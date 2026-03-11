@@ -23,21 +23,21 @@
 
 ### 1.2 Core Data Models (Pydantic)
 
-- [ ] `models/config.py` - Config models (AWS, Bedrock, output, logging)
-- [ ] `models/scenario.py` - Simplified scenario schema (Phase 1 subset)
-  - [ ] Basic TimeWindow, Environment, User, System models
-  - [ ] Simple persona structure (no LLM expansion yet)
-  - [ ] Basic storyline structure
-- [ ] `models/state.py` - Runtime state dataclasses (ActiveSession, RunningProcess, OpenConnection)
-- [ ] Custom exception hierarchy (EvidenceForgeError, ValidationError, etc.)
+- [x] `models/config.py` - Config models (AWS, Bedrock, output, logging)
+- [x] `models/scenario.py` - Simplified scenario schema (Phase 1 subset)
+  - [x] Basic TimeWindow, Environment, User, System models
+  - [x] Simple persona structure (no LLM expansion yet)
+  - [x] Basic storyline structure
+- [x] `models/state.py` - Runtime state dataclasses (ActiveSession, RunningProcess, OpenConnection)
+- [x] Custom exception hierarchy (EvidenceForgeError, ValidationError, etc.)
 
 ### 1.3 Configuration & Utilities
 
-- [ ] `utils/config.py` - Config loader with env var interpolation (${VAR_NAME})
-- [ ] `utils/logging.py` - Logging setup (console vs file, level filtering)
-- [ ] `utils/time.py` - Time parsing utilities (ISO 8601, duration strings)
-- [ ] `utils/files.py` - File I/O utilities, path validation
-- [ ] Test: Config loading from multiple sources (defaults, .env, config.yaml, CLI)
+- [x] `utils/config.py` - Config loader with env var interpolation (${VAR_NAME})
+- [x] `utils/logging.py` - Logging setup (console vs file, level filtering)
+- [x] `utils/time.py` - Time parsing utilities (ISO 8601, duration strings)
+- [x] `utils/files.py` - File I/O utilities, path validation
+- [x] Test: Config loading from multiple sources (defaults, .env, config.yaml, CLI)
 
 ### 1.4 State Management
 
