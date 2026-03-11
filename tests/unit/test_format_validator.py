@@ -215,7 +215,7 @@ class TestValidateFieldType:
 
     def test_sid_invalid_format(self):
         """Test invalid SID format."""
-        result = validate_field_type("field", "S-1-5", FieldType.SID)
+        result = validate_field_type("field", "S-1", FieldType.SID)
         assert result.valid is False
         assert "Invalid SID format" in result.errors[0]
 

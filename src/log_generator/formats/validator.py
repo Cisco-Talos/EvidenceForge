@@ -188,8 +188,9 @@ def validate_field_constraints(
     if constraints.json_logic:
         try:
             # JSON Logic rule has access to the field value as {"value": ...}
-            logic_result = jsonLogic(constraints.json_logic, {"value": field_value})
-            if not logic_result:
+            data = {"value": field_value}
+            logic_result = jsonLogic(constraints.json_logic, data)
+            if logic_result is False or logic_result is None:
                 result.add_error(
                     field_name, f"Failed JSON Logic validation: {constraints.json_logic}"
                 )
