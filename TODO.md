@@ -41,14 +41,14 @@
 
 ### 1.4 State Management
 
-- [ ] `generation/state_manager.py` - StateManager class
-  - [ ] Session creation and tracking (LogonID generation)
-  - [ ] Process creation and tracking (PID allocation per system)
-  - [ ] Connection tracking
-  - [ ] DNS cache
-  - [ ] Thread-safe reads, single-threaded writes
-- [ ] Test: Unique PID generation per system
-- [ ] Test: Session/process lifecycle
+- [x] `generation/state_manager.py` - StateManager class
+  - [x] Session creation and tracking (LogonID generation)
+  - [x] Process creation and tracking (PID allocation per system)
+  - [x] Connection tracking
+  - [x] DNS cache
+  - [x] Thread-safe reads, single-threaded writes
+- [x] Test: Unique PID generation per system
+- [x] Test: Session/process lifecycle
 
 ### 1.5 Format Definitions (2 formats for Phase 1)
 

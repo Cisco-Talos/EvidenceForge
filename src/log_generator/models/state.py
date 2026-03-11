@@ -115,7 +115,7 @@ class GeneratorState:
     """
 
     active_sessions: dict[str, ActiveSession] = field(default_factory=dict)
-    running_processes: dict[int, RunningProcess] = field(default_factory=dict)
+    running_processes: dict[tuple[str, int], RunningProcess] = field(default_factory=dict)
     open_connections: dict[str, OpenConnection] = field(default_factory=dict)
     dns_cache: dict[str, str] = field(default_factory=dict)
     current_time: datetime | None = None

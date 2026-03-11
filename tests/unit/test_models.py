@@ -553,6 +553,21 @@ class TestStateModels:
             start_time=datetime(2024, 1, 15, 9, 0, 0),
             source_ip="192.168.1.50",
         )
-        state = GeneratorState(active_sessions={"0x3e7": session})
+        process = RunningProcess(
+            pid=1234,
+            parent_pid=1000,
+            image="cmd.exe",
+            command_line="cmd.exe /c dir",
+            username="jdoe",
+            system="WS-01",
+            start_time=datetime(2024, 1, 15, 9, 0, 0),
+            integrity_level="Medium",
+        )
+        state = GeneratorState(
+            active_sessions={"0x3e7": session},
+            running_processes={("WS-01", 1234): process}
+        )
         assert "0x3e7" in state.active_sessions
         assert state.active_sessions["0x3e7"].username == "jdoe"
+        assert ("WS-01", 1234) in state.running_processes
+        assert state.running_processes[("WS-01", 1234)].pid == 1234
