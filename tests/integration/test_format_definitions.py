@@ -198,11 +198,11 @@ class TestWindowsEventFormat:
         assert any("TimeCreated" in error for error in result.errors)
 
 
-class TestZeekFormat:
-    """Tests for Zeek conn.log format definition."""
+class TestZeekJsonFormat:
+    """Tests for Zeek conn.log JSON format definition."""
 
     def setup_method(self):
-        """Load Zeek format before each test."""
+        """Load Zeek JSON format before each test."""
         self.format = load_format("zeek")
 
     def test_format_loads(self):
@@ -214,6 +214,156 @@ class TestZeekFormat:
 
     def test_no_variants(self):
         """Test that Zeek format has no variants."""
+        assert self.format.variants is None or len(self.format.variants) == 0
+
+    def test_has_connection_fields(self):
+        """Test that connection fields are defined."""
+        field_names = [f.name for f in self.format.fields]
+        assert "ts" in field_names
+        assert "uid" in field_names
+        assert "id.orig_h" in field_names
+        assert "id.orig_p" in field_names
+        assert "id.resp_h" in field_names
+        assert "id.resp_p" in field_names
+        assert "proto" in field_names
+        assert "conn_state" in field_names
+
+    def test_output_is_json(self):
+        """Test that output format is JSON."""
+        assert self.format.output.format == "json"
+        assert self.format.output.file_extension == ".json"
+        assert self.format.output.encoding == "utf-8"
+        assert self.format.output.header_template is None or self.format.output.header_template == ""
+        assert "{" in self.format.output.template
+        assert "}" in self.format.output.template
+
+    def test_validate_tcp_connection(self):
+        """Test validation of sample TCP connection."""
+        event_data = {
+            "ts": "2024-01-15T10:00:00.123456Z",
+            "uid": "C1a2b3c4d5e6f7g8",
+            "id.orig_h": "192.168.1.100",
+            "id.orig_p": 49152,
+            "id.resp_h": "93.184.216.34",
+            "id.resp_p": 80,
+            "proto": "tcp",
+            "service": "http",
+            "duration": "1.234",
+            "orig_bytes": 512,
+            "resp_bytes": 4096,
+            "conn_state": "SF",
+            "local_orig": True,
+            "local_resp": False,
+            "missed_bytes": 0,
+            "history": "ShADadfF",
+            "orig_pkts": 10,
+            "orig_ip_bytes": 1024,
+            "resp_pkts": 8,
+            "resp_ip_bytes": 8192,
+        }
+
+        result = validate_event(self.format, event_data)
+        if not result.valid:
+            print(f"Validation errors: {result.errors}")
+        assert result.valid is True
+
+    def test_validate_udp_connection(self):
+        """Test validation of sample UDP connection."""
+        event_data = {
+            "ts": "2024-01-15T10:00:05.654321Z",
+            "uid": "D9h8g7f6e5d4c3b2",
+            "id.orig_h": "10.0.0.50",
+            "id.orig_p": 53123,
+            "id.resp_h": "8.8.8.8",
+            "id.resp_p": 53,
+            "proto": "udp",
+            "service": "dns",
+            "duration": "0.012",
+            "orig_bytes": 64,
+            "resp_bytes": 128,
+            "conn_state": "SF",
+            "local_orig": True,
+            "local_resp": False,
+            "orig_pkts": 1,
+            "orig_ip_bytes": 92,
+            "resp_pkts": 1,
+            "resp_ip_bytes": 156,
+        }
+
+        result = validate_event(self.format, event_data)
+        if not result.valid:
+            print(f"Validation errors: {result.errors}")
+        assert result.valid is True
+
+    def test_validate_incomplete_connection(self):
+        """Test validation of incomplete connection (no duration)."""
+        event_data = {
+            "ts": "2024-01-15T10:00:10.000000Z",
+            "uid": "E1f2g3h4i5j6k7l8",
+            "id.orig_h": "192.168.1.200",
+            "id.orig_p": 12345,
+            "id.resp_h": "203.0.113.50",
+            "id.resp_p": 443,
+            "proto": "tcp",
+            "conn_state": "S0",
+        }
+
+        result = validate_event(self.format, event_data)
+        if not result.valid:
+            print(f"Validation errors: {result.errors}")
+        assert result.valid is True
+
+    def test_invalid_uid_format(self):
+        """Test that invalid UID format is rejected."""
+        event_data = {
+            "ts": "2024-01-15T10:00:00Z",
+            "uid": "invalid",  # Should be 16 characters
+            "id.orig_h": "192.168.1.100",
+            "id.orig_p": 49152,
+            "id.resp_h": "93.184.216.34",
+            "id.resp_p": 80,
+            "proto": "tcp",
+            "conn_state": "SF",
+        }
+
+        result = validate_event(self.format, event_data)
+        assert result.valid is False
+        assert any("uid" in error for error in result.errors)
+
+    def test_invalid_protocol(self):
+        """Test that invalid protocol is rejected."""
+        event_data = {
+            "ts": "2024-01-15T10:00:00Z",
+            "uid": "C1a2b3c4d5e6f7g8",
+            "id.orig_h": "192.168.1.100",
+            "id.orig_p": 49152,
+            "id.resp_h": "93.184.216.34",
+            "id.resp_p": 80,
+            "proto": "invalid_proto",
+            "conn_state": "SF",
+        }
+
+        result = validate_event(self.format, event_data)
+        assert result.valid is False
+        assert any("proto" in error for error in result.errors)
+
+
+class TestZeekTsvFormat:
+    """Tests for Zeek conn.log TSV format definition."""
+
+    def setup_method(self):
+        """Load Zeek TSV format before each test."""
+        self.format = load_format("zeek_tsv")
+
+    def test_format_loads(self):
+        """Test that zeek_tsv.yaml loads successfully."""
+        assert self.format is not None
+        assert self.format.name == "zeek_tsv"
+        assert self.format.version == "1.0"
+        assert self.format.category == "network"
+
+    def test_no_variants(self):
+        """Test that Zeek TSV format has no variants."""
         assert self.format.variants is None or len(self.format.variants) == 0
 
     def test_has_connection_fields(self):
@@ -351,12 +501,13 @@ class TestLoadAllFormats:
     """Tests for loading all format definitions."""
 
     def test_load_all_formats(self):
-        """Test that both formats load successfully."""
+        """Test that all three formats load successfully."""
         formats = load_all_formats()
 
-        assert len(formats) == 2
+        assert len(formats) == 3
         assert "windows_event" in formats
         assert "zeek" in formats
+        assert "zeek_tsv" in formats
 
         # Verify Windows Event format
         windows_fmt = formats["windows_event"]
@@ -364,11 +515,19 @@ class TestLoadAllFormats:
         assert windows_fmt.category == "host"
         assert len(windows_fmt.variants) == 3
 
-        # Verify Zeek format
+        # Verify Zeek JSON format
         zeek_fmt = formats["zeek"]
         assert zeek_fmt.name == "zeek"
         assert zeek_fmt.category == "network"
+        assert zeek_fmt.output.format == "json"
         assert zeek_fmt.variants is None or len(zeek_fmt.variants) == 0
+
+        # Verify Zeek TSV format
+        zeek_tsv_fmt = formats["zeek_tsv"]
+        assert zeek_tsv_fmt.name == "zeek_tsv"
+        assert zeek_tsv_fmt.category == "network"
+        assert zeek_tsv_fmt.output.format == "tsv"
+        assert zeek_tsv_fmt.variants is None or len(zeek_tsv_fmt.variants) == 0
 
     def test_formats_cached(self):
         """Test that formats are cached after loading."""
@@ -377,9 +536,10 @@ class TestLoadAllFormats:
         # Load all formats
         load_all_formats()
 
-        # Both should be in cache
+        # All three should be in cache
         assert get_format("windows_event") is not None
         assert get_format("zeek") is not None
+        assert get_format("zeek_tsv") is not None
 
     def test_clear_cache_works(self):
         """Test that cache clearing works."""

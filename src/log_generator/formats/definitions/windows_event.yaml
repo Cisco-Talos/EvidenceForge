@@ -316,6 +316,8 @@ output:
   format: xml
   file_extension: ".xml"
   encoding: "utf-8"
+  # Template formatting: Jinja2 conditionals ({% if %}, {% elif %}, {% endif %}) are on
+  # separate lines for readability. This doesn't affect XML output whitespace.
   template: |
     <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
       <System>
