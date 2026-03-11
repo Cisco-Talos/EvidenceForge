@@ -1,0 +1,48 @@
+# EvidenceForge Configuration File
+# Copy this file to config.yaml and customize as needed
+# Environment variables can be referenced using ${VAR_NAME} syntax
+
+# AWS Configuration
+aws:
+  # AWS profile to use for Bedrock access
+  # Can reference environment variable: ${AWS_PROFILE}
+  profile: default
+
+  # AWS region where Bedrock is available
+  # Can reference environment variable: ${AWS_REGION}
+  region: us-east-1
+
+# AWS Bedrock Model Configuration
+bedrock:
+  # Primary model for conversation and semantic validation
+  # Recommended: Claude Sonnet 4.6 for best quality
+  model_primary: anthropic.claude-sonnet-4-6-v1:0
+
+  # Model for MITRE ATT&CK TTP research
+  # Recommended: Claude Sonnet 4.6 for accuracy
+  model_research: anthropic.claude-sonnet-4-6-v1:0
+
+  # Model for bulk generation tasks (if used)
+  # Recommended: Claude Haiku 4.5 for cost optimization
+  model_generation: anthropic.claude-haiku-4-5-v1:0
+
+# Output Configuration
+output:
+  # Base directory for generated log datasets
+  # Each generation run creates a timestamped subdirectory
+  base_directory: ./output
+
+# Logging Configuration
+logging:
+  # Overall logging level for the application
+  # Options: debug, info, warning, error
+  level: info
+
+  # Console output level (typically less verbose than file logging)
+  # Options: debug, info, warning, error
+  # Set to 'warning' to reduce console noise during generation
+  console_level: warning
+
+  # Log file location (optional)
+  # If not specified, logs only to console
+  # file: ./logs/evidenceforge.log

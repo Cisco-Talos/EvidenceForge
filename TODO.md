@@ -12,14 +12,14 @@
 
 ### 1.1 Project Setup & Infrastructure
 
-- [ ] Initialize uv project with pyproject.toml
-- [ ] Set up src/log_generator/ package structure
-- [ ] Create tests/ directory structure (unit/, integration/, live/, fixtures/)
-- [ ] Set up pytest with pytest.ini and coverage configuration
-- [ ] Create .env.example with AWS_PROFILE, AWS_REGION placeholders
-- [ ] Create config.example.yaml with documented parameters
-- [ ] Add LICENSE file (TBD)
-- [ ] Set up GitHub Actions for CI (unit + integration tests only)
+- [x] Initialize uv project with pyproject.toml
+- [x] Set up src/log_generator/ package structure
+- [x] Create tests/ directory structure (unit/, integration/, live/, fixtures/)
+- [x] Set up pytest with pytest.ini and coverage configuration
+- [x] Create .env.example with AWS_PROFILE, AWS_REGION placeholders
+- [x] Create config.example.yaml with documented parameters
+- [x] Add LICENSE file (TBD)
+- [x] Set up GitHub Actions for CI (unit + integration tests only)
 
 ### 1.2 Core Data Models (Pydantic)
 
