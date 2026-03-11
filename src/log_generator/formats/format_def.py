@@ -15,6 +15,7 @@ class FieldType(str, Enum):
 
     STRING = "string"
     INTEGER = "integer"
+    FLOAT = "float"  # Floating point number
     BOOLEAN = "boolean"
     TIMESTAMP = "timestamp"  # ISO 8601 datetime
     IP_ADDRESS = "ip_address"  # IPv4 or IPv6

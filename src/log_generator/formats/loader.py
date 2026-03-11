@@ -58,9 +58,9 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
         ConfigurationError: If format file not found or invalid
 
     Example:
-        >>> fmt = load_format("windows_event")
+        >>> fmt = load_format("windows_event_security")
         >>> fmt.name
-        'windows_event'
+        'windows_event_security'
         >>> fmt.category
         'host'
     """

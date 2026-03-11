@@ -1,4 +1,4 @@
-name: windows_event
+name: windows_event_security
 version: "1.0"
 description: "Windows Security Event Log format (XML output)"
 category: host

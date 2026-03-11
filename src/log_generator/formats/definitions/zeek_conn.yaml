@@ -1,6 +1,6 @@
-name: zeek_tsv
+name: zeek_conn
 version: "1.0"
-description: "Zeek conn.log format (TSV output) - legacy format"
+description: "Zeek conn.log format (JSON output)"
 category: network
 
 # All Zeek conn.log fields
@@ -15,7 +15,7 @@ fields:
     required: true
     description: "Unique connection identifier"
     constraints:
-      pattern: "^[A-Za-z0-9]{16}$"
+      pattern: "^[A-Za-z0-9]{18}$"
 
   - name: id.orig_h
     type: ip_address
@@ -50,7 +50,7 @@ fields:
     description: "Application protocol (http, ssh, dns, etc.)"
 
   - name: duration
-    type: string
+    type: float
     required: false
     description: "Connection duration in seconds (unset if not ended)"
 
@@ -125,33 +125,84 @@ fields:
     constraints:
       min_value: 0
 
+  - name: ip_proto
+    type: integer
+    required: false
+    description: "IP protocol number (6=TCP, 17=UDP, 1=ICMP)"
+    constraints:
+      min_value: 0
+      max_value: 255
+
   - name: tunnel_parents
     type: string
     required: false
     description: "Tunnel UIDs if connection was tunneled"
 
-# Output template in Zeek TSV format
+# Output template in Zeek JSON format
 output:
-  format: tsv
-  file_extension: ".log"
+  format: json
+  file_extension: ".json"
   encoding: "utf-8"
 
-  # Zeek header comments
-  header_template: |
-    #separator \x09
-    #set_separator	,
-    #empty_field	(empty)
-    #unset_field	-
-    #path	conn
-    #open	{{ open_time }}
-    #fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	proto	service	duration	orig_bytes	resp_bytes	conn_state	local_orig	local_resp	missed_bytes	history	orig_pkts	orig_ip_bytes	resp_pkts	resp_ip_bytes	tunnel_parents
-    #types	time	string	addr	port	addr	port	enum	string	interval	count	count	string	bool	bool	count	string	count	count	count	count	set[string]
-
-  # TSV row template (tab-separated values)
-  # Note: TSV format is intentionally a single line with tabs. Inline ternary conditionals
-  # (e.g., 'T' if local_orig else 'F') are appropriate here since the output must be one line.
+  # JSON template (no header needed - JSON is self-describing)
+  # Note: For fields with dots, emitter should pass data as 'data' context variable
+  #
+  # Template formatting: Uses {%- and -%} for whitespace control to keep conditionals
+  # readable without affecting JSON output. The '-' strips whitespace, allowing each
+  # conditional to be on its own line while commas stay correctly positioned in output.
   template: |
-    {{ ts | float }}	{{ uid }}	{{ id.orig_h }}	{{ id.orig_p }}	{{ id.resp_h }}	{{ id.resp_p }}	{{ proto }}	{{ service | default('-') }}	{{ duration | default('-') }}	{{ orig_bytes | default('-') }}	{{ resp_bytes | default('-') }}	{{ conn_state }}	{{ 'T' if local_orig else 'F' if local_orig is not none else '-' }}	{{ 'T' if local_resp else 'F' if local_resp is not none else '-' }}	{{ missed_bytes | default('-') }}	{{ history | default('-') }}	{{ orig_pkts | default('-') }}	{{ orig_ip_bytes | default('-') }}	{{ resp_pkts | default('-') }}	{{ resp_ip_bytes | default('-') }}	{{ tunnel_parents | default('-') }}
+    {
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "proto": {{ proto | tojson }}
+      {%- if service %},
+      "service": {{ service | tojson }}
+      {%- endif %}
+      {%- if duration %},
+      "duration": {{ duration | tojson }}
+      {%- endif %}
+      {%- if orig_bytes is not none %},
+      "orig_bytes": {{ orig_bytes | tojson }}
+      {%- endif %}
+      {%- if resp_bytes is not none %},
+      "resp_bytes": {{ resp_bytes | tojson }}
+      {%- endif %},
+      "conn_state": {{ conn_state | tojson }}
+      {%- if local_orig is not none %},
+      "local_orig": {{ local_orig | tojson }}
+      {%- endif %}
+      {%- if local_resp is not none %},
+      "local_resp": {{ local_resp | tojson }}
+      {%- endif %}
+      {%- if missed_bytes is not none %},
+      "missed_bytes": {{ missed_bytes | tojson }}
+      {%- endif %}
+      {%- if history %},
+      "history": {{ history | tojson }}
+      {%- endif %}
+      {%- if orig_pkts is not none %},
+      "orig_pkts": {{ orig_pkts | tojson }}
+      {%- endif %}
+      {%- if orig_ip_bytes is not none %},
+      "orig_ip_bytes": {{ orig_ip_bytes | tojson }}
+      {%- endif %}
+      {%- if resp_pkts is not none %},
+      "resp_pkts": {{ resp_pkts | tojson }}
+      {%- endif %}
+      {%- if resp_ip_bytes is not none %},
+      "resp_ip_bytes": {{ resp_ip_bytes | tojson }}
+      {%- endif %}
+      {%- if ip_proto is not none %},
+      "ip_proto": {{ ip_proto | tojson }}
+      {%- endif %}
+      {%- if tunnel_parents %},
+      "tunnel_parents": {{ tunnel_parents | tojson }}
+      {%- endif %}
+    }
 
 # Cross-field validators
 validators:

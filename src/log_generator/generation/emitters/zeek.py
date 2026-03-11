@@ -1,0 +1,110 @@
+"""Zeek conn.log emitter."""
+
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from log_generator.formats.format_def import FormatDefinition
+from log_generator.generation.emitters.base import LogEmitter
+
+
+class ZeekEmitter(LogEmitter):
+    """Emitter for Zeek conn.log format (JSON).
+
+    Generates Zeek connection logs in JSON format (one JSON object per line).
+    Each connection includes source/dest IPs, ports, protocol, and connection state.
+    """
+
+    def __init__(
+        self,
+        format_def: FormatDefinition,
+        output_path: Path,
+        buffer_size: int = 10000,
+    ):
+        """Initialize Zeek emitter.
+
+        Args:
+            format_def: Zeek format definition
+            output_path: Path to write JSON log file
+            buffer_size: Number of events to buffer before flushing
+        """
+        super().__init__(format_def, output_path, buffer_size)
+
+    def emit_event(self, event_data: dict[str, Any]) -> None:
+        """Emit a Zeek connection event.
+
+        Args:
+            event_data: Event data with connection fields
+        """
+        # Render the event
+        rendered = self._render_event(event_data)
+
+        # Buffer it
+        self._buffer_event(rendered)
+
+    def _render_event(self, event_data: dict[str, Any]) -> str:
+        """Render Zeek connection to JSON format.
+
+        Args:
+            event_data: Event data dictionary
+
+        Returns:
+            Formatted JSON event (single line)
+        """
+        # Ensure timestamp is in epoch format with microsecond precision
+        # Zeek timestamps are float values with 6 decimal places (microseconds)
+        # e.g., 1427846411.876987
+        if "ts" in event_data:
+            ts = event_data["ts"]
+            if isinstance(ts, datetime):
+                # Convert to epoch with microseconds
+                # NOTE: Ensure datetime objects include microseconds for proper precision
+                event_data["ts"] = ts.timestamp()
+            elif isinstance(ts, str):
+                # If string, parse it
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                event_data["ts"] = dt.timestamp()
+
+        # Handle dotted field names (id.orig_h, etc.)
+        # Zeek template expects 'data' dict for dotted fields
+        data_fields = {}
+        regular_fields = {}
+
+        for key, value in event_data.items():
+            if "." in key:
+                data_fields[key] = value
+            else:
+                regular_fields[key] = value
+
+        # Merge for template rendering
+        template_context = regular_fields.copy()
+        if data_fields:
+            template_context["data"] = data_fields
+
+        # Ensure all optional fields exist with None if not provided
+        # This prevents Jinja2 Undefined errors in the template
+        optional_fields = [
+            "service", "duration", "orig_bytes", "resp_bytes",
+            "local_orig", "local_resp", "missed_bytes", "history",
+            "orig_pkts", "orig_ip_bytes", "resp_pkts", "resp_ip_bytes",
+            "ip_proto", "tunnel_parents"
+        ]
+        for field in optional_fields:
+            if field not in template_context:
+                template_context[field] = None
+
+        # Render using Jinja2 template from format definition
+        rendered = self._template.render(**template_context)
+
+        # Parse and compact the JSON to ensure single-line format (NDJSON)
+        # The template may have pretty-printing for readability
+        try:
+            data = json.loads(rendered)
+            # Re-serialize as compact JSON (no whitespace, single line)
+            rendered = json.dumps(data, separators=(',', ':'))
+        except json.JSONDecodeError:
+            # If template didn't produce valid JSON, use it as-is (shouldn't happen)
+            rendered = rendered.strip()
+
+        return rendered

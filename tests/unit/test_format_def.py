@@ -21,6 +21,7 @@ class TestFieldType:
         expected_types = {
             "string",
             "integer",
+            "float",
             "boolean",
             "timestamp",
             "ip_address",
