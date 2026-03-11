@@ -1,0 +1,405 @@
+name: windows_event
+version: "1.0"
+description: "Windows Security Event Log format (XML output)"
+category: host
+
+# Base fields common to all Windows Event Log entries
+fields:
+  - name: EventID
+    type: integer
+    required: true
+    description: "Windows Event ID"
+    constraints:
+      allowed_values: [4624, 4634, 4688]
+
+  - name: TimeCreated
+    type: timestamp
+    required: true
+    description: "Event creation timestamp"
+
+  - name: Computer
+    type: string
+    required: true
+    description: "Computer name where event was generated"
+
+  - name: Channel
+    type: string
+    required: true
+    description: "Event log channel"
+    default: "Security"
+
+  - name: Level
+    type: integer
+    required: true
+    description: "Event level (0=LogAlways, 4=Information)"
+    constraints:
+      allowed_values: [0, 1, 2, 3, 4]
+
+  - name: EventRecordID
+    type: integer
+    required: true
+    description: "Sequential event record ID"
+    constraints:
+      min_value: 1
+
+  - name: ExecutionProcessID
+    type: integer
+    required: true
+    description: "Process ID of event logging service"
+
+  - name: ExecutionThreadID
+    type: integer
+    required: true
+    description: "Thread ID of event logging service"
+
+# Event variants for different EventIDs
+variants:
+  # EventID 4624: An account was successfully logged on
+  - name: logon
+    event_id: "4624"
+    description: "User logon event"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+        description: "SID of account that reported the logon"
+
+      - name: SubjectUserName
+        type: string
+        required: true
+        description: "Account name that reported the logon"
+
+      - name: SubjectDomainName
+        type: string
+        required: true
+        description: "Domain of account that reported the logon"
+
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the account that reported the logon"
+
+      - name: TargetUserSid
+        type: sid
+        required: true
+        description: "SID of the account that was logged on"
+
+      - name: TargetUserName
+        type: string
+        required: true
+        description: "Account name that was logged on"
+
+      - name: TargetDomainName
+        type: string
+        required: true
+        description: "Domain of the account that was logged on"
+
+      - name: TargetLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the new logon session"
+
+      - name: LogonType
+        type: integer
+        required: true
+        description: "Type of logon (2=Interactive, 3=Network, 10=RemoteInteractive)"
+        constraints:
+          allowed_values: [2, 3, 4, 5, 7, 8, 9, 10, 11]
+
+      - name: LogonProcessName
+        type: string
+        required: false
+        description: "Name of the logon process"
+
+      - name: AuthenticationPackageName
+        type: string
+        required: false
+        description: "Authentication package used"
+
+      - name: WorkstationName
+        type: string
+        required: true
+        description: "Source workstation name"
+
+      - name: LogonGuid
+        type: string
+        required: false
+        description: "GUID to correlate with RADIUS/802.1x events"
+
+      - name: TransmittedServices
+        type: string
+        required: false
+        description: "List of transmitted services"
+
+      - name: LmPackageName
+        type: string
+        required: false
+        description: "LAN Manager package name"
+
+      - name: KeyLength
+        type: integer
+        required: false
+        description: "Length of NTLM session security key"
+
+      - name: ProcessId
+        type: hex_string
+        required: true
+        description: "Process ID of the logon process"
+
+      - name: ProcessName
+        type: string
+        required: true
+        description: "Full path of the logon process executable"
+
+      - name: IpAddress
+        type: string
+        required: true
+        description: "Source IP address (use '-' for local logons)"
+
+      - name: IpPort
+        type: integer
+        required: true
+        description: "Source port number (use 0 for local logons)"
+        constraints:
+          min_value: 0
+          max_value: 65535
+
+      - name: ImpersonationLevel
+        type: string
+        required: false
+        description: "Impersonation level"
+
+      - name: RestrictedAdminMode
+        type: string
+        required: false
+        description: "Restricted Admin mode indicator"
+
+      - name: TargetOutboundUserName
+        type: string
+        required: false
+        description: "Outbound account name"
+
+      - name: TargetOutboundDomainName
+        type: string
+        required: false
+        description: "Outbound domain name"
+
+      - name: VirtualAccount
+        type: string
+        required: false
+        description: "Virtual account indicator"
+
+      - name: ElevatedToken
+        type: string
+        required: false
+        description: "Elevated token indicator (Yes/No)"
+
+      - name: LinkedLogonId
+        type: hex_string
+        required: false
+        description: "Linked logon ID for split-token logons"
+
+  # EventID 4634: An account was logged off
+  - name: logoff
+    event_id: "4634"
+    description: "User logoff event"
+    fields:
+      - name: TargetUserSid
+        type: sid
+        required: true
+        description: "SID of the account that was logged off"
+
+      - name: TargetUserName
+        type: string
+        required: true
+        description: "Account name that was logged off"
+
+      - name: TargetDomainName
+        type: string
+        required: true
+        description: "Domain of the account that was logged off"
+
+      - name: TargetLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the session that was logged off"
+
+      - name: LogonType
+        type: integer
+        required: true
+        description: "Type of logon that was ended"
+        constraints:
+          allowed_values: [2, 3, 4, 5, 7, 8, 9, 10, 11]
+
+  # EventID 4688: A new process has been created
+  - name: process_creation
+    event_id: "4688"
+    description: "Process creation event"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+        description: "SID of account that created the process"
+
+      - name: SubjectUserName
+        type: string
+        required: true
+        description: "Account name that created the process"
+
+      - name: SubjectDomainName
+        type: string
+        required: true
+        description: "Domain of account that created the process"
+
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the account that created the process"
+
+      - name: NewProcessId
+        type: hex_string
+        required: true
+        description: "Process ID of the newly created process"
+
+      - name: NewProcessName
+        type: string
+        required: true
+        description: "Full path of the newly created process"
+
+      - name: TokenElevationType
+        type: string
+        required: true
+        description: "Token elevation type (%%1936=Type1, %%1937=Type2, %%1938=Type3)"
+
+      - name: ProcessId
+        type: hex_string
+        required: true
+        description: "Process ID of the creator process"
+
+      - name: CommandLine
+        type: string
+        required: false
+        description: "Command line of the new process"
+
+      - name: TargetUserSid
+        type: sid
+        required: false
+        description: "SID of target user for new process"
+
+      - name: TargetUserName
+        type: string
+        required: false
+        description: "Target user name for new process"
+
+      - name: TargetDomainName
+        type: string
+        required: false
+        description: "Target domain for new process"
+
+      - name: TargetLogonId
+        type: hex_string
+        required: false
+        description: "Target logon ID for new process"
+
+      - name: ParentProcessName
+        type: string
+        required: false
+        description: "Full path of the parent process"
+
+      - name: MandatoryLabel
+        type: string
+        required: false
+        description: "Mandatory integrity label"
+
+# Output template in Windows Event Log XML format
+output:
+  format: xml
+  file_extension: ".xml"
+  encoding: "utf-8"
+  template: |
+    <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+      <System>
+        <Provider Name="Microsoft-Windows-Security-Auditing" Guid="{54849625-5478-4994-a5ba-3e3b0328c30d}"/>
+        <EventID>{{ EventID }}</EventID>
+        <Version>{{ 2 if EventID == 4688 else 1 if EventID == 4624 else 0 }}</Version>
+        <Level>{{ Level }}</Level>
+        <Task>{{ 12544 if EventID == 4624 else 12545 if EventID == 4634 else 13312 }}</Task>
+        <Opcode>0</Opcode>
+        <Keywords>0x8020000000000000</Keywords>
+        <TimeCreated SystemTime="{{ TimeCreated }}"/>
+        <EventRecordID>{{ EventRecordID }}</EventRecordID>
+        <Correlation/>
+        <Execution ProcessID="{{ ExecutionProcessID }}" ThreadID="{{ ExecutionThreadID }}"/>
+        <Channel>{{ Channel }}</Channel>
+        <Computer>{{ Computer }}</Computer>
+        <Security/>
+      </System>
+      <EventData>
+        {% if EventID == 4624 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="TargetUserSid">{{ TargetUserSid }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
+        <Data Name="LogonType">{{ LogonType }}</Data>
+        <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
+        <Data Name="LogonType">{{ LogonType }}</Data>
+        <Data Name="LogonProcessName">{{ LogonProcessName | default('-') }}</Data>
+        <Data Name="AuthenticationPackageName">{{ AuthenticationPackageName | default('-') }}</Data>
+        <Data Name="WorkstationName">{{ WorkstationName }}</Data>
+        <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
+        <Data Name="LmPackageName">{{ LmPackageName | default('-') }}</Data>
+        <Data Name="KeyLength">{{ KeyLength | default(0) }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessName">{{ ProcessName }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort }}</Data>
+        <Data Name="ImpersonationLevel">{{ ImpersonationLevel | default('%%1833') }}</Data>
+        <Data Name="RestrictedAdminMode">{{ RestrictedAdminMode | default('-') }}</Data>
+        <Data Name="TargetOutboundUserName">{{ TargetOutboundUserName | default('-') }}</Data>
+        <Data Name="TargetOutboundDomainName">{{ TargetOutboundDomainName | default('-') }}</Data>
+        <Data Name="VirtualAccount">{{ VirtualAccount | default('%%1843') }}</Data>
+        <Data Name="ElevatedToken">{{ ElevatedToken | default('%%1842') }}</Data>
+        <Data Name="LinkedLogonId">{{ LinkedLogonId | default('0x0') }}</Data>
+        {% elif EventID == 4634 %}
+        <Data Name="TargetUserSid">{{ TargetUserSid }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
+        <Data Name="LogonType">{{ LogonType }}</Data>
+        {% elif EventID == 4688 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="NewProcessId">{{ NewProcessId }}</Data>
+        <Data Name="NewProcessName">{{ NewProcessName }}</Data>
+        <Data Name="TokenElevationType">{{ TokenElevationType }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="CommandLine">{{ CommandLine | default('') }}</Data>
+        <Data Name="TargetUserSid">{{ TargetUserSid | default('-') }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName | default('-') }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName | default('-') }}</Data>
+        <Data Name="TargetLogonId">{{ TargetLogonId | default('0x0') }}</Data>
+        <Data Name="ParentProcessName">{{ ParentProcessName | default('-') }}</Data>
+        <Data Name="MandatoryLabel">{{ MandatoryLabel | default('S-1-16-8192') }}</Data>
+        {% endif %}
+      </EventData>
+    </Event>
+
+# Cross-field validators using JSON Logic
+validators:
+  # Network logons (type 3) should have valid IP address (not "-")
+  - if:
+      - and:
+          - "==": [{"var": "EventID"}, 4624]
+          - "==": [{"var": "LogonType"}, 3]
+    then:
+      "!=": [{"var": "IpAddress"}, "-"]

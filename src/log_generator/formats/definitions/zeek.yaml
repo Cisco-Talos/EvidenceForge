@@ -1,0 +1,175 @@
+name: zeek
+version: "1.0"
+description: "Zeek conn.log format (TSV output)"
+category: network
+
+# All Zeek conn.log fields
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of connection start"
+
+  - name: uid
+    type: string
+    required: true
+    description: "Unique connection identifier"
+    constraints:
+      pattern: "^[A-Za-z0-9]{16}$"
+
+  - name: id.orig_h
+    type: ip_address
+    required: true
+    description: "Originator IP address"
+
+  - name: id.orig_p
+    type: port
+    required: true
+    description: "Originator port"
+
+  - name: id.resp_h
+    type: ip_address
+    required: true
+    description: "Responder IP address"
+
+  - name: id.resp_p
+    type: port
+    required: true
+    description: "Responder port"
+
+  - name: proto
+    type: enum
+    required: true
+    description: "Transport protocol"
+    constraints:
+      allowed_values: ["tcp", "udp", "icmp"]
+
+  - name: service
+    type: string
+    required: false
+    description: "Application protocol (http, ssh, dns, etc.)"
+
+  - name: duration
+    type: string
+    required: false
+    description: "Connection duration in seconds (unset if not ended)"
+
+  - name: orig_bytes
+    type: integer
+    required: false
+    description: "Bytes sent by originator"
+    constraints:
+      min_value: 0
+
+  - name: resp_bytes
+    type: integer
+    required: false
+    description: "Bytes sent by responder"
+    constraints:
+      min_value: 0
+
+  - name: conn_state
+    type: enum
+    required: true
+    description: "Connection state"
+    constraints:
+      allowed_values: ["S0", "S1", "SF", "REJ", "S2", "S3", "RSTO", "RSTR", "RSTOS0", "RSTRH", "SH", "SHR", "OTH"]
+
+  - name: local_orig
+    type: boolean
+    required: false
+    description: "Connection originated locally"
+
+  - name: local_resp
+    type: boolean
+    required: false
+    description: "Connection responded to locally"
+
+  - name: missed_bytes
+    type: integer
+    required: false
+    description: "Bytes missed in content gaps"
+    constraints:
+      min_value: 0
+
+  - name: history
+    type: string
+    required: false
+    description: "Connection state history (flags)"
+
+  - name: orig_pkts
+    type: integer
+    required: false
+    description: "Packets sent by originator"
+    constraints:
+      min_value: 0
+
+  - name: orig_ip_bytes
+    type: integer
+    required: false
+    description: "IP-level bytes sent by originator"
+    constraints:
+      min_value: 0
+
+  - name: resp_pkts
+    type: integer
+    required: false
+    description: "Packets sent by responder"
+    constraints:
+      min_value: 0
+
+  - name: resp_ip_bytes
+    type: integer
+    required: false
+    description: "IP-level bytes sent by responder"
+    constraints:
+      min_value: 0
+
+  - name: tunnel_parents
+    type: string
+    required: false
+    description: "Tunnel UIDs if connection was tunneled"
+
+# Output template in Zeek TSV format
+output:
+  format: tsv
+  file_extension: ".log"
+  encoding: "utf-8"
+
+  # Zeek header comments
+  header_template: |
+    #separator \x09
+    #set_separator	,
+    #empty_field	(empty)
+    #unset_field	-
+    #path	conn
+    #open	{{ open_time }}
+    #fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	proto	service	duration	orig_bytes	resp_bytes	conn_state	local_orig	local_resp	missed_bytes	history	orig_pkts	orig_ip_bytes	resp_pkts	resp_ip_bytes	tunnel_parents
+    #types	time	string	addr	port	addr	port	enum	string	interval	count	count	string	bool	bool	count	string	count	count	count	count	set[string]
+
+  # TSV row template (tab-separated values)
+  template: |
+    {{ ts | float }}	{{ uid }}	{{ id.orig_h }}	{{ id.orig_p }}	{{ id.resp_h }}	{{ id.resp_p }}	{{ proto }}	{{ service | default('-') }}	{{ duration | default('-') }}	{{ orig_bytes | default('-') }}	{{ resp_bytes | default('-') }}	{{ conn_state }}	{{ 'T' if local_orig else 'F' if local_orig is not none else '-' }}	{{ 'T' if local_resp else 'F' if local_resp is not none else '-' }}	{{ missed_bytes | default('-') }}	{{ history | default('-') }}	{{ orig_pkts | default('-') }}	{{ orig_ip_bytes | default('-') }}	{{ resp_pkts | default('-') }}	{{ resp_ip_bytes | default('-') }}	{{ tunnel_parents | default('-') }}
+
+# Cross-field validators
+validators:
+  # If duration is set, it should be non-negative
+  - if:
+      - "!=": [{"var": "duration"}, null]
+    then:
+      ">=": [{"var": "duration"}, 0]
+
+  # If service is set, duration should also be set (established connection)
+  - if:
+      - "!=": [{"var": "service"}, null]
+    then:
+      "!=": [{"var": "duration"}, null]
+
+  # SF state (normal connection) should have duration and bytes
+  - if:
+      - "==": [{"var": "conn_state"}, "SF"]
+    then:
+      and:
+        - "!=": [{"var": "duration"}, null]
+        - "!=": [{"var": "orig_bytes"}, null]
+        - "!=": [{"var": "resp_bytes"}, null]
