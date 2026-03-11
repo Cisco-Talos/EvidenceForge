@@ -1,0 +1,22 @@
+name: test_format
+version: "1.0"
+description: "Minimal valid format for testing"
+category: host
+
+fields:
+  - name: field1
+    type: string
+    required: true
+    description: "Test field 1"
+
+  - name: field2
+    type: integer
+    required: false
+    description: "Test field 2"
+    default: 0
+
+output:
+  format: text
+  template: "{{ field1 }} {{ field2 }}"
+  file_extension: ".txt"
+  encoding: "utf-8"

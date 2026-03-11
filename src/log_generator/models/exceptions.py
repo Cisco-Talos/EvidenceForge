@@ -44,6 +44,14 @@ class ConfigurationError(EvidenceForgeError):
     """
 
 
+class FormatDefinitionError(ConfigurationError):
+    """Format definition loading or validation failed.
+
+    Raised when a format definition YAML file cannot be loaded,
+    parsed, or is invalid according to the FormatDefinition schema.
+    """
+
+
 class GenerationError(EvidenceForgeError):
     """Error during log generation.
 

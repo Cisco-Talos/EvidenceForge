@@ -1,0 +1,13 @@
+name: invalid_format
+version: "1.0"
+description: "Invalid format for testing error handling"
+category: invalid_category  # This will cause validation error
+
+fields:
+  - name: field1
+    type: string
+
+output:
+  format: xml
+  template: "<test/>"
+  file_extension: ".xml"
