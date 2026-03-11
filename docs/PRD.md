@@ -34,6 +34,7 @@ The tool addresses the need for realistic, large-volume training datasets withou
 - Checkpointing for long-running generation jobs
 - Schema validation and LLM-based semantic validation with interactive repair
 - Optional realism evaluation with concrete metrics
+- Ground truth documentation (GROUND_TRUTH.md) for scenarios with malicious activity: attack narrative, timeline, atomic IOCs
 - Comprehensive test coverage (95%+) with pytest
 - Ship with pre-built persona library to reduce LLM usage
 - Flexible timezone handling (UTC internal, configurable per-system/format for output)
@@ -146,6 +147,10 @@ log-generator generate SCENARIO_FILE [--output DIR] [--resume]
 11. Show progress bar with ETA (based on moving average of last 10% progress)
 12. Log details to generation.log in output directory
 13. Create checkpoint files every 5 minutes (or 100K events) for resume capability
+14. Generate GROUND_TRUTH.md file when malicious/suspicious activities are present:
+   - Attack narrative summary (malicious activities only, excludes benign baseline)
+   - Timeline of key malicious events with timestamps and optional record IDs
+   - Atomic IOCs grouped by type (IP addresses, usernames, hostnames, processes, file paths, command lines, etc.)
 
 #### Workflow 5: Evaluate Output
 ```bash
@@ -157,8 +162,9 @@ log-generator evaluate OUTPUT_DIR
    - Consistency (cross-references resolve correctly)
    - Statistical properties (distributions, timing patterns)
    - Completeness (no orphaned references)
-3. Generate report with scores and specific findings
-4. Optional: Save report for comparison across runs
+3. If GROUND_TRUTH.md exists, validate that all documented IOCs are present in logs
+4. Generate report with scores and specific findings
+5. Optional: Save report for comparison across runs
 
 ### 4.2 Data Model
 
@@ -426,6 +432,92 @@ class GeneratorState:
     checkpoint_data: dict  # For resume capability
 ```
 
+#### Output Files
+
+**Directory Structure**
+
+Generated logs are written to a timestamped output directory:
+```
+output/
+  scenario-name-YYYYMMDD-HHMMSS/
+    generation.log              # Detailed generation log
+    GROUND_TRUTH.md            # Attack ground truth (if malicious activity present)
+    windows_events.xml         # Windows Event Logs
+    zeek_conn.log              # Zeek connection logs
+    syslog.log                 # Linux syslogs
+    snort_alerts.log           # Snort/Suricata alerts
+    web_access.log             # Web/proxy logs
+    .checkpoints/              # Resume checkpoints (deleted on success)
+```
+
+**GROUND_TRUTH.md Format**
+
+When a scenario includes malicious or suspicious activities (not baseline-only scenarios), the generator creates a GROUND_TRUTH.md file documenting the attack for training and evaluation purposes.
+
+```markdown
+# Ground Truth: [Scenario Name]
+
+Generated: YYYY-MM-DD HH:MM:SS UTC
+Time Window: [start] to [end]
+
+## Attack Summary
+
+[Narrative description of the malicious/suspicious activities. Excludes benign baseline
+activity. Describes the attack from initial access through objectives, including
+techniques used, systems compromised, data accessed, etc.]
+
+## Timeline
+
+Chronological sequence of key malicious events. Each entry includes:
+- Timestamp (ISO 8601 format)
+- Optional record ID (EventRecordID, UID, line number) if applicable
+- Human-readable description with relevant context
+
+Format:
+YYYY-MM-DDTHH:MM:SS.ssssssZ [RecordID: 12345] - Description with IOCs
+
+Example:
+2024-01-15T10:23:45.123456Z [EventRecordID: 12345] - Initial access: Threat actor logged in to WIN-TEST-01 as CORP\jdoe from source IP 203.0.113.50
+2024-01-15T10:24:12.789012Z - C2 communication: Outbound connection from 192.168.1.100 to C2 server 198.51.100.45:443
+2024-01-15T10:25:03.456789Z [EventRecordID: 12389] - Credential dumping: Process mimikatz.exe (PID 4532) executed by CORP\jdoe
+
+## Indicators of Compromise (IOCs)
+
+Atomic indicators that can be searched for in the logs to identify malicious activity.
+Grouped by type for easy reference.
+
+### Network Indicators
+- Attacker IP addresses: 203.0.113.50, 198.51.100.45
+- C2 domains: evil-c2.example.com, malware-download.net
+- C2 IP:Port combinations: 198.51.100.45:443, 198.51.100.45:8080
+
+### User Accounts
+- Compromised accounts: CORP\jdoe, CORP\admin-backup
+- Created accounts: CORP\backdoor-admin
+
+### Host Indicators
+- Compromised systems: WIN-TEST-01, WIN-TEST-05, DC-01
+- Malicious processes: mimikatz.exe, nc.exe, evil-payload.exe
+- Process IDs: 4532 (mimikatz.exe), 5123 (nc.exe)
+- File paths: C:\Temp\mimikatz.exe, C:\Users\jdoe\Downloads\payload.exe
+- Command lines: "mimikatz.exe privilege::debug sekurlsa::logonpasswords"
+
+### Other Indicators
+- [Additional categories as relevant: registry keys, scheduled tasks, services, etc.]
+```
+
+**Purpose:**
+- Provides ground truth for threat hunting training exercises
+- Enables validation that detection rules capture the malicious activity
+- Documents the attack narrative for educational purposes
+- Lists atomic IOCs for direct searching in SIEM/analysis tools
+
+**Generation:**
+- Created automatically during log generation when storyline contains malicious activities
+- Not generated for baseline-only scenarios (no malicious activity)
+- IOCs extracted from actual generated events (guaranteed to be present in logs)
+- Timeline includes only key events (not every single malicious log entry)
+
 ### 4.3 CLI Interface
 
 **Command: init**
@@ -507,6 +599,7 @@ Evaluates generated logs for concrete metrics:
   - Consistency: 100% of cross-references resolve (LogonIDs, PIDs, connection IDs)
   - Statistical properties: Event type distributions, logon/logoff balance (within 5%)
   - Completeness: No orphaned references
+  - Ground truth validation: If GROUND_TRUTH.md exists, verify all documented IOCs are present in logs
 
 Report is informational only (no pass/fail thresholds for MVP).
 Outputs JSON report with scores and specific findings.

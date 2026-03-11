@@ -77,9 +77,17 @@
   - [ ] Basic baseline activity generation (fixed patterns, no LLM)
   - [ ] Simple storyline execution
   - [ ] Coordinate emitters for cross-log consistency
+  - [ ] Generate GROUND_TRUTH.md when malicious activities present
 - [ ] `generation/activity.py` - Activity execution logic
+- [ ] `generation/ground_truth.py` - Ground truth documentation generator
+  - [ ] Extract attack narrative from storyline
+  - [ ] Build timeline of key malicious events with timestamps and record IDs
+  - [ ] Collect atomic IOCs (IPs, usernames, hostnames, processes, file paths, command lines)
+  - [ ] Write formatted GROUND_TRUTH.md
 - [ ] Test: Small scenario end-to-end (<1000 events)
 - [ ] Test: Cross-log consistency (LogonIDs, PIDs match)
+- [ ] Test: GROUND_TRUTH.md generation for attack scenarios
+- [ ] Test: No GROUND_TRUTH.md for baseline-only scenarios
 
 ### 1.8 CLI Framework (Basic Commands)
 
@@ -251,15 +259,18 @@
   - [ ] Cross-reference consistency (100% resolution)
   - [ ] Statistical properties (event distributions, logon/logoff balance within 5%)
   - [ ] Completeness (no orphaned references)
+  - [ ] Ground truth validation (if GROUND_TRUTH.md exists, verify all IOCs present)
 - [ ] `evaluation/evaluator.py` - Main evaluation logic
 - [ ] `evaluation/report.py` - JSON report generation
 - [ ] Command: `forge evaluate` - Evaluate generated logs
   - [ ] Load logs from output directory
   - [ ] Run all metrics
+  - [ ] Validate GROUND_TRUTH.md IOCs if present
   - [ ] Generate report (JSON)
   - [ ] --verbose flag for detailed findings
 - [ ] Test: Metrics calculation
 - [ ] Test: Report generation
+- [ ] Test: Ground truth IOC validation
 
 ### 3.5 Pre-Built Persona Library
 
