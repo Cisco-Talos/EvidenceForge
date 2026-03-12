@@ -21,6 +21,7 @@ class ZeekEmitter(LogEmitter):
         format_def: FormatDefinition,
         output_path: Path,
         buffer_size: int = 10000,
+        threaded: bool = False,
     ):
         """Initialize Zeek emitter.
 
@@ -28,20 +29,25 @@ class ZeekEmitter(LogEmitter):
             format_def: Zeek format definition
             output_path: Path to write JSON log file
             buffer_size: Number of events to buffer before flushing
+            threaded: Enable threaded mode with queue-based processing (Phase 2.1)
         """
-        super().__init__(format_def, output_path, buffer_size)
+        super().__init__(format_def, output_path, buffer_size, threaded)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Emit a Zeek connection event.
 
+        In threaded mode, posts to queue. In non-threaded mode, renders immediately.
+
         Args:
             event_data: Event data with connection fields
         """
-        # Render the event
-        rendered = self._render_event(event_data)
-
-        # Buffer it
-        self._buffer_event(rendered)
+        if self.threaded:
+            # Threaded mode: post to queue
+            self._emit_threaded(event_data)
+        else:
+            # Non-threaded mode: render and buffer immediately
+            rendered = self._render_event(event_data)
+            self._buffer_event(rendered)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Zeek connection to JSON format.

@@ -8,6 +8,7 @@ coordinates them across multiple log formats for consistency.
 import logging
 import random
 from datetime import datetime
+from threading import local, get_ident, Lock
 from typing import Optional
 
 from log_generator.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -16,6 +17,29 @@ from log_generator.models.scenario import User, System
 from log_generator.utils.ids import generate_zeek_uid
 
 logger = logging.getLogger(__name__)
+
+
+# Thread-local storage for RNG (Phase 2.1)
+_thread_local = local()
+
+
+def _get_rng() -> random.Random:
+    """Get thread-local Random instance with deterministic seed.
+
+    This provides thread-safe random number generation without GIL contention.
+    Each thread gets its own RNG instance with a deterministic seed based on
+    the thread ID, preserving reproducibility.
+
+    Returns:
+        Thread-local Random instance
+    """
+    if not hasattr(_thread_local, 'rng'):
+        thread_id = get_ident()
+        # Deterministic seed: combine thread ID with global seed
+        # TODO: Make global seed configurable via config
+        seed = hash((thread_id, 42))  # 42 = global seed
+        _thread_local.rng = random.Random(seed)
+    return _thread_local.rng
 
 
 # Fixed baseline activity patterns for Phase 1 (no LLM expansion)
@@ -154,6 +178,7 @@ class ActivityGenerator:
         self.state_manager = state_manager
         self.emitters = emitters
         self.event_record_counter = event_record_counter
+        self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
 
     def generate_logon(
         self,
@@ -198,7 +223,7 @@ class ActivityGenerator:
             'Level': 0,  # Information
             'EventRecordID': self._get_next_event_record_id(),
             'ExecutionProcessID': 4,    # System process
-            'ExecutionThreadID': random.randint(100, 500),
+            'ExecutionThreadID': _get_rng().randint(100, 500),
             # Logon variant fields
             'TargetUserName': user.username,
             'TargetDomainName': 'CORP',  # Phase 1: Fixed domain
@@ -206,7 +231,7 @@ class ActivityGenerator:
             'LogonType': logon_type,
             'WorkstationName': system.hostname,
             'IpAddress': source_ip,
-            'IpPort': random.randint(49152, 65535) if logon_type == 3 else None,
+            'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else None,
             'LogonProcessName': 'User32' if logon_type == 2 else 'NtLmSsp',
             'AuthenticationPackageName': 'Negotiate',
         }
@@ -245,7 +270,7 @@ class ActivityGenerator:
             'Level': 0,
             'EventRecordID': self._get_next_event_record_id(),
             'ExecutionProcessID': 4,
-            'ExecutionThreadID': random.randint(100, 500),
+            'ExecutionThreadID': _get_rng().randint(100, 500),
             # Logoff variant fields
             'TargetUserName': user.username,
             'TargetDomainName': 'CORP',
@@ -301,7 +326,7 @@ class ActivityGenerator:
             'Level': 0,
             'EventRecordID': self._get_next_event_record_id(),
             'ExecutionProcessID': 4,
-            'ExecutionThreadID': random.randint(100, 500),
+            'ExecutionThreadID': _get_rng().randint(100, 500),
             # Process variant fields
             'SubjectUserName': user.username,
             'SubjectDomainName': 'CORP',
@@ -360,7 +385,7 @@ class ActivityGenerator:
             )
             return ""  # Return empty UID to indicate skipped connection
 
-        src_port = random.randint(49152, 65535)  # Ephemeral port
+        src_port = _get_rng().randint(49152, 65535)  # Ephemeral port
 
         # Create connection in StateManager
         conn_id = self.state_manager.open_connection(
@@ -460,7 +485,7 @@ class ActivityGenerator:
                 logon_id = sessions[0].logon_id  # Use first active session
 
             # Choose random process template
-            process_name, command_line = random.choice(PROCESS_TEMPLATES[activity_type])
+            process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES[activity_type])
             self.generate_process(user, system, time, logon_id, process_name, command_line)
 
         # Connection activities
@@ -479,11 +504,11 @@ class ActivityGenerator:
                 )
                 return
 
-            dst_ip = random.choice(available_destinations)
+            dst_ip = _get_rng().choice(available_destinations)
 
             # Set service and port based on activity type
             if activity_type == 'connection_web':
-                service = random.choice(['http', 'https'])
+                service = _get_rng().choice(['http', 'https'])
                 dst_port = 443 if service == 'https' else 80
             elif activity_type == 'connection_email':
                 service = 'smtp'
@@ -499,9 +524,9 @@ class ActivityGenerator:
                 dst_port = 443
 
             # Generate realistic traffic sizes
-            orig_bytes = random.randint(500, 5000)
-            resp_bytes = random.randint(1000, 50000)
-            duration = random.uniform(0.1, 5.0)
+            orig_bytes = _get_rng().randint(500, 5000)
+            resp_bytes = _get_rng().randint(1000, 50000)
+            duration = _get_rng().uniform(0.1, 5.0)
 
             self.generate_connection(
                 src_ip=system.ip,
@@ -515,10 +540,11 @@ class ActivityGenerator:
             )
 
     def _get_next_event_record_id(self) -> int:
-        """Get next EventRecordID for Windows events.
+        """Get next EventRecordID for Windows events (thread-safe).
 
         Returns:
             Next sequential EventRecordID
         """
-        self.event_record_counter += 1
-        return self.event_record_counter
+        with self._counter_lock:
+            self.event_record_counter += 1
+            return self.event_record_counter

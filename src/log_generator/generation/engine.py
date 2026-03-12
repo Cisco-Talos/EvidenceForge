@@ -157,9 +157,9 @@ class GenerationEngine:
             output_file = self.output_dir / f"{format_name}{format_def.output.file_extension}"
 
             if format_name == 'windows_event_security':
-                emitter = WindowsEventEmitter(format_def, output_file)
+                emitter = WindowsEventEmitter(format_def, output_file, threaded=True)
             elif format_name == 'zeek_conn':
-                emitter = ZeekEmitter(format_def, output_file)
+                emitter = ZeekEmitter(format_def, output_file, threaded=True)
             else:
                 raise ValueError(f"Unsupported format: {format_name}")
 
@@ -227,10 +227,25 @@ class GenerationEngine:
                     for event_time in event_times:
                         self._generate_user_activity(user, event_time)
 
+            # Barrier flush - ensure all events for this hour are written
+            # before proceeding to next hour (temporal consistency)
+            self._barrier_flush_all_emitters()
+
             # Move to next hour
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
+
+    def _barrier_flush_all_emitters(self) -> None:
+        """Flush all emitters and wait for completion (hour-level barrier).
+
+        Ensures temporal consistency: all events for hour N are written
+        before hour N+1 begins.
+        """
+        logger.debug("Barrier flush: waiting for all emitters to complete")
+        for format_name, emitter in self.emitters.items():
+            emitter.barrier_flush()
+        logger.debug("Barrier flush: all emitters complete")
 
     def _calculate_events_for_hour(self, user: User) -> int:
         """Calculate number of events for user this hour.
@@ -384,6 +399,9 @@ class GenerationEngine:
 
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
+
+            # Barrier flush after each storyline event (ensures event written before proceeding)
+            self._barrier_flush_all_emitters()
 
     def _parse_storyline_time(self, time_str: str) -> datetime:
         """Parse storyline event time to absolute datetime.
@@ -581,12 +599,18 @@ class GenerationEngine:
         """Finalize generation and close all emitters.
 
         Flushes remaining buffered events and closes emitter files.
+        Phase 2.1: Gracefully stops emitter threads before closing.
         """
         logger.info("Finalizing generation")
 
+        # Stop emitter threads gracefully (they flush on stop)
         for format_name, emitter in self.emitters.items():
-            logger.info(f"Closing {format_name} emitter")
-            emitter.close()
+            if emitter.threaded:
+                logger.info(f"Stopping {format_name} emitter thread")
+                emitter.stop_thread()
+            else:
+                logger.info(f"Closing {format_name} emitter")
+                emitter.close()
 
         logger.info("All emitters closed")
 
