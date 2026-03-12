@@ -415,6 +415,7 @@
 - [ ] Config file inheritance/templating
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
+- [ ] Additional network diagram formats (Graphviz/DOT, draw.io exports, network discovery tool outputs)
 - [ ] Performance optimizations (Rust extensions, better parallelization)
 
 ### Medium-term

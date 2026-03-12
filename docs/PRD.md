@@ -35,6 +35,7 @@ The tool addresses the need for realistic, large-volume training datasets withou
 - Schema validation and LLM-based semantic validation with interactive repair
 - Optional realism evaluation with concrete metrics
 - Ground truth documentation (GROUND_TRUTH.md) for scenarios with malicious activity: attack narrative, timeline, atomic IOCs
+- Network topology and sensor placement modeling: Define network segments, sensor locations, and traffic visibility to ensure only observable network traffic is generated
 - Comprehensive test coverage (95%+) with pytest
 - Ship with pre-built persona library to reduce LLM usage
 - Flexible timezone handling (UTC internal, configurable per-system/format for output)
@@ -86,6 +87,7 @@ log-generator new [--config CONFIG_FILE]
 1. System starts conversational interface
 2. Asks clarifying questions about:
    - Environment (size, type of organization, systems, users)
+   - Network topology (optional: provide Mermaid diagram file, define conversationally, or skip)
    - Baseline activity patterns (or select from pre-built persona library)
    - Specific attack scenarios or activities to inject
    - Time windows
@@ -243,6 +245,25 @@ environment:
     - path: string
       permissions: list[string]  # Group names
 
+  network:
+    segments:
+      - name: string           # Segment identifier (e.g., "workstations", "servers", "dmz")
+        cidr: string           # CIDR notation (e.g., "10.0.10.0/24")
+        description: string    # Human-readable description
+        systems: list[string]  # Optional: Hostnames in this segment (inferred from system IPs if omitted)
+
+    sensors:
+      - type: string           # network|ids|firewall (determines which log formats this sensor generates)
+        name: string           # Sensor identifier
+        monitoring_segments: list[string]  # Segment names this sensor monitors
+        direction: string      # inbound|outbound|bidirectional (what traffic is visible)
+        log_formats: list[string]  # Which formats this sensor generates (e.g., ["zeek_conn", "snort"])
+        description: string    # Optional description
+
+    # Note: Network topology defines which connections are observable by sensors.
+    # Phase 1: Basic validation (no localhost, no same src/dst, no link-local/multicast)
+    # Phase 2: Full topology-aware validation (only generate traffic visible to configured sensors)
+
 personas:
   # Note: LLM expands high-level persona descriptions into detailed activity patterns
   # during conversation phase. Can reference pre-built personas or define custom.
@@ -347,6 +368,7 @@ common_fields:
 # Type System for Format Definitions:
 # - datetime: ISO 8601 timestamp, rendered per format (epoch, ISO, custom)
 # - integer: 64-bit signed integer
+# - float: IEEE 754 double-precision floating point
 # - string: UTF-8 string
 # - ip_address: IPv4 or IPv6 address
 # - ipv4: IPv4 address specifically
@@ -361,6 +383,12 @@ common_fields:
 # - url: URL (http/https)
 # - uuid: UUID v4
 # - base64: Base64-encoded string
+
+# Format-Specific Precision Requirements:
+# - Zeek timestamps: Epoch float with exactly 6 decimal places (microsecond precision)
+#   Format: f"{timestamp:.6f}" to preserve trailing zeros during JSON serialization
+# - Windows Event timestamps: ISO 8601 with millisecond precision (YYYY-MM-DDTHH:MM:SS.sssZ)
+# - Syslog timestamps: RFC 3339 format with timezone offset
 
 variants:                    # For formats with subtypes (channels, log types)
   - name: string
@@ -539,13 +567,23 @@ Non-interactive: Simply writes heavily-commented config file with:
 
 **Command: new**
 ```
-log-generator new [--config CONFIG_FILE]
+log-generator new [--config CONFIG_FILE] [--network-diagram DIAGRAM_FILE]
 
 Options:
-  --config    Path to config file (default: ./config.yaml)
+  --config           Path to config file (default: ./config.yaml)
+  --network-diagram  Path to Mermaid diagram file defining network topology (optional)
 
 Starts interactive conversational interface for scenario creation.
 Outputs scenario YAML file based on user responses.
+
+Network topology can be provided in three ways:
+1. Via --network-diagram flag: Provide Mermaid (.mmd or .md) diagram file. CLI reads file
+   locally and sends contents to LLM for parsing into structured YAML network schema.
+2. Conversationally: LLM prompts for network topology details and builds schema interactively.
+3. Skip: Omit network topology entirely (simple scenarios or manual YAML editing later).
+
+MVP supports Mermaid diagram format only. Future enhancements may add Graphviz/DOT, draw.io
+exports, or network discovery tool outputs.
 ```
 
 **Command: validate**
@@ -1033,8 +1071,13 @@ Note: Warnings do not affect exit code.
 - Circular parent references: Error
 
 **Network impossibilities:**
-- Connection to private IP from external actor: Warn (might be VPN/proxy)
+- Connection where src_ip == dst_ip: Skip with warning (network sensors cannot observe localhost traffic)
+- Connection involving localhost addresses (127.0.0.0/8): Skip with warning (never traverses network)
+- Connection involving link-local addresses (169.254.0.0/16): Skip with warning (auto-config, not routed)
+- Connection involving multicast/reserved addresses (224.0.0.0/4): Skip with warning (special handling required)
+- Connection to private IP from external actor: Warn (might be VPN/proxy, but allow)
 - Response bytes > 0 for failed connection: Adjust to 0, warn
+- Phase 2: Connection not visible to configured sensors: Skip based on network topology and sensor placement
 
 **Logon without logoff:**
 - Within time window: Acceptable and common (user still logged in, forgot to log off, system crash)
@@ -1063,7 +1106,7 @@ Note: Warnings do not affect exit code.
 **Connection to private IP from external actor:**
 - Allow but warn: "External actor accessing private IP - consider modeling VPN/proxy/compromised perimeter"
 - Don't auto-create NAT infrastructure
-- User should explicitly model network topology if needed (or note as future enhancement)
+- User should explicitly model network topology to represent VPN/proxy/perimeter devices (see environment.network schema)
 
 ## 9. Testing Strategy
 
@@ -1279,7 +1322,7 @@ class FormatDefinition:
 - Generate logs for systems we don't have format definitions for
 - Guarantee detection rule triggering (depends on SIEM/tool configuration)
 - Provide bit-perfect reproducibility (LLM expansion is non-deterministic; save and reuse scenario files)
-- Auto-generate complete network topology (external->internal connections flagged with warning)
+- Auto-infer network topology from system IPs (users must explicitly define network segments and sensor placement)
 
 **Performance bounds (MVP):**
 - Max 1000 users (technical limit, not enforced)
