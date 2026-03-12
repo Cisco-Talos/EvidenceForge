@@ -159,12 +159,12 @@
 
 ### 2.3 Progress Reporting
 
-- [ ] Integrate Rich library for progress bars
-- [ ] `cli/commands.py` - Add progress bar to generate command
-  - [ ] Show time window progress (elapsed / total)
-  - [ ] Show event counts per format
-  - [ ] Show ETA based on moving average
-- [ ] Test: Progress updates correctly during generation
+- [x] Integrate Rich library for progress bars
+- [x] `cli/commands.py` - Add progress bar to generate command
+  - [x] Show time window progress (elapsed / total)
+  - [x] Show event counts per format
+  - [x] Show ETA based on moving average
+- [x] Test: Progress updates correctly during generation
 
 ### 2.4 Enhanced Scenario Schema
 

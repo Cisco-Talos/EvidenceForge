@@ -9,7 +9,7 @@ import logging
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from log_generator.formats import load_format
 from log_generator.generation.activity import ActivityGenerator
@@ -46,15 +46,23 @@ class GenerationEngine:
         malicious_events: List of malicious events for GROUND_TRUTH.md
     """
 
-    def __init__(self, scenario: Scenario, output_dir: Path):
+    def __init__(
+        self,
+        scenario: Scenario,
+        output_dir: Path,
+        progress_callback: Optional[Callable[[str, dict], None]] = None
+    ):
         """Initialize generation engine.
 
         Args:
             scenario: Validated scenario object
             output_dir: Output directory path
+            progress_callback: Optional callback for progress reporting.
+                Called with (event_type: str, data: dict) at key milestones.
         """
         self.scenario = scenario
         self.output_dir = output_dir
+        self.progress_callback = progress_callback
         self.state_manager = StateManager()
         self.emitters: dict[str, WindowsEventEmitter | ZeekEmitter] = {}
         self.activity_generator: Optional[ActivityGenerator] = None
@@ -64,6 +72,16 @@ class GenerationEngine:
 
         # Event counter for record IDs
         self.event_record_counter = 10000
+
+    def _report_progress(self, event_type: str, data: dict) -> None:
+        """Report progress to callback if registered.
+
+        Args:
+            event_type: Type of progress event (e.g., "phase_start", "hour_progress")
+            data: Event-specific data payload
+        """
+        if self.progress_callback:
+            self.progress_callback(event_type, data)
 
     def generate(self) -> None:
         """Main generation flow.
@@ -78,23 +96,36 @@ class GenerationEngine:
         logger.info(f"Starting generation for scenario: {self.scenario.name}")
 
         # Phase 1: Initialize
+        self._report_progress("phase_start", {"phase": "initialize", "description": "Initializing generation engine"})
         self._initialize()
+        self._report_progress("phase_end", {"phase": "initialize"})
 
         # Phase 2: Generate baseline activity
+        self._report_progress("phase_start", {"phase": "baseline", "description": "Generating baseline activity"})
         self._generate_baseline()
+        self._report_progress("phase_end", {"phase": "baseline"})
 
         # Phase 3: Execute storyline events (if present)
         if self.scenario.storyline:
             logger.info(f"Executing {len(self.scenario.storyline)} storyline events")
+            self._report_progress("phase_start", {
+                "phase": "storyline",
+                "description": f"Executing {len(self.scenario.storyline)} storyline events"
+            })
             self._execute_storyline()
+            self._report_progress("phase_end", {"phase": "storyline"})
 
         # Phase 4: Finalize and close emitters
+        self._report_progress("phase_start", {"phase": "finalize", "description": "Finalizing generation"})
         self._finalize()
+        self._report_progress("phase_end", {"phase": "finalize"})
 
         # Phase 5: Generate ground truth (if malicious activity present)
         if self.malicious_events:
             logger.info(f"Generating GROUND_TRUTH.md with {len(self.malicious_events)} malicious events")
+            self._report_progress("phase_start", {"phase": "ground_truth", "description": "Generating ground truth documentation"})
             self._generate_ground_truth()
+            self._report_progress("phase_end", {"phase": "ground_truth"})
 
         logger.info("Generation complete")
 
@@ -164,6 +195,9 @@ class GenerationEngine:
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
         logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
 
+        # Calculate total hours for progress tracking
+        total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
+
         # Hour-by-hour iteration
         current_hour = self.start_time
         hour_count = 0
@@ -172,6 +206,13 @@ class GenerationEngine:
             hour_count += 1
             logger.debug(f"Processing hour {hour_count}: {current_hour}")
             self.state_manager.set_current_time(current_hour)
+
+            # Report hour progress
+            self._report_progress("hour_progress", {
+                "hour": hour_count,
+                "total_hours": total_hours,
+                "current_time": current_hour
+            })
 
             # Generate events for each user this hour
             for user in enabled_users:
@@ -295,7 +336,9 @@ class GenerationEngine:
         - Basic event generation based on activity description
         - Tracking of malicious events for ground truth
         """
-        for storyline_event in self.scenario.storyline:
+        total_events = len(self.scenario.storyline)
+
+        for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
             # Parse event time
             event_time = self._parse_storyline_time(storyline_event.time)
 
@@ -314,6 +357,14 @@ class GenerationEngine:
                 f"Executing storyline event: {storyline_event.actor} on "
                 f"{storyline_event.system} at {event_time}"
             )
+
+            # Report storyline progress
+            self._report_progress("storyline_progress", {
+                "event_num": event_num,
+                "total_events": total_events,
+                "actor": actor.username,
+                "system": system.hostname
+            })
 
             # Match activity to event types (simple keyword matching)
             event_types = self._match_activity_to_events(storyline_event.activity)

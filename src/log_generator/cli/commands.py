@@ -13,6 +13,15 @@ import typer
 from pydantic import ValidationError
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from log_generator.generation import GenerationEngine
 from log_generator.models.scenario import Scenario
@@ -210,8 +219,67 @@ def generate(
     try:
         console.print("\n[bold]Starting log generation...[/bold]")
 
-        engine = GenerationEngine(scenario=scenario, output_dir=output_dir)
-        engine.generate()
+        # Create progress display with Rich
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,  # Keep progress bars visible after completion
+        ) as progress:
+
+            # Progress tracking state
+            phase_task = progress.add_task("Initializing...", total=None)
+            hour_task = None
+            storyline_task = None
+
+            # Progress callback closure
+            def progress_callback(event_type: str, data: dict) -> None:
+                nonlocal phase_task, hour_task, storyline_task
+
+                if event_type == "phase_start":
+                    progress.update(phase_task, description=data["description"])
+
+                elif event_type == "phase_end":
+                    if data["phase"] == "baseline" and hour_task is not None:
+                        progress.update(hour_task, completed=progress.tasks[hour_task].total)
+                    elif data["phase"] == "storyline" and storyline_task is not None:
+                        progress.update(storyline_task, completed=progress.tasks[storyline_task].total)
+
+                elif event_type == "hour_progress":
+                    if hour_task is None:
+                        hour_task = progress.add_task(
+                            "Processing hours...",
+                            total=data["total_hours"]
+                        )
+                    progress.update(
+                        hour_task,
+                        completed=data["hour"],
+                        description=f"Hour {data['hour']}/{data['total_hours']}"
+                    )
+
+                elif event_type == "storyline_progress":
+                    if storyline_task is None:
+                        storyline_task = progress.add_task(
+                            "Storyline events...",
+                            total=data["total_events"]
+                        )
+                    progress.update(
+                        storyline_task,
+                        completed=data["event_num"],
+                        description=f"Event {data['event_num']}/{data['total_events']}: {data['actor']} on {data['system']}"
+                    )
+
+            # Generate logs with progress reporting
+            engine = GenerationEngine(
+                scenario=scenario,
+                output_dir=output_dir,
+                progress_callback=progress_callback
+            )
+            engine.generate()
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")
         console.print(f"\nGenerated logs:")
