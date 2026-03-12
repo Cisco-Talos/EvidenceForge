@@ -1,0 +1,180 @@
+version: "1.0"
+name: medium-dataset
+description: "Medium-scale baseline scenario for performance testing (100 users, 20 systems, 8 hours)"
+
+environment:
+  description: "Mid-size corporate office with mixed Windows/Linux infrastructure"
+
+  users:
+    # Executives (10)
+    - {username: exec01, full_name: "Alice Chen", email: exec01@corp.com, persona: executive, primary_system: WS-01, enabled: true}
+    - {username: exec02, full_name: "Bob Davis", email: exec02@corp.com, persona: executive, primary_system: WS-02, enabled: true}
+    - {username: exec03, full_name: "Carol Evans", email: exec03@corp.com, persona: executive, primary_system: WS-03, enabled: true}
+    - {username: exec04, full_name: "Dan Foster", email: exec04@corp.com, persona: executive, primary_system: WS-04, enabled: true}
+    - {username: exec05, full_name: "Eve Grant", email: exec05@corp.com, persona: executive, primary_system: WS-05, enabled: true}
+    - {username: exec06, full_name: "Frank Hall", email: exec06@corp.com, persona: executive, primary_system: WS-06, enabled: true}
+    - {username: exec07, full_name: "Grace Irwin", email: exec07@corp.com, persona: executive, primary_system: WS-07, enabled: true}
+    - {username: exec08, full_name: "Henry James", email: exec08@corp.com, persona: executive, primary_system: WS-08, enabled: true}
+    - {username: exec09, full_name: "Iris King", email: exec09@corp.com, persona: executive, primary_system: WS-09, enabled: true}
+    - {username: exec10, full_name: "Jack Lee", email: exec10@corp.com, persona: executive, primary_system: WS-10, enabled: true}
+
+    # Developers (20)
+    - {username: dev01, full_name: "Kate Moore", email: dev01@corp.com, persona: developer, primary_system: WS-01, enabled: true}
+    - {username: dev02, full_name: "Leo Nash", email: dev02@corp.com, persona: developer, primary_system: WS-02, enabled: true}
+    - {username: dev03, full_name: "Mia Owen", email: dev03@corp.com, persona: developer, primary_system: WS-03, enabled: true}
+    - {username: dev04, full_name: "Noah Price", email: dev04@corp.com, persona: developer, primary_system: WS-04, enabled: true}
+    - {username: dev05, full_name: "Olivia Quinn", email: dev05@corp.com, persona: developer, primary_system: WS-05, enabled: true}
+    - {username: dev06, full_name: "Paul Ross", email: dev06@corp.com, persona: developer, primary_system: WS-06, enabled: true}
+    - {username: dev07, full_name: "Quinn Scott", email: dev07@corp.com, persona: developer, primary_system: WS-07, enabled: true}
+    - {username: dev08, full_name: "Ruby Turner", email: dev08@corp.com, persona: developer, primary_system: WS-08, enabled: true}
+    - {username: dev09, full_name: "Sam Underwood", email: dev09@corp.com, persona: developer, primary_system: WS-09, enabled: true}
+    - {username: dev10, full_name: "Tina Voss", email: dev10@corp.com, persona: developer, primary_system: WS-10, enabled: true}
+    - {username: dev11, full_name: "Uma Walker", email: dev11@corp.com, persona: developer, primary_system: WS-01, enabled: true}
+    - {username: dev12, full_name: "Vic Xu", email: dev12@corp.com, persona: developer, primary_system: WS-02, enabled: true}
+    - {username: dev13, full_name: "Wendy Young", email: dev13@corp.com, persona: developer, primary_system: WS-03, enabled: true}
+    - {username: dev14, full_name: "Xavier Zhang", email: dev14@corp.com, persona: developer, primary_system: WS-04, enabled: true}
+    - {username: dev15, full_name: "Yara Adams", email: dev15@corp.com, persona: developer, primary_system: WS-05, enabled: true}
+    - {username: dev16, full_name: "Zack Bell", email: dev16@corp.com, persona: developer, primary_system: WS-06, enabled: true}
+    - {username: dev17, full_name: "Amy Clark", email: dev17@corp.com, persona: developer, primary_system: WS-07, enabled: true}
+    - {username: dev18, full_name: "Ben Drake", email: dev18@corp.com, persona: developer, primary_system: WS-08, enabled: true}
+    - {username: dev19, full_name: "Clara Ellis", email: dev19@corp.com, persona: developer, primary_system: WS-09, enabled: true}
+    - {username: dev20, full_name: "Doug Flynn", email: dev20@corp.com, persona: developer, primary_system: WS-10, enabled: true}
+
+    # Analysts (30)
+    - {username: analyst01, full_name: "Emma Garcia", email: analyst01@corp.com, persona: analyst, primary_system: WS-01, enabled: true}
+    - {username: analyst02, full_name: "Finn Harris", email: analyst02@corp.com, persona: analyst, primary_system: WS-02, enabled: true}
+    - {username: analyst03, full_name: "Gina Ivy", email: analyst03@corp.com, persona: analyst, primary_system: WS-03, enabled: true}
+    - {username: analyst04, full_name: "Hugo Jones", email: analyst04@corp.com, persona: analyst, primary_system: WS-04, enabled: true}
+    - {username: analyst05, full_name: "Isla Kent", email: analyst05@corp.com, persona: analyst, primary_system: WS-05, enabled: true}
+    - {username: analyst06, full_name: "Jake Long", email: analyst06@corp.com, persona: analyst, primary_system: WS-06, enabled: true}
+    - {username: analyst07, full_name: "Kim Mason", email: analyst07@corp.com, persona: analyst, primary_system: WS-07, enabled: true}
+    - {username: analyst08, full_name: "Liam Neal", email: analyst08@corp.com, persona: analyst, primary_system: WS-08, enabled: true}
+    - {username: analyst09, full_name: "Mona Ott", email: analyst09@corp.com, persona: analyst, primary_system: WS-09, enabled: true}
+    - {username: analyst10, full_name: "Nate Park", email: analyst10@corp.com, persona: analyst, primary_system: WS-10, enabled: true}
+    - {username: analyst11, full_name: "Opal Reed", email: analyst11@corp.com, persona: analyst, primary_system: WS-01, enabled: true}
+    - {username: analyst12, full_name: "Pete Shaw", email: analyst12@corp.com, persona: analyst, primary_system: WS-02, enabled: true}
+    - {username: analyst13, full_name: "Rosa Todd", email: analyst13@corp.com, persona: analyst, primary_system: WS-03, enabled: true}
+    - {username: analyst14, full_name: "Seth Upton", email: analyst14@corp.com, persona: analyst, primary_system: WS-04, enabled: true}
+    - {username: analyst15, full_name: "Tara Vale", email: analyst15@corp.com, persona: analyst, primary_system: WS-05, enabled: true}
+    - {username: analyst16, full_name: "Uri Wade", email: analyst16@corp.com, persona: analyst, primary_system: WS-06, enabled: true}
+    - {username: analyst17, full_name: "Vera West", email: analyst17@corp.com, persona: analyst, primary_system: WS-07, enabled: true}
+    - {username: analyst18, full_name: "Will York", email: analyst18@corp.com, persona: analyst, primary_system: WS-08, enabled: true}
+    - {username: analyst19, full_name: "Xena Zane", email: analyst19@corp.com, persona: analyst, primary_system: WS-09, enabled: true}
+    - {username: analyst20, full_name: "Yuri Abel", email: analyst20@corp.com, persona: analyst, primary_system: WS-10, enabled: true}
+    - {username: analyst21, full_name: "Zara Bolt", email: analyst21@corp.com, persona: analyst, primary_system: WS-01, enabled: true}
+    - {username: analyst22, full_name: "Adam Colt", email: analyst22@corp.com, persona: analyst, primary_system: WS-02, enabled: true}
+    - {username: analyst23, full_name: "Beth Dean", email: analyst23@corp.com, persona: analyst, primary_system: WS-03, enabled: true}
+    - {username: analyst24, full_name: "Chad Eyre", email: analyst24@corp.com, persona: analyst, primary_system: WS-04, enabled: true}
+    - {username: analyst25, full_name: "Dana Fisk", email: analyst25@corp.com, persona: analyst, primary_system: WS-05, enabled: true}
+    - {username: analyst26, full_name: "Earl Gill", email: analyst26@corp.com, persona: analyst, primary_system: WS-06, enabled: true}
+    - {username: analyst27, full_name: "Faye Hood", email: analyst27@corp.com, persona: analyst, primary_system: WS-07, enabled: true}
+    - {username: analyst28, full_name: "Gene Ives", email: analyst28@corp.com, persona: analyst, primary_system: WS-08, enabled: true}
+    - {username: analyst29, full_name: "Hope Jack", email: analyst29@corp.com, persona: analyst, primary_system: WS-09, enabled: true}
+    - {username: analyst30, full_name: "Ivan Koch", email: analyst30@corp.com, persona: analyst, primary_system: WS-10, enabled: true}
+
+    # General staff (40)
+    - {username: staff01, full_name: "Jill Lang", email: staff01@corp.com, primary_system: WS-01, enabled: true}
+    - {username: staff02, full_name: "Karl Mann", email: staff02@corp.com, primary_system: WS-02, enabled: true}
+    - {username: staff03, full_name: "Lena Nunn", email: staff03@corp.com, primary_system: WS-03, enabled: true}
+    - {username: staff04, full_name: "Mark Ober", email: staff04@corp.com, primary_system: WS-04, enabled: true}
+    - {username: staff05, full_name: "Nina Page", email: staff05@corp.com, primary_system: WS-05, enabled: true}
+    - {username: staff06, full_name: "Omar Rask", email: staff06@corp.com, primary_system: WS-06, enabled: true}
+    - {username: staff07, full_name: "Pam Sage", email: staff07@corp.com, primary_system: WS-07, enabled: true}
+    - {username: staff08, full_name: "Reed Taft", email: staff08@corp.com, primary_system: WS-08, enabled: true}
+    - {username: staff09, full_name: "Sara Ulm", email: staff09@corp.com, primary_system: WS-09, enabled: true}
+    - {username: staff10, full_name: "Troy Vann", email: staff10@corp.com, primary_system: WS-10, enabled: true}
+    - {username: staff11, full_name: "Una Webb", email: staff11@corp.com, primary_system: WS-01, enabled: true}
+    - {username: staff12, full_name: "Vick Xiao", email: staff12@corp.com, primary_system: WS-02, enabled: true}
+    - {username: staff13, full_name: "Wren Yost", email: staff13@corp.com, primary_system: WS-03, enabled: true}
+    - {username: staff14, full_name: "Alex Zinn", email: staff14@corp.com, primary_system: WS-04, enabled: true}
+    - {username: staff15, full_name: "Bria Alby", email: staff15@corp.com, primary_system: WS-05, enabled: true}
+    - {username: staff16, full_name: "Cole Bray", email: staff16@corp.com, primary_system: WS-06, enabled: true}
+    - {username: staff17, full_name: "Dawn Clay", email: staff17@corp.com, primary_system: WS-07, enabled: true}
+    - {username: staff18, full_name: "Evan Dole", email: staff18@corp.com, primary_system: WS-08, enabled: true}
+    - {username: staff19, full_name: "Fern Edge", email: staff19@corp.com, primary_system: WS-09, enabled: true}
+    - {username: staff20, full_name: "Glen Falk", email: staff20@corp.com, primary_system: WS-10, enabled: true}
+    - {username: staff21, full_name: "Hank Gale", email: staff21@corp.com, primary_system: SRV-LIN-01, enabled: true}
+    - {username: staff22, full_name: "Ida Hale", email: staff22@corp.com, primary_system: SRV-LIN-02, enabled: true}
+    - {username: staff23, full_name: "Juan Ike", email: staff23@corp.com, primary_system: SRV-LIN-03, enabled: true}
+    - {username: staff24, full_name: "Kaya Jost", email: staff24@corp.com, primary_system: SRV-LIN-04, enabled: true}
+    - {username: staff25, full_name: "Lane Kapp", email: staff25@corp.com, primary_system: SRV-LIN-05, enabled: true}
+    - {username: staff26, full_name: "May Lund", email: staff26@corp.com, primary_system: WS-01, enabled: true}
+    - {username: staff27, full_name: "Nick Moe", email: staff27@corp.com, primary_system: WS-02, enabled: true}
+    - {username: staff28, full_name: "Opal Nye", email: staff28@corp.com, primary_system: WS-03, enabled: true}
+    - {username: staff29, full_name: "Phil Ord", email: staff29@corp.com, primary_system: WS-04, enabled: true}
+    - {username: staff30, full_name: "Rae Poe", email: staff30@corp.com, primary_system: WS-05, enabled: true}
+    - {username: staff31, full_name: "Sid Quay", email: staff31@corp.com, primary_system: WS-06, enabled: true}
+    - {username: staff32, full_name: "Tia Roth", email: staff32@corp.com, primary_system: WS-07, enabled: true}
+    - {username: staff33, full_name: "Ulf Sato", email: staff33@corp.com, primary_system: WS-08, enabled: true}
+    - {username: staff34, full_name: "Val Toth", email: staff34@corp.com, primary_system: WS-09, enabled: true}
+    - {username: staff35, full_name: "Will Ure", email: staff35@corp.com, primary_system: WS-10, enabled: true}
+    - {username: staff36, full_name: "Xia Voss", email: staff36@corp.com, primary_system: WS-01, enabled: true}
+    - {username: staff37, full_name: "Yves Watt", email: staff37@corp.com, primary_system: WS-02, enabled: true}
+    - {username: staff38, full_name: "Zoe Xin", email: staff38@corp.com, primary_system: WS-03, enabled: true}
+    - {username: staff39, full_name: "Ava Yee", email: staff39@corp.com, primary_system: WS-04, enabled: true}
+    - {username: staff40, full_name: "Ben Zhu", email: staff40@corp.com, primary_system: WS-05, enabled: true}
+
+  systems:
+    # Windows workstations (10)
+    - {hostname: WS-01, ip: "10.0.1.1", os: "Windows 10", type: workstation}
+    - {hostname: WS-02, ip: "10.0.1.2", os: "Windows 10", type: workstation}
+    - {hostname: WS-03, ip: "10.0.1.3", os: "Windows 10", type: workstation}
+    - {hostname: WS-04, ip: "10.0.1.4", os: "Windows 10", type: workstation}
+    - {hostname: WS-05, ip: "10.0.1.5", os: "Windows 10", type: workstation}
+    - {hostname: WS-06, ip: "10.0.1.6", os: "Windows 10", type: workstation}
+    - {hostname: WS-07, ip: "10.0.1.7", os: "Windows 10", type: workstation}
+    - {hostname: WS-08, ip: "10.0.1.8", os: "Windows 10", type: workstation}
+    - {hostname: WS-09, ip: "10.0.1.9", os: "Windows 10", type: workstation}
+    - {hostname: WS-10, ip: "10.0.1.10", os: "Windows 10", type: workstation}
+    # Linux servers (5)
+    - {hostname: SRV-LIN-01, ip: "10.0.2.1", os: "Linux Ubuntu 22.04", type: server}
+    - {hostname: SRV-LIN-02, ip: "10.0.2.2", os: "Linux Ubuntu 22.04", type: server}
+    - {hostname: SRV-LIN-03, ip: "10.0.2.3", os: "Linux CentOS 8", type: server}
+    - {hostname: SRV-LIN-04, ip: "10.0.2.4", os: "Linux RHEL 9", type: server}
+    - {hostname: SRV-LIN-05, ip: "10.0.2.5", os: "Linux Debian 12", type: server}
+    # Windows servers (3)
+    - {hostname: SRV-WIN-01, ip: "10.0.3.1", os: "Windows Server 2019", type: server}
+    - {hostname: SRV-WIN-02, ip: "10.0.3.2", os: "Windows Server 2022", type: server}
+    # Domain controllers (2)
+    - {hostname: DC-01, ip: "10.0.3.10", os: "Windows Server 2019", type: domain_controller}
+    - {hostname: DC-02, ip: "10.0.3.11", os: "Windows Server 2019", type: domain_controller}
+
+personas:
+  - name: executive
+    description: "C-level and senior management"
+    typical_activities: ["email", "web browsing", "document review"]
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Outlook", "Chrome", "Word"]
+    risk_profile: "low"
+
+  - name: developer
+    description: "Software engineers and DevOps"
+    typical_activities: ["coding", "building", "git operations"]
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["VS Code", "Terminal", "Chrome"]
+    risk_profile: "high"
+
+  - name: analyst
+    description: "Business and data analysts"
+    typical_activities: ["database queries", "report generation", "data analysis"]
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Excel", "SQL Client", "Chrome"]
+    risk_profile: "medium"
+
+time_window:
+  start: "2024-06-15T06:00:00Z"
+  duration: "8h"
+
+baseline_activity:
+  description: "Normal weekday office activity"
+  intensity: medium
+  variation: medium
+
+output:
+  logs:
+    - {format: windows_event_security}
+    - {format: zeek_conn}
+    - {format: ecar}
+    - {format: syslog}
+    - {format: bash_history}
+  destination: ./output

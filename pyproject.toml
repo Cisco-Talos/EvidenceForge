@@ -46,6 +46,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "live: Tests requiring LLM API calls (not run by default)",
+    "slow: Tests requiring large dataset generation (100+ users, minutes to run)",
 ]
 addopts = [
     "-v",
