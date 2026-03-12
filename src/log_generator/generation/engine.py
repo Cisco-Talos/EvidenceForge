@@ -24,7 +24,7 @@ from log_generator.generation.emitters import (
 )
 from log_generator.generation.ground_truth import GroundTruthGenerator
 from log_generator.generation.state_manager import StateManager
-from log_generator.models.scenario import Scenario, User, System
+from log_generator.models.scenario import Persona, Scenario, User, System
 from log_generator.utils.time import parse_duration, parse_iso8601, resolve_time_window
 
 logger = logging.getLogger(__name__)
@@ -249,8 +249,13 @@ class GenerationEngine:
 
             # Generate events for each user this hour
             for user in enabled_users:
+                # Resolve persona for work hours and risk modulation
+                persona = self._get_user_persona(user)
+
                 # Calculate events for this user this hour
-                num_events = self._calculate_events_for_hour(user)
+                num_events = self._calculate_events_for_hour(
+                    user, current_hour=current_hour.hour, persona=persona
+                )
 
                 if num_events > 0:
                     # Distribute events across the hour
@@ -280,26 +285,59 @@ class GenerationEngine:
             emitter.barrier_flush()
         logger.debug("Barrier flush: all emitters complete")
 
-    def _calculate_events_for_hour(self, user: User) -> int:
+    def _get_user_persona(self, user: User) -> Optional[Persona]:
+        """Resolve user.persona string to Persona object.
+
+        Args:
+            user: User whose persona to resolve
+
+        Returns:
+            Persona object or None if not found
+        """
+        if not user.persona or not self.scenario.personas:
+            return None
+        for persona in self.scenario.personas:
+            if persona.name == user.persona:
+                return persona
+        return None
+
+    def _calculate_events_for_hour(
+        self,
+        user: User,
+        current_hour: Optional[int] = None,
+        persona: Optional[Persona] = None,
+    ) -> int:
         """Calculate number of events for user this hour.
 
-        Applies intensity + variation + persona risk profile to determine
-        how many events to generate for this user during this hour.
+        Applies intensity + variation + persona risk profile + work hours
+        to determine how many events to generate for this user during this hour.
+
+        Phase 2.6: Uses persona data for time-of-day modulation and risk scaling.
 
         Args:
             user: User to calculate events for
+            current_hour: Hour of day (0-23) for work hours modulation
+            persona: Resolved Persona object for risk/work-hours modulation
 
         Returns:
             Number of events to generate (>= 0)
         """
-        # Base intensity
+        # Base intensity from scenario
         intensity_map = {'low': 5, 'medium': 15, 'high': 40}
         base_events = intensity_map[self.scenario.baseline_activity.intensity]
 
-        # Risk profile adjustment (if persona assigned)
-        # Note: Phase 1 - persona is just a string name, not full Persona object
-        # Risk adjustments would require full persona definition (Phase 2+)
-        # For now, skip risk adjustment since we don't have access to risk_profile
+        # Phase 2.6: Risk profile multiplier
+        if persona and persona.risk_profile:
+            risk_mult = {'low': 0.7, 'medium': 1.0, 'high': 1.3}
+            base_events = int(base_events * risk_mult.get(persona.risk_profile, 1.0))
+
+        # Phase 2.6: Work hours modulation
+        if persona and persona.work_hours_parsed and current_hour is not None:
+            whp = persona.work_hours_parsed
+            if current_hour not in whp['hours']:
+                return 0  # Outside work hours — no activity
+            elif current_hour in (whp.get('peak_hours') or []):
+                base_events = int(base_events * 1.5)  # Peak hours: 150%
 
         # Apply variation (random jitter)
         variation_map = {'low': 0.10, 'medium': 0.25, 'high': 0.50}
@@ -357,9 +395,9 @@ class GenerationEngine:
                 system = random.choice(self.scenario.environment.systems)
 
         # Get baseline pattern for user's persona
-        # Note: persona is a string (persona name) in Phase 1, not a Persona object
+        persona = self._get_user_persona(user)
         persona_name = user.persona if user.persona else None
-        pattern = self.activity_generator.get_baseline_pattern(persona_name)
+        pattern = self.activity_generator.get_baseline_pattern(persona_name, persona=persona)
 
         # Execute activities based on probabilities
         for activity_type, probability in pattern:

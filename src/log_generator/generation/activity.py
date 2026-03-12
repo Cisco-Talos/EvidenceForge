@@ -579,18 +579,60 @@ class ActivityGenerator:
         self.emitters['bash_history'].emit_event(event_data)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
 
-    def get_baseline_pattern(self, persona_name: Optional[str]) -> list[tuple[str, float]]:
+    def get_baseline_pattern(
+        self,
+        persona_name: Optional[str],
+        persona=None,
+    ) -> list[tuple[str, float]]:
         """Get baseline activity pattern for persona.
 
+        Phase 2.6: If persona has activity_intensity overrides, builds
+        dynamic pattern from those. Otherwise falls back to hardcoded patterns.
+
         Args:
-            persona_name: Persona name (or None for default)
+            persona_name: Persona name string (or None for default)
+            persona: Optional resolved Persona object for dynamic patterns
 
         Returns:
             List of (activity_type, probability) tuples
         """
+        # Phase 2.6: Use activity_intensity overrides if provided
+        if persona and persona.activity_intensity:
+            return self._build_pattern_from_intensity(persona.activity_intensity)
+
+        # Fall back to hardcoded patterns (Phase 1 behavior)
         if persona_name and persona_name.lower() in BASELINE_PATTERNS:
             return BASELINE_PATTERNS[persona_name.lower()]
         return BASELINE_PATTERNS['default']
+
+    def _build_pattern_from_intensity(
+        self, intensity: dict[str, int]
+    ) -> list[tuple[str, float]]:
+        """Convert activity_intensity dict to baseline pattern.
+
+        Maps intensity values to probabilities. Higher intensity = higher probability.
+
+        Args:
+            intensity: Dict mapping activity_type to events/hour intensity
+
+        Returns:
+            List of (activity_type, probability) tuples
+        """
+        # Always include logon
+        pattern: list[tuple[str, float]] = [("logon", 0.9)]
+
+        if not intensity:
+            return pattern
+
+        # Normalize intensities to probabilities (cap at 0.95)
+        max_val = max(intensity.values())
+        for activity, value in intensity.items():
+            if activity == "logon":
+                continue  # Already added
+            prob = min(0.95, value / max_val * 0.8 + 0.1)
+            pattern.append((activity, prob))
+
+        return pattern
 
     def execute_baseline_activity(
         self,
