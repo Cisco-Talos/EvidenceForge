@@ -352,194 +352,86 @@
 
 ---
 
-## Phase 3: Robustness - MVP Release (3-4 weeks)
+## Phase 3: MVP Release (Skill-Based Architecture)
 
-**Goal:** Production-ready tool with checkpointing, full error handling, 95%+ test coverage, complete documentation, examples.
+**Goal:** Ship skills for scenario creation, evaluation framework, persona library, and updated documentation. Core generation engine is already complete.
 
-### 3.1 Conversational Interface & LLM Integration
+**Architecture shift:** Interactive/creative work (scenario creation) happens through Claude Code Skills, not a built-in LLM conversation engine. The `forge` CLI stays focused on deterministic operations (generate, validate, evaluate).
 
-**Includes LLM client work deferred from Phase 2.7.**
+### 3.1 Claude Code Skills + Install Command
 
-- [ ] `llm/client.py` - BedrockClient implementation (from Phase 2.7)
-  - [ ] Chat and complete methods
-  - [ ] Boto3 session management with profile/region
-  - [ ] Basic error handling
-- [ ] `llm/retry.py` - Exponential backoff retry logic (from Phase 2.7)
-  - [ ] Retry on 429, 500, 502, 503, network errors
-  - [ ] Don't retry on 400, 401, 403, 404
-  - [ ] 2s, 4s, 8s delays with ±25% jitter, max 3 attempts
-- [ ] `cli/conversation.py` - Interactive scenario creation
-- [ ] `llm/prompts.py` - System prompts for conversation, validation, research
-- [ ] `llm/research.py` - MITRE ATT&CK TTP research (30s timeout per query)
-- [ ] Command: `forge new` - Interactive scenario creation
-  - [ ] One question at a time
-  - [ ] LLM expands high-level descriptions into detailed execution plans
-  - [ ] Save scenario YAML + research markdown companion file
-- [ ] Test: Retry logic with mocked failures
-- [ ] Test: Conversation flow with mocked LLM
-- [ ] Live test: Full conversation with real Bedrock API
+- [ ] Create `skills/forge/scenario.md` — `/forge scenario` skill
+  - [ ] Hybrid interview flow: structured questions first, then free-form gap-filling
+  - [ ] Environment, network, personas, attacks, time window, output formats
+  - [ ] References persona library and scenario schema
+  - [ ] Generates valid scenario YAML, validates before saving
+  - [ ] Use `/skill-creator` to develop skill prompt content
+- [ ] Create `skills/forge/generate.md` — `/forge generate` skill
+  - [ ] Runs `forge generate` on scenario file
+  - [ ] Monitors output, diagnoses errors
+  - [ ] Suggests fixes for common issues
+- [ ] Add `forge install-skills` CLI command to `cli/commands.py`
+  - [ ] `--project` flag: copies to `.claude/skills/` (default)
+  - [ ] `--global` flag: copies to `~/.claude/skills/`
+  - [ ] Skills bundled as package data via `importlib.resources`
+- [ ] Test: install-skills copies files correctly
 
-### 3.2 Semantic Validation & Repair
+### 3.2 Pre-Built Persona Library
 
-- [ ] `validation/semantic.py` - LLM-based semantic validation
-  - [ ] Check logical consistency (users exist, timelines make sense)
-  - [ ] Identify issues with context and suggestions
-- [ ] `validation/repair.py` - Interactive repair workflow
-- [ ] Command: `forge validate` - Validate scenario file
-  - [ ] Schema validation (Pydantic)
-  - [ ] Semantic validation (LLM)
-  - [ ] --fix flag for auto-repair
-  - [ ] --interactive flag for guided repair
-- [ ] Test: Semantic validation catches logical errors
-- [ ] Test: Interactive repair flow
+- [ ] Create `personas/` directory with 15 YAML persona files
+  - [ ] Uses same schema as Persona model in scenario files
+  - [ ] developer, executive, analyst, sysadmin, help_desk, security_analyst
+  - [ ] accountant, sales, hr, marketing, data_analyst
+  - [ ] receptionist, intern, project_manager, legal_counsel
+  - [ ] Each with realistic work_hours, typical_activities, risk_profile
+- [ ] Skills reference persona library when creating scenarios
 
-### 3.3 Checkpointing & Resume
+### 3.3 Evaluation Framework
 
-- [ ] `generation/checkpoint.py` - Checkpoint/resume logic
-  - [ ] Save state every 5 minutes OR 100K events
-  - [ ] Checkpoint format: current time, StateManager snapshot, event counts, progress metrics
-  - [ ] Versioned checkpoint schema
-- [ ] Update `forge generate` command with --resume flag
-- [ ] Auto-delete checkpoints on successful completion
-- [ ] Retain checkpoints on failure
-- [ ] Test: Resume from checkpoint continues correctly
-- [ ] Test: Checkpoint cleanup
-
-### 3.4 Evaluation Framework
-
-- [ ] `evaluation/metrics.py` - Concrete metrics
-  - [ ] Format compliance (100% parse rate)
-  - [ ] Cross-reference consistency (100% resolution)
-  - [ ] Statistical properties (event distributions, logon/logoff balance within 5%)
-  - [ ] Completeness (no orphaned references)
-  - [ ] Ground truth validation (if GROUND_TRUTH.md exists, verify all IOCs present)
-- [ ] `evaluation/evaluator.py` - Main evaluation logic
-- [ ] `evaluation/report.py` - JSON report generation
-- [ ] Command: `forge evaluate` - Evaluate generated logs
-  - [ ] Load logs from output directory
-  - [ ] Run all metrics
-  - [ ] Validate GROUND_TRUTH.md IOCs if present
-  - [ ] Generate report (JSON)
-  - [ ] --verbose flag for detailed findings
-- [ ] Test: Metrics calculation
+- [ ] `evaluation/metrics.py` — Extensible metrics framework
+  - [ ] Format compliance (parse rate per format)
+  - [ ] Cross-reference consistency
+  - [ ] Ground truth IOC validation
+  - [ ] Specific checks defined iteratively during implementation
+- [ ] `evaluation/evaluator.py` — Main evaluation logic
+- [ ] `evaluation/report.py` — JSON report generation
+- [ ] Add `forge evaluate` CLI command
+  - [ ] `--report` flag for output path
+  - [ ] `--verbose` flag for detailed findings
+- [ ] Test: Evaluation metrics calculation
 - [ ] Test: Report generation
-- [ ] Test: Ground truth IOC validation
 
-### 3.5 Pre-Built Persona Library
+### 3.4 Documentation
 
-- [ ] Create `personas/` directory
-- [ ] 10-15 common personas in YAML format:
-  - [ ] `developer.yaml` - Software developer
-  - [ ] `accountant.yaml` - Finance/accounting
-  - [ ] `executive.yaml` - C-level executive
-  - [ ] `help_desk.yaml` - IT support
-  - [ ] `security_analyst.yaml` - SOC analyst
-  - [ ] `sales.yaml` - Sales representative
-  - [ ] `hr.yaml` - Human resources
-  - [ ] `marketing.yaml` - Marketing
-  - [ ] `data_analyst.yaml` - Data analyst
-  - [ ] `sysadmin.yaml` - System administrator
-  - [ ] Additional 5 personas based on common enterprise roles
-- [ ] Update conversation logic to reference persona library
+- [ ] Update `docs/scenario-reference.md` (already exists, may need refresh)
+- [ ] Create skill usage guide
+- [ ] Update README with skill-based workflow
+- [ ] Update TODO with Phase 3 completion status
 
-### 3.6 Comprehensive Error Handling
+### 3.5 MVP Release Preparation
 
-- [ ] Disk space check before generation (require 2x estimated output size)
-- [ ] Graceful handling of Ctrl+C (SIGINT) with checkpoint
-- [ ] Resource exhaustion detection (disk, memory)
-- [ ] All error messages actionable and clear
-- [ ] Test: Insufficient disk space fails fast
-- [ ] Test: SIGINT creates checkpoint and exits cleanly
-- [ ] Test: All exit codes correct for error types
-
-### 3.7 Complete Test Suite
-
-- [ ] 95%+ test coverage overall
-- [ ] 95%+ coverage for core generation engine
-- [ ] 90%+ coverage for format definitions & validators
-- [ ] 85%+ coverage for CLI/conversation interface
-- [ ] Property-based tests with Hypothesis (PID uniqueness, timestamp ordering)
-- [ ] Live tests marked with @pytest.mark.live (conversation, semantic validation, research)
-- [ ] Test fixtures for all 5 required scenarios:
-  - [ ] `minimal.yaml` (1 user, 1 system, 1 hour, baseline only)
-  - [ ] `small-realistic.yaml` (20 users, 10 systems, 8 hours, baseline only)
-  - [ ] `attack-single.yaml` (50 users, ransomware scenario)
-  - [ ] `attack-multi.yaml` (100 users, credential stuffing + lateral movement)
-  - [ ] `large-scale.yaml` (100 users, 24 hours, multiple formats)
-- [ ] Sample log files for validation (10-20 examples per format)
-
-### 3.8 Example Scenarios
-
-- [ ] `examples/simple-baseline/` - Simple baseline activity scenario
-  - [ ] scenario.yaml
-  - [ ] README.md explaining the scenario
-- [ ] `examples/ransomware-attack/` - Ransomware scenario
-  - [ ] scenario.yaml
-  - [ ] scenario-research.md
-  - [ ] README.md
-- [ ] `examples/credential-stuffing/` - Credential attack scenario
-  - [ ] scenario.yaml
-  - [ ] scenario-research.md
-  - [ ] README.md
-- [ ] `examples/insider-threat/` - Insider threat scenario
-  - [ ] scenario.yaml
-  - [ ] scenario-research.md
-  - [ ] README.md
-- [ ] Additional 5-10 examples covering common training scenarios
-
-### 3.9 Complete Documentation
-
-- [ ] `docs/installation.md` - Installation guide (uv, AWS credentials, requirements)
-- [ ] `docs/quickstart.md` - Quick start guide (init, new, generate, evaluate)
-- [ ] `docs/user-guide.md` - Comprehensive user guide
-  - [ ] Scenario creation (conversational and manual)
-  - [ ] Configuration options
-  - [ ] Command reference
-  - [ ] Common workflows
-- [ ] `docs/scenario-reference.md` - Complete scenario file schema reference
-- [ ] `docs/format-definitions.md` - Format definition system documentation
-- [ ] `docs/architecture.md` - Technical architecture overview
-- [ ] Update README.md with complete feature list and getting started
-- [ ] Contributing guide (reference AGENTS.md)
-
-### 3.10 Large Dataset Support & Optimization
-
-- [ ] Test: 7-day, 500-user scenario (target: ~20M events, <4 hours)
-- [ ] Memory optimization to stay <2GB for large scenarios
-- [ ] Performance profiling and bottleneck identification
-- [ ] Optimize hot paths if needed
-
-### 3.11 MVP Release Preparation
-
-- [ ] Run all tests (unit, integration, live)
-- [ ] Verify 95%+ test coverage achieved
-- [ ] Manual testing: All CLI commands with various scenarios
-- [ ] Manual testing: Generate logs and import into Splunk/ELK
-- [ ] Verify all 7 MVP success metrics:
-  - [ ] 8-hour, 100-user dataset in <30 minutes
-  - [ ] All 5 formats pass validation
-  - [ ] Cross-log consistency checks pass
-  - [ ] 10+ example scenarios included
-  - [ ] 95%+ test coverage achieved
-  - [ ] Test with 3+ external users (internal team first)
-  - [ ] Logs import into Splunk/ELK without errors
-- [ ] Create release notes for MVP v1.0
+- [ ] Run all tests
+- [ ] Manual testing: skills + generate + evaluate workflow
+- [ ] Verify success metrics (see PRD Section 9)
 - [ ] Tag release: v1.0.0
 
-**Phase 3 Milestone:** Production-ready MVP with full feature set, comprehensive testing, and complete documentation.
+**Phase 3 Milestone:** Skills-based scenario creation, evaluation framework, persona library, and documentation. Core generation engine already complete from Phase 2.
 
 ---
 
 ## Post-MVP Enhancements (Future)
 
-**Not part of MVP, but tracked here for future reference:**
+**Not part of MVP, but tracked here for future reference.**
 
 ### Short-term (Post-MVP)
+- [ ] Bedrock LLM client for semantic validation (`forge validate --semantic`)
+- [ ] Checkpointing and resume for long-running generation
+- [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
+- [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
 - [ ] Subjective realism evaluation (LLM-based)
 - [ ] Config file inheritance/templating
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
-- [ ] Additional network diagram formats (Graphviz/DOT, draw.io exports, network discovery tool outputs)
 - [ ] Network diagram ingestion: auto-infer sensor placement (span vs tap) from diagram topology
 - [ ] Performance optimizations (Rust extensions, better parallelization)
 

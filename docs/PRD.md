@@ -1,50 +1,54 @@
 # PRD: EvidenceForge
 
+> **Naming conventions:** "EvidenceForge" is the product name, `log_generator` is the Python package name, `forge` is the CLI command name.
+
 ## 1. Overview
 
-This project creates a system for generating realistic synthetic security logs for cybersecurity threat hunting training and research. The system uses a two-phase hybrid architecture:
+EvidenceForge is a system for generating realistic synthetic security logs for cybersecurity threat hunting training and research. The system uses a two-phase architecture:
 
-**Phase 1 - Scenario Creation (LLM-intensive):** Conversational interface accepts natural language descriptions of computing environments and activities. LLM researches TTPs, expands high-level descriptions into detailed execution plans, and outputs structured scenario files.
+**Phase 1 - Scenario Creation (Skill-assisted):** Claude Code skills (`/forge scenario`) guide users through an interactive interview to build structured scenario YAML files. The skill uses a hybrid interview flow -- structured questions first for core requirements, then free-form conversation to fill gaps and refine details. Users can also hand-author or edit scenario YAML directly.
 
-**Phase 2 - Log Generation (Deterministic):** Generation engine executes the detailed scenario plan without LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, Syslog, web logs, etc.) with coordinated cross-references (matching LogonIDs, PIDs, session data, etc.).
+**Phase 2 - Log Generation (Deterministic):** The `forge generate` CLI command executes the scenario plan without any LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, ECAR, Syslog, Bash History, Snort, web logs) with coordinated cross-references (matching LogonIDs, PIDs, session data, connection IDs, etc.).
 
-This architecture combines the flexibility and realism of LLM understanding with the speed, cost-efficiency, and reproducibility of deterministic generation.
+This architecture combines the flexibility and domain expertise of LLM-assisted authoring with the speed, cost-efficiency, and reproducibility of deterministic generation.
 
 Unlike existing tools that focus solely on attack simulation or use purely programmatic generation, this system:
-- Accepts natural language input (not just code/YAML)
 - Generates coordinated multi-source logs (not single format)
 - Supports both baseline "normal" activity and injected attack scenarios
-- Maintains realistic temporal patterns and behavioral variation
+- Maintains realistic temporal patterns and behavioral variation via persona-based activity distribution
 - Provides ground truth about malicious activities for threat hunting exercises
+- Models network topology and sensor placement for realistic traffic visibility
 
 The tool addresses the need for realistic, large-volume training datasets without the privacy/security concerns of production data.
 
 ## 2. Goals & Non-Goals
 
 ### Goals (MVP)
-- Generate realistic synthetic logs for 5 initial formats: Windows Event Logs, Zeek, Snort/Suricata, Linux syslogs, W3C web/proxy logs
-- Conversational interface for scenario specification that outputs structured configuration files
-- LLM expands high-level descriptions during conversation into detailed execution plans (no LLM calls during generation)
-- Support both high-level environment descriptions (LLM fills in details) and explicit specifications (users define exact systems, users, IPs)
-- Maintain cross-log consistency (events reference same LogonIDs, PIDs, timestamps, etc.)
+- Generate realistic synthetic logs for 7 formats: Windows Event Security, Zeek conn, ECAR, Syslog, Bash History, Snort alerts, W3C web access
+- Claude Code skills for scenario creation (`/forge scenario`) and generation troubleshooting (`/forge generate`)
+- Skill installer command (`forge install-skills`) for project-level or global installation
+- Pre-built persona library for common organizational roles
+- Maintain cross-log consistency (events reference same LogonIDs, PIDs, timestamps, connection IDs)
 - Support arbitrary time windows from hours to weeks
-- Handle datasets from small (classroom exercises) to huge (multi-day, 500+ users)
-- Parallel generation at emitter level (different log formats simultaneously) with incremental writing for performance
-- Progress reporting during generation
-- Checkpointing for long-running generation jobs
-- Schema validation and LLM-based semantic validation with interactive repair
-- Optional realism evaluation with concrete metrics
-- Ground truth documentation (GROUND_TRUTH.md) for scenarios with malicious activity: attack narrative, timeline, atomic IOCs
-- Network topology and sensor placement modeling: Define network segments, sensor locations, and traffic visibility to ensure only observable network traffic is generated
+- Handle datasets from small (classroom exercises) to large (multi-day, 500+ users)
+- Parallel generation at emitter level (different log formats simultaneously) with incremental writing
+- Progress reporting during generation with per-hour and per-storyline-event tracking
+- Schema validation for scenario files (Pydantic-based)
+- Cross-reference validation (users, systems, personas, groups referenced correctly)
+- Evaluation framework with concrete metrics (format compliance, consistency, statistical properties)
+- Ground truth documentation (GROUND_TRUTH.md) for scenarios with malicious activity
+- Network topology and sensor placement modeling for traffic visibility
+- Persona-based temporal activity distribution with configurable work hours, intensity, and risk profiles
 - Comprehensive test coverage (95%+) with pytest
-- Ship with pre-built persona library to reduce LLM usage
 - Flexible timezone handling (UTC internal, configurable per-system/format for output)
 
 ### Non-Goals (Future Enhancements)
-- Bit-perfect reproducibility via seed (LLM expansion during conversation is non-deterministic; save scenario file for reuse)
+- Bit-perfect reproducibility via seed (save scenario file for reuse instead)
 - Subjective "does this feel real?" evaluation beyond concrete metrics
 - Config file inheritance/templating
-- Support for LLM backends beyond AWS Bedrock (OpenAI, Ollama, Anthropic native, Gemini)
+- Built-in LLM client for semantic validation (deferred; use Claude Code skills for now)
+- Checkpointing and resume for long-running generation jobs
+- Support for LLM backends beyond Claude Code skills (Bedrock client, OpenAI, Ollama)
 - PyPI package distribution (MVP is git clone + local install)
 - Pre-built binaries or container images
 - Streaming output to SIEM/data lakes
@@ -52,6 +56,7 @@ The tool addresses the need for realistic, large-volume training datasets withou
 - Mobile device logs
 - Cloud provider logs (CloudTrail, Azure Activity, GCP Audit)
 - Time-slice or user-level parallelization (MVP parallelizes at emitter level only)
+- Large dataset optimization (100M+ events, memory-mapped writes)
 
 ## 3. Target Users
 
@@ -63,10 +68,12 @@ The tool addresses the need for realistic, large-volume training datasets withou
 - **Detection Engineers**: Require test data for validating detection rules and SIEM configurations
 
 **User Context:**
+- All users are expected to have Claude Code installed (skills are the primary scenario authoring interface)
 - Mix of technical proficiency (from educators who may not code to researchers who do)
-- Need for both quick scenario generation and detailed customization
+- Need for both quick scenario generation via skills and detailed customization via YAML editing
 - Often simulating specific real-world environments or generic representative environments
 - May need same scenario run multiple times with variations
+- Can use `/forge scenario` skill for guided creation or hand-author YAML for precise control
 
 ## 4. Functional Requirements
 
@@ -74,93 +81,88 @@ The tool addresses the need for realistic, large-volume training datasets withou
 
 #### Workflow 1: Initialize New Project
 ```bash
-log-generator init [--output CONFIG_FILE]
+forge init [--force]
 ```
-1. System creates example configuration file with documented parameters
-2. Includes example models, AWS settings, output paths
+1. System copies `config.example.yaml` to `config.yaml` in the current directory
+2. Includes documented parameters for output paths and logging
 3. User can customize for their environment
 
-#### Workflow 2: Interactive Scenario Creation
-```bash
-log-generator new [--config CONFIG_FILE]
+#### Workflow 2: Scenario Creation via Skill
 ```
-1. System starts conversational interface
-2. Asks clarifying questions about:
+/forge scenario
+```
+1. Claude Code skill starts a hybrid interview flow
+2. **Structured phase** -- asks targeted questions about:
    - Environment (size, type of organization, systems, users)
-   - Network topology (optional: provide Mermaid diagram file, define conversationally, or skip)
-   - Baseline activity patterns (or select from pre-built persona library)
+   - Network topology and sensor placement
+   - Baseline activity patterns (reference pre-built personas or define custom)
    - Specific attack scenarios or activities to inject
-   - Time windows
-   - Output requirements
-3. User can specify at any level of detail:
-   - High-level: "50-person financial services company"
-   - Mixed: 10 specific users, generate 40 more
+   - Time windows and output requirements
+3. **Free-form phase** -- identifies gaps in the scenario and asks open-ended questions:
+   - Refine persona behaviors
+   - Add detail to attack storylines
+   - Clarify network visibility requirements
+4. User can specify at any level of detail:
+   - High-level: "50-person financial services company" (skill fills in details)
+   - Mixed: 10 specific users, generate 40 more with personas
    - Detailed: Exact usernames, hostnames, IPs, file paths, timezones
-4. LLM performs research as needed:
-   - MITRE ATT&CK TTPs for attack scenarios
-   - Typical behavior patterns for custom personas
-   - Log artifact details for specific techniques
-   - Common tooling and related techniques
-   - 30-second timeout per research query
-5. LLM expands high-level descriptions into detailed execution plans:
-   - Personas → concrete activity sequences with frequencies
-   - Storyline activities → detailed event sequences with specific log artifacts
-   - Attack scenarios → full kill chain with appropriate techniques
-6. System generates complete scenario YAML file + research markdown file
-7. Saves to disk for review/editing/reuse
-8. No further LLM calls needed during generation phase
+5. Skill generates complete scenario YAML file conforming to the schema in Section 4.2
+6. Saves to disk for review/editing/reuse
+7. No LLM calls needed during generation phase
 
-#### Workflow 3: Validate Scenario
+#### Workflow 3: Install Skills
 ```bash
-log-generator validate SCENARIO_FILE
+forge install-skills [--project | --global]
 ```
-1. Schema validation: Check YAML structure, data types, required fields
-2. LLM semantic validation: Check logical consistency
+1. Copies skill files from the repo's `skills/forge/` directory
+2. `--project` (default): Installs to `.claude/skills/` in the current project
+3. `--global`: Installs to `~/.claude/skills/`
+4. Reports which skills were installed and their slash-command triggers
+
+#### Workflow 4: Validate Scenario
+```bash
+forge validate SCENARIO_FILE
+```
+1. Schema validation: Check YAML structure, data types, required fields via Pydantic models
+2. Cross-reference validation: Verify internal consistency
    - Referenced users exist in environment
-   - Activities make sense for specified environment
-   - Time sequences are logical
-   - Attack scenarios are technically sound
-3. If issues found:
-   - Present issues to user
-   - Offer interactive repair (re-enter conversation mode)
-   - Suggest auto-fixes where appropriate
-4. Report validation status
+   - Referenced systems exist in environment
+   - Referenced personas are defined
+   - Group members reference valid users
+   - Storyline actors reference valid users
+   - Time sequences are within the defined window
+3. Report all validation issues with field paths, descriptions, and suggestions
+4. Return exit code 0 on success, exit code 2 on schema failure
 
-#### Workflow 4: Generate Logs
+#### Workflow 5: Generate Logs
 ```bash
-log-generator generate SCENARIO_FILE [--output DIR] [--resume]
+forge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
 ```
-1. Load and validate scenario file (schema validation only, no LLM)
+1. Load and validate scenario file (schema + cross-reference validation)
 2. Load format definitions for requested log types
-3. Load research markdown if exists (context for generation)
-4. Initialize generation state (users, systems, sessions, processes, connections)
-5. Start parallel emitters (one per log format, shared read-only state access)
-6. Generate baseline activity:
-   - Execute expanded persona activity patterns for all users
+3. Initialize generation state (users, systems, sessions, processes, connections)
+4. Start parallel emitters (one per log format, shared read-only state access)
+5. Generate baseline activity:
+   - Execute persona-based activity patterns for all users
    - Apply realistic temporal distributions throughout time window
-   - StateManager tracks all sessions, processes, connections (no automatic cleanup)
-7. Layer storyline activities on top of baseline:
+   - StateManager tracks all sessions, processes, connections
+6. Layer storyline activities on top of baseline:
    - Execute detailed event sequences at specified times
-   - Suppress baseline for affected users during storyline (±5 min window to avoid conflicts)
-   - LLM-defined behavior controls completeness (some sessions/processes may not close cleanly)
-8. Each emitter writes coordinated logs with consistent cross-references (LogonIDs, PIDs, timestamps)
-9. Convert timestamps from UTC to system/format-specific timezones as configured
-10. Write to organized directory structure with incremental flushing (10K event buffer)
-11. Show progress bar with ETA (based on moving average of last 10% progress)
-12. Log details to generation.log in output directory
-13. Create checkpoint files every 5 minutes (or 100K events) for resume capability
-14. Generate GROUND_TRUTH.md file when malicious/suspicious activities are present:
-   - Attack narrative summary (malicious activities only, excludes benign baseline)
-   - Timeline of key malicious events with timestamps and optional record IDs
-   - Atomic IOCs grouped by type (IP addresses, usernames, hostnames, processes, file paths, command lines, etc.)
+   - Suppress baseline for affected users during storyline (+/-5 min window)
+7. Each emitter writes coordinated logs with consistent cross-references
+8. Convert timestamps from UTC to system/format-specific timezones as configured
+9. Write to organized directory structure with incremental flushing (10K event buffer)
+10. Show progress with Rich progress bars (per-hour baseline, per-event storyline)
+11. Log details to `generation.log` in output directory
+12. Generate GROUND_TRUTH.md when malicious/suspicious activities are present
 
-#### Workflow 5: Evaluate Output
+#### Workflow 6: Evaluate Output
 ```bash
-log-generator evaluate OUTPUT_DIR
+forge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]
 ```
 1. Load generated logs
 2. Run validation checks:
-   - Format compliance (syntactically valid)
+   - Format compliance (syntactically valid against format definitions)
    - Consistency (cross-references resolve correctly)
    - Statistical properties (distributions, timing patterns)
    - Completeness (no orphaned references)
@@ -170,34 +172,14 @@ log-generator evaluate OUTPUT_DIR
 
 ### 4.2 Data Model
 
-#### Configuration File Schema
-
-**Main Configuration** (`config.yaml` or `.env`)
-```yaml
-aws:
-  profile: string (supports ${AWS_PROFILE})
-  region: string (supports ${AWS_REGION})
-
-bedrock:
-  model_primary: string      # Default: anthropic.claude-sonnet-4-6-v1:0
-  model_research: string     # For TTP research, default: sonnet-4-6
-  model_generation: string   # For bulk generation, default: haiku-4-5
-
-output:
-  base_directory: string     # Where to write generated datasets
-
-logging:
-  level: string              # debug|info|warning|error
-  console_level: string      # warning|error (what shows on console)
-```
-
-**Scenario File Schema** (output of conversational interface)
+#### Scenario File Schema
 
 Primary file: `scenario-name.yaml`
-Companion file: `scenario-name-research.md` (LLM research findings)
 
 ```yaml
 version: string              # Schema version, e.g., "1.0"
+                             # If schema version is not "1.0", reject with error:
+                             # "Unsupported schema version. This tool supports version 1.0."
 name: string                 # Human-readable scenario name
 description: string          # Multi-line natural language description
 
@@ -209,15 +191,10 @@ environment:
     systems:                 # Per-system overrides (optional)
       pattern: string        # e.g., "WS-NYC-*": "America/New_York"
 
-  # Option 1: Generated (LLM fills in details)
-  generate:
-    organization_type: string
-    size: integer
-    user_count: integer
-    workstation_count: integer
-    server_count: integer
+  # Note: The /forge scenario skill handles auto-generating users/systems from
+  # high-level descriptions (e.g., "50-person financial services company").
+  # The final scenario YAML only contains explicit users and systems lists.
 
-  # Option 2: Explicit (user-defined)
   users:
     - username: string
       full_name: string
@@ -231,7 +208,7 @@ environment:
     - hostname: string
       ip: string             # Single IP address (multi-NIC out of scope for MVP)
       os: string
-      type: string           # workstation|server|domain_controller|network_device|...
+      type: string           # workstation|server|domain_controller
       assigned_user: string  # Optional, for workstations
       services: list[string] # Service names like "IIS", "SSH", "SQL Server" (not ports)
 
@@ -240,10 +217,6 @@ environment:
       description: string
       members: list[string]  # Usernames
       permissions: list[string]
-
-  file_shares:
-    - path: string
-      permissions: list[string]  # Group names
 
   network:
     segments:
@@ -257,25 +230,21 @@ environment:
         name: string           # Sensor identifier
         monitoring_segments: list[string]  # Segment names this sensor monitors
         direction: string      # inbound|outbound|bidirectional (what traffic is visible)
-        log_formats: list[string]  # Which formats this sensor generates (e.g., ["zeek_conn", "snort"])
+        log_formats: list[string]  # Which formats this sensor generates (e.g., ["zeek_conn", "snort_alert"])
         description: string    # Optional description
 
     # Note: Network topology defines which connections are observable by sensors.
-    # Phase 1: Basic validation (no localhost, no same src/dst, no link-local/multicast)
-    # Phase 2: Full topology-aware validation (only generate traffic visible to configured sensors)
+    # Only traffic visible to configured sensors generates network log entries.
 
 personas:
-  # Note: LLM expands high-level persona descriptions into detailed activity patterns
-  # during conversation phase. Can reference pre-built personas or define custom.
   - name: string
     description: string      # Natural language behavior description
-    typical_activities: list[string]  # High-level activities that LLM expands
-    work_hours: string       # e.g., "8am-6pm with variation" (LLM interprets as distribution)
+    typical_activities: list[string]  # High-level activities
+    work_hours: string       # e.g., "8am-6pm with variation"
     application_usage: list[string]
     risk_profile: string     # low|medium|high (affects activity intensity/variation)
 
-    # LLM-expanded fields (added during conversation):
-    expanded_activities:     # Detailed activity patterns with frequencies, processes, etc.
+    expanded_activities:     # Detailed activity patterns with frequencies
       - activity: string     # Concrete activity
         frequency: float     # Events per hour
         processes: list[string]
@@ -291,35 +260,32 @@ time_window:
 
 baseline_activity:
   description: string        # Natural language description
-  intensity: string          # low|medium|high → events/user/hour: low=5, medium=15, high=40
-  variation: string          # low|medium|high → timing stddev: low=±10%, medium=±25%, high=±50%
+  intensity: string          # low|medium|high -> events/user/hour: low=5, medium=15, high=40
+  variation: string          # low|medium|high -> timing stddev: low=+/-10%, medium=+/-25%, high=+/-50%
   # Note: Persona risk_profile modifies intensity (low=-5, high=+10 events/hour)
 
 storyline:
-  # Note: LLM expands natural language activities into detailed event sequences during conversation
   - time: string             # Time formats:
                              #   - ISO 8601 timestamp (must be within window)
                              #   - Relative offset: "+2h30m" or "+2h" or "+150m"
                              #   - Offset in seconds: "+7200"
-    actor: string            # Actor specification (LLM interprets during expansion):
+    actor: string            # Actor specification:
                              #   - Specific username: "bwilliams"
                              #   - Threat actor: "APT29", "SCATTERED SPIDER", "Red Team Alpha"
-                             #   - Generic: "attacker" (LLM determines external vs internal)
+                             #   - Generic: "attacker"
                              #   - Note: Multiple distinct actors supported in same scenario
-    source_ip: string        # Optional, for external actors
-    system: string           # Target system hostname (specific or ANY_SYSTEM_OF_TYPE:workstation)
-    activity: string         # Natural language activity description (LLM expands to detailed events)
-    details: dict            # Flexible activity-specific details (LLM validates appropriateness):
+    system: string           # Target system hostname
+    activity: string         # Natural language activity description
+    details: dict            # Flexible activity-specific details:
       # Common examples (not exhaustive):
+      source_ip: string      # For external attackers (e.g., details.source_ip)
       url: string            # For web activities
       file: string           # For file operations
       binary: string         # For process execution
       command: string        # For command execution
       target_system: string  # For lateral movement
       stolen_creds: string   # For credential usage
-      # Any other relevant fields as needed
 
-    # LLM-expanded fields (added during conversation):
     event_sequence: list     # Detailed event sequence with specific log artifacts
       - event_type: string
         log_sources: list[string]  # Which log formats show this event
@@ -327,29 +293,19 @@ storyline:
 
 output:
   logs:
-    - format: string         # windows_event|zeek|syslog|snort|web
+    - format: string         # windows_event_security|zeek_conn|ecar|syslog|bash_history|snort_alert|web_access
       variant: string        # Optional: Security|System|conn|http|auth|access
       timezone: string       # "system" (use system's timezone) or explicit "UTC"/"America/New_York"
       options: dict          # Format-specific options
 
   destination: string        # Output directory path
   compression: boolean       # Compress output files (gzip)
-  format_options:            # Complete options for all MVP formats
-    windows_event:
-      output_format: string  # xml|evtx|json (default: xml, binary evtx optional)
-    zeek:
-      include_header: boolean  # TSV header row (default: true)
-    syslog:
-      format: string         # rfc3164|rfc5424 (default: rfc5424)
-    snort:
-      format: string         # unified2|fast|full (default: fast)
-    web:
-      format: string         # w3c|combined|common (default: w3c)
+  # Format-specific options (output format, headers, etc.) are future enhancements.
 ```
 
 #### Format Definition Schema
 
-**Format Definitions** (`formats/{format_name}.yaml`)
+**Format Definitions** (`src/log_generator/formats/definitions/{format_name}.yaml`)
 ```yaml
 format:
   name: string
@@ -407,8 +363,6 @@ output_template: string      # Jinja2 template for rendering final log format
 #
 # Network logon requires IP address:
 # {"and": [{"in": [{"var": "LogonType"}, [3, 10]]}, {"==": [{"var": "IpAddress"}, "-"]}]}
-#
-# Reference: JSON Logic provides complete formal specification, unambiguous for AI generation
 ```
 
 #### Internal State Model (Runtime)
@@ -457,7 +411,6 @@ class GeneratorState:
     dns_cache: dict[str, str]
     current_time: datetime
     user_states: dict[str, UserState]  # Current activity per user
-    checkpoint_data: dict  # For resume capability
 ```
 
 #### Output Files
@@ -472,10 +425,11 @@ output/
     GROUND_TRUTH.md            # Attack ground truth (if malicious activity present)
     windows_events.xml         # Windows Event Logs
     zeek_conn.log              # Zeek connection logs
+    ecar.json                  # ECAR events
     syslog.log                 # Linux syslogs
+    bash_history.log           # Bash history entries
     snort_alerts.log           # Snort/Suricata alerts
     web_access.log             # Web/proxy logs
-    .checkpoints/              # Resume checkpoints (deleted on success)
 ```
 
 **GROUND_TRUTH.md Format**
@@ -550,135 +504,185 @@ Grouped by type for easy reference.
 
 **Command: init**
 ```
-log-generator init [--output CONFIG_FILE]
+forge init [--force]
 
 Options:
-  --output    Path to write config file (default: ./config.yaml)
+  --force    Overwrite existing config.yaml if it exists
 
-Creates example configuration file with AWS settings, model selections,
-and other parameters documented inline.
-
-Non-interactive: Simply writes heavily-commented config file with:
-- All options documented
-- Defaults set
-- AWS profile/region set to ${AWS_PROFILE}, ${AWS_REGION} placeholders
-- Links to documentation for more details
+Creates config.yaml from config.example.yaml in the current directory.
+Non-interactive: Simply copies the example config with all options documented.
 ```
 
-**Command: new**
+**Command: install-skills**
 ```
-log-generator new [--config CONFIG_FILE] [--network-diagram DIAGRAM_FILE]
+forge install-skills [--project | --global]
 
 Options:
-  --config           Path to config file (default: ./config.yaml)
-  --network-diagram  Path to Mermaid diagram file defining network topology (optional)
+  --project    Install skills to .claude/skills/ in the current project (default)
+  --global     Install skills to ~/.claude/skills/
 
-Starts interactive conversational interface for scenario creation.
-Outputs scenario YAML file based on user responses.
+Copies EvidenceForge skill files to the appropriate Claude Code skills location.
+Skill files are bundled as package data and loaded via importlib.resources at runtime.
 
-Network topology can be provided in three ways:
-1. Via --network-diagram flag: Provide Mermaid (.mmd or .md) diagram file. CLI reads file
-   locally and sends contents to LLM for parsing into structured YAML network schema.
-2. Conversationally: LLM prompts for network topology details and builds schema interactively.
-3. Skip: Omit network topology entirely (simple scenarios or manual YAML editing later).
-
-MVP supports Mermaid diagram format only. Future enhancements may add Graphviz/DOT, draw.io
-exports, or network discovery tool outputs.
+Skills installed:
+  /forge scenario  - Guided scenario creation
+  /forge generate  - Generation with troubleshooting
 ```
 
 **Command: validate**
 ```
-log-generator validate SCENARIO_FILE [--config CONFIG_FILE]
+forge validate SCENARIO_FILE
 
 Arguments:
   SCENARIO_FILE    Path to scenario YAML file
 
-Options:
-  --config         Path to config file (default: ./config.yaml)
-  --fix            Automatically fix issues where possible
-  --interactive    Enter conversation mode to fix issues interactively
+Validates scenario file for schema correctness and cross-reference integrity.
+Exit codes: 0 = success, 1 = YAML parse error, 2 = schema/cross-reference error.
 
-Validates scenario file for schema and semantic correctness.
-Returns exit code 0 on success, non-zero on failure.
+Checks performed:
+  - YAML parsing and Pydantic schema validation
+  - All referenced users exist in environment.users
+  - All referenced systems exist in environment.systems
+  - All referenced personas are defined in personas section
+  - Group members reference valid users
+  - Storyline actors reference valid users or external actors
+  - Storyline times fall within the defined time window
+  - Network segment and sensor references are valid
 ```
 
 **Command: generate**
 ```
-log-generator generate SCENARIO_FILE [--config CONFIG_FILE] [--output DIR] [--resume]
+forge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
 
 Arguments:
   SCENARIO_FILE    Path to scenario YAML file
 
 Options:
-  --config         Path to config file (default: ./config.yaml)
-  --output         Override output directory from scenario file
-  --resume         Resume from last checkpoint if generation was interrupted
+  --output, -o     Override output directory from scenario file
+  --verbose, -v    Enable INFO level logging
+  --debug, -d      Enable DEBUG level logging
 
 Generates logs according to scenario specification.
-No LLM calls during generation (all expansion happened during 'new' command).
-Shows progress bar and writes detailed logs to output directory.
-Performs schema validation only (no LLM semantic validation).
+No LLM calls during generation (purely deterministic).
+Shows progress bars and writes detailed logs to output directory.
+Performs schema + cross-reference validation before generation starts.
 ```
 
 **Command: evaluate**
 ```
-log-generator evaluate OUTPUT_DIR [--config CONFIG_FILE] [--report REPORT_FILE]
+forge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]
 
 Arguments:
   OUTPUT_DIR       Path to generated log directory
 
 Options:
-  --config         Path to config file (default: ./config.yaml)
   --report         Path to write evaluation report (default: OUTPUT_DIR/evaluation.json)
   --verbose        Include detailed findings in report
 
 Evaluates generated logs for concrete metrics:
-  - Format compliance: 100% of events parse successfully against format definitions
-  - Consistency: 100% of cross-references resolve (LogonIDs, PIDs, connection IDs)
-  - Statistical properties: Event type distributions, logon/logoff balance (within 5%)
+  - Format compliance: Events parse successfully against format definitions
+  - Consistency: Cross-references resolve (LogonIDs, PIDs, connection IDs)
+  - Statistical properties: Event type distributions, timing patterns
   - Completeness: No orphaned references
-  - Ground truth validation: If GROUND_TRUTH.md exists, verify all documented IOCs are present in logs
+  - Ground truth validation: If GROUND_TRUTH.md exists, verify all documented IOCs are present
 
 Report is informational only (no pass/fail thresholds for MVP).
 Outputs JSON report with scores and specific findings.
 ```
 
+**Evaluation Report Schema (minimal)**
+
+The evaluation report is a JSON file with the following top-level structure. The exact sub-structure of each section will be refined during implementation.
+
+```json
+{
+  "format_compliance": { "...": "per-format parse/validation results" },
+  "cross_ref_consistency": { "...": "orphaned references, mismatched IDs" },
+  "ground_truth": { "...": "IOC presence verification (if GROUND_TRUTH.md exists)" },
+  "summary": { "total_checks": 0, "passed": 0, "failed": 0, "warnings": 0 }
+}
+```
+
+**Command: version**
+```
+forge version
+
+Shows version information.
+```
+
+### 4.4 Skills Architecture
+
+EvidenceForge uses Claude Code skills as the primary scenario authoring interface. Skills are Markdown files that provide Claude Code with domain-specific instructions, enabling it to guide users through complex scenario creation without requiring a built-in LLM client.
+
+#### Skill Files
+
+Skills live in `skills/forge/` in the repository and are installed via `forge install-skills`.
+
+**`/forge scenario`** -- Guided scenario creation skill
+
+Responsibilities:
+- Interview users about their scenario requirements using a hybrid flow
+- Structured phase: targeted questions about environment, users, systems, network, personas, storyline, time window, output formats
+- Free-form phase: identify gaps, refine details, ask follow-up questions
+- Reference the pre-built persona library and suggest appropriate personas
+- Generate valid scenario YAML conforming to the schema
+- Validate the generated YAML against known constraints before saving
+- Save the file and suggest next steps (`forge validate`, `forge generate`)
+
+**`/forge generate`** -- Generation with troubleshooting skill
+
+Responsibilities:
+- Run `forge generate` on a scenario file
+- If generation fails, analyze the error output
+- Suggest fixes for common issues (schema errors, missing references, invalid time windows)
+- Optionally edit the scenario file to fix issues and retry
+- Report summary of generated output on success
+
+#### Skill Design Principles
+
+1. **Hybrid interview flow**: Start with structured questions to gather core requirements quickly, then switch to free-form conversation for gap-filling and refinement
+2. **Progressive disclosure**: Ask simple questions first, offer advanced options only when relevant
+3. **Persona-aware**: Reference the pre-built persona library to reduce authoring effort
+4. **Schema-aware**: Skills know the exact scenario YAML schema and generate conforming output
+5. **Idempotent suggestions**: Skills suggest CLI commands the user can verify and run
+
+#### Installation Model
+
+```
+# Install to current project (default)
+forge install-skills --project
+# Creates .claude/skills/forge-scenario.md
+# Creates .claude/skills/forge-generate.md
+
+# Install globally for all projects
+forge install-skills --global
+# Creates ~/.claude/skills/forge-scenario.md
+# Creates ~/.claude/skills/forge-generate.md
+```
+
+Skills are plain Markdown files and can be version-controlled, customized, or extended by users.
+
 ## 5. Non-Functional Requirements
 
 ### Performance
-- **Small datasets** (1 hour, 50 users, ~10K events): < 1 minute generation time
+- **Small datasets** (1 hour, 50 users, ~10K events): < 15 seconds generation time
+- **Medium datasets** (8 hours, 100 users, ~100K events): < 30 seconds generation time (current benchmark: ~14 seconds)
 - **Large datasets** (8 hours, 500 users, ~1M events): < 30 minutes generation time
-- **Huge datasets** (7 days, 500 users, ~20M events): < 4 hours generation time
 - Memory usage: < 2GB regardless of output size (soft target, not enforced)
   - Streaming writes with 10K event buffer per emitter
-  - State grows with active sessions/processes but typically < 100MB for huge scenarios
+  - State grows with active sessions/processes but typically < 100MB for large scenarios
   - No automatic state pruning (realistic incompleteness is acceptable)
 - Parallel generation at emitter level: Different log formats write simultaneously
   - Shared StateManager with thread-safe read access
   - Each emitter runs in separate thread
-  - Time-slice and user-level parallelization out of MVP scope
 
 ### Scalability
 - Support up to 1000 users and 2000 systems in a single environment
 - Handle time windows up to 30 days
 - Generate up to 100M events in a single run
-- Checkpoint every 5 minutes during generation for resume capability
 
 ### Reliability
-- **LLM API retry logic** (conversation and validation phases only, not generation):
-  - Retry per-request with exponential backoff: 2s, 4s, 8s (±25% jitter)
-  - Retry on: 429 (rate limit), 500, 502, 503, network errors
-  - Don't retry on: 400 (bad request), 401 (unauthorized), 403 (forbidden)
-  - Max 3 attempts per request
-  - Log retries at INFO level
-  - After 3 failures: Fail fast with clear error message indicating operation and remediation
-- **Checkpointing** (generation phase):
-  - Save state every 5 minutes OR 100K events (whichever comes first)
-  - Checkpoint contains: current time in window, StateManager snapshot, event counts per format, progress metrics
-  - Checkpoints auto-deleted on successful completion, retained on failure
-  - Support --resume flag to continue from last checkpoint
-  - Checkpoints versioned with schema version for forward compatibility
-- **Input validation**: Schema validation before generation starts (fail fast)
+- **Input validation**: Schema + cross-reference validation before generation starts (fail fast)
 - **Atomic writes**: Use temp files + rename for log files
 - **Resource exhaustion**: Check disk space before starting (require 2x estimated output size), fail if insufficient
 
@@ -690,17 +694,17 @@ Outputs JSON report with scores and specific findings.
 - Format definition validation: Constrained DSL only, no arbitrary code execution from untrusted format files
 
 ### Usability
-- Progress reporting with ETA for long-running jobs
-- Clear, actionable error messages
-- Interactive validation repair when issues found
+- Progress reporting with Rich progress bars for long-running jobs
+- Clear, actionable error messages with field paths and suggestions
 - Examples and templates included
 - Comprehensive documentation
+- Skills provide guided authoring for users who prefer not to write YAML manually
 
 ### Maintainability
 - 95%+ test coverage across all components
 - Type hints throughout codebase
 - Pydantic models for all data structures
-- Clear separation of concerns (conversation / validation / generation)
+- Clear separation of concerns (skill-assisted authoring / validation / generation / evaluation)
 - Format definitions as data, not code
 
 ## 6. Technical Architecture
@@ -712,155 +716,163 @@ Outputs JSON report with scores and specific findings.
 - uv for package management and script/tool support
 - Pydantic v2 for data validation and schema management
 
-**LLM Integration:**
-- boto3 for AWS Bedrock access
-- Primary model: anthropic.claude-sonnet-4-6-v1:0
-- Research model: anthropic.claude-sonnet-4-6-v1:0
-- Generation model: anthropic.claude-haiku-4-5-v1:0 (cost optimization)
-
 **CLI & Output:**
-- Typer for CLI framework (modern, excellent Pydantic integration)
+- Typer for CLI framework
 - Rich for progress bars and console formatting
 - Jinja2 for log format templates
 - PyYAML for configuration parsing
 - pytz for timezone handling
 
+**Skills:**
+- Claude Code skills (Markdown files in `skills/forge/`)
+- Installed via `forge install-skills` command
+- No runtime dependency on Claude Code for generation (skills are authoring-time only)
+
 **Testing:**
 - pytest for test framework
-- pytest-asyncio for async tests
 - pytest-cov for coverage reporting
 - pytest-mock for mocking
-- Separate markers for @pytest.mark.live (requires LLM API) vs unit tests
+- pytest-benchmark for performance tests
+- Separate markers for @pytest.mark.live (requires API) and @pytest.mark.slow (large datasets)
 
 **Format Support:**
-- python-evtx (try first) or XML fallback for Windows Event Log (binary EVTX optional)
 - Standard library json/csv for text formats
-- Custom parsers/writers for Zeek, Syslog, etc.
-- json-logic-py for format definition validation
+- Custom parsers/writers for Zeek, Syslog, ECAR, Bash History, etc.
+- json-logic-qubit for format definition validation rules
 
 ### 6.2 Project Structure
 
 ```
-log-generator/
-├── README.md
-├── AGENTS.md                    # AI coding agent instructions
-├── LICENSE
-├── pyproject.toml               # uv project config
-├── config.example.yaml          # Example configuration
-├── .env.example                 # Example environment variables
-│
-├── personas/                    # Pre-built persona library (reduce LLM usage)
-│   ├── developer.yaml
-│   ├── accountant.yaml
-│   ├── executive.yaml
-│   ├── help_desk.yaml
-│   ├── security_analyst.yaml
-│   └── ...                      # 10-15 common personas
-│
-├── src/
-│   └── log_generator/
-│       ├── __init__.py
-│       ├── __main__.py          # CLI entry point
-│       │
-│       ├── cli/
-│       │   ├── __init__.py
-│       │   ├── commands.py      # CLI command implementations
-│       │   └── conversation.py  # Interactive conversation interface
-│       │
-│       ├── models/
-│       │   ├── __init__.py
-│       │   ├── config.py        # Pydantic models for config
-│       │   ├── scenario.py      # Pydantic models for scenario
-│       │   ├── format_def.py    # Pydantic models for format definitions
-│       │   └── state.py         # Runtime state models
-│       │
-│       ├── validation/
-│       │   ├── __init__.py
-│       │   ├── schema.py        # Schema validation
-│       │   ├── semantic.py      # LLM-based semantic validation
-│       │   └── repair.py        # Interactive repair logic
-│       │
-│       ├── generation/
-│       │   ├── __init__.py
-│       │   ├── engine.py        # Main generation orchestrator
-│       │   ├── state_manager.py # State tracking (sessions, processes, etc.)
-│       │   ├── persona.py       # Persona-based activity generation
-│       │   ├── activity.py      # Activity script execution
-│       │   ├── checkpoint.py    # Checkpoint/resume logic
-│       │   └── emitters/
-│       │       ├── __init__.py
-│       │       ├── base.py      # Base emitter interface
-│       │       ├── windows.py   # Windows Event Log emitter
-│       │       ├── zeek.py      # Zeek log emitter
-│       │       ├── syslog.py    # Syslog emitter
-│       │       ├── snort.py     # Snort/Suricata emitter
-│       │       └── web.py       # Web/proxy log emitter
-│       │
-│       ├── formats/
-│       │   ├── __init__.py
-│       │   ├── loader.py        # Format definition loader
-│       │   ├── validator.py     # Format constraint validator (DSL)
-│       │   └── definitions/
-│       │       ├── windows_event.yaml
-│       │       ├── zeek.yaml
-│       │       ├── syslog.yaml
-│       │       ├── snort.yaml
-│       │       └── web.yaml
-│       │
-│       ├── llm/
-│       │   ├── __init__.py
-│       │   ├── client.py        # Bedrock client wrapper
-│       │   ├── prompts.py       # System prompts for various tasks
-│       │   ├── research.py      # TTP research logic
-│       │   └── retry.py         # Retry logic with backoff
-│       │
-│       ├── evaluation/
-│       │   ├── __init__.py
-│       │   ├── evaluator.py     # Main evaluation logic
-│       │   ├── metrics.py       # Concrete metrics (format, consistency, stats)
-│       │   └── report.py        # Report generation
-│       │
-│       └── utils/
-│           ├── __init__.py
-│           ├── config.py        # Config loading with env var interpolation
-│           ├── logging.py       # Logging setup
-│           ├── time.py          # Time/duration parsing utilities
-│           └── files.py         # File I/O utilities
-│
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py              # Shared fixtures
-│   ├── unit/                    # Fast unit tests
-│   │   ├── test_models.py
-│   │   ├── test_validation.py
-│   │   ├── test_state_manager.py
-│   │   └── ...
-│   ├── integration/             # Multi-component tests
-│   │   ├── test_scenario_creation.py
-│   │   ├── test_generation_small.py
-│   │   └── ...
-│   ├── live/                    # Tests requiring LLM API (marked @pytest.mark.live)
-│   │   ├── test_conversation.py
-│   │   ├── test_semantic_validation.py
-│   │   └── test_research.py
-│   └── fixtures/
-│       ├── scenarios/           # Example scenario files
-│       ├── configs/             # Example configs
-│       └── sample_logs/         # Real log samples for validation
-│
-├── docs/
-│   ├── installation.md
-│   ├── quickstart.md
-│   ├── user-guide.md
-│   ├── scenario-reference.md
-│   ├── format-definitions.md
-│   └── architecture.md
-│
-└── examples/
-    ├── simple-baseline/         # Simple baseline activity scenario
-    ├── ransomware-attack/       # Ransomware scenario
-    ├── credential-stuffing/     # Credential attack scenario
-    └── insider-threat/          # Insider threat scenario
+evidenceforge/
++-- README.md
++-- AGENTS.md                    # AI coding agent instructions
++-- LICENSE
++-- pyproject.toml               # uv project config (entry point: forge)
++-- config.example.yaml          # Example configuration
++-- .env.example                 # Example environment variables
+|
++-- skills/                      # Claude Code skills (source, installed via forge install-skills)
+|   +-- forge/
+|       +-- scenario.md          # /forge scenario skill
+|       +-- generate.md          # /forge generate skill
+|
++-- personas/                    # Pre-built persona library
+|   +-- developer.yaml
+|   +-- accountant.yaml
+|   +-- executive.yaml
+|   +-- help_desk.yaml
+|   +-- security_analyst.yaml
+|   +-- ...                      # 10-15 common personas
+|
++-- src/
+|   +-- log_generator/
+|       +-- __init__.py
+|       +-- __main__.py          # CLI entry point
+|       +-- py.typed             # PEP 561 marker
+|       |
+|       +-- cli/
+|       |   +-- __init__.py
+|       |   +-- commands.py      # CLI command implementations (init, generate, validate, evaluate, install-skills, version)
+|       |
+|       +-- models/
+|       |   +-- __init__.py
+|       |   +-- config.py        # Pydantic models for config
+|       |   +-- scenario.py      # Pydantic models for scenario
+|       |   +-- exceptions.py    # Custom exception types
+|       |   +-- state.py         # Runtime state models
+|       |
+|       +-- validation/
+|       |   +-- __init__.py
+|       |   +-- schema.py        # Schema + cross-reference validation
+|       |
+|       +-- generation/
+|       |   +-- __init__.py
+|       |   +-- engine.py        # Main generation orchestrator
+|       |   +-- state_manager.py # State tracking (sessions, processes, connections)
+|       |   +-- activity.py      # Persona-based activity generation with temporal distribution
+|       |   +-- ground_truth.py  # GROUND_TRUTH.md generation
+|       |   +-- network_visibility.py  # TAP/SPAN sensor modeling
+|       |   +-- emitters/
+|       |       +-- __init__.py
+|       |       +-- base.py      # Base emitter interface
+|       |       +-- windows.py   # Windows Event Security emitter
+|       |       +-- zeek.py      # Zeek conn.log emitter
+|       |       +-- ecar.py      # ECAR event emitter
+|       |       +-- syslog.py    # Syslog emitter
+|       |       +-- bash_history.py  # Bash history emitter
+|       |       +-- snort.py     # Snort alert emitter
+|       |       +-- web.py       # Web access log emitter
+|       |
+|       +-- formats/
+|       |   +-- __init__.py
+|       |   +-- format_def.py    # Pydantic models for format definitions
+|       |   +-- loader.py        # Format definition loader
+|       |   +-- validator.py     # Format constraint validator (JSON Logic DSL)
+|       |   +-- definitions/
+|       |       +-- windows_event_security.yaml
+|       |       +-- zeek_conn.yaml
+|       |       +-- ecar.yaml
+|       |       +-- syslog.yaml
+|       |       +-- bash_history.yaml
+|       |       +-- snort_alert.yaml
+|       |       +-- web_access.yaml
+|       |
+|       +-- llm/                 # Created when LLM integration is needed (future)
+|       |   +-- __init__.py
+|       |
+|       +-- evaluation/
+|       |   +-- __init__.py
+|       |   +-- evaluator.py     # Main evaluation logic
+|       |   +-- metrics.py       # Concrete metrics (format, consistency, stats)
+|       |   +-- report.py        # Report generation
+|       |
+|       +-- utils/
+|           +-- __init__.py
+|           +-- config.py        # Config loading with env var interpolation
+|           +-- files.py         # File I/O utilities
+|           +-- ids.py           # ID generation utilities
+|           +-- logging.py       # Logging setup
+|           +-- time.py          # Time/duration parsing utilities
+|
++-- tests/
+|   +-- __init__.py
+|   +-- conftest.py              # Shared fixtures
+|   +-- unit/                    # Fast unit tests (526+ tests)
+|   |   +-- test_models.py
+|   |   +-- test_validation.py
+|   |   +-- test_state_manager.py
+|   |   +-- test_engine.py
+|   |   +-- test_emitters.py
+|   |   +-- test_activity.py
+|   |   +-- test_persona_activity.py
+|   |   +-- test_network_visibility.py
+|   |   +-- test_ground_truth.py
+|   |   +-- test_format_def.py
+|   |   +-- test_format_loader.py
+|   |   +-- test_format_validator.py
+|   |   +-- test_time_parsing.py
+|   |   +-- test_timezone_handling.py
+|   |   +-- test_cli.py
+|   |   +-- test_utils.py
+|   |   +-- ...
+|   +-- integration/             # Multi-component tests
+|   |   +-- test_format_definitions.py
+|   |   +-- test_parallel_generation.py
+|   |   +-- test_scenario_timezone.py
+|   |   +-- test_medium_dataset.py
+|   |   +-- ...
+|   +-- live/                    # Tests requiring external APIs
+|   +-- fixtures/                # Test fixture data
+|
++-- docs/
+|   +-- PRD.md                   # This document
+|   +-- ...
+|
++-- examples/
+    +-- simple-baseline/         # Simple baseline activity scenario
+    +-- ransomware-attack/       # Ransomware scenario
+    +-- credential-stuffing/     # Credential attack scenario
+    +-- insider-threat/          # Insider threat scenario
 ```
 
 ### 6.3 Configuration & Secrets
@@ -879,95 +891,10 @@ log-generator/
   3. IAM role (if running on EC2/ECS)
   4. AWS SSO
 - **Other secrets**: Support environment variable interpolation in config: `${VAR_NAME}`
-  - Example: `bedrock.model_primary: "${MODEL_PRIMARY}"`
-- **.env file search**: Walk from CWD upward, max search depth is home directory (don't search above)
+- **.env file search**: Walk from CWD upward, max search depth is home directory
 - **Security**: Never log secrets or include in error messages, stack traces, or debug output
 
-**Required Configuration Items:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| aws.profile | string | "default" | AWS profile name, supports ${AWS_PROFILE} |
-| aws.region | string | "us-east-1" | AWS region, supports ${AWS_REGION} |
-| bedrock.model_primary | string | "anthropic.claude-sonnet-4-6-v1:0" | Main model for conversation and validation |
-| bedrock.model_research | string | "anthropic.claude-sonnet-4-6-v1:0" | Model for TTP research |
-| bedrock.model_generation | string | "anthropic.claude-haiku-4-5-v1:0" | Model for bulk generation tasks |
-| output.base_directory | string | "./output" | Base directory for generated datasets |
-| logging.level | string | "info" | Log level for file: debug/info/warning/error |
-| logging.console_level | string | "warning" | Log level for console: warning/error |
-
-## 7. UI/UX
-
-This is a CLI tool, so traditional UI/UX doesn't apply. However, interaction design matters:
-
-### Conversational Interface
-
-**Design Principles:**
-- One question at a time (never multi-part questions)
-- Acknowledge user's answers before proceeding
-- Offer recommendations when user is unsure
-- Explain technical concepts if user asks
-- Follow tangents (often reveal important requirements)
-- Summarize and confirm before finalizing scenario
-
-**Interaction Model:**
-- Linear conversation (no backtracking in MVP - users edit YAML for corrections)
-- LLM detects completeness when all required fields can be populated
-- User says "done" or LLM asks "Is there anything else?" to conclude
-- Three example conversation flows should be documented covering:
-  1. Simple baseline-only scenario (minimal user input)
-  2. Attack scenario with research and expansion
-  3. Complex multi-actor scenario with explicit environment specs
-
-**Implementation Notes:**
-- System prompts guide LLM behavior (one question at a time, acknowledgment, etc.)
-- Few-shot examples demonstrate desired interaction patterns
-- Conversation state tracked for context
-- Research results referenced in later questions
-
-### Progress Reporting
-```
-Generating logs for scenario: ransomware-healthcare
-Time window: 2026-01-15 08:00:00 to 2026-01-15 18:00:00 (10 hours)
-Environment: 120 users, 95 workstations, 12 servers
-
-[████████████████████--------] 65% | 6h 32m / 10h | ETA: 8m 15s
-
-Writing: Windows Security Events (23,451 events)
-         Sysmon (8,932 events)
-         Zeek conn.log (127,834 connections)
-
-Last activity: User jsmith browsing to internal portal (14:32:15)
-```
-
-### Error Messages
-**Bad:**
-```
-Error: Validation failed
-```
-
-**Good:**
-```
-Validation Error: Invalid scenario file
-
-Issue 1: Referenced user not found
-  Line 42: storyline[0].actor = "bwilliams"
-  Problem: User "bwilliams" is not defined in environment.users
-
-  Suggestions:
-    1. Add bwilliams to environment.users section
-    2. Change actor to "ANY_USER_FROM:accountant"
-    3. Run 'log-generator validate --interactive' to fix issues
-
-Issue 2: Invalid time format
-  Line 15: time_window.start = "2026-1-15"
-  Problem: Must use ISO 8601 format
-  Expected: "2026-01-15T08:00:00"
-
-Run with --fix to automatically correct fixable issues.
-```
-
-## 8. Error Handling & Edge Cases
+## 7. Error Handling & Edge Cases
 
 ### Input Validation Errors
 
@@ -977,16 +904,11 @@ Run with --fix to automatically correct fixable issues.
 |------|----------|-------------|
 | 0 | Success | Operation completed successfully |
 | 1 | Input Error | Malformed YAML or file I/O error |
-| 2 | Schema Validation | Pydantic validation failure (type/constraint violations) |
-| 3 | Semantic Validation | LLM-detected logical inconsistencies |
-| 10 | LLM API Failure | Persistent LLM API errors (auth, quota, region) |
-| 11 | LLM Timeout | LLM operation exceeded timeout |
+| 2 | Schema Validation | Pydantic validation or cross-reference failure |
 | 20 | Resource Exhaustion | Insufficient disk space or memory |
 | 21 | Generation Error | Invalid state or unrecoverable generation failure |
 | 22 | Format Error | Format definition loading or validation error |
 | 130 | SIGINT | User interrupted (Ctrl+C) |
-
-Note: Warnings do not affect exit code.
 
 **Malformed YAML:**
 - Detect during parsing
@@ -1000,29 +922,10 @@ Note: Warnings do not affect exit code.
 - List all violations (don't stop at first)
 - Exit code: 2
 
-**Semantic Inconsistencies:**
-- LLM validates logical consistency (conversation phase only)
-- Present issues with context and suggestions
-- Offer interactive repair (Option A: ask clarifying questions with suggestions from LLM auto-fixes)
-- Exit code: 3
-
-### LLM API Failures
-
-**Transient errors** (rate limits, network issues):
-- Retry with exponential backoff: 2s, 4s, 8s
-- Log retry attempts at debug level
-- After 3 failures: Escalate to persistent error handling
-
-**Persistent errors** (auth failures, quota exhausted):
-- Stop immediately with clear error message
-- Indicate which operation failed (conversation, validation, research)
-- Suggest remediation (check credentials, quota, region)
-- Exit code: 10
-
-**Context window exceeded:**
-- For conversation: Summarize and continue
-- For validation: Break into chunks
-- For generation: Should not happen (deterministic, not LLM-based)
+**Cross-Reference Errors:**
+- Present issues with field paths, descriptions, and suggestions
+- Distinguish errors (block generation) from warnings (proceed with caution)
+- Exit code: 2 if errors present
 
 ### Generation Failures
 
@@ -1035,7 +938,7 @@ Note: Warnings do not affect exit code.
 - Detect impossible states (e.g., PID reuse collision)
 - Log detailed state information
 - Attempt recovery (assign new PID)
-- If unrecoverable: Checkpoint and fail with detailed error
+- If unrecoverable: fail with detailed error
 - Exit code: 21
 
 **Format definition errors:**
@@ -1051,12 +954,12 @@ Note: Warnings do not affect exit code.
 - If duration <= 0: Error
 
 **No users or systems defined:**
-- If environment.generate not specified and no explicit users: Error
 - Require at least 1 user and 1 system
+- Error with suggestion to add users/systems
 
 **Conflicting specifications:**
-- Both environment.generate and environment.users specified: Use explicit (users), ignore generate
-- Warn user about ignored section
+- Duplicate usernames or hostnames: Error (must be unique)
+- Storyline references non-existent user/system: Error with suggestion
 
 **Activity before window start or after end:**
 - Clamp to window boundaries with warning
@@ -1074,15 +977,14 @@ Note: Warnings do not affect exit code.
 - Connection where src_ip == dst_ip: Skip with warning (network sensors cannot observe localhost traffic)
 - Connection involving localhost addresses (127.0.0.0/8): Skip with warning (never traverses network)
 - Connection involving link-local addresses (169.254.0.0/16): Skip with warning (auto-config, not routed)
-- Connection involving multicast/reserved addresses (224.0.0.0/4): Skip with warning (special handling required)
+- Connection involving multicast/reserved addresses (224.0.0.0/4): Skip with warning
 - Connection to private IP from external actor: Warn (might be VPN/proxy, but allow)
 - Response bytes > 0 for failed connection: Adjust to 0, warn
-- Phase 2: Connection not visible to configured sensors: Skip based on network topology and sensor placement
+- Connection not visible to configured sensors: Skip based on network topology and sensor placement
 
 **Logon without logoff:**
 - Within time window: Acceptable and common (user still logged in, forgot to log off, system crash)
-- At end of window: LLM decides during expansion whether to close sessions cleanly or leave incomplete
-- Default behavior: ~85% of sessions close properly, ~15% incomplete (realistic messiness)
+- At end of window: ~85% of sessions close properly, ~15% incomplete (realistic messiness)
 - Storyline can specify incomplete sessions for attacker behavior
 
 **Time travel:**
@@ -1094,7 +996,6 @@ Note: Warnings do not affect exit code.
 - Two users with same username: Error (must be unique)
 - Two systems with same hostname: Error (must be unique)
 - PID reuse within same system: Track PIDs per-system, allocate incrementally, reuse only after explicit termination
-- If PID pool exhausted (unlikely < 32K processes): Error with suggestion to shorten scenario
 
 **Timezone handling:**
 - All internal timestamps UTC
@@ -1104,39 +1005,35 @@ Note: Warnings do not affect exit code.
 - Invalid timezone name: Error with suggestion
 
 **Connection to private IP from external actor:**
-- Allow but warn: "External actor accessing private IP - consider modeling VPN/proxy/compromised perimeter"
-- Don't auto-create NAT infrastructure
-- User should explicitly model network topology to represent VPN/proxy/perimeter devices (see environment.network schema)
+- Allow but warn: "External actor accessing private IP -- consider modeling VPN/proxy/compromised perimeter"
+- User should explicitly model network topology to represent VPN/proxy/perimeter devices
 
-## 9. Testing Strategy
+## 8. Testing Strategy
 
 ### Test Levels
 
-**Unit Tests** (target: 95% coverage)
+**Unit Tests** (target: 95% coverage, currently 526+ tests passing)
 - All Pydantic models: validation, serialization
-- State manager: session/process/connection tracking
+- State manager: session/process/connection tracking (including thread safety)
 - Format validators: constraint DSL evaluation
-- Emitters: log format generation (mocked output)
-- Time utilities: parsing, duration calculation
+- Emitters: log format generation (including thread safety)
+- Activity generation: persona-based temporal distribution
+- Network visibility: sensor placement and traffic filtering
+- Ground truth generation
+- Time utilities: parsing, duration calculation, timezone handling
 - Config loading: env var interpolation, .env file discovery
+- CLI commands: argument parsing, error handling
 
 **Integration Tests** (target: 90% coverage)
-- Conversation → scenario file generation (mocked LLM)
-- Scenario file → validation → report
-- Small scenario end-to-end generation (< 1000 events, deterministic)
-- Format definition loading → validation → application
-- Checkpoint → resume workflow
-
-**Live Tests** (marked with @pytest.mark.live, not run by default)
-- Actual LLM conversation workflows
-- Real semantic validation with Bedrock
-- TTP research queries
-- Full scenario with all LLM calls
-- Run manually or in nightly CI builds with API budget
+- Scenario file loading, validation, and generation end-to-end
+- Format definition loading, validation, and application
+- Parallel generation across multiple emitters
+- Timezone handling through full pipeline
+- Medium dataset generation (100 users, 8 hours)
 
 **End-to-End Tests** (run manually or in release pipeline)
-- Complete workflow: init → new → validate → generate → evaluate
-- Medium dataset: 8 hours, 100 users, all 5 log formats
+- Complete workflow: init, generate, evaluate
+- Multiple dataset sizes and configurations
 - Verify output structure, format compliance, consistency
 - Performance benchmarks (time to generate, memory usage)
 
@@ -1144,22 +1041,12 @@ Note: Warnings do not affect exit code.
 
 **Fixtures:**
 
-Required scenario files (5):
+Required scenario files:
 1. **minimal**: 1 user, 1 system, 1 hour, baseline only
 2. **small-realistic**: 20 users, 10 systems, 8 hours, baseline only
 3. **attack-single**: 50 users, ransomware scenario
 4. **attack-multi**: 100 users, credential stuffing + lateral movement
 5. **large-scale**: 100 users, 24 hours, multiple log formats
-
-Sample log files:
-- Use synthetic logs generated with early implementation
-- Manually validate for correctness
-- Commit as test fixtures for regression testing
-- 10-20 examples per format (not 100+ - too large)
-
-Mock LLM responses:
-- Record actual LLM responses for common scenarios
-- Use for unit/integration tests to avoid API costs
 
 **Property Tests:**
 - All timestamps within specified window
@@ -1167,92 +1054,96 @@ Mock LLM responses:
 - All PIDs referenced have corresponding process creation events
 - No orphaned connections (all have start events)
 
-**Regression Tests:**
-- Commit validation criteria for scenarios
-- Assert structure, key metrics, sample events match expected patterns
-- Don't commit full output (too large), just validation rules
-
 ### Testing Tools
 
 **Framework:** pytest with plugins
 - pytest-cov for coverage
-- pytest-asyncio for async tests
 - pytest-mock for mocking
 - pytest-benchmark for performance tests
-
-**Mocking Strategy:**
-- Mock LLM API calls in unit/integration tests (use recorded responses)
-- Mock file I/O in unit tests, use temp directories in integration tests
-- Mock time/randomness for deterministic tests
 
 **Coverage Requirements:**
 - Overall: 95%+
 - Core generation engine: 95%+
 - Format definitions & validators: 90%+
-- CLI/conversation interface: 85%+
+- CLI interface: 85%+
 - Exclude: `__main__.py`, type stubs, test fixtures
 
-**CI/CD Integration:**
-- Run unit + integration tests on every PR
-- Enforce coverage thresholds (fail if below target)
-- Run live tests nightly with API budget limits
-- Run E2E tests before releases
+## 9. MVP Scope & Future Considerations
 
-## 10. MVP Scope & Future Considerations
+### MVP Deliverables
 
-### MVP Phase Breakdown
+1. **Two Claude Code skills**
+   - `/forge scenario`: Guided scenario creation with hybrid interview flow
+   - `/forge generate`: Generation execution with troubleshooting
+   - Note: Skill prompt content will be developed using the /skill-creator skill during implementation. The PRD defines what each skill does, not its exact prompt.
 
-**Phase 1: Core Generation**
-- Basic scenario schema (simplified)
-- Single-threaded generation
-- Manual state tracking
-- 2-3 log formats (Windows Event, Zeek conn, syslog)
-- Small datasets only (< 10K events)
-- No checkpointing
-- Target: Prove the concept works
+2. **Evaluation framework**
+   - Format compliance checking
+   - Cross-reference consistency validation
+   - Statistical property analysis
+   - Ground truth IOC verification
+   - Note: Specific check implementations will be defined iteratively during development. The framework should be designed for extensibility.
 
-**Phase 2: Scalability**
-- Parallel generation (multiple log types simultaneously)
-- Incremental file writing (streaming)
-- Progress reporting
-- All 5 MVP log formats
-- Medium datasets (100K+ events)
-- Target: Handle real-world dataset sizes
+3. **Pre-built persona library** (10-15 personas)
+   - Persona files use the exact same YAML schema as the Persona model in scenario files. No metadata extensions for MVP.
+   - Complete set: developer, executive, analyst, sysadmin, help_desk, security_analyst, accountant, sales, hr, marketing, data_analyst, receptionist, intern, project_manager, legal_counsel
+   - Each with realistic activity patterns, work hours, and risk profiles
 
-**Phase 3: Robustness (MVP Release)**
-- Checkpointing and resume
-- Full error handling and retry logic
-- Comprehensive test coverage (95%+)
-- Complete documentation (installation, user guide, format definitions, architecture)
-- Example scenarios (5 required fixtures + 5-10 additional examples)
-- Pre-built persona library (10-15 personas)
-- Large dataset support (millions of events)
-- Timezone handling
-- Target: Production-ready tool
+4. **Documentation**
+   - This PRD
+   - Installation guide
+   - Scenario authoring reference
+   - Format definition reference
 
-**Timeline Estimate:**
-- Phase 1: 2-3 weeks
-- Phase 2: 2-3 weeks
-- Phase 3: 3-4 weeks
-- Total MVP: 7-10 weeks
+5. **Core generation engine** (already implemented)
+   - 7 log formats with emitters
+   - Persona-based temporal activity distribution
+   - Network visibility with TAP/SPAN sensor modeling
+   - Parallel emitter-level generation
+   - Progress reporting
+   - Ground truth generation
+   - Schema + cross-reference validation
+   - 526+ tests passing at 95%+ coverage
 
-Note: Phase 3 is the MVP release. Phases 1-2 are internal milestones.
+### Current Implementation Status
+
+| Component | Status |
+|-----------|--------|
+| CLI (`forge init`, `forge generate`, `forge version`) | Complete |
+| Scenario Pydantic models | Complete |
+| 7 format definitions (YAML) | Complete |
+| 7 emitters (Windows, Zeek, ECAR, Syslog, Bash History, Snort, Web) | Complete |
+| State manager (sessions, processes, connections) | Complete |
+| Persona-based activity generation | Complete |
+| Network visibility / sensor modeling | Complete |
+| Ground truth generation | Complete |
+| Schema + cross-reference validation | Complete |
+| Parallel emitter-level generation | Complete |
+| Progress reporting (Rich) | Complete |
+| Timezone handling | Complete |
+| `forge validate` command | Not yet implemented |
+| `forge evaluate` command | Not yet implemented |
+| `forge install-skills` command | Not yet implemented |
+| Skills (`/forge scenario`, `/forge generate`) | Not yet implemented |
+| Persona library files | Not yet implemented |
+| Evaluation framework | Not yet implemented |
 
 ### Future Enhancements
 
 **Short-term (post-MVP):**
-- Subjective realism evaluation (LLM-based "does this feel real?")
+- Bedrock LLM client for semantic validation (`forge validate --semantic`)
+- Checkpointing and resume for long-running generation jobs
+- Large dataset optimization (100M+ events, memory-mapped writes)
 - Config file inheritance/templating
+- Additional log formats (cloud providers, databases)
 - PyPI package distribution
-- Additional log formats (cloud providers, mobile, databases)
-- Performance optimizations (Rust extensions, better parallelization)
 
 **Medium-term:**
 - Alternative LLM backends (OpenAI, Ollama, Anthropic native, Gemini)
 - Web UI for scenario creation
 - Streaming output to SIEM/data lakes
 - Log format auto-detection from samples
-- Machine learning-based realism scoring
+- Realism scoring beyond concrete metrics
 
 **Long-term:**
 - OT/ICS environment simulation
@@ -1260,26 +1151,20 @@ Note: Phase 3 is the MVP release. Phases 1-2 are internal milestones.
 - Collaborative scenario editing
 - Scenario marketplace (share/download scenarios)
 - Integration with attack frameworks (CALDERA, Atomic Red Team)
+- Cloud provider logs (CloudTrail, Azure Activity, GCP Audit)
 
 ### Architectural Decisions Preserving Future Features
 
 **Must NOT block:**
-1. **Additional LLM backends**: Keep LLM client abstracted behind interface, config specifies backend type
+1. **LLM client integration**: `llm/` package created when LLM integration is needed (future); Bedrock/OpenAI client plugs in here
 2. **Real-time streaming**: State manager and emitters designed to work event-by-event, not requiring full dataset in memory
-3. **New log formats**: Format engine is data-driven, adding formats doesn't require code changes
+3. **New log formats**: Format engine is data-driven, adding formats requires only a new YAML definition and emitter class
 4. **Web UI**: Business logic separated from CLI, can wrap with API layer
-5. **Distributed generation**: State can be partitioned (per-user, per-system), enable future map-reduce style parallelization
+5. **Distributed generation**: State can be partitioned (per-user, per-system)
 
 **Abstractions to maintain:**
 
-Key interfaces to preserve future extensibility:
-
 ```python
-# LLM Client abstraction (currently Bedrock, future: OpenAI, Ollama, etc.)
-class LLMClient(Protocol):
-    def chat(self, messages: list[Message]) -> str: ...
-    def complete(self, prompt: str) -> str: ...
-
 # Log Emitter base class (uniform interface for all formats)
 class LogEmitter(ABC):
     @abstractmethod
@@ -1290,7 +1175,7 @@ class LogEmitter(ABC):
 
 # State Manager (encapsulates all runtime state)
 class StateManager:
-    # Only StateManager can mutate state, emitters read-only
+    # Thread-safe state access; only StateManager can mutate state
     def create_session(self, ...) -> str: ...  # Returns LogonID
     def get_active_sessions(self) -> dict[str, ActiveSession]: ...
     def create_process(self, ...) -> int: ...  # Returns PID
@@ -1307,36 +1192,31 @@ class FormatDefinition:
 
 - Scenario schema versioning (enable backward compatibility)
 
-**Configuration extensibility:**
-- Use nested dicts for format-specific options
-- Allow unknown keys (don't fail on new config options from future versions)
-- Version scenario file schema explicitly
-
 ### Known Limitations
 
 **MVP will NOT:**
-- Generate bit-perfect binary EVTX files (XML output by default, binary EVTX optional if python-evtx works)
-- Support binary log formats beyond EVTX (Snort will be unified2 or fast alert format, not pcap)
+- Generate bit-perfect binary EVTX files (XML output by default)
+- Support binary log formats (Snort uses fast alert format, not pcap)
 - Perform network traffic capture simulation (packet-level)
 - Simulate actual malware execution (this is synthetic, not sandboxing)
-- Generate logs for systems we don't have format definitions for
+- Generate logs for systems without format definitions
 - Guarantee detection rule triggering (depends on SIEM/tool configuration)
-- Provide bit-perfect reproducibility (LLM expansion is non-deterministic; save and reuse scenario files)
-- Auto-infer network topology from system IPs (users must explicitly define network segments and sensor placement)
+- Provide bit-perfect reproducibility (save and reuse scenario files)
+- Checkpoint and resume interrupted generation jobs
 
 **Performance bounds (MVP):**
 - Max 1000 users (technical limit, not enforced)
 - Max 30-day time windows (technical limit, not enforced)
 - Single machine execution (no distributed generation)
-- Sequential persona activity generation (persona templates applied one at a time)
+- Emitter-level parallelization only (not user-level or time-slice)
 
 ### Success Metrics
 
 **MVP is successful if:**
-1. Can generate realistic 8-hour dataset for 100 users in < 30 minutes
-2. Generated logs pass format validation for all 5 MVP formats
+1. Can generate realistic 8-hour dataset for 100 users in < 30 seconds
+2. Generated logs pass format validation for all 7 formats
 3. Cross-log consistency checks pass (no orphaned references)
-4. At least 10 example scenarios included and documented
+4. `/forge scenario` skill can produce valid scenarios for common use cases
 5. 95%+ test coverage achieved
 6. 3+ external users successfully generate custom scenarios
 7. Generated logs successfully imported into Splunk/ELK without errors

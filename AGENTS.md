@@ -6,13 +6,13 @@ This document provides AI coding agents with everything needed to write consiste
 
 EvidenceForge generates realistic synthetic security logs for cybersecurity threat hunting training and research. The system uses a two-phase hybrid architecture:
 
-**Phase 1 - Scenario Creation (LLM-intensive):** Conversational CLI interface accepts natural language descriptions of computing environments and activities. LLM researches TTPs via MITRE ATT&CK, expands high-level descriptions into detailed execution plans, and outputs structured YAML scenario files with companion research markdown.
+**Phase 1 - Scenario Creation (Skill-assisted):** Claude Code Skills guide users through scenario creation via structured interviews. Skills research TTPs via MITRE ATT&CK, expand high-level descriptions into detailed execution plans, and output structured YAML scenario files with companion research markdown.
 
 **Phase 2 - Log Generation (Deterministic):** Generation engine executes the detailed scenario plan WITHOUT any LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, Syslog, Snort/Suricata, web logs) with coordinated cross-references (matching LogonIDs, PIDs, session data).
 
 This architecture combines LLM flexibility/realism with deterministic speed, cost-efficiency, and reproducibility.
 
-**Key Principle:** Phase 1 does ALL the creative work. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation.
+**Key Principle:** The `forge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation.
 
 ## 🔴 MANDATORY: Implementation State Tracking
 
@@ -81,11 +81,13 @@ Use markdown checkboxes organized by phase/feature:
 - uv for package management, virtual environments, and script running
 - Pydantic v2 for all data validation and schema management
 
-**LLM Integration:**
-- boto3 for AWS Bedrock access (MVP only supports Bedrock, other backends are future enhancements)
-- Primary model: `anthropic.claude-sonnet-4-6-v1:0` (conversation & validation)
-- Research model: `anthropic.claude-sonnet-4-6-v1:0` (TTP research)
-- Generation model: `anthropic.claude-haiku-4-5-v1:0` (cost optimization for bulk tasks)
+**LLM Integration (deferred):**
+- Built-in LLM client via boto3/Bedrock is deferred to future phases
+- Scenario creation is handled by Claude Code Skills (external to the codebase)
+- The `llm/` directory is a placeholder; model IDs kept as reference for future use:
+  - Primary model: `anthropic.claude-sonnet-4-6-v1:0` (conversation & validation)
+  - Research model: `anthropic.claude-sonnet-4-6-v1:0` (TTP research)
+  - Generation model: `anthropic.claude-haiku-4-5-v1:0` (cost optimization for bulk tasks)
 
 **CLI & Output:**
 - Typer for CLI framework (excellent Pydantic integration)
@@ -115,11 +117,13 @@ log-generator/
 ├── config.example.yaml          # Example configuration
 ├── .env.example                 # Example environment variables
 │
-├── personas/                    # Pre-built persona library (reduce LLM usage)
-│   ├── developer.yaml
-│   ├── accountant.yaml
-│   ├── executive.yaml
-│   └── ...                      # 10-15 common personas
+├── skills/
+│   └── forge/                   # Claude Code Skills for scenario creation
+│       ├── scenario.md          # /forge scenario - guided scenario creation
+│       └── generate.md          # /forge generate - generation workflow
+│
+├── personas/                    # Pre-built persona library
+│   └── ...                      # Persona YAML files (developer, accountant, etc.)
 │
 ├── src/
 │   └── log_generator/
@@ -128,8 +132,7 @@ log-generator/
 │       │
 │       ├── cli/
 │       │   ├── __init__.py
-│       │   ├── commands.py      # Typer CLI command implementations
-│       │   └── conversation.py  # Interactive conversation interface
+│       │   └── commands.py      # Typer CLI command implementations
 │       │
 │       ├── models/
 │       │   ├── __init__.py
@@ -140,25 +143,24 @@ log-generator/
 │       │
 │       ├── validation/
 │       │   ├── __init__.py
-│       │   ├── schema.py        # Pydantic-based schema validation
-│       │   ├── semantic.py      # LLM-based semantic validation
-│       │   └── repair.py        # Interactive repair logic
+│       │   └── schema.py        # Pydantic-based schema validation
 │       │
 │       ├── generation/
 │       │   ├── __init__.py
-│       │   ├── engine.py        # Main generation orchestrator
+│       │   ├── engine.py        # Main generation orchestrator (includes persona logic)
 │       │   ├── state_manager.py # State tracking (sessions, processes, connections)
-│       │   ├── persona.py       # Persona-based activity generation
-│       │   ├── activity.py      # Activity script execution
-│       │   ├── checkpoint.py    # Checkpoint/resume logic
+│       │   ├── activity.py      # Activity script execution (includes persona behavior)
+│       │   ├── network_visibility.py  # Network visibility/perspective logic
 │       │   └── emitters/
 │       │       ├── __init__.py
-│       │       ├── base.py      # Base emitter ABC
-│       │       ├── windows.py   # Windows Event Log emitter
-│       │       ├── zeek.py      # Zeek log emitter
-│       │       ├── syslog.py    # Syslog emitter
-│       │       ├── snort.py     # Snort/Suricata emitter
-│       │       └── web.py       # Web/proxy log emitter
+│       │       ├── base.py          # Base emitter ABC
+│       │       ├── bash_history.py  # Bash history emitter
+│       │       ├── ecar.py          # ECAR emitter
+│       │       ├── snort.py         # Snort/Suricata emitter
+│       │       ├── syslog.py        # Syslog emitter
+│       │       ├── web.py           # Web/proxy log emitter
+│       │       ├── windows.py       # Windows Event Log emitter
+│       │       └── zeek.py          # Zeek log emitter
 │       │
 │       ├── formats/
 │       │   ├── __init__.py
@@ -171,12 +173,8 @@ log-generator/
 │       │       ├── snort.yaml
 │       │       └── web.yaml
 │       │
-│       ├── llm/
-│       │   ├── __init__.py
-│       │   ├── client.py        # Bedrock client wrapper
-│       │   ├── prompts.py       # System prompts for various tasks
-│       │   ├── research.py      # TTP research logic (30s timeout per query)
-│       │   └── retry.py         # Retry logic with exponential backoff
+│       ├── llm/                 # Placeholder for future built-in LLM integration
+│       │   └── __init__.py
 │       │
 │       ├── evaluation/
 │       │   ├── __init__.py
@@ -561,9 +559,11 @@ def redact_secrets(obj: dict[str, Any]) -> dict[str, Any]:
 
 ## Key Architecture Patterns
 
-### LLM Client Abstraction
+### LLM Client Abstraction (Future)
 
-The LLM client is abstracted behind a Protocol to support future backends (OpenAI, Ollama, etc.):
+The LLM client abstraction is planned for future built-in LLM integration. Currently, scenario creation is handled by Claude Code Skills (external to the codebase). The patterns below are kept as reference for when the `llm/` module is implemented.
+
+The LLM client will be abstracted behind a Protocol to support future backends (OpenAI, Ollama, etc.):
 
 ```python
 from typing import Protocol
@@ -599,9 +599,9 @@ class BedrockClient:
         ...
 ```
 
-**Usage pattern:**
+**Usage pattern (future):**
 ```python
-# In cli/conversation.py
+# Example for future built-in LLM integration
 llm = BedrockClient(
     model_id=config.bedrock.model_primary,
     region=config.aws.region,
@@ -614,7 +614,7 @@ response = llm.chat(messages=[
 ])
 ```
 
-**Critical:** Never call LLM during generation phase. Only in conversation (`new` command) and validation (`validate` command with `--interactive`).
+**Critical:** Never call LLM during generation phase. Scenario creation is currently handled by Claude Code Skills, not built-in LLM calls.
 
 ### Retry Logic with Backoff
 
@@ -1347,11 +1347,44 @@ def test_state_manager_creates_unique_pids(user_count: int):
         pids.add(pid)
 ```
 
+## Skills
+
+Claude Code Skills handle the interactive, creative aspects of scenario creation -- work that was originally planned as a built-in conversational CLI.
+
+**Location:** `skills/forge/` directory
+
+**Installation:**
+```bash
+# Install skills for the current project
+forge install-skills --project
+
+# Install skills globally
+forge install-skills --global
+```
+
+**MVP Skills:**
+- `/forge scenario` -- Guided scenario creation through a structured interview, producing a validated YAML scenario file
+- `/forge generate` -- Generation workflow that validates a scenario and runs the deterministic engine
+
+**Key design points:**
+- Skills are markdown prompt files (`.md`), not Python code
+- They run inside Claude Code, not inside the `forge` CLI process
+- Skills follow a hybrid interview pattern: structured questions first (environment, users, systems), then free-form refinement
+- Skills reference the scenario schema from `docs/scenario-reference.md`
+
+### Adding a New Skill
+
+1. Create `skills/forge/{name}.md` with the skill prompt
+2. Follow the hybrid interview pattern: structured questions first, then free-form elaboration
+3. Reference the scenario schema from `docs/scenario-reference.md` to ensure output validity
+4. Test interactively by running the skill in Claude Code
+5. Update the `install-skills` command if needed to include the new skill
+
 ## Common Pitfalls
 
 ### DO NOT
 
-1. **Call LLMs during generation** - All LLM work happens in `new` and `validate --interactive` commands only
+1. **Call LLMs during generation** - All creative/LLM work happens via Claude Code Skills before generation
    ```python
    # WRONG
    def generate_event(event_type: str) -> Event:
