@@ -1,0 +1,67 @@
+name: snort_alert
+version: "1.0"
+description: "Snort/Suricata fast alert format"
+category: network
+
+fields:
+  - name: timestamp
+    type: timestamp
+    required: true
+    description: "Alert timestamp"
+
+  - name: sid
+    type: integer
+    required: true
+    description: "Signature ID"
+
+  - name: classification
+    type: string
+    required: true
+    description: "Alert classification"
+
+  - name: priority
+    type: integer
+    required: true
+    description: "Alert priority (1-4)"
+    constraints:
+      min_value: 1
+      max_value: 4
+
+  - name: protocol
+    type: string
+    required: true
+    description: "Protocol (TCP/UDP/ICMP)"
+    constraints:
+      allowed_values: [TCP, UDP, ICMP]
+
+  - name: src_ip
+    type: ip_address
+    required: true
+    description: "Source IP"
+
+  - name: src_port
+    type: port
+    required: false
+    description: "Source port"
+
+  - name: dst_ip
+    type: ip_address
+    required: true
+    description: "Destination IP"
+
+  - name: dst_port
+    type: port
+    required: false
+    description: "Destination port"
+
+  - name: message
+    type: string
+    required: true
+    description: "Alert message"
+
+output:
+  format: text
+  file_extension: ".alert"
+  encoding: utf-8
+  template: |
+    {{ timestamp.strftime('%m/%d-%H:%M:%S.%f')[:-3] }} [**] [{{ sid }}:1:1] {{ message }} [**] [Classification: {{ classification }}] [Priority: {{ priority }}] {%raw%}{{{ protocol }}}{%endraw%} {{ src_ip }}{% if src_port %}:{{ src_port }}{% endif %} -> {{ dst_ip }}{% if dst_port %}:{{ dst_port }}{% endif %}

@@ -13,7 +13,15 @@ from typing import Callable, Optional
 
 from log_generator.formats import load_format
 from log_generator.generation.activity import ActivityGenerator
-from log_generator.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from log_generator.generation.emitters import (
+    WindowsEventEmitter,
+    ZeekEmitter,
+    EcarEmitter,
+    SyslogEmitter,
+    BashHistoryEmitter,
+    SnortEmitter,
+    WebEmitter,
+)
 from log_generator.generation.ground_truth import GroundTruthGenerator
 from log_generator.generation.state_manager import StateManager
 from log_generator.models.scenario import Scenario, User, System
@@ -64,7 +72,7 @@ class GenerationEngine:
         self.output_dir = output_dir
         self.progress_callback = progress_callback
         self.state_manager = StateManager()
-        self.emitters: dict[str, WindowsEventEmitter | ZeekEmitter] = {}
+        self.emitters: dict[str, WindowsEventEmitter | ZeekEmitter | EcarEmitter | SyslogEmitter | BashHistoryEmitter | SnortEmitter | WebEmitter] = {}
         self.activity_generator: Optional[ActivityGenerator] = None
         self.start_time: Optional[datetime] = None
         self.end_time: Optional[datetime] = None
@@ -149,22 +157,39 @@ class GenerationEngine:
         logger.info(f"Output directory: {self.output_dir}")
 
         # Load format definitions and create emitters
-        # Phase 1: Windows Event Security and Zeek conn.log only
-        formats_to_generate = ['windows_event_security', 'zeek_conn']
+        # Phase 2.2: Added new formats (eCAR, syslog, bash_history, snort, web)
+        # Note: windows_event_security kept temporarily until Phase 2.10 when activity.py
+        # is updated to emit to eCAR instead
+        formats_to_generate = [
+            'windows_event_security',  # Phase 1 - Temporary (activity.py still uses this)
+            'zeek_conn',               # Phase 1 - Network visibility
+            'ecar',                    # Phase 2.2 - Primary host EDR/XDR (NEW)
+            'syslog',                  # Phase 2.2 - Linux native logs (NEW)
+            'bash_history',            # Phase 2.2 - Command history (NEW)
+            'snort_alert',             # Phase 2.2 - IDS alerts (NEW)
+            'web_access'               # Phase 2.2 - Web logs (NEW)
+        ]
+
+        # Map format names to emitter classes
+        emitter_classes = {
+            'windows_event_security': WindowsEventEmitter,
+            'zeek_conn': ZeekEmitter,
+            'ecar': EcarEmitter,
+            'syslog': SyslogEmitter,
+            'bash_history': BashHistoryEmitter,
+            'snort_alert': SnortEmitter,
+            'web_access': WebEmitter,
+        }
 
         for format_name in formats_to_generate:
             format_def = load_format(format_name)
             output_file = self.output_dir / f"{format_name}{format_def.output.file_extension}"
 
-            if format_name == 'windows_event_security':
-                emitter = WindowsEventEmitter(format_def, output_file, threaded=True)
-            elif format_name == 'zeek_conn':
-                emitter = ZeekEmitter(format_def, output_file, threaded=True)
-            else:
-                raise ValueError(f"Unsupported format: {format_name}")
+            emitter_class = emitter_classes[format_name]
+            emitter = emitter_class(format_def, output_file, threaded=True)
 
             self.emitters[format_name] = emitter
-            logger.info(f"Initialized {format_name} emitter -> {output_file}")
+            logger.info(f"Initialized {format_name} emitter (threaded) -> {output_file}")
 
         # Initialize activity generator
         self.activity_generator = ActivityGenerator(

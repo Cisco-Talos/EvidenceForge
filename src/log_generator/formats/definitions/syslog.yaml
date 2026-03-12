@@ -1,0 +1,53 @@
+name: syslog
+version: "1.0"
+description: "Linux syslog - OS-level authentication and daemon logs"
+category: host
+
+fields:
+  - name: timestamp
+    type: timestamp
+    required: true
+    description: "Event timestamp"
+
+  - name: hostname
+    type: string
+    required: true
+    description: "Source hostname"
+
+  - name: facility
+    type: integer
+    required: true
+    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv)"
+    constraints:
+      min_value: 0
+      max_value: 23
+
+  - name: severity
+    type: integer
+    required: true
+    description: "Syslog severity (6=info, 5=notice, 4=warning)"
+    constraints:
+      min_value: 0
+      max_value: 7
+
+  - name: app_name
+    type: string
+    required: true
+    description: "Application/process name (sshd, su, sudo, systemd, etc.)"
+
+  - name: pid
+    type: integer
+    required: false
+    description: "Process ID"
+
+  - name: message
+    type: string
+    required: true
+    description: "Log message content"
+
+output:
+  format: text
+  file_extension: ".log"
+  encoding: utf-8
+  template: |
+    {{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} {{ app_name }}[{{ pid if pid else '-' }}]: {{ message }}

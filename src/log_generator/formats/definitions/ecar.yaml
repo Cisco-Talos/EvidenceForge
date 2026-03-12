@@ -1,0 +1,206 @@
+name: ecar
+version: "1.0"
+description: "eCAR (extended Cyber Analytics Repository) - EDR/XDR host telemetry"
+category: host
+
+fields:
+  # Core metadata
+  - name: timestamp_ms
+    type: integer
+    required: true
+    description: "Timestamp in milliseconds since epoch"
+
+  - name: id
+    type: string
+    required: true
+    description: "UUID for this event record"
+
+  - name: hostname
+    type: string
+    required: true
+    description: "Target system hostname"
+
+  # Event definition (object/action model)
+  - name: object
+    type: string
+    required: true
+    description: "Entity type (PROCESS, FILE, FLOW, REGISTRY, etc.)"
+    constraints:
+      allowed_values: [PROCESS, FILE, FLOW, REGISTRY, MODULE, THREAD, USER_SESSION, SOCKET, DRIVER, SERVICE]
+
+  - name: action
+    type: string
+    required: true
+    description: "Operation performed (CREATE, OPEN, MODIFY, DELETE, etc.)"
+    constraints:
+      allowed_values: [CREATE, TERMINATE, OPEN, CLOSE, MODIFY, DELETE, WRITE, READ, CONNECT, ACCEPT, SEND, RECEIVE, LOAD, UNLOAD, START, STOP, LOGIN, LOGOUT]
+
+  - name: objectID
+    type: string
+    required: true
+    description: "UUID of the affected entity"
+
+  # Actor information
+  - name: actorID
+    type: string
+    required: false
+    description: "UUID of entity performing the action"
+
+  - name: pid
+    type: integer
+    required: false
+    description: "Process ID (-1 if unavailable)"
+
+  - name: tid
+    type: integer
+    required: false
+    description: "Thread ID (-1 if unavailable)"
+
+  - name: ppid
+    type: integer
+    required: false
+    description: "Parent process ID (-1 if unavailable)"
+
+  - name: principal
+    type: string
+    required: false
+    description: "User account executing the action"
+
+  # Properties (flexible key-value pairs)
+  - name: command_line
+    type: string
+    required: false
+    description: "Command line for PROCESS events"
+
+  - name: image_path
+    type: string
+    required: false
+    description: "Executable path for PROCESS events"
+
+  - name: file_path
+    type: string
+    required: false
+    description: "File path for FILE events"
+
+  - name: src_ip
+    type: ip_address
+    required: false
+    description: "Source IP for FLOW/SOCKET events"
+
+  - name: src_port
+    type: port
+    required: false
+    description: "Source port for FLOW/SOCKET events"
+
+  - name: dst_ip
+    type: ip_address
+    required: false
+    description: "Destination IP for FLOW/SOCKET events"
+
+  - name: dst_port
+    type: port
+    required: false
+    description: "Destination port for FLOW/SOCKET events"
+
+  - name: protocol
+    type: string
+    required: false
+    description: "Protocol for network events"
+
+  - name: md5
+    type: string
+    required: false
+    description: "MD5 hash for FILE events"
+
+  - name: sha256
+    type: string
+    required: false
+    description: "SHA256 hash for FILE events"
+
+  - name: registry_key
+    type: string
+    required: false
+    description: "Registry key path for REGISTRY events"
+
+  - name: registry_value
+    type: string
+    required: false
+    description: "Registry value name for REGISTRY events"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "timestamp_ms": {{ timestamp_ms }},
+      "id": "{{ id }}",
+      "hostname": "{{ hostname }}",
+      "object": "{{ object }}",
+      "action": "{{ action }}",
+      "objectID": "{{ objectID }}",
+      {%- if actorID %}
+      "actorID": "{{ actorID }}",
+      {%- endif %}
+      {%- if pid %}
+      "pid": {{ pid }},
+      {%- endif %}
+      {%- if tid %}
+      "tid": {{ tid }},
+      {%- endif %}
+      {%- if ppid %}
+      "ppid": {{ ppid }},
+      {%- endif %}
+      {%- if principal %}
+      "principal": "{{ principal }}",
+      {%- endif %}
+      "properties": {
+        {%- if command_line %}
+        "command_line": "{{ command_line | replace('\\', '\\\\') | replace('"', '\\"') }}"
+        {%- endif %}
+        {%- if image_path %}
+        {%- if command_line %},{% endif %}
+        "image_path": "{{ image_path | replace('\\', '\\\\') | replace('"', '\\"') }}"
+        {%- endif %}
+        {%- if file_path %}
+        {%- if command_line or image_path %},{% endif %}
+        "file_path": "{{ file_path | replace('\\', '\\\\') | replace('"', '\\"') }}"
+        {%- endif %}
+        {%- if src_ip %}
+        {%- if command_line or image_path or file_path %},{% endif %}
+        "src_ip": "{{ src_ip }}"
+        {%- endif %}
+        {%- if src_port %}
+        {%- if command_line or image_path or file_path or src_ip %},{% endif %}
+        "src_port": {{ src_port }}
+        {%- endif %}
+        {%- if dst_ip %}
+        {%- if command_line or image_path or file_path or src_ip or src_port %},{% endif %}
+        "dst_ip": "{{ dst_ip }}"
+        {%- endif %}
+        {%- if dst_port %}
+        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip %},{% endif %}
+        "dst_port": {{ dst_port }}
+        {%- endif %}
+        {%- if protocol %}
+        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port %},{% endif %}
+        "protocol": "{{ protocol }}"
+        {%- endif %}
+        {%- if md5 %}
+        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol %},{% endif %}
+        "md5": "{{ md5 }}"
+        {%- endif %}
+        {%- if sha256 %}
+        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 %},{% endif %}
+        "sha256": "{{ sha256 }}"
+        {%- endif %}
+        {%- if registry_key %}
+        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 or sha256 %},{% endif %}
+        "registry_key": "{{ registry_key }}"
+        {%- endif %}
+        {%- if registry_value %}
+        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 or sha256 or registry_key %},{% endif %}
+        "registry_value": "{{ registry_value }}"
+        {%- endif %}
+      }
+    }

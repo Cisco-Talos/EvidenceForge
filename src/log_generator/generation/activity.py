@@ -42,6 +42,26 @@ def _get_rng() -> random.Random:
     return _thread_local.rng
 
 
+def _get_os_category(os_string: str) -> str:
+    """Detect OS category from OS string.
+
+    Phase 2.10: OS-aware activity generation helper.
+
+    Args:
+        os_string: OS name/version (e.g., "Windows 10", "Linux Ubuntu 20.04")
+
+    Returns:
+        OS category: "windows", "linux", or "unknown"
+    """
+    os_lower = os_string.lower()
+    if 'windows' in os_lower:
+        return 'windows'
+    elif 'linux' in os_lower or 'ubuntu' in os_lower or 'centos' in os_lower or 'debian' in os_lower or 'rhel' in os_lower:
+        return 'linux'
+    else:
+        return 'unknown'
+
+
 # Fixed baseline activity patterns for Phase 1 (no LLM expansion)
 # Format: (activity_type, probability)
 BASELINE_PATTERNS = {
@@ -67,7 +87,7 @@ BASELINE_PATTERNS = {
     ],
 }
 
-# Process names and command lines for baseline activities
+# Process names and command lines for baseline activities (Windows)
 PROCESS_TEMPLATES = {
     'process_code': [
         ('C:\\Program Files\\Microsoft VS Code\\Code.exe', 'Code.exe --no-sandbox'),
@@ -80,6 +100,24 @@ PROCESS_TEMPLATES = {
     'process_query': [
         ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S localhost -Q "SELECT * FROM users"'),
         ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "Get-EventLog -LogName Security -Newest 100"'),
+    ],
+}
+
+# Process names and command lines for baseline activities (Linux) - Phase 2.10
+PROCESS_TEMPLATES_LINUX = {
+    'process_code': [
+        ('/usr/bin/vim', 'vim /home/user/script.py'),
+        ('/usr/bin/nano', 'nano /etc/config.conf'),
+        ('/usr/bin/code', 'code --no-sandbox /home/user/project'),
+    ],
+    'process_build': [
+        ('/usr/bin/make', 'make -j4'),
+        ('/usr/bin/gcc', 'gcc -o output source.c'),
+        ('/usr/bin/npm', 'npm run build'),
+    ],
+    'process_query': [
+        ('/usr/bin/mysql', 'mysql -u root -p database'),
+        ('/usr/bin/psql', 'psql -U postgres -d mydb'),
     ],
 }
 
@@ -214,31 +252,52 @@ class ActivityGenerator:
             source_ip=source_ip
         )
 
-        # Emit Windows Event 4624 (An account was successfully logged on)
-        event_data = {
-            'EventID': 4624,
-            'TimeCreated': time,
-            'Computer': system.hostname,
-            'Channel': 'Security',
-            'Level': 0,  # Information
-            'EventRecordID': self._get_next_event_record_id(),
-            'ExecutionProcessID': 4,    # System process
-            'ExecutionThreadID': _get_rng().randint(100, 500),
-            # Logon variant fields
-            'TargetUserName': user.username,
-            'TargetDomainName': 'CORP',  # Phase 1: Fixed domain
-            'TargetLogonId': logon_id,
-            'LogonType': logon_type,
-            'WorkstationName': system.hostname,
-            'IpAddress': source_ip,
-            'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else None,
-            'LogonProcessName': 'User32' if logon_type == 2 else 'NtLmSsp',
-            'AuthenticationPackageName': 'Negotiate',
-        }
+        # Phase 2.10: OS-aware multi-format emission
+        os_category = _get_os_category(system.os)
 
-        self.emitters['windows_event_security'].emit_event(event_data)
+        # Emit to native OS log format
+        if os_category == 'windows':
+            # Emit Windows Event 4624 (An account was successfully logged on)
+            event_data = {
+                'EventID': 4624,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,  # Information
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,    # System process
+                'ExecutionThreadID': _get_rng().randint(100, 500),
+                # Logon variant fields
+                'TargetUserName': user.username,
+                'TargetDomainName': 'CORP',  # Phase 1: Fixed domain
+                'TargetLogonId': logon_id,
+                'LogonType': logon_type,
+                'WorkstationName': system.hostname,
+                'IpAddress': source_ip,
+                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else None,
+                'LogonProcessName': 'User32' if logon_type == 2 else 'NtLmSsp',
+                'AuthenticationPackageName': 'Negotiate',
+            }
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+        elif os_category == 'linux':
+            # Emit syslog authentication message
+            if 'syslog' in self.emitters:
+                event_data = {
+                    'timestamp': time,
+                    'hostname': system.hostname,
+                    'facility': 10,  # authpriv
+                    'severity': 6,   # info
+                    'app_name': 'sshd' if logon_type == 3 else 'login',
+                    'pid': _get_rng().randint(1000, 9999),
+                    'message': f'Accepted password for {user.username} from {source_ip} port {_get_rng().randint(49152, 65535)}'
+                }
+                self.emitters['syslog'].emit_event(event_data)
+
+        # Emit eCAR if available (optional EDR/XDR layer)
+        self._emit_ecar_logon(user, system, time, logon_id, logon_type, source_ip)
+
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
-
         return logon_id
 
     def generate_logoff(
@@ -317,33 +376,45 @@ class ActivityGenerator:
             integrity_level='Medium'  # Phase 1: Fixed integrity level
         )
 
-        # Emit Windows Event 4688 (A new process has been created)
-        event_data = {
-            'EventID': 4688,
-            'TimeCreated': time,
-            'Computer': system.hostname,
-            'Channel': 'Security',
-            'Level': 0,
-            'EventRecordID': self._get_next_event_record_id(),
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': _get_rng().randint(100, 500),
-            # Process variant fields
-            'SubjectUserName': user.username,
-            'SubjectDomainName': 'CORP',
-            'SubjectLogonId': logon_id,
-            'NewProcessId': f'0x{pid:x}',  # Hex format
-            'NewProcessName': process_name,
-            'TokenElevationType': '%%1936',  # Limited token
-            'ProcessId': f'0x{parent_pid:x}',  # Parent PID in hex
-            'CommandLine': command_line,
-            'TargetUserName': user.username,
-            'TargetDomainName': 'CORP',
-            'TargetLogonId': logon_id,
-        }
+        # Phase 2.10: OS-aware multi-format emission
+        os_category = _get_os_category(system.os)
 
-        self.emitters['windows_event_security'].emit_event(event_data)
+        # Emit to native OS log format
+        if os_category == 'windows':
+            # Emit Windows Event 4688 (A new process has been created)
+            event_data = {
+                'EventID': 4688,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': _get_rng().randint(100, 500),
+                # Process variant fields
+                'SubjectUserName': user.username,
+                'SubjectDomainName': 'CORP',
+                'SubjectLogonId': logon_id,
+                'NewProcessId': f'0x{pid:x}',  # Hex format
+                'NewProcessName': process_name,
+                'TokenElevationType': '%%1936',  # Limited token
+                'ProcessId': f'0x{parent_pid:x}',  # Parent PID in hex
+                'CommandLine': command_line,
+                'TargetUserName': user.username,
+                'TargetDomainName': 'CORP',
+                'TargetLogonId': logon_id,
+            }
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+        elif os_category == 'linux':
+            # Linux process creation may not generate syslog (depends on auditd config)
+            # For now, skip native log (eCAR would provide visibility if enabled)
+            pass
+
+        # Emit eCAR if available (optional EDR/XDR layer)
+        self._emit_ecar_process(user, system, time, pid, parent_pid, process_name, command_line, logon_id)
+
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
-
         return pid
 
     def generate_connection(
@@ -442,6 +513,52 @@ class ActivityGenerator:
 
         return uid
 
+    def generate_bash_command(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        activity_type: str = 'default'
+    ) -> None:
+        """Generate bash command history entry (Linux only).
+
+        Phase 2.10: Linux command-line visibility.
+
+        Args:
+            user: User executing command
+            system: Linux system
+            time: Command execution time
+            activity_type: Type of activity (process_code, process_build, etc.)
+        """
+        os_category = _get_os_category(system.os)
+        if os_category != 'linux':
+            return  # Bash history only for Linux
+
+        if 'bash_history' not in self.emitters:
+            return  # bash_history not enabled
+
+        # Select command based on activity type
+        commands = {
+            'process_code': ['vim script.py', 'nano config.conf', 'code .'],
+            'process_build': ['make', 'gcc -o output source.c', 'npm run build'],
+            'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz'],
+            'default': ['ls -la', 'ps aux', 'top', 'df -h']
+        }
+
+        command_list = commands.get(activity_type, commands['default'])
+        command = _get_rng().choice(command_list)
+
+        event_data = {
+            'timestamp': time,
+            'username': user.username,
+            'hostname': system.hostname,
+            'command': command,
+            'exit_code': 0  # Success
+        }
+
+        self.emitters['bash_history'].emit_event(event_data)
+        logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
+
     def get_baseline_pattern(self, persona_name: Optional[str]) -> list[tuple[str, float]]:
         """Get baseline activity pattern for persona.
 
@@ -484,9 +601,20 @@ class ActivityGenerator:
             else:
                 logon_id = sessions[0].logon_id  # Use first active session
 
-            # Choose random process template
-            process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES[activity_type])
-            self.generate_process(user, system, time, logon_id, process_name, command_line)
+            # Phase 2.10: OS-aware process template selection
+            os_category = _get_os_category(system.os)
+            if os_category == 'windows' and activity_type in PROCESS_TEMPLATES:
+                # Use Windows process templates
+                process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES[activity_type])
+                self.generate_process(user, system, time, logon_id, process_name, command_line)
+
+            elif os_category == 'linux' and activity_type in PROCESS_TEMPLATES_LINUX:
+                # Use Linux process templates
+                process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES_LINUX[activity_type])
+                self.generate_process(user, system, time, logon_id, process_name, command_line)
+
+                # Also generate bash history for Linux
+                self.generate_bash_command(user, system, time, activity_type)
 
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
@@ -548,3 +676,82 @@ class ActivityGenerator:
         with self._counter_lock:
             self.event_record_counter += 1
             return self.event_record_counter
+
+    def _emit_ecar_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        logon_type: int,
+        source_ip: str
+    ) -> None:
+        """Emit eCAR USER_SESSION/LOGIN event.
+
+        Phase 2.10: eCAR provides unified EDR/XDR visibility across all OSes.
+
+        Args:
+            user: User logging on
+            system: Target system
+            time: Login timestamp
+            logon_id: Session logon ID
+            logon_type: Logon type (2=interactive, 3=network)
+            source_ip: Source IP address
+        """
+        if 'ecar' not in self.emitters:
+            return  # eCAR not enabled
+
+        event_data = {
+            'timestamp': time,
+            'hostname': system.hostname,
+            'object': 'USER_SESSION',
+            'action': 'LOGIN',
+            'principal': user.username,
+            'src_ip': source_ip,
+        }
+
+        self.emitters['ecar'].emit_event(event_data)
+        logger.debug(f"Generated eCAR logon: {user.username} on {system.hostname}")
+
+    def _emit_ecar_process(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        parent_pid: int,
+        process_name: str,
+        command_line: str,
+        logon_id: str
+    ) -> None:
+        """Emit eCAR PROCESS/CREATE event.
+
+        Phase 2.10: eCAR provides unified EDR/XDR visibility across all OSes.
+
+        Args:
+            user: User creating the process
+            system: System where process created
+            time: Process creation timestamp
+            pid: Process ID
+            parent_pid: Parent process ID
+            process_name: Executable path
+            command_line: Command line
+            logon_id: Session logon ID
+        """
+        if 'ecar' not in self.emitters:
+            return  # eCAR not enabled
+
+        event_data = {
+            'timestamp': time,
+            'hostname': system.hostname,
+            'object': 'PROCESS',
+            'action': 'CREATE',
+            'pid': pid,
+            'ppid': parent_pid,
+            'principal': user.username,
+            'image_path': process_name,
+            'command_line': command_line,
+        }
+
+        self.emitters['ecar'].emit_event(event_data)
+        logger.debug(f"Generated eCAR process: {process_name} (PID: {pid}) on {system.hostname}")

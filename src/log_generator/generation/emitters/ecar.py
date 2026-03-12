@@ -1,0 +1,89 @@
+"""eCAR emitter for EDR/XDR host telemetry."""
+
+import json
+import uuid
+from pathlib import Path
+from typing import Any
+from datetime import datetime
+
+from log_generator.formats.format_def import FormatDefinition
+from log_generator.generation.emitters.base import LogEmitter
+
+
+class EcarEmitter(LogEmitter):
+    """Emitter for eCAR (extended Cyber Analytics Repository) format."""
+
+    def emit_event(self, event_data: dict[str, Any]) -> None:
+        """Route to threaded or non-threaded path."""
+        if self.threaded:
+            self._emit_threaded(event_data)
+        else:
+            rendered = self._render_event(event_data)
+            self._buffer_event(rendered)
+
+    def _render_event(self, event_data: dict[str, Any]) -> str:
+        """Render eCAR event to JSON format (NDJSON - one event per line).
+
+        Converts timestamp to milliseconds, ensures UUIDs, handles properties.
+        """
+        # Convert timestamp to milliseconds
+        if 'timestamp' in event_data:
+            ts = event_data['timestamp']
+            if isinstance(ts, datetime):
+                timestamp_ms = int(ts.timestamp() * 1000)
+            else:
+                timestamp_ms = int(ts * 1000)
+            event_data['timestamp_ms'] = timestamp_ms
+
+        # Ensure event has an ID
+        if 'id' not in event_data:
+            event_data['id'] = str(uuid.uuid4())
+
+        # Ensure objectID and actorID are UUIDs
+        if 'objectID' not in event_data:
+            event_data['objectID'] = str(uuid.uuid4())
+
+        # Handle -1 for unavailable PID/TID/PPID
+        for field in ['pid', 'tid', 'ppid']:
+            if field in event_data and event_data[field] is None:
+                event_data[field] = -1
+
+        # Build template context - fill all optional fields
+        context = {
+            'timestamp_ms': event_data.get('timestamp_ms'),
+            'id': event_data.get('id'),
+            'hostname': event_data.get('hostname'),
+            'object': event_data.get('object'),
+            'action': event_data.get('action'),
+            'objectID': event_data.get('objectID'),
+            'actorID': event_data.get('actorID'),
+            'pid': event_data.get('pid'),
+            'tid': event_data.get('tid'),
+            'ppid': event_data.get('ppid'),
+            'principal': event_data.get('principal'),
+            # Properties
+            'command_line': event_data.get('command_line'),
+            'image_path': event_data.get('image_path'),
+            'file_path': event_data.get('file_path'),
+            'src_ip': event_data.get('src_ip'),
+            'src_port': event_data.get('src_port'),
+            'dst_ip': event_data.get('dst_ip'),
+            'dst_port': event_data.get('dst_port'),
+            'protocol': event_data.get('protocol'),
+            'md5': event_data.get('md5'),
+            'sha256': event_data.get('sha256'),
+            'registry_key': event_data.get('registry_key'),
+            'registry_value': event_data.get('registry_value')
+        }
+
+        # Render template
+        rendered = self._template.render(**context)
+
+        # Compact JSON to single line (NDJSON format)
+        try:
+            parsed = json.loads(rendered)
+            compact = json.dumps(parsed, separators=(',', ':'))
+            return compact
+        except json.JSONDecodeError:
+            # If template rendering failed, return as-is
+            return rendered

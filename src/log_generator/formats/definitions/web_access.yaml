@@ -1,0 +1,67 @@
+name: web_access
+version: "1.0"
+description: "W3C web server access logs (Apache/Nginx)"
+category: application
+
+fields:
+  - name: timestamp
+    type: timestamp
+    required: true
+    description: "Request timestamp"
+
+  - name: client_ip
+    type: ip_address
+    required: true
+    description: "Client IP address"
+
+  - name: username
+    type: string
+    required: false
+    description: "Authenticated username"
+
+  - name: method
+    type: string
+    required: true
+    description: "HTTP method"
+    constraints:
+      allowed_values: [GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH]
+
+  - name: path
+    type: string
+    required: true
+    description: "Request path"
+
+  - name: protocol
+    type: string
+    required: true
+    description: "HTTP protocol version"
+
+  - name: status_code
+    type: integer
+    required: true
+    description: "HTTP status code"
+    constraints:
+      min_value: 100
+      max_value: 599
+
+  - name: bytes_sent
+    type: integer
+    required: false
+    description: "Response size in bytes"
+
+  - name: referer
+    type: string
+    required: false
+    description: "HTTP Referer"
+
+  - name: user_agent
+    type: string
+    required: false
+    description: "User-Agent string"
+
+output:
+  format: text
+  file_extension: ".log"
+  encoding: utf-8
+  template: |
+    {{ client_ip }} - {{ username if username else '-' }} [{{ timestamp.strftime('%d/%b/%Y:%H:%M:%S %z') }}] "{{ method }} {{ path }} {{ protocol }}" {{ status_code }} {{ bytes_sent if bytes_sent else '-' }} "{{ referer if referer else '-' }}" "{{ user_agent if user_agent else '-' }}"
