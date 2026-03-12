@@ -208,10 +208,9 @@ class GenerationEngine:
         base_events = intensity_map[self.scenario.baseline_activity.intensity]
 
         # Risk profile adjustment (if persona assigned)
-        if user.persona:
-            risk_adjustments = {'low': -5, 'medium': 0, 'high': 10}
-            persona_risk = user.persona.risk_profile
-            base_events += risk_adjustments.get(persona_risk, 0)
+        # Note: Phase 1 - persona is just a string name, not full Persona object
+        # Risk adjustments would require full persona definition (Phase 2+)
+        # For now, skip risk adjustment since we don't have access to risk_profile
 
         # Apply variation (random jitter)
         variation_map = {'low': 0.10, 'medium': 0.25, 'high': 0.50}
@@ -269,7 +268,8 @@ class GenerationEngine:
                 system = random.choice(self.scenario.environment.systems)
 
         # Get baseline pattern for user's persona
-        persona_name = user.persona.name if user.persona else None
+        # Note: persona is a string (persona name) in Phase 1, not a Persona object
+        persona_name = user.persona if user.persona else None
         pattern = self.activity_generator.get_baseline_pattern(persona_name)
 
         # Execute activities based on probabilities
@@ -449,7 +449,7 @@ class GenerationEngine:
                 # Create session first
                 logon_id = self.activity_generator.generate_logon(actor, system, time, logon_type=3)
             else:
-                logon_id = list(sessions.keys())[0]
+                logon_id = sessions[0].logon_id  # Use first active session
 
             # Use details or create malicious-looking process
             process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')

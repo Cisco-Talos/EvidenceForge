@@ -100,17 +100,17 @@
 
 ### 1.8 CLI Framework (Basic Commands)
 
-- [ ] `cli/commands.py` - Typer app setup with command structure
-- [ ] `__main__.py` - CLI entry point
-- [ ] Command: `forge init` - Write config.example.yaml to config.yaml
-- [ ] Command: `forge generate` - Generate logs from simplified scenario file
-  - [ ] Accept scenario file path
-  - [ ] Accept --config, --output flags
-  - [ ] Schema validation only (no LLM)
-  - [ ] Call generation engine
-  - [ ] Exit codes: 0 (success), 1 (input error), 2 (schema validation), 21 (generation error), 130 (SIGINT)
-- [ ] Test: CLI argument parsing
-- [ ] Test: Exit codes for error conditions
+- [x] `cli/commands.py` - Typer app setup with command structure
+- [x] `__main__.py` - CLI entry point
+- [x] Command: `forge init` - Write config.example.yaml to config.yaml
+- [x] Command: `forge generate` - Generate logs from simplified scenario file
+  - [x] Accept scenario file path
+  - [x] Accept --config, --output flags
+  - [x] Schema validation only (no LLM)
+  - [x] Call generation engine
+  - [x] Exit codes: 0 (success), 1 (input error), 2 (schema validation), 21 (generation error), 130 (SIGINT)
+- [x] Test: CLI argument parsing
+- [x] Test: Exit codes for error conditions
 
 ### 1.9 Validation (Schema Only for Phase 1)
 

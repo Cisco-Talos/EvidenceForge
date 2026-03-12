@@ -403,7 +403,7 @@ class ActivityGenerator:
                 # No active session - create one first
                 logon_id = self.generate_logon(user, system, time)
             else:
-                logon_id = list(sessions.keys())[0]  # Use first active session
+                logon_id = sessions[0].logon_id  # Use first active session
 
             # Choose random process template
             process_name, command_line = random.choice(PROCESS_TEMPLATES[activity_type])

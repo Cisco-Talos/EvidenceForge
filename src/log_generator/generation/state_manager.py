@@ -180,8 +180,10 @@ class StateManager:
         if self.state.current_time is None:
             raise StateError("Cannot create process: current_time not set")
 
-        # Validate parent exists (unless parent_pid is 0 for system processes)
-        if parent_pid != 0:
+        # Validate parent exists (unless parent_pid is 0 or 4 for system processes)
+        # PID 0: Idle/System Idle Process
+        # PID 4: System process (Windows)
+        if parent_pid not in (0, 4):
             parent_key = (system, parent_pid)
             if parent_key not in self.state.running_processes:
                 raise StateError(
