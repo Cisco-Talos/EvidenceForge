@@ -136,7 +136,24 @@
 - [ ] Manual testing: Generate logs and verify format compliance
 - [ ] Update README with Phase 1 status and basic usage
 
-**Phase 1 Milestone:** Can generate small, consistent datasets across 2 log formats with schema validation.
+### 1.11 Document Windows-Only Limitation
+
+- [ ] Add validation warning when non-Windows OS detected in scenario
+  - [ ] Modify `validation/schema.py` to check system.os field
+  - [ ] Warn (not error) if OS is not Windows-based
+  - [ ] Include suggestion to use Windows or wait for Phase 2 multi-OS support
+- [ ] Update README.md to document Phase 1 Windows-only support
+  - [ ] Add "Current Limitations" section
+  - [ ] Clearly state that Phase 1 generates Windows Event Logs for all systems
+  - [ ] Note that system.os field is stored but not used in Phase 1
+- [ ] Add comment in retail-store-ftp-attack.yaml explaining behavior
+  - [ ] Note that MUSIC-SRV-01 (Ubuntu) will generate Windows logs in Phase 1
+  - [ ] Keep as test case for Phase 2 multi-OS implementation
+- [ ] Document in architecture docs that OS field exists but isn't used in Phase 1
+  - [ ] Update PRD.md or create architecture.md if needed
+  - [ ] Explain that OS detection will be implemented in Phase 2.10
+
+**Phase 1 Milestone:** Can generate small, consistent datasets across 2 log formats with schema validation. **Known limitation:** Windows-only log generation (documented and validated).
 
 ---
 
@@ -153,16 +170,31 @@
 - [ ] Test: Parallel emitter execution with state consistency
 - [ ] Test: No data races or deadlocks
 
-### 2.2 Additional Log Formats (3 more)
+### 2.2 Additional Log Formats & Multi-OS Support
+
+**Goal:** Add Linux log formats and additional formats for 5+ total MVP formats
 
 - [ ] `formats/definitions/syslog.yaml` - Linux syslog format (RFC 5424)
+  - [ ] Support process execution logs (daemon.log, syslog)
+  - [ ] Support authentication logs (auth.log)
+  - [ ] Include facility/severity mapping
+- [ ] `formats/definitions/auditd.yaml` - Linux audit logs (similar to Windows Security logs)
+  - [ ] Support EXECVE records (process execution)
+  - [ ] Support USER_AUTH records (authentication)
+  - [ ] Support SYSCALL records (system calls)
+- [ ] `formats/definitions/bash_history.yaml` - Bash command history format
+  - [ ] Support timestamped command history
+  - [ ] Per-user history files
 - [ ] `formats/definitions/snort.yaml` - Snort/Suricata alert format (fast alert)
 - [ ] `formats/definitions/web.yaml` - W3C web log format
 - [ ] `generation/emitters/syslog.py` - Syslog emitter
+- [ ] `generation/emitters/auditd.py` - Auditd emitter
+- [ ] `generation/emitters/bash_history.py` - Bash history emitter
 - [ ] `generation/emitters/snort.py` - Snort emitter
 - [ ] `generation/emitters/web.py` - Web log emitter
-- [ ] Test: All 5 formats generate valid output
-- [ ] Test: Cross-format consistency across all 5 formats
+- [ ] Test: All formats generate valid output
+- [ ] Test: Cross-format consistency across all formats
+- [ ] Test: Linux formats parse correctly with standard Linux log viewers
 
 ### 2.3 Progress Reporting
 
@@ -236,13 +268,48 @@
 
 ### 2.9 Phase 2 Testing & Scenarios
 
-- [ ] Integration test: 8-hour scenario with all 5 formats
+- [ ] Integration test: 8-hour scenario with all 5+ formats
 - [ ] Create test fixture: `fixtures/scenarios/medium-dataset.yaml` (100 users, 8 hours)
 - [ ] Performance benchmarks (time, memory) for medium datasets
 - [ ] Unit test coverage: maintain 95%+ overall
 - [ ] Update README with Phase 2 capabilities
 
-**Phase 2 Milestone:** Can generate medium-scale datasets (100K+ events) across all 5 MVP formats in parallel with good performance.
+### 2.10 OS-Aware Activity Generation
+
+**Goal:** Enable generation of OS-specific logs based on system.os field (addresses Phase 1 limitation)
+
+- [ ] Create OS detection utility in `utils/os.py`
+  - [ ] `OSType` enum (Windows, Linux, MacOS, Unknown)
+  - [ ] `detect_os_type(system: System) -> OSType` function
+  - [ ] Pattern matching for OS strings (flexible matching: "Windows 10", "Ubuntu", "macOS", etc.)
+  - [ ] Handle variations: "Windows Server 2019", "Ubuntu 22.04 LTS", "Red Hat", etc.
+- [ ] Refactor `generation/activity.py` for OS branching
+  - [ ] `generate_process()` - detect OS and route to OS-specific process generator
+  - [ ] `_generate_windows_process()` - existing Windows Event 4688 logic (refactored)
+  - [ ] `_generate_linux_process()` - emit syslog/auditd entries
+  - [ ] Update process templates to include OS-specific paths and commands
+  - [ ] Maintain existing ActivityGenerator API (no breaking changes)
+- [ ] Create `generation/activity_templates.py` - OS-specific command mappings
+  - [ ] Map storyline activities to OS-specific implementations
+  - [ ] Windows: paths (C:\Windows\...), event IDs (4624, 4688, etc.)
+  - [ ] Linux: paths (/usr/bin/..., /bin/...), syslog facilities, auditd record types
+  - [ ] Common commands: whoami, ps/tasklist, netstat, etc.
+  - [ ] Support for LOLBins on both platforms
+- [ ] Update `generation/engine.py` for OS-aware emitter initialization
+  - [ ] Check system.os when creating emitters per system
+  - [ ] Windows systems → Windows Event emitters
+  - [ ] Linux systems → syslog/auditd/bash_history emitters
+  - [ ] Mixed environments → coordinate across both
+  - [ ] Zeek emitter remains OS-agnostic (network visibility)
+- [ ] Test: Windows system generates Windows Event logs
+- [ ] Test: Linux system generates syslog/auditd logs
+- [ ] Test: Mixed environment (Windows + Linux) generates appropriate logs per system
+- [ ] Test: Storyline activities correctly mapped to OS-specific commands
+- [ ] Test: Cross-log consistency in mixed environments (Zeek sees connections between Windows and Linux systems)
+- [ ] Update retail-store-ftp-attack.yaml to properly generate Linux logs for MUSIC-SRV-01
+- [ ] Remove Phase 1 validation warning for non-Windows systems
+
+**Phase 2 Milestone:** Can generate medium-scale datasets (100K+ events) across all 5+ MVP formats in parallel with good performance. **Multi-OS support:** Windows and Linux systems generate appropriate OS-specific logs.
 
 ---
 
