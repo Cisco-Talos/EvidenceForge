@@ -1,0 +1,71 @@
+version: "1.0"
+name: baseline-only
+description: "Baseline-only scenario with 5 users, 3 systems, 2 hours - no malicious activity"
+
+environment:
+  description: "Small corporate environment with normal activity only"
+
+  users:
+    - username: alice
+      full_name: "Alice Developer"
+      email: "alice@corp.example.com"
+      enabled: true
+      persona: developer
+
+    - username: bob
+      full_name: "Bob Executive"
+      email: "bob@corp.example.com"
+      enabled: true
+      persona: executive
+
+    - username: charlie
+      full_name: "Charlie Analyst"
+      email: "charlie@corp.example.com"
+      enabled: true
+      persona: analyst
+
+    - username: diana
+      full_name: "Diana Developer"
+      email: "diana@corp.example.com"
+      enabled: true
+      primary_system: WS-DEV-02
+      persona: developer
+
+    - username: eve
+      full_name: "Eve Executive"
+      email: "eve@corp.example.com"
+      enabled: true
+      persona: executive
+
+  systems:
+    - hostname: WS-DEV-01
+      ip: 10.0.1.10
+      os: "Windows 10"
+      type: workstation
+
+    - hostname: WS-DEV-02
+      ip: 10.0.1.11
+      os: "Windows 10"
+      type: workstation
+      assigned_user: diana
+
+    - hostname: WS-EXEC-01
+      ip: 10.0.2.10
+      os: "Windows 11"
+      type: workstation
+
+time_window:
+  start: "2024-01-15T09:00:00Z"
+  duration: "2h"
+
+baseline_activity:
+  description: "Normal corporate activity - no attacks"
+  intensity: medium
+  variation: medium
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+  destination: "./output"
+  compression: false

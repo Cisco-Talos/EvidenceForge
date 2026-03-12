@@ -52,42 +52,51 @@
 
 ### 1.5 Format Definitions (2 formats for Phase 1)
 
-- [ ] `formats/format_def.py` - Pydantic models for format definitions
-- [ ] `formats/loader.py` - YAML format definition loader
-- [ ] `formats/validator.py` - JSON Logic validator integration (json-logic-py)
-- [ ] `formats/definitions/windows_event.yaml` - Windows Event Log format (Security variant)
-- [ ] `formats/definitions/zeek.yaml` - Zeek conn.log format
-- [ ] Test: Format definition loading and validation
+- [x] `formats/format_def.py` - Pydantic models for format definitions
+- [x] `formats/loader.py` - YAML format definition loader
+- [x] `formats/validator.py` - JSON Logic validator integration (json-logic-py)
+- [x] `formats/definitions/windows_event_security.yaml` - Windows Event Log format (Security variant)
+- [x] `formats/definitions/zeek_conn.yaml` - Zeek conn.log format (JSON/NDJSON output)
+- [x] Test: Format definition loading and validation
+- [x] Added FLOAT field type for Zeek duration field
+- [x] Created test_zeek_format_accuracy.py to validate against real-world Zeek logs
 
 ### 1.6 Log Emitters (2 formats for Phase 1)
 
-- [ ] `generation/emitters/base.py` - LogEmitter ABC with buffering (10K events)
-- [ ] `generation/emitters/windows.py` - Windows Event Log emitter (XML output)
-  - [ ] EventID 4624 (logon), 4634 (logoff), 4688 (process creation)
-- [ ] `generation/emitters/zeek.py` - Zeek conn.log emitter (TSV output)
-- [ ] Test: Buffer flushing at 10K threshold
-- [ ] Test: Event formatting matches format definitions
+- [x] `generation/emitters/base.py` - LogEmitter ABC with buffering (10K events)
+- [x] `generation/emitters/windows.py` - Windows Event Log emitter (XML output)
+  - [x] EventID 4624 (logon), 4634 (logoff), 4688 (process creation)
+- [x] `generation/emitters/zeek.py` - Zeek conn.log emitter (JSON/NDJSON output)
+- [x] Test: Buffer flushing at 10K threshold
+- [x] Test: Event formatting matches format definitions
+- [x] Created `utils/ids.py` with generate_zeek_uid() for 18-character UIDs
+- [x] Validated format accuracy against real-world Zeek conn.log examples
 
 ### 1.7 Generation Engine (Simplified)
 
-- [ ] `generation/engine.py` - Main generation orchestrator (single-threaded for Phase 1)
-  - [ ] Load scenario and validate schema
-  - [ ] Initialize StateManager
-  - [ ] Simple time iteration loop (hour-by-hour)
-  - [ ] Basic baseline activity generation (fixed patterns, no LLM)
-  - [ ] Simple storyline execution
-  - [ ] Coordinate emitters for cross-log consistency
-  - [ ] Generate GROUND_TRUTH.md when malicious activities present
-- [ ] `generation/activity.py` - Activity execution logic
-- [ ] `generation/ground_truth.py` - Ground truth documentation generator
-  - [ ] Extract attack narrative from storyline
-  - [ ] Build timeline of key malicious events with timestamps and record IDs
-  - [ ] Collect atomic IOCs (IPs, usernames, hostnames, processes, file paths, command lines)
-  - [ ] Write formatted GROUND_TRUTH.md
-- [ ] Test: Small scenario end-to-end (<1000 events)
-- [ ] Test: Cross-log consistency (LogonIDs, PIDs match)
-- [ ] Test: GROUND_TRUTH.md generation for attack scenarios
-- [ ] Test: No GROUND_TRUTH.md for baseline-only scenarios
+- [x] `generation/engine.py` - Main generation orchestrator (single-threaded for Phase 1)
+  - [x] Load scenario and validate schema
+  - [x] Initialize StateManager
+  - [x] Simple time iteration loop (hour-by-hour)
+  - [x] Basic baseline activity generation (fixed patterns, no LLM)
+  - [x] Simple storyline execution with keyword matching
+  - [x] Coordinate emitters for cross-log consistency
+  - [x] Generate GROUND_TRUTH.md when malicious activities present
+- [x] `generation/activity.py` - Activity execution logic
+  - [x] generate_logon() - creates session, emits Windows 4624
+  - [x] generate_logoff() - ends session, emits Windows 4634
+  - [x] generate_process() - creates process, emits Windows 4688
+  - [x] generate_connection() - opens connection, emits Zeek conn.log
+  - [x] Fixed baseline patterns (developer, executive, analyst)
+- [x] `generation/ground_truth.py` - Ground truth documentation generator
+  - [x] Extract attack narrative from storyline
+  - [x] Build timeline of key malicious events with timestamps and record IDs
+  - [x] Collect atomic IOCs (IPs, usernames, hostnames, processes, file paths, command lines)
+  - [x] Write formatted GROUND_TRUTH.md
+- [x] Test: Small scenario end-to-end (<1000 events) - smoke test passed
+- [x] Created test fixtures: minimal.yaml, baseline-only.yaml, attack.yaml
+- [ ] Test: Full unit tests for engine, activity, ground truth modules (deferred to Phase 2)
+- [ ] Test: Integration tests with cross-log consistency checks (deferred to Phase 2)
 
 ### 1.8 CLI Framework (Basic Commands)
 

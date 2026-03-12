@@ -1,0 +1,125 @@
+version: "1.0"
+name: credential-stuffing-attack
+description: "Credential stuffing attack followed by lateral movement and data exfiltration"
+
+environment:
+  description: "Corporate environment under attack"
+
+  users:
+    - username: jsmith
+      full_name: "John Smith"
+      email: "jsmith@corp.example.com"
+      enabled: true
+      persona: analyst
+
+    - username: mjones
+      full_name: "Mary Jones"
+      email: "mjones@corp.example.com"
+      enabled: true
+      persona: executive
+
+    - username: attacker
+      full_name: "External Attacker"
+      email: "attacker@external.com"
+      enabled: true
+
+  systems:
+    - hostname: WS-ANALYST-01
+      ip: 10.0.10.50
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jsmith
+
+    - hostname: WS-EXEC-01
+      ip: 10.0.10.100
+      os: "Windows 11"
+      type: workstation
+      assigned_user: mjones
+
+    - hostname: SRV-DC-01
+      ip: 10.0.1.10
+      os: "Windows Server 2019"
+      type: domain_controller
+
+time_window:
+  start: "2024-01-15T10:00:00Z"
+  duration: "4h"
+
+baseline_activity:
+  description: "Normal corporate activity mixed with attack"
+  intensity: low
+  variation: low
+
+storyline:
+  - time: "+15m"
+    actor: attacker
+    system: WS-ANALYST-01
+    activity: "Attacker authenticates using stolen credentials for jsmith account"
+    details:
+      source_ip: "203.0.113.50"
+      logon_type: 3
+
+  - time: "+20m"
+    actor: attacker
+    system: WS-ANALYST-01
+    activity: "Execute reconnaissance PowerShell script to enumerate domain users"
+    details:
+      process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      command_line: "powershell.exe -enc JABkAGMAID0AIAAoAFsAUwB5AHMAdABlAG0ALgBEAGkAcgBlAGMAdABvAHIAeQBTAGUAcgB2AGkAYwBlAHMALgBBAGMAdABpAHYAZQBEAGkAcgBlAGMAdABvAHIAeQBdADoAOgBHAGUAdABDAHUAcgByAGUAbgB0AEQAbwBtAGEAaQBuACkAKQA7ACAAJABkAGMALgBHAGUAdABEAGkAcgBlAGMAdABvAHIAeQBFAG4AdAByAHkAKAApAC4AQwBoAGkAbABkAHIAZQBuACAAfAAgAD8AewAkAF8ALgBTAGMAaABlAG0AYQBDAGwAYQBzAHMATgBhAG0AZQAgAC0AZQBxACAAJwB1AHMAZQByACcAfQA="
+
+  - time: "+25m"
+    actor: attacker
+    system: WS-ANALYST-01
+    activity: "Connect to external C2 server for command and control"
+    details:
+      dst_ip: "198.51.100.10"
+      dst_port: 443
+      service: "https"
+
+  - time: "+45m"
+    actor: attacker
+    system: WS-EXEC-01
+    activity: "Lateral movement: Authenticate to executive workstation using pass-the-hash"
+    details:
+      source_ip: "10.0.10.50"
+      logon_type: 3
+
+  - time: "+50m"
+    actor: attacker
+    system: WS-EXEC-01
+    activity: "Execute credential dumping tool to extract passwords"
+    details:
+      process_name: "C:\\Windows\\Temp\\mimikatz.exe"
+      command_line: "mimikatz.exe privilege::debug sekurlsa::logonpasswords exit"
+
+  - time: "+1h"
+    actor: attacker
+    system: WS-EXEC-01
+    activity: "Exfiltrate sensitive documents to external server"
+    details:
+      dst_ip: "198.51.100.20"
+      dst_port: 443
+      service: "https"
+
+  - time: "+1h10m"
+    actor: attacker
+    system: SRV-DC-01
+    activity: "Lateral movement: Authenticate to domain controller with elevated privileges"
+    details:
+      source_ip: "10.0.10.100"
+      logon_type: 3
+
+  - time: "+1h15m"
+    actor: attacker
+    system: SRV-DC-01
+    activity: "Execute DCSync attack to dump domain credentials"
+    details:
+      process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      command_line: "powershell.exe -Command \"Import-Module .\\PowerView.ps1; Get-DomainUser -LDAPFilter '(adminCount=1)'\""
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+  destination: "./output"
+  compression: false
