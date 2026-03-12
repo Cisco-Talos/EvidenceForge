@@ -15,6 +15,21 @@ from log_generator.models import (
 class TestGenerationEngine:
     """Tests for GenerationEngine class."""
 
+    @pytest.fixture(autouse=True)
+    def mock_new_emitters(self):
+        """Mock the 5 emitter classes added in Phase 2.2.
+
+        Tests were written for Phase 1 (2 emitters). The engine now creates
+        7 emitters. This fixture mocks the 5 new ones so existing tests
+        that only patch WindowsEventEmitter and ZeekEmitter still work.
+        """
+        with patch('log_generator.generation.engine.EcarEmitter') as m1, \
+             patch('log_generator.generation.engine.SyslogEmitter') as m2, \
+             patch('log_generator.generation.engine.BashHistoryEmitter') as m3, \
+             patch('log_generator.generation.engine.SnortEmitter') as m4, \
+             patch('log_generator.generation.engine.WebEmitter') as m5:
+            yield m1, m2, m3, m4, m5
+
     @pytest.fixture
     def minimal_scenario(self):
         """Create minimal valid scenario for testing."""
@@ -141,10 +156,10 @@ class TestGenerationEngine:
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
 
-        # Verify emitters created
+        # Verify emitters created (7 total: 2 Phase 1 + 5 Phase 2.2)
         assert mock_windows.called
         assert mock_zeek.called
-        assert len(engine.emitters) == 2
+        assert len(engine.emitters) == 7
         assert 'windows_event_security' in engine.emitters
         assert 'zeek_conn' in engine.emitters
 
@@ -542,9 +557,9 @@ class TestGenerationEngine:
         engine._initialize()
         engine._finalize()
 
-        # Verify both emitters closed
-        assert mock_windows_instance.close.called
-        assert mock_zeek_instance.close.called
+        # Emitters are created with threaded=True, so _finalize calls stop_thread()
+        assert mock_windows_instance.stop_thread.called
+        assert mock_zeek_instance.stop_thread.called
 
     @patch('log_generator.generation.engine.ActivityGenerator')
     @patch('log_generator.generation.engine.ZeekEmitter')

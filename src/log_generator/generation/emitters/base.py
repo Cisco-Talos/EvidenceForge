@@ -238,9 +238,12 @@ class LogEmitter(ABC):
         if not self.buffer:
             return
 
-        # Ensure header is written first
+        # Ensure header is written first (or mark as done if no header)
         if not self._header_written:
             self._write_header_unlocked()
+            # Mark header as written even if no header template exists,
+            # so subsequent flushes use append mode instead of truncating
+            self._header_written = True
 
         # Ensure output directory exists
         self.output_path.parent.mkdir(parents=True, exist_ok=True)

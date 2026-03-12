@@ -13,7 +13,7 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 import ipaddress
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import pytz
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -155,21 +155,26 @@ class Group(BaseModel):
 
 
 class Persona(BaseModel):
-    """Persona definition (simplified for Phase 1 - no LLM expansion).
+    """Persona definition with optional LLM expansion fields.
 
-    Defines a behavioral template for user activity. In Phase 1, personas
-    are stored as-is without LLM expansion. Phase 2+ will expand these
-    into detailed activity plans.
+    Phase 1: Basic string descriptions (typical_activities, work_hours)
+    Phase 2.4: Add optional expanded_activities for future LLM population
+    Phase 2.6: Persona-based activity generation uses expanded_activities
+    Phase 3.1: LLM expands descriptions into expanded_activities
 
     Attributes:
         name: Persona name (e.g., "developer", "accountant")
         description: Natural language behavior description
         typical_activities: List of typical activities (Phase 1: stored as strings)
-        work_hours: Work hours description (Phase 1: stored as string, not parsed)
+        work_hours: Work hours description (e.g., "9am-5pm", "8:30am-5:30pm (lunch 12pm-1pm)")
         application_usage: List of applications this persona uses
         risk_profile: Activity risk level (low|medium|high)
+        expanded_activities: Optional detailed activity sequences (Phase 3.1 LLM-populated)
+        work_hours_parsed: Optional parsed work hours distribution (auto-populated)
+        activity_intensity: Optional per-activity-type intensity overrides (events/hour)
     """
 
+    # Phase 1 fields (required/default)
     name: str
     description: str
     typical_activities: list[str] = Field(default_factory=list)
@@ -177,7 +182,38 @@ class Persona(BaseModel):
     application_usage: list[str] = Field(default_factory=list)
     risk_profile: str = Field(default="medium", pattern="^(low|medium|high)$")
 
+    # Phase 2.4 optional fields (backward compatible - prepare for future LLM expansion)
+    expanded_activities: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description="Detailed activity sequences (populated by LLM in Phase 3.1)"
+    )
+    work_hours_parsed: Optional[dict[str, Any]] = Field(
+        None,
+        description="Parsed work hours distribution (auto-populated from work_hours)"
+    )
+    activity_intensity: Optional[dict[str, int]] = Field(
+        None,
+        description="Per-activity-type intensity overrides (events/hour)"
+    )
+
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode='after')
+    def parse_work_hours_on_load(self) -> 'Persona':
+        """Auto-populate work_hours_parsed if not provided.
+
+        Phase 2.4: Parse work_hours string into structured time distribution.
+        """
+        if self.work_hours_parsed is None and self.work_hours:
+            try:
+                # Import here to avoid circular dependency
+                from log_generator.utils.time import parse_work_hours
+                self.work_hours_parsed = parse_work_hours(self.work_hours)
+            except Exception:
+                # If parsing fails, leave work_hours_parsed as None
+                # This maintains backward compatibility with invalid work_hours strings
+                pass
+        return self
 
 
 class BaselineActivity(BaseModel):
@@ -201,10 +237,11 @@ class BaselineActivity(BaseModel):
 
 
 class StorylineEvent(BaseModel):
-    """Storyline event (simplified for Phase 1 - no LLM expansion).
+    """Storyline event with optional LLM expansion fields.
 
-    Represents a specific event in the attack/incident storyline.
-    Phase 1 stores events as-is; Phase 2+ will expand into detailed event sequences.
+    Phase 1: Single activity per event, ad-hoc details dict
+    Phase 2.4: Add optional event_sequence for complex multi-step events
+    Phase 3.1: LLM expands high-level events into detailed sequences
 
     Attributes:
         time: Event time (ISO 8601, relative offset like "+2h30m", or seconds "+7200")
@@ -212,13 +249,38 @@ class StorylineEvent(BaseModel):
         system: Target system hostname
         activity: Natural language activity description
         details: Optional activity-specific details (flexible dict)
+        event_sequence: Optional detailed sub-events for multi-step actions (Phase 3.1 LLM-populated)
+        duration: Optional event duration (e.g., '30m' for long-running activity)
+        retry_on_failure: Optional flag for whether this event retries if it fails
+        success_probability: Optional probability this event succeeds (0.0-1.0)
     """
 
+    # Phase 1 fields (required)
     time: str
     actor: str
     system: str
     activity: str
     details: dict[str, Any] | None = Field(default_factory=dict)
+
+    # Phase 2.4 optional fields (backward compatible - prepare for future LLM expansion)
+    event_sequence: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description="Detailed sub-events for multi-step actions (populated by LLM in Phase 3.1)"
+    )
+    duration: Optional[str] = Field(
+        None,
+        description="Event duration (e.g., '30m' for long-running activity)"
+    )
+    retry_on_failure: Optional[bool] = Field(
+        None,
+        description="Whether this event retries if it fails"
+    )
+    success_probability: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Probability this event succeeds (0.0-1.0)"
+    )
 
     model_config = ConfigDict(extra="forbid")
 

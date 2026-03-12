@@ -770,3 +770,229 @@ class TestScenarioValidator:
         assert "environment.users.0.primary_system" in field_paths
         assert "environment.users.1.username" in field_paths
         assert "environment.systems.0.assigned_user" in field_paths
+
+    def test_valid_expanded_activities(self):
+        """Valid expanded_activities should produce no issues."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            personas=[
+                Persona(
+                    name="dev",
+                    description="Developer",
+                    typical_activities=["coding"],
+                    expanded_activities=[
+                        {"activity_type": "process_code", "sequence": [{"action": "open_ide"}]},
+                        {"activity_type": "connection_web"},
+                    ],
+                )
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        assert len(issues) == 0
+
+    def test_expanded_activities_missing_activity_type(self):
+        """expanded_activities item without activity_type should error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            personas=[
+                Persona(
+                    name="dev",
+                    description="Developer",
+                    typical_activities=["coding"],
+                    expanded_activities=[
+                        {"sequence": [{"action": "open_ide"}]},  # Missing activity_type
+                    ],
+                )
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        assert len(issues) == 1
+        assert issues[0].severity == "error"
+        assert "expanded_activities" in issues[0].field_path
+        assert "activity_type" in issues[0].message
+
+    def test_expanded_activities_invalid_sequence_type(self):
+        """expanded_activities with non-list sequence should error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            personas=[
+                Persona(
+                    name="dev",
+                    description="Developer",
+                    typical_activities=["coding"],
+                    expanded_activities=[
+                        {"activity_type": "process_code", "sequence": "not_a_list"},
+                    ],
+                )
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        assert len(issues) == 1
+        assert "sequence" in issues[0].field_path
+        assert "must be a list" in issues[0].message
+
+    def test_valid_event_sequence(self):
+        """Valid event_sequence should produce no issues."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            storyline=[
+                StorylineEvent(
+                    time="2024-01-15T10:30:00Z",
+                    actor="attacker",
+                    system="TEST-01",
+                    activity="multi-step attack",
+                    event_sequence=[
+                        {"sub_event_type": "process", "delay_seconds": 5},
+                        {"sub_event_type": "file", "delay_seconds": 10},
+                    ],
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        assert len(issues) == 0
+
+    def test_event_sequence_missing_sub_event_type(self):
+        """event_sequence item without sub_event_type should error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            storyline=[
+                StorylineEvent(
+                    time="2024-01-15T10:30:00Z",
+                    actor="attacker",
+                    system="TEST-01",
+                    activity="multi-step attack",
+                    event_sequence=[
+                        {"delay_seconds": 5},  # Missing sub_event_type
+                    ],
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        assert len(issues) == 1
+        assert issues[0].severity == "error"
+        assert "event_sequence" in issues[0].field_path
+        assert "sub_event_type" in issues[0].message
+
+    def test_none_optional_fields_no_issues(self):
+        """Personas/events with None optional fields should produce no issues."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            personas=[
+                Persona(
+                    name="dev",
+                    description="Developer",
+                    typical_activities=["coding"],
+                    # expanded_activities=None (default)
+                )
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            storyline=[
+                StorylineEvent(
+                    time="2024-01-15T10:30:00Z",
+                    actor="attacker",
+                    system="TEST-01",
+                    activity="simple attack",
+                    # event_sequence=None (default)
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        assert len(issues) == 0

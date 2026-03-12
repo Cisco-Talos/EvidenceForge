@@ -352,12 +352,18 @@ class TestLoadAllFormats:
     """Tests for loading all format definitions."""
 
     def test_load_all_formats(self):
-        """Test that both formats load successfully."""
+        """Test that all format definitions load successfully."""
         formats = load_all_formats()
 
-        assert len(formats) == 2
+        # Phase 1 (2) + Phase 2.2 (5) = 7 formats
+        assert len(formats) == 7
         assert "windows_event_security" in formats
         assert "zeek_conn" in formats
+        assert "ecar" in formats
+        assert "syslog" in formats
+        assert "bash_history" in formats
+        assert "snort_alert" in formats
+        assert "web_access" in formats
 
         # Verify Windows Event format
         windows_fmt = formats["windows_event_security"]

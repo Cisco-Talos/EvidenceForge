@@ -70,6 +70,8 @@ class ScenarioValidator:
         self._validate_group_member_references()
         self._validate_storyline_references()
         self._validate_uniqueness()
+        self._validate_expanded_activities()
+        self._validate_event_sequences()
         return self.issues
 
     def has_errors(self) -> bool:
@@ -212,3 +214,50 @@ class ScenarioValidator:
                     )
                 )
             seen_ips.add(system.ip)
+
+    def _validate_expanded_activities(self) -> None:
+        """Validate persona expanded_activities structure if present."""
+        if not self.scenario.personas:
+            return
+
+        for idx, persona in enumerate(self.scenario.personas):
+            if persona.expanded_activities is None:
+                continue
+            for act_idx, activity in enumerate(persona.expanded_activities):
+                if "activity_type" not in activity:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"personas.{idx}.expanded_activities.{act_idx}",
+                            message=f"Persona '{persona.name}': expanded_activities[{act_idx}] missing 'activity_type'",
+                            suggestion="Each expanded activity must have an 'activity_type' field",
+                        )
+                    )
+                if "sequence" in activity and not isinstance(activity["sequence"], list):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"personas.{idx}.expanded_activities.{act_idx}.sequence",
+                            message=f"Persona '{persona.name}': expanded_activities[{act_idx}].sequence must be a list",
+                            suggestion="The 'sequence' field should be a list of action steps",
+                        )
+                    )
+
+    def _validate_event_sequences(self) -> None:
+        """Validate storyline event_sequence structure if present."""
+        if not self.scenario.storyline:
+            return
+
+        for idx, event in enumerate(self.scenario.storyline):
+            if event.event_sequence is None:
+                continue
+            for seq_idx, sub_event in enumerate(event.event_sequence):
+                if "sub_event_type" not in sub_event:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"storyline.{idx}.event_sequence.{seq_idx}",
+                            message=f"Storyline event at {event.time}: event_sequence[{seq_idx}] missing 'sub_event_type'",
+                            suggestion="Each sub-event must have a 'sub_event_type' field",
+                        )
+                    )

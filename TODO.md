@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 2 - Scalability (In Progress - 2.4-2.9 remaining)
+**Status:** Phase 2 - Scalability (In Progress - 2.5-2.9 remaining)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-12
+**Last Updated:** 2026-03-12 (Phase 2.4 complete)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -10,6 +10,7 @@
 - ✅ Phase 2.2: 5 New Log Formats (eCAR, syslog, bash_history, snort_alert, web_access)
 - ✅ Phase 2.3: Progress Reporting
 - ✅ Phase 2.10: OS-Aware Activity Generation (Windows + Linux support)
+- ✅ Phase 2.4: Enhanced Scenario Schema (work hours parsing, model expansion, timezone tests, validation, docs)
 
 ---
 
@@ -219,15 +220,45 @@
   - [x] Show ETA based on moving average
 - [x] Test: Progress updates correctly during generation
 
-### 2.4 Enhanced Scenario Schema
+### 2.4 Enhanced Scenario Schema ✅ COMPLETE
 
-- [ ] Expand `models/scenario.py` with full MVP schema
-  - [ ] Timezone configuration (default + per-system patterns)
-  - [ ] Persona structure with expanded_activities (prepare for LLM expansion)
-  - [ ] Storyline with event_sequence (prepare for LLM expansion)
-  - [ ] Complete environment specification
-- [ ] Timezone handling in utilities
-- [ ] Test: Timezone conversions (UTC internal → system timezone output)
+**Goal:** Add optional schema fields for LLM expansion (Phase 3.1) and persona generation (Phase 2.6)
+
+- [x] Add `parse_work_hours()` utility to `utils/time.py`
+  - [x] Parse "9am-5pm" format to hour ranges
+  - [x] Support lunch breaks: "9am-5pm (lunch 12pm-1pm)"
+  - [x] Support half-hours: "8:30am-5:30pm"
+  - [x] Calculate peak hours (mid-morning, mid-afternoon)
+  - [x] Add 10+ test cases in `tests/unit/test_time_parsing.py` (17 tests, all passing)
+- [x] Expand Persona model in `models/scenario.py` (optional fields, backward compatible)
+  - [x] Timezone configuration (default + per-system patterns) - Already exists!
+  - [x] Add optional `expanded_activities` field (for Phase 3.1 LLM to populate)
+  - [x] Add optional `work_hours_parsed` field (auto-populated from work_hours)
+  - [x] Add optional `activity_intensity` field (per-activity overrides)
+  - [x] Add `@model_validator` to auto-populate work_hours_parsed
+- [x] Expand StorylineEvent model in `models/scenario.py` (optional fields, backward compatible)
+  - [x] Add optional `event_sequence` field (sub-events for complex attacks)
+  - [x] Add optional `duration` field (event duration like "30m")
+  - [x] Add optional `retry_on_failure` field
+  - [x] Add optional `success_probability` field (0.0-1.0)
+- [x] Add timezone tests
+  - [x] Create `tests/unit/test_timezone_handling.py` (14 tests: pattern matching, DST, conversions)
+  - [x] Create `tests/integration/test_scenario_timezone.py` (4 tests: multi-timezone scenarios)
+  - [x] Test UTC → local timezone conversions
+  - [x] Test pattern-based timezone overrides
+  - [x] Test work hours parsing
+- [x] Update validation in `validation/schema.py`
+  - [x] Validate expanded_activities structure if present
+  - [x] Validate event_sequence structure if present
+  - [x] 6 new validation tests added to `tests/unit/test_validation.py`
+- [x] Documentation
+  - [x] Create `docs/scenario-reference.md` with full schema reference
+  - [x] Document optional fields for Phase 3.1 LLM expansion
+  - [x] Document backward compatibility guarantees
+- [x] Verification
+  - [x] Test backward compatibility with existing scenarios (minimal.yaml, attack.yaml)
+  - [x] Verify work_hours_parsed auto-population works
+  - [x] All 105 Phase 2.4 tests pass
 
 ### 2.5 Network Visibility Architecture
 
@@ -321,8 +352,8 @@
 **Architecture Note:** Native logs (Windows Event Security, syslog) are ALWAYS present per OS type. eCAR is OPTIONAL and may be present on all, some, or no systems (EDR/XDR is not universally deployed).
 
 **Phase 2 Status:**
-- ✅ Complete: 2.1 (Parallel Generation), 2.2 (7 Log Formats), 2.3 (Progress Reporting), 2.10 (OS-Aware Generation)
-- 🚧 In Progress: 2.4-2.9 (Enhanced Schema, Network Visibility, Persona Generation, LLM Integration, Medium Datasets)
+- ✅ Complete: 2.1 (Parallel Generation), 2.2 (7 Log Formats), 2.3 (Progress Reporting), 2.4 (Enhanced Schema), 2.10 (OS-Aware Generation)
+- 🚧 Pending: 2.5-2.9 (Network Visibility, Persona Generation, LLM Integration, Medium Datasets, Phase 2 Testing)
 
 **Phase 2 Milestone (Partial):** Can generate datasets across 7 formats (Windows Event Security, Zeek, eCAR, syslog, bash_history, snort_alert, web_access) in parallel with threaded emitters. Windows and Linux systems generate appropriate OS-specific logs. Native logs (Windows Event/syslog) always present; eCAR optional EDR/XDR layer.
 

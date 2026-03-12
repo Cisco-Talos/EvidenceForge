@@ -132,3 +132,168 @@ def convert_to_output_timezone(
     tz_name = get_system_timezone(system_hostname, environment)
     tz = pytz.timezone(tz_name)
     return dt.astimezone(tz)
+
+
+def parse_work_hours(work_hours_str: str) -> dict:
+    """Parse work hours string into time ranges and distributions.
+
+    Phase 2.4: Supports parsing work hours for temporal activity distribution.
+
+    Supports formats:
+    - "9am-5pm" → {start: 9, end: 17, lunch: None}
+    - "8:30am-5:30pm" → {start: 8.5, end: 17.5, lunch: None}
+    - "9am-5pm (lunch 12pm-1pm)" → {start: 9, end: 17, lunch: (12, 13)}
+
+    Args:
+        work_hours_str: Human-readable work hours string
+
+    Returns:
+        Dict with:
+        - start: Start hour (24-hour format, float for half-hours)
+        - end: End hour (24-hour format, float)
+        - lunch: Tuple (start, end) if lunch break specified, else None
+        - hours: List of active hours (excluding lunch)
+        - peak_hours: List of peak hours (mid-morning, mid-afternoon)
+
+    Raises:
+        ValueError: If format is invalid
+
+    Examples:
+        >>> parse_work_hours("9am-5pm")
+        {
+            'start': 9,
+            'end': 17,
+            'lunch': None,
+            'hours': [9, 10, 11, 12, 13, 14, 15, 16],
+            'peak_hours': [10, 11, 14, 15]
+        }
+
+        >>> parse_work_hours("9am-5pm (lunch 12pm-1pm)")
+        {
+            'start': 9,
+            'end': 17,
+            'lunch': (12, 13),
+            'hours': [9, 10, 11, 13, 14, 15, 16],
+            'peak_hours': [10, 11, 14, 15]
+        }
+    """
+    # Extract lunch break if present
+    lunch_pattern = r'\(lunch\s+([\d:]+(?:am|pm)?)\s*-\s*([\d:]+(?:am|pm)?)\)'
+    lunch_match = re.search(lunch_pattern, work_hours_str, re.IGNORECASE)
+
+    lunch_start = None
+    lunch_end = None
+    if lunch_match:
+        lunch_start_str = lunch_match.group(1)
+        lunch_end_str = lunch_match.group(2)
+        lunch_start = _parse_time_to_hour(lunch_start_str)
+        lunch_end = _parse_time_to_hour(lunch_end_str)
+        # Remove lunch portion from main string
+        work_hours_str = work_hours_str[:lunch_match.start()] + work_hours_str[lunch_match.end():]
+
+    # Parse main work hours range
+    main_pattern = r'([\d:]+(?:am|pm)?)\s*-\s*([\d:]+(?:am|pm)?)'
+    main_match = re.search(main_pattern, work_hours_str, re.IGNORECASE)
+
+    if not main_match:
+        raise ValueError(f"Invalid work hours format: {work_hours_str}")
+
+    start_time_str = main_match.group(1)
+    end_time_str = main_match.group(2)
+
+    start = _parse_time_to_hour(start_time_str)
+    end = _parse_time_to_hour(end_time_str)
+
+    # Generate list of active hours (integer hours only, excluding lunch)
+    # If end time has fractional part (e.g., 5:30pm = 17.5), include that hour
+    hours = []
+    current_hour = int(start)
+    end_hour_inclusive = int(end) if end == int(end) else int(end) + 1
+
+    while current_hour < end_hour_inclusive:
+        # Exclude lunch hours (use ceiling for lunch_end to exclude partial overlaps)
+        if lunch_start is not None and lunch_end is not None:
+            lunch_end_ceil = int(lunch_end) if lunch_end == int(lunch_end) else int(lunch_end) + 1
+            if not (int(lunch_start) <= current_hour < lunch_end_ceil):
+                hours.append(current_hour)
+        else:
+            hours.append(current_hour)
+        current_hour += 1
+
+    # Calculate peak hours (2-3 hours after start, 2-3 hours before end, exclude lunch)
+    peak_hours = []
+
+    # Morning peak: 2-3 hours after start
+    morning_peak_start = int(start) + 1
+    morning_peak_end = int(start) + 3
+    for hour in range(morning_peak_start, morning_peak_end):
+        if hour in hours:
+            peak_hours.append(hour)
+
+    # Afternoon peak: 2-3 hours before end
+    afternoon_peak_start = int(end) - 3
+    afternoon_peak_end = int(end) - 1
+    for hour in range(afternoon_peak_start, afternoon_peak_end):
+        if hour in hours and hour not in peak_hours:
+            peak_hours.append(hour)
+
+    return {
+        'start': start,
+        'end': end,
+        'lunch': (lunch_start, lunch_end) if lunch_start is not None else None,
+        'hours': hours,
+        'peak_hours': peak_hours
+    }
+
+
+def _parse_time_to_hour(time_str: str) -> float:
+    """Helper to parse time string to 24-hour float.
+
+    Supports: "9am", "5pm", "8:30am", "12:45pm"
+
+    Args:
+        time_str: Time string with optional am/pm
+
+    Returns:
+        Hour as float (e.g., 9.0, 17.5, 12.75)
+
+    Raises:
+        ValueError: If format is invalid
+    """
+    time_str = time_str.strip().lower()
+
+    # Check for am/pm
+    is_pm = 'pm' in time_str
+    is_am = 'am' in time_str
+
+    # Remove am/pm suffix
+    time_str = time_str.replace('am', '').replace('pm', '').strip()
+
+    # Parse hour and optional minutes
+    try:
+        if ':' in time_str:
+            parts = time_str.split(':')
+            if len(parts) != 2:
+                raise ValueError(f"Invalid time format: {time_str}")
+            hour = int(parts[0])
+            minutes = int(parts[1])
+        else:
+            hour = int(time_str)
+            minutes = 0
+    except ValueError as e:
+        raise ValueError(f"Invalid time format: {time_str}") from e
+
+    # Validate ranges
+    if hour < 1 or hour > 12:
+        raise ValueError(f"Hour must be 1-12, got {hour}")
+    if minutes < 0 or minutes > 59:
+        raise ValueError(f"Minutes must be 0-59, got {minutes}")
+
+    # Convert to 24-hour format
+    if is_pm and hour != 12:
+        hour += 12
+    elif is_am and hour == 12:
+        hour = 0
+
+    # Return as float (hour + fraction for minutes)
+    return hour + (minutes / 60.0)

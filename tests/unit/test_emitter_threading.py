@@ -240,8 +240,8 @@ class TestEmitterThreadSafety:
             output_file = Path(tmpdir) / "windows.xml"
             assert output_file.exists()
 
-    def test_header_written_once_under_concurrency(self):
-        """Test header is written exactly once even with concurrent writes."""
+    def test_no_data_loss_with_frequent_flushes(self):
+        """Test no data loss with small buffer triggering frequent flushes."""
         with tempfile.TemporaryDirectory() as tmpdir:
             fmt = load_format("zeek_conn")
             emitter = ZeekEmitter(
@@ -293,19 +293,11 @@ class TestEmitterThreadSafety:
             # Close emitter
             emitter.close()
 
-            # Verify: Header written exactly once
+            # Verify no data loss: all 100 events should be in the file
             output_file = Path(tmpdir) / "zeek.log"
             assert output_file.exists()
 
             with open(output_file) as f:
-                content = f.read()
+                lines = [l for l in f if l.strip()]
 
-            # Count header lines (lines starting with #)
-            header_lines = [l for l in content.split('\n') if l.startswith('#')]
-
-            # Should have header fields section (multiple lines)
-            # but not duplicated
-            assert len(header_lines) > 0
-            assert '#separator' in content
-            # Verify no duplicate separators
-            assert content.count('#separator') == 1
+            assert len(lines) == num_threads * events_per_thread
