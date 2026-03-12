@@ -127,3 +127,85 @@ class TestZeekFormatAccuracy:
             assert expected_type in (str, int, float, bool), (
                 f"Field '{field}' has invalid type: {expected_type}"
             )
+
+    def test_timestamp_precision(self):
+        """Verify Zeek timestamps have exactly 6 decimal places (microseconds).
+
+        This test ensures timestamps maintain microsecond precision and don't
+        lose trailing zeros when serialized to JSON. Real Zeek logs always use
+        exactly 6 decimal places for the epoch timestamp.
+        """
+        from datetime import datetime
+        from log_generator.generation.emitters.zeek import ZeekEmitter
+        from log_generator.formats import load_format
+        from pathlib import Path
+        import tempfile
+        import json
+
+        # Create emitter with temporary output file
+        format_def = load_format('zeek_conn')
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            output_file = Path(f.name)
+
+        try:
+            emitter = ZeekEmitter(format_def, output_file)
+
+            # Create test event with specific microseconds
+            test_time = datetime(2024, 1, 15, 10, 30, 45, 123456)  # 123456 microseconds
+
+            event_data = {
+                'ts': test_time,
+                'uid': 'C1234567890ABCDE',
+                'id.orig_h': '10.0.10.5',
+                'id.orig_p': 50000,
+                'id.resp_h': '93.184.216.34',
+                'id.resp_p': 443,
+                'proto': 'tcp',
+                'service': 'https',
+                'duration': 1.5,
+                'orig_bytes': 1000,
+                'resp_bytes': 5000,
+                'conn_state': 'SF',
+                'local_orig': True,
+                'local_resp': False,
+                'missed_bytes': 0,
+                'history': 'ShADadfF',
+                'orig_pkts': 10,
+                'orig_ip_bytes': 1400,
+                'resp_pkts': 12,
+                'resp_ip_bytes': 5480,
+                'ip_proto': 6,
+            }
+
+            emitter.emit_event(event_data)
+            emitter.close()
+
+            # Read the generated JSON
+            with open(output_file) as f:
+                line = f.readline()
+                generated = json.loads(line)
+
+            # Verify timestamp has exactly 6 decimal places
+            ts_str = str(generated['ts'])
+
+            # Split at decimal point
+            assert '.' in ts_str, f"Timestamp missing decimal point: {ts_str}"
+            integer_part, decimal_part = ts_str.split('.')
+
+            # Check exactly 6 decimal places
+            assert len(decimal_part) == 6, (
+                f"Timestamp must have exactly 6 decimal places (microseconds), "
+                f"got {len(decimal_part)}: {ts_str}"
+            )
+
+            # Verify it matches expected value
+            expected_ts = test_time.timestamp()
+            actual_ts = float(generated['ts'])
+            assert abs(actual_ts - expected_ts) < 0.000001, (
+                f"Timestamp value mismatch: expected {expected_ts}, got {actual_ts}"
+            )
+
+        finally:
+            # Clean up
+            if output_file.exists():
+                output_file.unlink()

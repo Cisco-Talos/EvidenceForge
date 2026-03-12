@@ -59,12 +59,13 @@ class ZeekEmitter(LogEmitter):
             ts = event_data["ts"]
             if isinstance(ts, datetime):
                 # Convert to epoch with microseconds
-                # NOTE: Ensure datetime objects include microseconds for proper precision
-                event_data["ts"] = ts.timestamp()
+                # Format to exactly 6 decimal places to match Zeek format
+                # This prevents loss of trailing zeros during JSON serialization
+                event_data["ts"] = f"{ts.timestamp():.6f}"
             elif isinstance(ts, str):
                 # If string, parse it
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                event_data["ts"] = dt.timestamp()
+                event_data["ts"] = f"{dt.timestamp():.6f}"
 
         # Handle dotted field names (id.orig_h, etc.)
         # Zeek template expects 'data' dict for dotted fields

@@ -176,7 +176,27 @@
 - [ ] Timezone handling in utilities
 - [ ] Test: Timezone conversions (UTC internal → system timezone output)
 
-### 2.5 Persona-Based Activity Generation
+### 2.5 Network Visibility Architecture
+
+- [ ] Model network topology and sensor placement in scenario schema
+  - [ ] Define network segments (CIDR ranges) in environment
+  - [ ] Specify sensor placement (which segments are monitored)
+  - [ ] Define sensor capabilities (direction: inbound/outbound/bidirectional)
+- [ ] Implement traffic visibility calculation
+  - [ ] Determine if connection would traverse monitored network points
+  - [ ] Validate connections based on network topology
+  - [ ] Skip connections that wouldn't be visible to configured sensors
+- [ ] Update `generation/activity.py` connection logic
+  - [ ] Check if connection would be observable by network sensors
+  - [ ] Consider source/destination network segments
+  - [ ] Apply sensor placement rules
+- [ ] Test: Intra-segment traffic not visible unless sensor on segment
+- [ ] Test: Cross-segment traffic visible if sensor monitors either segment
+- [ ] Test: External traffic visible if sensor monitors perimeter
+
+**Note:** Phase 1 implemented basic IP validation (no localhost, no same src/dst, no link-local/multicast). This phase adds full network topology modeling for realistic sensor placement.
+
+### 2.6 Persona-Based Activity Generation
 
 - [ ] `generation/persona.py` - Persona activity pattern execution
   - [ ] Load persona definitions (from scenario)
@@ -186,7 +206,7 @@
 - [ ] Test: Persona activity patterns match definitions
 - [ ] Test: Temporal distributions look realistic
 
-### 2.6 LLM Integration (Bedrock Client)
+### 2.7 LLM Integration (Bedrock Client)
 
 - [ ] `llm/client.py` - BedrockClient implementation
   - [ ] Chat and complete methods
@@ -200,14 +220,14 @@
 - [ ] Test: Retry logic with mocked failures
 - [ ] Test: Non-retryable errors fail immediately
 
-### 2.7 Medium Dataset Support
+### 2.8 Medium Dataset Support
 
 - [ ] Optimize StateManager for 100K+ events
 - [ ] Memory profiling to ensure <2GB usage
 - [ ] Test: 8-hour, 100-user scenario (target: ~100K events, <10 min generation time)
 - [ ] Test: Memory usage stays under 2GB
 
-### 2.8 Phase 2 Testing & Scenarios
+### 2.9 Phase 2 Testing & Scenarios
 
 - [ ] Integration test: 8-hour scenario with all 5 formats
 - [ ] Create test fixture: `fixtures/scenarios/medium-dataset.yaml` (100 users, 8 hours)

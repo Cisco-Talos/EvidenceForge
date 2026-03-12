@@ -75,10 +75,55 @@ EXTERNAL_IPS = {
         '104.26.7.33',     # gitlab.com
     ],
     'connection_db': [
-        '10.0.10.50',      # Internal DB server
-        '192.168.100.25',  # Internal DB server
+        # For internal DB connections, use dedicated DB server IPs in separate subnet
+        # This prevents matching workstation IPs (10.0.10.x) which would create
+        # same source/destination connections that network sensors can't observe
+        '10.0.100.10',     # Internal DB server (separate subnet)
+        '10.0.100.11',     # Internal DB replica
     ],
 }
+
+
+def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]:
+    """Validate that a network connection would be observable by network sensors.
+
+    Network-based data sources like Zeek can only observe traffic that actually
+    traverses the network. This function checks for connections that would never
+    be visible to network sensors.
+
+    Args:
+        src_ip: Source IP address
+        dst_ip: Destination IP address
+
+    Returns:
+        Tuple of (is_invalid, reason). If is_invalid=True, connection should not be generated.
+    """
+    # Check if source and destination are the same
+    if src_ip == dst_ip:
+        return True, f"Source and destination are identical ({src_ip})"
+
+    # Check for localhost addresses (127.0.0.0/8)
+    # Network sensors cannot observe localhost traffic
+    if src_ip.startswith('127.') or dst_ip.startswith('127.'):
+        return True, f"Connection involves localhost address (src={src_ip}, dst={dst_ip})"
+
+    # Check for link-local addresses (169.254.0.0/16)
+    # These are auto-configured and typically not routed
+    if src_ip.startswith('169.254.') or dst_ip.startswith('169.254.'):
+        return True, f"Connection involves link-local address (src={src_ip}, dst={dst_ip})"
+
+    # Check for multicast addresses (224.0.0.0/4)
+    # These require special handling and shouldn't appear in typical conn logs
+    try:
+        src_first_octet = int(src_ip.split('.')[0])
+        dst_first_octet = int(dst_ip.split('.')[0])
+        if src_first_octet >= 224 or dst_first_octet >= 224:
+            return True, f"Connection involves multicast/reserved address (src={src_ip}, dst={dst_ip})"
+    except (ValueError, IndexError):
+        # Invalid IP format - let it pass, will be caught by other validation
+        pass
+
+    return False, ""
 
 
 class ActivityGenerator:
@@ -306,6 +351,15 @@ class ActivityGenerator:
         Returns:
             Zeek UID (18-character string)
         """
+        # Validate connection would be observable by network sensors
+        is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
+        if is_invalid:
+            logger.warning(
+                f"Skipping invalid network connection: {src_ip} -> {dst_ip}. "
+                f"Reason: {reason}. Network sensors would not observe this traffic."
+            )
+            return ""  # Return empty UID to indicate skipped connection
+
         src_port = random.randint(49152, 65535)  # Ephemeral port
 
         # Create connection in StateManager
@@ -411,8 +465,21 @@ class ActivityGenerator:
 
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
-            # Choose random destination IP
-            dst_ip = random.choice(EXTERNAL_IPS[activity_type])
+            # Choose random destination IP (exclude source system's IP)
+            available_destinations = [
+                ip for ip in EXTERNAL_IPS[activity_type]
+                if ip != system.ip
+            ]
+
+            if not available_destinations:
+                # No valid destinations (all IPs match source)
+                logger.debug(
+                    f"Skipping {activity_type} for {system.hostname}: "
+                    f"no valid destination IPs (all match source {system.ip})"
+                )
+                return
+
+            dst_ip = random.choice(available_destinations)
 
             # Set service and port based on activity type
             if activity_type == 'connection_web':

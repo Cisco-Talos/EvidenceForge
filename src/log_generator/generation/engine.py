@@ -524,6 +524,14 @@ class GenerationEngine:
             dst_port = details.get('dst_port', 443)
             service = details.get('service', 'https')
 
+            # Validate destination is different from source
+            if dst_ip == system.ip:
+                logger.warning(
+                    f"Skipping storyline connection: dst_ip {dst_ip} matches system IP {system.ip}. "
+                    f"Adjusting to external IP."
+                )
+                dst_ip = '198.51.100.10'  # Force to external IP
+
             uid = self.activity_generator.generate_connection(
                 src_ip=system.ip,
                 dst_ip=dst_ip,
