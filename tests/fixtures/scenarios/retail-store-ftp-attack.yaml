@@ -1,0 +1,497 @@
+version: "1.0"
+name: retail-store-ftp-attack
+description: "24-hour retail store operation with FTP RCE attack and reconnaissance"
+
+environment:
+  description: "Single retail store network (Walmart/Target-style) with POS, office, and back-office infrastructure"
+
+  users:
+    # Store Management
+    - username: smanager
+      full_name: "Sarah Manager"
+      email: "sarah.manager@retailstore.com"
+      persona: executive
+      primary_system: OFFICE-WS-01
+      enabled: true
+
+    - username: amanager1
+      full_name: "Mike Assistant"
+      email: "mike.assistant@retailstore.com"
+      persona: executive
+      primary_system: OFFICE-WS-02
+      enabled: true
+
+    - username: amanager2
+      full_name: "Jennifer Assistant"
+      email: "jennifer.assistant@retailstore.com"
+      persona: executive
+      primary_system: OFFICE-WS-03
+      enabled: true
+
+    # Department Managers
+    - username: dmgr_electronics
+      full_name: "David Electronics"
+      email: "david.electronics@retailstore.com"
+      persona: analyst
+      primary_system: OFFICE-WS-04
+      enabled: true
+
+    - username: dmgr_clothing
+      full_name: "Lisa Clothing"
+      email: "lisa.clothing@retailstore.com"
+      persona: analyst
+      primary_system: OFFICE-WS-05
+      enabled: true
+
+    - username: dmgr_grocery
+      full_name: "Robert Grocery"
+      email: "robert.grocery@retailstore.com"
+      persona: analyst
+      primary_system: OFFICE-WS-04
+      enabled: true
+
+    - username: dmgr_service
+      full_name: "Amanda Service"
+      email: "amanda.service@retailstore.com"
+      persona: analyst
+      primary_system: OFFICE-WS-05
+      enabled: true
+
+    # IT Support
+    - username: itsupport
+      full_name: "Tom Support"
+      email: "tom.support@retailstore.com"
+      persona: developer
+      primary_system: OFFICE-WS-01
+      enabled: true
+
+    # Cashiers (10 total, 5 on duty at once sharing 5 POS terminals)
+    - username: cashier01
+      full_name: "Emma Cashier"
+      email: "emma.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier02
+      full_name: "James Cashier"
+      email: "james.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier03
+      full_name: "Olivia Cashier"
+      email: "olivia.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier04
+      full_name: "William Cashier"
+      email: "william.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier05
+      full_name: "Sophia Cashier"
+      email: "sophia.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier06
+      full_name: "Benjamin Cashier"
+      email: "benjamin.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier07
+      full_name: "Isabella Cashier"
+      email: "isabella.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier08
+      full_name: "Lucas Cashier"
+      email: "lucas.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier09
+      full_name: "Mia Cashier"
+      email: "mia.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    - username: cashier10
+      full_name: "Henry Cashier"
+      email: "henry.cashier@retailstore.com"
+      persona: default
+      enabled: true
+
+    # Inventory Staff
+    - username: inventory01
+      full_name: "Carlos Inventory"
+      email: "carlos.inventory@retailstore.com"
+      persona: default
+      primary_system: BACKOFFICE-SRV-01
+      enabled: true
+
+    - username: inventory02
+      full_name: "Maria Inventory"
+      email: "maria.inventory@retailstore.com"
+      persona: default
+      primary_system: BACKOFFICE-SRV-01
+      enabled: true
+
+    - username: inventory03
+      full_name: "Kevin Inventory"
+      email: "kevin.inventory@retailstore.com"
+      persona: default
+      primary_system: BACKOFFICE-SRV-01
+      enabled: true
+
+    # External Attacker
+    - username: attacker
+      full_name: "External Attacker"
+      email: "attacker@evil.com"
+      enabled: true
+
+  systems:
+    # POS Terminals (shared by cashiers)
+    - hostname: POS-01
+      ip: 10.10.10.101
+      os: "Windows 10"
+      type: workstation
+
+    - hostname: POS-02
+      ip: 10.10.10.102
+      os: "Windows 10"
+      type: workstation
+
+    - hostname: POS-03
+      ip: 10.10.10.103
+      os: "Windows 10"
+      type: workstation
+
+    - hostname: POS-04
+      ip: 10.10.10.104
+      os: "Windows 10"
+      type: workstation
+
+    - hostname: POS-05
+      ip: 10.10.10.105
+      os: "Windows 10"
+      type: workstation
+
+    # Office Workstations
+    - hostname: OFFICE-WS-01
+      ip: 10.10.20.101
+      os: "Windows 10"
+      type: workstation
+      assigned_user: smanager
+
+    - hostname: OFFICE-WS-02
+      ip: 10.10.20.102
+      os: "Windows 10"
+      type: workstation
+      assigned_user: amanager1
+
+    - hostname: OFFICE-WS-03
+      ip: 10.10.20.103
+      os: "Windows 10"
+      type: workstation
+      assigned_user: amanager2
+
+    - hostname: OFFICE-WS-04
+      ip: 10.10.20.104
+      os: "Windows 10"
+      type: workstation
+      assigned_user: dmgr_electronics
+
+    - hostname: OFFICE-WS-05
+      ip: 10.10.20.105
+      os: "Windows 10"
+      type: workstation
+      assigned_user: dmgr_clothing
+
+    # Back-office Infrastructure
+    - hostname: BACKOFFICE-SRV-01
+      ip: 10.10.30.10
+      os: "Windows Server 2019"
+      type: server
+
+    - hostname: FILE-SRV-01
+      ip: 10.10.30.20
+      os: "Windows Server 2019"
+      type: server
+
+    - hostname: DC-01
+      ip: 10.10.30.1
+      os: "Windows Server 2019"
+      type: domain_controller
+
+    - hostname: MUSIC-SRV-01
+      ip: 10.10.30.50
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["FTP", "Music Streaming"]
+
+personas:
+  - name: executive
+    description: "Store management personnel with administrative access"
+    typical_activities:
+      - "Review sales reports and analytics"
+      - "Email communication with corporate and staff"
+      - "Access file server for store documents"
+    work_hours: "8am-5pm"
+    application_usage: ["Microsoft Office", "Chrome", "File Explorer"]
+    risk_profile: "medium"
+
+  - name: analyst
+    description: "Department managers monitoring inventory and operations"
+    typical_activities:
+      - "Monitor department inventory levels"
+      - "Generate department reports"
+      - "Coordinate with vendors via email"
+    work_hours: "9am-9pm"
+    application_usage: ["Inventory Management", "Chrome", "Excel"]
+    risk_profile: "medium"
+
+  - name: developer
+    description: "IT support managing store technology infrastructure"
+    typical_activities:
+      - "Remote desktop to servers for maintenance"
+      - "Monitor system health and logs"
+      - "Respond to support tickets"
+    work_hours: "8am-5pm"
+    application_usage: ["Remote Desktop", "PowerShell", "Event Viewer"]
+    risk_profile: "high"
+
+  - name: default
+    description: "Cashiers and inventory staff with basic access"
+    typical_activities:
+      - "POS transactions and customer checkout"
+      - "Inventory scanning and updates"
+      - "Basic system access for job functions"
+    work_hours: "9am-9pm"
+    application_usage: ["POS Software", "Inventory Scanner"]
+    risk_profile: "low"
+
+time_window:
+  start: "2024-01-15T05:00:00Z"  # 00:00 Eastern
+  duration: "24h"
+  # Store hours: 14:00-02:00 UTC (09:00-21:00 Eastern)
+
+baseline_activity:
+  description: "High-fidelity retail store operations with realistic activity patterns throughout 24-hour period. Store hours 9am-9pm Eastern. Peak shopping times at lunch and evening. Cashier shifts morning and evening. Managers 8am-5pm. Inventory staff morning receiving and evening restocking. Overnight minimal activity with music server streaming."
+  intensity: high
+  variation: high
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+  destination: "./output"
+  compression: false
+
+storyline:
+  - time: "2024-01-15T15:30:00Z"  # 10:30 AM Eastern - during business hours
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Exploit FTP server RCE vulnerability (CVE-2023-XXXXX) to gain initial access"
+    details:
+      technique: "T1190 - Exploit Public-Facing Application"
+      description: "Attacker exploits vulnerable FTP server to execute arbitrary commands"
+      source_ip: "203.0.113.45"
+      dst_port: 21
+
+  - time: "2024-01-15T15:32:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'whoami' to identify current user context"
+    details:
+      technique: "T1033 - System Owner/User Discovery"
+      command: "whoami"
+      description: "LOLBin reconnaissance - identify privileges"
+
+  - time: "2024-01-15T15:33:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'id' to enumerate user groups and privileges"
+    details:
+      technique: "T1033 - System Owner/User Discovery"
+      command: "id"
+      description: "LOLBin reconnaissance - enumerate group memberships"
+
+  - time: "2024-01-15T15:34:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'uname -a' to identify OS version and kernel"
+    details:
+      technique: "T1082 - System Information Discovery"
+      command: "uname -a"
+      description: "LOLBin reconnaissance - OS fingerprinting"
+
+  - time: "2024-01-15T15:35:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'cat /etc/passwd' to enumerate local user accounts"
+    details:
+      technique: "T1087.001 - Account Discovery: Local Account"
+      command: "cat /etc/passwd"
+      description: "LOLBin reconnaissance - enumerate users"
+
+  - time: "2024-01-15T15:36:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'cat /etc/group' to enumerate local groups"
+    details:
+      technique: "T1069.001 - Permission Groups Discovery: Local Groups"
+      command: "cat /etc/group"
+      description: "LOLBin reconnaissance - enumerate groups"
+
+  - time: "2024-01-15T15:37:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'ps aux' to list running processes"
+    details:
+      technique: "T1057 - Process Discovery"
+      command: "ps aux"
+      description: "LOLBin reconnaissance - identify running services"
+
+  - time: "2024-01-15T15:38:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'netstat -tulpn' to enumerate network connections and listening ports"
+    details:
+      technique: "T1049 - System Network Connections Discovery"
+      command: "netstat -tulpn"
+      description: "LOLBin reconnaissance - map network services"
+
+  - time: "2024-01-15T15:40:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'ip addr' to identify network interfaces and IP configuration"
+    details:
+      technique: "T1016 - System Network Configuration Discovery"
+      command: "ip addr"
+      description: "LOLBin reconnaissance - network configuration"
+
+  - time: "2024-01-15T15:42:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'ip route' to enumerate routing table"
+    details:
+      technique: "T1016 - System Network Configuration Discovery"
+      command: "ip route"
+      description: "LOLBin reconnaissance - routing information"
+
+  - time: "2024-01-15T15:44:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'cat /etc/resolv.conf' to identify DNS servers"
+    details:
+      technique: "T1016 - System Network Configuration Discovery"
+      command: "cat /etc/resolv.conf"
+      description: "LOLBin reconnaissance - DNS configuration"
+
+  - time: "2024-01-15T15:46:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'ls -la /home' to enumerate user home directories"
+    details:
+      technique: "T1083 - File and Directory Discovery"
+      command: "ls -la /home"
+      description: "LOLBin reconnaissance - identify user directories"
+
+  - time: "2024-01-15T15:48:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'find / -type f -name '*.conf' 2>/dev/null' to locate configuration files"
+    details:
+      technique: "T1083 - File and Directory Discovery"
+      command: "find / -type f -name '*.conf' 2>/dev/null"
+      description: "LOLBin reconnaissance - locate sensitive configs"
+
+  - time: "2024-01-15T15:50:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'df -h' to view filesystem usage and mounted volumes"
+    details:
+      technique: "T1082 - System Information Discovery"
+      command: "df -h"
+      description: "LOLBin reconnaissance - storage enumeration"
+
+  - time: "2024-01-15T15:52:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'cat /etc/hosts' to identify static host mappings"
+    details:
+      technique: "T1018 - Remote System Discovery"
+      command: "cat /etc/hosts"
+      description: "LOLBin reconnaissance - discover known hosts"
+
+  - time: "2024-01-15T15:54:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'arp -a' to view ARP cache for local network discovery"
+    details:
+      technique: "T1018 - Remote System Discovery"
+      command: "arp -a"
+      description: "LOLBin reconnaissance - local network mapping"
+
+  - time: "2024-01-15T15:56:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Initiate ping sweep of 10.10.30.0/24 subnet"
+    details:
+      technique: "T1018 - Remote System Discovery"
+      command: "for i in {1..254}; do ping -c 1 10.10.30.$i & done"
+      description: "Network mapping - identify active hosts in back-office subnet"
+
+  - time: "2024-01-15T16:00:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Initiate Nmap port scan of discovered hosts in 10.10.30.0/24"
+    details:
+      technique: "T1046 - Network Service Discovery"
+      command: "nmap -sT -p- 10.10.30.0/24"
+      description: "Port scanning to identify vulnerable services"
+      targets:
+        - "10.10.30.1 (DC-01)"
+        - "10.10.30.10 (BACKOFFICE-SRV-01)"
+        - "10.10.30.20 (FILE-SRV-01)"
+
+  - time: "2024-01-15T16:05:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Initiate Nmap service version detection scan on identified ports"
+    details:
+      technique: "T1046 - Network Service Discovery"
+      command: "nmap -sV 10.10.30.1,10.10.30.10,10.10.30.20"
+      description: "Service fingerprinting for vulnerability identification"
+
+  - time: "2024-01-15T16:10:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'cat /var/log/auth.log | tail -100' to review recent authentication logs"
+    details:
+      technique: "T1005 - Data from Local System"
+      command: "cat /var/log/auth.log | tail -100"
+      description: "Review authentication logs for credential information"
+
+  - time: "2024-01-15T16:12:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'history' to view bash command history"
+    details:
+      technique: "T1005 - Data from Local System"
+      command: "history"
+      description: "Search command history for credentials or sensitive information"
+
+  - time: "2024-01-15T16:14:00Z"
+    actor: attacker
+    system: MUSIC-SRV-01
+    activity: "Execute 'grep -r password /etc/ 2>/dev/null' to search for passwords in config files"
+    details:
+      technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+      command: "grep -r password /etc/ 2>/dev/null"
+      description: "Search for hardcoded credentials in configuration files"

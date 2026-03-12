@@ -1,0 +1,214 @@
+"""Cross-reference and logical validation for scenarios.
+
+This module provides validation beyond Pydantic's schema validation:
+- Cross-references between users, systems, personas, groups
+- Uniqueness constraints (usernames, hostnames, IPs)
+- Logical consistency checks
+"""
+
+from dataclasses import dataclass
+from typing import Optional
+
+from log_generator.models import Scenario
+
+
+@dataclass
+class ValidationIssue:
+    """Represents a validation issue found in a scenario.
+
+    Attributes:
+        severity: "error" (blocks generation) or "warning" (informational)
+        field_path: Dot-separated path to the problematic field
+        message: Human-readable description of the issue
+        suggestion: Optional actionable suggestion to fix the issue
+    """
+
+    severity: str  # "error" | "warning"
+    field_path: str
+    message: str
+    suggestion: Optional[str] = None
+
+
+class ScenarioValidator:
+    """Validates cross-references and logical consistency in scenarios."""
+
+    def __init__(self, scenario: Scenario):
+        """Initialize validator with a scenario.
+
+        Args:
+            scenario: The scenario to validate
+        """
+        self.scenario = scenario
+        self.issues: list[ValidationIssue] = []
+
+        # Build lookup sets for fast reference checking
+        self._build_lookups()
+
+    def _build_lookups(self) -> None:
+        """Build lookup dictionaries for users, systems, personas, groups."""
+        self.usernames = {user.username for user in self.scenario.environment.users}
+        self.hostnames = {
+            system.hostname for system in self.scenario.environment.systems
+        }
+        self.ips = {system.ip for system in self.scenario.environment.systems}
+        self.persona_names = {persona.name for persona in self.scenario.personas}
+        self.group_names = (
+            {group.name for group in self.scenario.environment.groups}
+            if self.scenario.environment.groups
+            else set()
+        )
+
+    def validate(self) -> list[ValidationIssue]:
+        """Run all validation checks and return issues found.
+
+        Returns:
+            List of validation issues (errors and warnings)
+        """
+        self._validate_user_persona_references()
+        self._validate_system_user_references()
+        self._validate_user_primary_system_references()
+        self._validate_group_member_references()
+        self._validate_storyline_references()
+        self._validate_uniqueness()
+        return self.issues
+
+    def has_errors(self) -> bool:
+        """Check if any error-level issues were found.
+
+        Returns:
+            True if any errors found, False otherwise
+        """
+        return any(issue.severity == "error" for issue in self.issues)
+
+    def _validate_user_persona_references(self) -> None:
+        """Check that user persona references exist in personas list."""
+        for idx, user in enumerate(self.scenario.environment.users):
+            if user.persona and user.persona not in self.persona_names:
+                available = (
+                    ", ".join(sorted(self.persona_names))
+                    if self.persona_names
+                    else "none defined"
+                )
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.users.{idx}.persona",
+                        message=f"User '{user.username}' references undefined persona '{user.persona}'",
+                        suggestion=f"Available personas: {available}",
+                    )
+                )
+
+    def _validate_system_user_references(self) -> None:
+        """Check that system assigned_user references exist in users list."""
+        for idx, system in enumerate(self.scenario.environment.systems):
+            if system.assigned_user and system.assigned_user not in self.usernames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.systems.{idx}.assigned_user",
+                        message=f"System '{system.hostname}' references undefined user '{system.assigned_user}'",
+                        suggestion=f"Available users: {', '.join(sorted(self.usernames))}",
+                    )
+                )
+
+    def _validate_user_primary_system_references(self) -> None:
+        """Check that user primary_system references exist in systems list."""
+        for idx, user in enumerate(self.scenario.environment.users):
+            if user.primary_system and user.primary_system not in self.hostnames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.users.{idx}.primary_system",
+                        message=f"User '{user.username}' references undefined system '{user.primary_system}'",
+                        suggestion=f"Available systems: {', '.join(sorted(self.hostnames))}",
+                    )
+                )
+
+    def _validate_group_member_references(self) -> None:
+        """Check that group members exist in users list."""
+        if not self.scenario.environment.groups:
+            return
+
+        for idx, group in enumerate(self.scenario.environment.groups):
+            for member_idx, member in enumerate(group.members):
+                if member not in self.usernames:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.groups.{idx}.members.{member_idx}",
+                            message=f"Group '{group.name}' references undefined member '{member}'",
+                            suggestion=f"Available users: {', '.join(sorted(self.usernames))}",
+                        )
+                    )
+
+    def _validate_storyline_references(self) -> None:
+        """Check that storyline actor/system references are valid."""
+        if not self.scenario.storyline:
+            return
+
+        for idx, event in enumerate(self.scenario.storyline):
+            # Validate actor (must be user or "attacker")
+            if event.actor not in self.usernames and event.actor != "attacker":
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.actor",
+                        message=f"Storyline event references undefined actor '{event.actor}'",
+                        suggestion=f"Available users: {', '.join(sorted(self.usernames))}, or use 'attacker'",
+                    )
+                )
+
+            # Validate system
+            if event.system not in self.hostnames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.system",
+                        message=f"Storyline event references undefined system '{event.system}'",
+                        suggestion=f"Available systems: {', '.join(sorted(self.hostnames))}",
+                    )
+                )
+
+    def _validate_uniqueness(self) -> None:
+        """Check for duplicate usernames, hostnames, and IPs."""
+        # Check duplicate usernames
+        seen_usernames = set()
+        for idx, user in enumerate(self.scenario.environment.users):
+            if user.username in seen_usernames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.users.{idx}.username",
+                        message=f"Duplicate username '{user.username}' found",
+                        suggestion="Usernames must be unique across all users",
+                    )
+                )
+            seen_usernames.add(user.username)
+
+        # Check duplicate hostnames
+        seen_hostnames = set()
+        for idx, system in enumerate(self.scenario.environment.systems):
+            if system.hostname in seen_hostnames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.systems.{idx}.hostname",
+                        message=f"Duplicate hostname '{system.hostname}' found",
+                        suggestion="Hostnames must be unique across all systems",
+                    )
+                )
+            seen_hostnames.add(system.hostname)
+
+        # Check duplicate IPs
+        seen_ips = set()
+        for idx, system in enumerate(self.scenario.environment.systems):
+            if system.ip in seen_ips:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.systems.{idx}.ip",
+                        message=f"Duplicate IP address '{system.ip}' found",
+                        suggestion="IP addresses must be unique across all systems",
+                    )
+                )
+            seen_ips.add(system.ip)

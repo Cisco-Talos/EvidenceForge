@@ -114,17 +114,24 @@
 
 ### 1.9 Validation (Schema Only for Phase 1)
 
-- [ ] `validation/schema.py` - Pydantic-based schema validation
-- [ ] Clear error messages with field paths
-- [ ] Test: Invalid YAML detection
-- [ ] Test: Missing required fields
-- [ ] Test: Type violations
+- [x] `validation/schema.py` - Pydantic-based schema validation
+- [x] Clear error messages with field paths
+- [x] Test: Invalid YAML detection
+- [x] Test: Missing required fields
+- [x] Test: Type violations
+- [x] Cross-reference validation (personas, systems, users)
+- [x] Uniqueness validation (usernames, hostnames, IPs)
+- [x] CLI integration with Rich formatting
+- [x] 14 test cases with 100% coverage
 
 ### 1.10 Phase 1 Testing & Documentation
 
-- [ ] Unit tests for all core modules (target: 90%+ coverage for Phase 1 code)
-- [ ] Integration test: Complete flow with minimal scenario
-- [ ] Create test fixture: `fixtures/scenarios/minimal.yaml` (1 user, 1 system, 1 hour)
+- [ ] Unit tests for CLI module (target: 90%+ coverage) - IN PROGRESS
+- [ ] Unit tests for engine module (target: 90%+ coverage)
+- [ ] Unit tests for activity module (target: 90%+ coverage)
+- [ ] Unit tests for ground_truth module (target: 90%+ coverage)
+- [ ] Integration tests: Complete flow with all scenarios
+- [x] Test fixture exists: `fixtures/scenarios/minimal.yaml`
 - [ ] Create test fixture: `fixtures/scenarios/small-realistic.yaml` (20 users, 10 systems, 8 hours)
 - [ ] Manual testing: Generate logs and verify format compliance
 - [ ] Update README with Phase 1 status and basic usage

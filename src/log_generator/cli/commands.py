@@ -43,13 +43,20 @@ EXIT_GENERATION_ERROR = 21
 EXIT_SIGINT = 130
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, debug: bool = False) -> None:
     """Configure logging with Rich handler.
 
     Args:
-        verbose: Enable debug logging if True
+        verbose: Enable INFO level logging if True
+        debug: Enable DEBUG level logging if True (takes precedence over verbose)
     """
-    level = logging.DEBUG if verbose else logging.INFO
+    if debug:
+        level = logging.DEBUG
+    elif verbose:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+
     logging.basicConfig(
         level=level,
         format="%(message)s",
@@ -140,7 +147,13 @@ def generate(
         False,
         "--verbose",
         "-v",
-        help="Enable verbose logging"
+        help="Enable verbose (INFO level) logging"
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        "-d",
+        help="Enable debug (DEBUG level) logging"
     ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
@@ -155,7 +168,7 @@ def generate(
     - 21: Generation error
     - 130: Interrupted (Ctrl+C)
     """
-    setup_logging(verbose)
+    setup_logging(verbose, debug)
     logger = logging.getLogger(__name__)
 
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
@@ -172,6 +185,35 @@ def generate(
         console.print(f"  Systems: {len(scenario.environment.systems)}")
         if scenario.storyline:
             console.print(f"  Storyline events: {len(scenario.storyline)}")
+
+        # Cross-reference validation (Phase 1.9)
+        from log_generator.validation import ScenarioValidator
+
+        console.print("\n[bold]Validating cross-references...[/bold]")
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        if issues:
+            console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
+            for issue in issues:
+                color = "red" if issue.severity == "error" else "yellow"
+                icon = "✗" if issue.severity == "error" else "!"
+                console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
+                console.print(f"    {issue.message}", style=color)
+                if issue.suggestion:
+                    console.print(f"    💡 {issue.suggestion}", style="dim")
+
+            if validator.has_errors():
+                console.print("\n[bold red]Validation failed with errors. Cannot proceed with generation.[/bold red]")
+                raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+            else:
+                console.print("\n[yellow]Warnings found but proceeding with generation...[/yellow]")
+        else:
+            console.print("[green]✓[/green] All cross-references valid")
+
+    except typer.Exit:
+        # Re-raise typer.Exit to preserve exit codes
+        raise
 
     except FileNotFoundError:
         console.print(
@@ -196,7 +238,7 @@ def generate(
             f"[bold red]Error:[/bold red] Failed to load scenario: {e}",
             style="red"
         )
-        if verbose:
+        if verbose or debug:
             console.print_exception()
         raise typer.Exit(EXIT_INPUT_ERROR)
 
@@ -306,7 +348,7 @@ def generate(
             f"\n[bold red]Error:[/bold red] Generation failed: {e}",
             style="red"
         )
-        if verbose:
+        if verbose or debug:
             console.print_exception()
         logger.exception("Generation failed")
         raise typer.Exit(EXIT_GENERATION_ERROR)
