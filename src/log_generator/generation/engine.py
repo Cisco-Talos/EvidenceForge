@@ -191,11 +191,19 @@ class GenerationEngine:
             self.emitters[format_name] = emitter
             logger.info(f"Initialized {format_name} emitter (threaded) -> {output_file}")
 
+        # Initialize network visibility engine (Phase 2.5)
+        from log_generator.generation.network_visibility import NetworkVisibilityEngine
+        visibility_engine = NetworkVisibilityEngine(
+            network_config=self.scenario.environment.network,
+            systems=self.scenario.environment.systems,
+        )
+
         # Initialize activity generator
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
             emitters=self.emitters,
-            event_record_counter=self.event_record_counter
+            event_record_counter=self.event_record_counter,
+            network_visibility=visibility_engine,
         )
         logger.info("Initialized activity generator")
 

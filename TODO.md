@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 2 - Scalability (In Progress - 2.5-2.9 remaining)
+**Status:** Phase 2 - Scalability (In Progress - 2.6-2.9 remaining)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-12 (Phase 2.4 complete)
+**Last Updated:** 2026-03-12 (Phase 2.5 complete)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -11,6 +11,7 @@
 - ✅ Phase 2.3: Progress Reporting
 - ✅ Phase 2.10: OS-Aware Activity Generation (Windows + Linux support)
 - ✅ Phase 2.4: Enhanced Scenario Schema (work hours parsing, model expansion, timezone tests, validation, docs)
+- ✅ Phase 2.5: Network Visibility Architecture (sensor placement, TAP vs SPAN, direction filtering)
 
 ---
 
@@ -260,25 +261,29 @@
   - [x] Verify work_hours_parsed auto-population works
   - [x] All 105 Phase 2.4 tests pass
 
-### 2.5 Network Visibility Architecture
+### 2.5 Network Visibility Architecture ✅ COMPLETE
 
-- [ ] Model network topology and sensor placement in scenario schema
-  - [ ] Define network segments (CIDR ranges) in environment
-  - [ ] Specify sensor placement (which segments are monitored)
-  - [ ] Define sensor capabilities (direction: inbound/outbound/bidirectional)
-- [ ] Implement traffic visibility calculation
-  - [ ] Determine if connection would traverse monitored network points
-  - [ ] Validate connections based on network topology
-  - [ ] Skip connections that wouldn't be visible to configured sensors
-- [ ] Update `generation/activity.py` connection logic
-  - [ ] Check if connection would be observable by network sensors
-  - [ ] Consider source/destination network segments
-  - [ ] Apply sensor placement rules
-- [ ] Test: Intra-segment traffic not visible unless sensor on segment
-- [ ] Test: Cross-segment traffic visible if sensor monitors either segment
-- [ ] Test: External traffic visible if sensor monitors perimeter
-
-**Note:** Phase 1 implemented basic IP validation (no localhost, no same src/dst, no link-local/multicast). This phase adds full network topology modeling for realistic sensor placement.
+- [x] Model network topology and sensor placement in scenario schema
+  - [x] `NetworkSegment` model: name, CIDR, description, systems list
+  - [x] `NetworkSensor` model: type, name, monitoring_segments, direction, placement (span|tap), log_formats
+  - [x] `NetworkConfig` model: segments + sensors, added as optional field on `Environment`
+- [x] Implement `NetworkVisibilityEngine` in `generation/network_visibility.py`
+  - [x] IP-to-segment mapping (explicit systems list or CIDR auto-inference)
+  - [x] Direction filtering: inbound, outbound, bidirectional
+  - [x] Placement filtering: SPAN (sees intra-segment) vs TAP (cross-segment only)
+  - [x] Format-aware emission: union of log_formats from all observing sensors
+  - [x] Backward compatible: no network config = all connections visible
+- [x] Integrate into `generation/activity.py` connection logic
+  - [x] Visibility check before connection emission
+  - [x] Format-aware emitter selection (replaces hardcoded Zeek emission)
+- [x] Wire up in `generation/engine.py`
+- [x] Cross-reference validation in `validation/schema.py`
+  - [x] Segment systems reference existing hostnames
+  - [x] Sensor segments reference existing segments
+  - [x] System IP vs segment CIDR mismatch warnings
+- [x] 25 unit tests in `tests/unit/test_network_visibility.py`
+- [x] 5 validation tests in `tests/unit/test_validation.py`
+- [x] Updated `retail-store-ftp-attack.yaml` with network topology (3 segments, 2 sensors)
 
 ### 2.6 Persona-Based Activity Generation
 
@@ -352,8 +357,8 @@
 **Architecture Note:** Native logs (Windows Event Security, syslog) are ALWAYS present per OS type. eCAR is OPTIONAL and may be present on all, some, or no systems (EDR/XDR is not universally deployed).
 
 **Phase 2 Status:**
-- ✅ Complete: 2.1 (Parallel Generation), 2.2 (7 Log Formats), 2.3 (Progress Reporting), 2.4 (Enhanced Schema), 2.10 (OS-Aware Generation)
-- 🚧 Pending: 2.5-2.9 (Network Visibility, Persona Generation, LLM Integration, Medium Datasets, Phase 2 Testing)
+- ✅ Complete: 2.1 (Parallel Generation), 2.2 (7 Log Formats), 2.3 (Progress Reporting), 2.4 (Enhanced Schema), 2.5 (Network Visibility), 2.10 (OS-Aware Generation)
+- 🚧 Pending: 2.6-2.9 (Persona Generation, LLM Integration, Medium Datasets, Phase 2 Testing)
 
 **Phase 2 Milestone (Partial):** Can generate datasets across 7 formats (Windows Event Security, Zeek, eCAR, syslog, bash_history, snort_alert, web_access) in parallel with threaded emitters. Windows and Linux systems generate appropriate OS-specific logs. Native logs (Windows Event/syslog) always present; eCAR optional EDR/XDR layer.
 
@@ -536,6 +541,7 @@
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Additional network diagram formats (Graphviz/DOT, draw.io exports, network discovery tool outputs)
+- [ ] Network diagram ingestion: auto-infer sensor placement (span vs tap) from diagram topology
 - [ ] Performance optimizations (Rust extensions, better parallelization)
 
 ### Medium-term

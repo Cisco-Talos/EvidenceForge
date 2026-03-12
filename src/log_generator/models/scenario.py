@@ -314,11 +314,98 @@ class Timezone(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class NetworkSegment(BaseModel):
+    """Network segment definition.
+
+    Attributes:
+        name: Segment identifier (e.g., "workstations", "servers", "dmz")
+        cidr: CIDR notation (e.g., "10.10.10.0/24")
+        description: Human-readable description
+        systems: Optional list of hostnames in this segment
+                 (if omitted, inferred from system IPs matching CIDR)
+    """
+
+    name: str
+    cidr: str
+    description: str = ""
+    systems: list[str] = Field(default_factory=list)
+
+    @field_validator("cidr")
+    @classmethod
+    def validate_cidr(cls, v: str) -> str:
+        """Validate CIDR notation."""
+        try:
+            ipaddress.ip_network(v, strict=False)
+        except ValueError as e:
+            raise ValueError(f"Invalid CIDR notation: {v}") from e
+        return v
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NetworkSensor(BaseModel):
+    """Network sensor definition.
+
+    Attributes:
+        type: Sensor type (network|ids|firewall)
+        name: Sensor identifier
+        monitoring_segments: List of segment names this sensor monitors
+        direction: Traffic direction visible (inbound|outbound|bidirectional)
+        placement: How the sensor is connected (span|tap).
+                   span: sees all traffic including intra-segment (e.g., SPAN port on switch)
+                   tap: only sees traffic crossing segment boundaries (e.g., inline TAP on uplink)
+        log_formats: Which log formats this sensor generates
+        description: Optional description
+    """
+
+    type: str = Field(..., pattern="^(network|ids|firewall)$")
+    name: str
+    monitoring_segments: list[str]
+    direction: str = Field(
+        default="bidirectional", pattern="^(inbound|outbound|bidirectional)$"
+    )
+    placement: str = Field(default="span", pattern="^(span|tap)$")
+    log_formats: list[str] = Field(default_factory=lambda: ["zeek_conn"])
+    description: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NetworkConfig(BaseModel):
+    """Network topology configuration.
+
+    Attributes:
+        segments: List of network segments
+        sensors: List of network sensors
+    """
+
+    segments: list[NetworkSegment]
+    sensors: list[NetworkSensor]
+
+    @field_validator("segments")
+    @classmethod
+    def validate_segments_not_empty(cls, v: list[NetworkSegment]) -> list[NetworkSegment]:
+        """Ensure at least one segment is defined."""
+        if not v:
+            raise ValueError("Network config must have at least one segment")
+        return v
+
+    @field_validator("sensors")
+    @classmethod
+    def validate_sensors_not_empty(cls, v: list[NetworkSensor]) -> list[NetworkSensor]:
+        """Ensure at least one sensor is defined."""
+        if not v:
+            raise ValueError("Network config must have at least one sensor")
+        return v
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class Environment(BaseModel):
-    """Environment definition (simplified for Phase 1).
+    """Environment definition.
 
     Describes the computing environment including users, systems, groups,
-    and timezone configuration.
+    timezone configuration, and optional network topology.
 
     Attributes:
         description: Natural language environment description
@@ -326,6 +413,7 @@ class Environment(BaseModel):
         users: List of users (at least one required)
         systems: List of systems (at least one required)
         groups: Optional list of groups
+        network: Optional network topology and sensor configuration
     """
 
     description: str
@@ -333,6 +421,9 @@ class Environment(BaseModel):
     users: list[User]
     systems: list[System]
     groups: list[Group] | None = Field(default_factory=list)
+    network: NetworkConfig | None = Field(
+        None, description="Optional network topology and sensor config"
+    )
 
     @field_validator("users")
     @classmethod

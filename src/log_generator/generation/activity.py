@@ -204,7 +204,8 @@ class ActivityGenerator:
         self,
         state_manager: StateManager,
         emitters: dict[str, WindowsEventEmitter | ZeekEmitter],
-        event_record_counter: int = 10000
+        event_record_counter: int = 10000,
+        network_visibility=None,
     ):
         """Initialize activity generator.
 
@@ -212,11 +213,18 @@ class ActivityGenerator:
             state_manager: StateManager instance
             emitters: Dict of emitters by format name
             event_record_counter: Starting EventRecordID
+            network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
         """
         self.state_manager = state_manager
         self.emitters = emitters
         self.event_record_counter = event_record_counter
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
+
+        # Network visibility (Phase 2.5): default to all-visible if not provided
+        if network_visibility is None:
+            from log_generator.generation.network_visibility import NetworkVisibilityEngine
+            network_visibility = NetworkVisibilityEngine(None, [])
+        self.network_visibility = network_visibility
 
     def generate_logon(
         self,
@@ -456,6 +464,14 @@ class ActivityGenerator:
             )
             return ""  # Return empty UID to indicate skipped connection
 
+        # Phase 2.5: Check network topology visibility
+        if not self.network_visibility.is_connection_visible(src_ip, dst_ip):
+            logger.debug(
+                f"Skipping connection {src_ip} -> {dst_ip}: "
+                f"not observable by any configured sensor"
+            )
+            return ""
+
         src_port = _get_rng().randint(49152, 65535)  # Ephemeral port
 
         # Create connection in StateManager
@@ -508,8 +524,12 @@ class ActivityGenerator:
             'ip_proto': 6 if proto == 'tcp' else 17 if proto == 'udp' else 1,  # TCP=6, UDP=17, ICMP=1
         }
 
-        self.emitters['zeek_conn'].emit_event(event_data)
-        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
+        # Phase 2.5: Emit to sensor-appropriate formats
+        visible_formats = self.network_visibility.get_log_formats_for_connection(src_ip, dst_ip)
+        for format_name in visible_formats:
+            if format_name in self.emitters:
+                self.emitters[format_name].emit_event(event_data)
+        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid}, formats: {visible_formats})")
 
         return uid
 

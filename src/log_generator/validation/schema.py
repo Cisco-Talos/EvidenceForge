@@ -6,6 +6,7 @@ This module provides validation beyond Pydantic's schema validation:
 - Logical consistency checks
 """
 
+import ipaddress
 from dataclasses import dataclass
 from typing import Optional
 
@@ -57,6 +58,11 @@ class ScenarioValidator:
             if self.scenario.environment.groups
             else set()
         )
+        self.segment_names = (
+            {seg.name for seg in self.scenario.environment.network.segments}
+            if self.scenario.environment.network
+            else set()
+        )
 
     def validate(self) -> list[ValidationIssue]:
         """Run all validation checks and return issues found.
@@ -72,6 +78,8 @@ class ScenarioValidator:
         self._validate_uniqueness()
         self._validate_expanded_activities()
         self._validate_event_sequences()
+        self._validate_network_segments()
+        self._validate_network_sensors()
         return self.issues
 
     def has_errors(self) -> bool:
@@ -261,3 +269,70 @@ class ScenarioValidator:
                             suggestion="Each sub-event must have a 'sub_event_type' field",
                         )
                     )
+
+    def _validate_network_segments(self) -> None:
+        """Validate network segment cross-references."""
+        if not self.scenario.environment.network:
+            return
+
+        for idx, segment in enumerate(self.scenario.environment.network.segments):
+            network = ipaddress.ip_network(segment.cidr, strict=False)
+
+            for sys_idx, hostname in enumerate(segment.systems):
+                if hostname not in self.hostnames:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.network.segments.{idx}.systems.{sys_idx}",
+                            message=f"Segment '{segment.name}' references undefined system '{hostname}'",
+                            suggestion=f"Available systems: {', '.join(sorted(self.hostnames))}",
+                        )
+                    )
+                else:
+                    system_ip = self._get_system_ip(hostname)
+                    if system_ip and ipaddress.ip_address(system_ip) not in network:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"environment.network.segments.{idx}.systems.{sys_idx}",
+                                message=f"System '{hostname}' (IP: {system_ip}) not in segment CIDR {segment.cidr}",
+                                suggestion="Check IP assignment or segment CIDR",
+                            )
+                        )
+
+    def _validate_network_sensors(self) -> None:
+        """Validate network sensor cross-references."""
+        if not self.scenario.environment.network:
+            return
+
+        known_formats = {"zeek_conn", "snort_alert", "web_access"}
+
+        for idx, sensor in enumerate(self.scenario.environment.network.sensors):
+            for seg_idx, seg_name in enumerate(sensor.monitoring_segments):
+                if seg_name not in self.segment_names:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.network.sensors.{idx}.monitoring_segments.{seg_idx}",
+                            message=f"Sensor '{sensor.name}' references undefined segment '{seg_name}'",
+                            suggestion=f"Available segments: {', '.join(sorted(self.segment_names))}",
+                        )
+                    )
+
+            for fmt_idx, fmt in enumerate(sensor.log_formats):
+                if fmt not in known_formats:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=f"environment.network.sensors.{idx}.log_formats.{fmt_idx}",
+                            message=f"Sensor '{sensor.name}' uses unknown log format '{fmt}'",
+                            suggestion=f"Known network formats: {', '.join(sorted(known_formats))}",
+                        )
+                    )
+
+    def _get_system_ip(self, hostname: str) -> str | None:
+        """Get IP address for a system by hostname."""
+        for system in self.scenario.environment.systems:
+            if system.hostname == hostname:
+                return system.ip
+        return None

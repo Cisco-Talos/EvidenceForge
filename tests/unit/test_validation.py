@@ -8,6 +8,9 @@ from log_generator.models import (
     BaselineActivity,
     Environment,
     Group,
+    NetworkConfig,
+    NetworkSegment,
+    NetworkSensor,
     OutputSpec,
     Persona,
     Scenario,
@@ -993,6 +996,123 @@ class TestScenarioValidator:
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
         )
 
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        assert len(issues) == 0
+
+
+class TestNetworkValidation:
+    """Tests for network topology validation."""
+
+    def _make_scenario_with_network(self, network_config):
+        """Helper to create a scenario with network config."""
+        return Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com")
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.10.10.1", os="Windows 10", type="workstation"),
+                    System(hostname="SRV-01", ip="10.10.30.1", os="Windows Server 2019", type="server"),
+                ],
+                network=network_config,
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+    def test_valid_network_config(self):
+        """Valid network config should produce no issues."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(name="workstations", cidr="10.10.10.0/24", systems=["WS-01"]),
+                    NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01"]),
+                ],
+                sensors=[
+                    NetworkSensor(type="network", name="tap",
+                                  monitoring_segments=["workstations", "servers"],
+                                  log_formats=["zeek_conn"]),
+                ],
+            )
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        assert len(issues) == 0
+
+    def test_segment_references_undefined_system(self):
+        """Segment referencing undefined system should error."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(name="workstations", cidr="10.10.10.0/24",
+                                   systems=["WS-01", "NONEXISTENT"]),
+                ],
+                sensors=[
+                    NetworkSensor(type="network", name="tap",
+                                  monitoring_segments=["workstations"]),
+                ],
+            )
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        errors = [i for i in issues if i.severity == "error"]
+        assert len(errors) == 1
+        assert "NONEXISTENT" in errors[0].message
+        assert "segments" in errors[0].field_path
+
+    def test_sensor_references_undefined_segment(self):
+        """Sensor referencing undefined segment should error."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(name="workstations", cidr="10.10.10.0/24"),
+                ],
+                sensors=[
+                    NetworkSensor(type="network", name="tap",
+                                  monitoring_segments=["workstations", "nonexistent"]),
+                ],
+            )
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        errors = [i for i in issues if i.severity == "error"]
+        assert len(errors) == 1
+        assert "nonexistent" in errors[0].message
+        assert "sensors" in errors[0].field_path
+
+    def test_system_ip_outside_cidr_warning(self):
+        """System IP not matching segment CIDR should produce warning."""
+        scenario = self._make_scenario_with_network(
+            NetworkConfig(
+                segments=[
+                    NetworkSegment(name="wrong_subnet", cidr="192.168.1.0/24",
+                                   systems=["WS-01"]),
+                ],
+                sensors=[
+                    NetworkSensor(type="network", name="tap",
+                                  monitoring_segments=["wrong_subnet"]),
+                ],
+            )
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if i.severity == "warning"]
+        assert len(warnings) == 1
+        assert "10.10.10.1" in warnings[0].message
+        assert "192.168.1.0/24" in warnings[0].message
+
+    def test_no_network_config_no_issues(self):
+        """Scenario without network config should produce no network-related issues."""
+        scenario = self._make_scenario_with_network(None)
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
         assert len(issues) == 0

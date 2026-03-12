@@ -234,6 +234,36 @@ environment:
       type: server
       services: ["FTP", "Music Streaming"]
 
+  network:
+    segments:
+      - name: pos_network
+        cidr: "10.10.10.0/24"
+        description: "POS terminal network"
+        systems: [POS-01, POS-02, POS-03, POS-04, POS-05]
+      - name: office_network
+        cidr: "10.10.20.0/24"
+        description: "Office workstation network"
+        systems: [OFFICE-WS-01, OFFICE-WS-02, OFFICE-WS-03, OFFICE-WS-04, OFFICE-WS-05]
+      - name: server_network
+        cidr: "10.10.30.0/24"
+        description: "Back-office server network"
+        systems: [BACKOFFICE-SRV-01, FILE-SRV-01, DC-01, MUSIC-SRV-01]
+    sensors:
+      - type: network
+        name: core-switch-tap
+        monitoring_segments: [pos_network, office_network, server_network]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek_conn]
+        description: "Core switch SPAN port - sees all traffic including intra-segment"
+      - type: ids
+        name: perimeter-ids
+        monitoring_segments: [server_network]
+        direction: inbound
+        placement: tap
+        log_formats: [snort_alert]
+        description: "Perimeter IDS on inline TAP monitoring inbound traffic to servers"
+
 personas:
   - name: executive
     description: "Store management personnel with administrative access"
