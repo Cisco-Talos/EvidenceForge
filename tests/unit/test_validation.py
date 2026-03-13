@@ -255,7 +255,7 @@ class TestScenarioValidator:
         assert "testuser" in issues[0].suggestion
 
     def test_invalid_storyline_actor(self):
-        """Storyline actor not in users and not 'attacker' should error."""
+        """Storyline actor not in users list should error."""
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -311,10 +311,9 @@ class TestScenarioValidator:
         assert issues[0].field_path == "storyline.0.actor"
         assert "nonexistent_actor" in issues[0].message
         assert "testuser" in issues[0].suggestion
-        assert "attacker" in issues[0].suggestion
 
-    def test_valid_attacker_actor(self):
-        """Storyline actor 'attacker' should be valid."""
+    def test_actor_must_be_in_users_list(self):
+        """Storyline actor must be a defined user, even if named 'attacker'."""
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -349,7 +348,7 @@ class TestScenarioValidator:
             storyline=[
                 StorylineEvent(
                     time="2024-01-15T10:30:00Z",
-                    actor="attacker",  # Valid special actor
+                    actor="attacker",  # Not in users list — should fail
                     system="TEST-01",
                     activity="malicious activity",
                     details={}
@@ -365,9 +364,10 @@ class TestScenarioValidator:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        # Should only have 0 issues (attacker is valid)
-        assert len(issues) == 0
-        assert not validator.has_errors()
+        # "attacker" is not in the users list, so it should be flagged
+        assert len(issues) == 1
+        assert issues[0].severity == "error"
+        assert "attacker" in issues[0].message
 
     def test_invalid_storyline_system(self):
         """Storyline system not in systems list should error."""
@@ -405,7 +405,7 @@ class TestScenarioValidator:
             storyline=[
                 StorylineEvent(
                     time="2024-01-15T10:30:00Z",
-                    actor="attacker",
+                    actor="testuser",
                     system="NONEXISTENT-01",  # Invalid
                     activity="malicious activity",
                     details={}
@@ -904,7 +904,7 @@ class TestScenarioValidator:
             storyline=[
                 StorylineEvent(
                     time="2024-01-15T10:30:00Z",
-                    actor="attacker",
+                    actor="testuser",
                     system="TEST-01",
                     activity="multi-step attack",
                     event_sequence=[
@@ -940,7 +940,7 @@ class TestScenarioValidator:
             storyline=[
                 StorylineEvent(
                     time="2024-01-15T10:30:00Z",
-                    actor="attacker",
+                    actor="testuser",
                     system="TEST-01",
                     activity="multi-step attack",
                     event_sequence=[
@@ -987,7 +987,7 @@ class TestScenarioValidator:
             storyline=[
                 StorylineEvent(
                     time="2024-01-15T10:30:00Z",
-                    actor="attacker",
+                    actor="testuser",
                     system="TEST-01",
                     activity="simple attack",
                     # event_sequence=None (default)

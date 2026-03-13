@@ -245,7 +245,7 @@ class StorylineEvent(BaseModel):
 
     Attributes:
         time: Event time (ISO 8601, relative offset like "+2h30m", or seconds "+7200")
-        actor: Username or "attacker" for external actor
+        actor: Username of the account performing the action (compromised account or system account)
         system: Target system hostname
         activity: Natural language activity description
         details: Optional activity-specific details (flexible dict)

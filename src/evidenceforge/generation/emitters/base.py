@@ -112,9 +112,10 @@ class LogEmitter(ABC):
                 # Try to get event from queue with timeout
                 event_data = self._event_queue.get(timeout=0.1)
 
-                # Render and buffer the event
+                # Render and buffer the event (None means skip)
                 rendered = self._render_event(event_data)
-                self._buffer_event(rendered)
+                if rendered is not None:
+                    self._buffer_event(rendered)
 
                 # Mark task as done
                 self._event_queue.task_done()

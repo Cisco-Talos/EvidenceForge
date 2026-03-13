@@ -29,6 +29,8 @@ Your job is to understand what the user wants, ask smart questions to fill gaps,
 
 Use a hybrid approach: let the user describe their idea first, then ask targeted follow-up questions to fill gaps. Don't present a checklist — have a conversation.
 
+**Ask exactly ONE question per message.** Never bundle multiple questions in a single turn — it's overwhelming and users tend to only answer the first one. Use the `AskUserQuestion` tool if it's available to you; fall back to a conversational question if not. Either way, one question at a time. After the user answers, acknowledge briefly (one sentence max) and move to the next topic.
+
 If the user gives a rich description up front, extract as much as you can from it before asking questions. If they're vague ("I need some attack data"), guide them through the key decisions.
 
 ### Key Topics to Cover
@@ -82,7 +84,33 @@ The username format should follow a consistent convention for the organization (
 
 **Service/system accounts** are the exception — names like `svc_backup`, `sql_agent`, or `ftp_service` are fine when needed for the story or environment realism. Only add these when they're needed.
 
-**External threat actors** should use the username `attacker` (or `attacker1`, `attacker2` for multiple). These are excluded from the ENVIRONMENT.md document given to students.
+### Modeling Threat Actors
+
+**External attackers do NOT have their own accounts in the victim organization.** Never create a user called `attacker`, `hacker`, `threat_actor`, or anything obviously malicious. Real attackers operate by:
+
+- **Compromising legitimate accounts** — The attacker gains credentials for an existing user (via phishing, credential stuffing, password spraying, etc.) and uses that account. The storyline `actor` field is the compromised user's username. This is the most common case.
+- **Operating at the system level** — Some attacks don't involve user accounts at all (e.g., exploiting a vulnerable service). The actor can be a system account like `SYSTEM`, `NT AUTHORITY\SYSTEM`, `root`, or the service account running the exploited application.
+- **Creating new accounts (rare)** — If the attacker creates accounts for persistence, those accounts must have blending-in names like `svc_sqlbackup`, `admin.temp`, or `backup.service` — never `attacker1` or `evil_admin`.
+
+**Insider threats** use their own legitimate account — they're already in the users list with a normal name.
+
+### Realistic Naming for Attacker Infrastructure and Tools
+
+Everything the attacker controls should look plausible at first glance. The whole point of threat hunting training is that the data looks realistic — obvious names are a dead giveaway that defeats the exercise.
+
+**C2 servers and malicious domains:**
+- Good: `cdn-assets-update.com`, `analytics-service.net`, `img-hosting-cdn.com`, `graph-api-auth.com`
+- Bad: `evil-c2.com`, `malware-server.net`, `attacker-infra.io`, `hack.evil.com`
+
+**Malicious files and processes:**
+- Good: `svchost_helper.exe`, `update-agent.bin`, `chromium_updater.sh`, `ms-index-service.exe`
+- Bad: `my_password_dumper.exe`, `evil_payload.ps1`, `hack_tool.bat`, `malware.exe`
+
+**Attacker email addresses** (for phishing "From:" lines, etc.):
+- Good: `support@accounts-verify.com`, `noreply@hr-benefits-portal.net`, `j.martinez@consulting-group.com`
+- Bad: `attacker@external`, `hacker@evil.com`, `phishing@malicious.net`
+
+**Exception — real tool names:** When the scenario uses a well-known attack tool, use its real name. `mimikatz.exe` is mimikatz. `PsExec.exe` is PsExec. `nmap`, `Rubeus.exe`, `SharpHound.exe`, `Cobalt Strike` — all fine. The rule is: don't *invent* names that scream "malicious", but don't rename real tools either.
 
 ## Scenario YAML Schema
 
@@ -158,7 +186,7 @@ baseline_activity:
 
 storyline:                        # The attack events to bury in the data
   - time: "+2h"                   # Relative offset from start, or absolute ISO 8601
-    actor: attacker               # Username or "attacker"
+    actor: marcus.chen            # Username of compromised account (or system account)
     system: WS-DEV-01             # Must reference existing hostname
     activity: "Description of what happens"
     details:                      # Flexible dict — activity-specific fields
@@ -191,7 +219,7 @@ The scenario is validated before generation. Common issues to avoid:
 - Every `user.persona` must match a persona name (from inline personas or pre-built library)
 - Every `user.primary_system` must match a system hostname
 - Every `system.assigned_user` must match a username
-- Every storyline `actor` must be a username or "attacker"
+- Every storyline `actor` must be a username defined in the users list (or a system account like `SYSTEM`/`root`)
 - Every storyline `system` must match a system hostname
 - Usernames, hostnames, and IPs must all be unique
 - Network segment `systems` must reference existing hostnames
@@ -332,7 +360,8 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 - Include ALL users who appear in the storyline (their accounts show up in the attack data, so students need to be able to look them up)
 - Add 5–15 additional users from the background population, mixed in with the storyline users
 - For very large scenarios (50+ users), include a representative subset — not all of them
-- **Exclude all external threat actors** (username "attacker", "attacker1", etc.) — these should never appear in the document
+- **Exclude any accounts the attacker created** during the attack (e.g., persistence accounts like `svc_sqlbackup`) — these wouldn't exist in the org's directory beforehand
+- **Include every legitimate user whose account gets compromised** — students will see activity under that username and need to look them up
 - Use natural role names, not raw persona codes. Persona "hr" becomes "Human Resources", "sysadmin" becomes "System Administrator", "developer" becomes "Software Engineer", etc.
 
 **Timezone:**
@@ -354,9 +383,17 @@ After the interview, generate both files:
 
 1. **Scenario YAML** — Write to the user's chosen path (default: `scenarios/<scenario-name>.yaml`)
 2. **ENVIRONMENT.md** — Write alongside the scenario YAML
-3. **Validate** — Run `uv run eforge validate <scenario-file>` to check schema and cross-references
-4. If validation fails, fix the issues and re-validate
-5. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
+3. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
+   - **Attack realism**: Does the attack chain make sense? Would a real attacker do this in this order? Are there missing steps (e.g., no reconnaissance before lateral movement, no persistence after initial access)?
+   - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
+   - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
+   - **Environmental consistency**: Do the users, systems, and network make sense together? Would this org realistically have this infrastructure?
+   - **Timing realism**: Are attack events spaced realistically? (Not crammed into 30 seconds, not dragged over days with no activity)
+   - **Detection opportunity**: Is there enough signal for a hunter to find the attack while still requiring genuine effort?
+   If you find issues, fix them. Tell the user what you changed and why.
+4. **Validate** — Run `uv run eforge validate <scenario-file>` to check schema and cross-references
+5. If validation fails, fix the issues and re-validate
+6. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
 
 If the user wants to immediately generate logs, suggest using `/eforge generate` or running `uv run eforge generate <scenario-file>`.
 

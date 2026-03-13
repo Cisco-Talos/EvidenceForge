@@ -157,14 +157,14 @@ class ScenarioValidator:
             return
 
         for idx, event in enumerate(self.scenario.storyline):
-            # Validate actor (must be user or "attacker")
-            if event.actor not in self.usernames and event.actor != "attacker":
+            # Validate actor (must be a defined username)
+            if event.actor not in self.usernames:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"storyline.{idx}.actor",
                         message=f"Storyline event references undefined actor '{event.actor}'",
-                        suggestion=f"Available users: {', '.join(sorted(self.usernames))}, or use 'attacker'",
+                        suggestion=f"Available users: {', '.join(sorted(self.usernames))}",
                     )
                 )
 
