@@ -1,0 +1,15 @@
+name: data_analyst
+description: "Data analyst and scientist who writes Python scripts, builds models in Jupyter notebooks, and queries large datasets"
+typical_activities:
+  - "Write Python scripts for data processing"
+  - "Build and iterate on models in Jupyter notebooks"
+  - "Query databases for large datasets"
+  - "Visualize data and share findings"
+  - "Browse research papers and documentation"
+work_hours: "9am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "Python"
+  - "Jupyter"
+  - "SQL Client"
+  - "Chrome"
+risk_profile: "medium"

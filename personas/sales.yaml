@@ -1,0 +1,16 @@
+name: sales
+description: "Sales representative who manages client relationships, tracks deals in CRM, and communicates with prospects"
+typical_activities:
+  - "Update CRM with deal progress and notes"
+  - "Send outreach emails and follow-ups"
+  - "Conduct video calls with prospects"
+  - "Research potential clients on LinkedIn"
+  - "Prepare sales proposals and quotes"
+work_hours: "8am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "Salesforce"
+  - "Outlook"
+  - "Chrome"
+  - "Teams"
+  - "LinkedIn"
+risk_profile: "low"

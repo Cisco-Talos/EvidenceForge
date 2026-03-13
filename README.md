@@ -24,10 +24,10 @@ Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what
 uv sync
 
 # Generate logs from a scenario
-uv run forge generate tests/fixtures/scenarios/attack.yaml -o ./output
+uv run eforge generate tests/fixtures/scenarios/attack.yaml -o ./output
 
 # Generate the retail store FTP attack scenario (24-hour, 20+ users, network topology)
-uv run forge generate tests/fixtures/scenarios/retail-store-ftp-attack.yaml -o ./output
+uv run eforge generate tests/fixtures/scenarios/retail-store-ftp-attack.yaml -o ./output
 ```
 
 Output includes:
@@ -95,7 +95,7 @@ Threaded emitters write all 7 log formats simultaneously with hour-level barrier
 
 ### Scenario Validation
 ```bash
-uv run forge validate scenario.yaml
+uv run eforge validate scenario.yaml
 ```
 Validates cross-references (users, systems, personas, storyline actors), uniqueness constraints, network topology, and schema compliance with clear error messages.
 

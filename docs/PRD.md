@@ -1,14 +1,14 @@
 # PRD: EvidenceForge
 
-> **Naming conventions:** "EvidenceForge" is the product name, `log_generator` is the Python package name, `forge` is the CLI command name.
+> **Naming conventions:** "EvidenceForge" is the product name, `log_generator` is the Python package name, `eforge` is the CLI command name.
 
 ## 1. Overview
 
 EvidenceForge is a system for generating realistic synthetic security logs for cybersecurity threat hunting training and research. The system uses a two-phase architecture:
 
-**Phase 1 - Scenario Creation (Skill-assisted):** Claude Code skills (`/forge scenario`) guide users through an interactive interview to build structured scenario YAML files. The skill uses a hybrid interview flow -- structured questions first for core requirements, then free-form conversation to fill gaps and refine details. Users can also hand-author or edit scenario YAML directly.
+**Phase 1 - Scenario Creation (Skill-assisted):** Claude Code skills (`/eforge scenario`) guide users through an interactive interview to build structured scenario YAML files. The skill uses a hybrid interview flow -- structured questions first for core requirements, then free-form conversation to fill gaps and refine details. Users can also hand-author or edit scenario YAML directly.
 
-**Phase 2 - Log Generation (Deterministic):** The `forge generate` CLI command executes the scenario plan without any LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, ECAR, Syslog, Bash History, Snort, web logs) with coordinated cross-references (matching LogonIDs, PIDs, session data, connection IDs, etc.).
+**Phase 2 - Log Generation (Deterministic):** The `eforge generate` CLI command executes the scenario plan without any LLM calls, producing large-scale, temporally consistent datasets across multiple log formats (Windows Event Logs, Zeek, ECAR, Syslog, Bash History, Snort, web logs) with coordinated cross-references (matching LogonIDs, PIDs, session data, connection IDs, etc.).
 
 This architecture combines the flexibility and domain expertise of LLM-assisted authoring with the speed, cost-efficiency, and reproducibility of deterministic generation.
 
@@ -25,8 +25,8 @@ The tool addresses the need for realistic, large-volume training datasets withou
 
 ### Goals (MVP)
 - Generate realistic synthetic logs for 7 formats: Windows Event Security, Zeek conn, ECAR, Syslog, Bash History, Snort alerts, W3C web access
-- Claude Code skills for scenario creation (`/forge scenario`) and generation troubleshooting (`/forge generate`)
-- Skill installer command (`forge install-skills`) for project-level or global installation
+- Claude Code skills for scenario creation (`/eforge scenario`) and generation troubleshooting (`/eforge generate`)
+- Skill installer command (`eforge install-skills`) for project-level or global installation
 - Pre-built persona library for common organizational roles
 - Maintain cross-log consistency (events reference same LogonIDs, PIDs, timestamps, connection IDs)
 - Support arbitrary time windows from hours to weeks
@@ -73,7 +73,7 @@ The tool addresses the need for realistic, large-volume training datasets withou
 - Need for both quick scenario generation via skills and detailed customization via YAML editing
 - Often simulating specific real-world environments or generic representative environments
 - May need same scenario run multiple times with variations
-- Can use `/forge scenario` skill for guided creation or hand-author YAML for precise control
+- Can use `/eforge scenario` skill for guided creation or hand-author YAML for precise control
 
 ## 4. Functional Requirements
 
@@ -81,7 +81,7 @@ The tool addresses the need for realistic, large-volume training datasets withou
 
 #### Workflow 1: Initialize New Project
 ```bash
-forge init [--force]
+eforge init [--force]
 ```
 1. System copies `config.example.yaml` to `config.yaml` in the current directory
 2. Includes documented parameters for output paths and logging
@@ -89,7 +89,7 @@ forge init [--force]
 
 #### Workflow 2: Scenario Creation via Skill
 ```
-/forge scenario
+/eforge scenario
 ```
 1. Claude Code skill starts a hybrid interview flow
 2. **Structured phase** -- asks targeted questions about:
@@ -112,16 +112,16 @@ forge init [--force]
 
 #### Workflow 3: Install Skills
 ```bash
-forge install-skills [--project | --global]
+eforge install-skills [--project | --global]
 ```
-1. Copies skill files from the repo's `skills/forge/` directory
+1. Copies skill files from the repo's `skills/eforge/` directory
 2. `--project` (default): Installs to `.claude/skills/` in the current project
 3. `--global`: Installs to `~/.claude/skills/`
 4. Reports which skills were installed and their slash-command triggers
 
 #### Workflow 4: Validate Scenario
 ```bash
-forge validate SCENARIO_FILE
+eforge validate SCENARIO_FILE
 ```
 1. Schema validation: Check YAML structure, data types, required fields via Pydantic models
 2. Cross-reference validation: Verify internal consistency
@@ -136,7 +136,7 @@ forge validate SCENARIO_FILE
 
 #### Workflow 5: Generate Logs
 ```bash
-forge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
+eforge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
 ```
 1. Load and validate scenario file (schema + cross-reference validation)
 2. Load format definitions for requested log types
@@ -158,7 +158,7 @@ forge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
 
 #### Workflow 6: Evaluate Output
 ```bash
-forge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]
+eforge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]
 ```
 1. Load generated logs
 2. Run validation checks:
@@ -191,7 +191,7 @@ environment:
     systems:                 # Per-system overrides (optional)
       pattern: string        # e.g., "WS-NYC-*": "America/New_York"
 
-  # Note: The /forge scenario skill handles auto-generating users/systems from
+  # Note: The /eforge scenario skill handles auto-generating users/systems from
   # high-level descriptions (e.g., "50-person financial services company").
   # The final scenario YAML only contains explicit users and systems lists.
 
@@ -504,7 +504,7 @@ Grouped by type for easy reference.
 
 **Command: init**
 ```
-forge init [--force]
+eforge init [--force]
 
 Options:
   --force    Overwrite existing config.yaml if it exists
@@ -515,7 +515,7 @@ Non-interactive: Simply copies the example config with all options documented.
 
 **Command: install-skills**
 ```
-forge install-skills [--project | --global]
+eforge install-skills [--project | --global]
 
 Options:
   --project    Install skills to .claude/skills/ in the current project (default)
@@ -525,13 +525,13 @@ Copies EvidenceForge skill files to the appropriate Claude Code skills location.
 Skill files are bundled as package data and loaded via importlib.resources at runtime.
 
 Skills installed:
-  /forge scenario  - Guided scenario creation
-  /forge generate  - Generation with troubleshooting
+  /eforge scenario  - Guided scenario creation
+  /eforge generate  - Generation with troubleshooting
 ```
 
 **Command: validate**
 ```
-forge validate SCENARIO_FILE
+eforge validate SCENARIO_FILE
 
 Arguments:
   SCENARIO_FILE    Path to scenario YAML file
@@ -552,7 +552,7 @@ Checks performed:
 
 **Command: generate**
 ```
-forge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
+eforge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
 
 Arguments:
   SCENARIO_FILE    Path to scenario YAML file
@@ -570,7 +570,7 @@ Performs schema + cross-reference validation before generation starts.
 
 **Command: evaluate**
 ```
-forge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]
+eforge evaluate OUTPUT_DIR [--report REPORT_FILE] [--verbose]
 
 Arguments:
   OUTPUT_DIR       Path to generated log directory
@@ -605,7 +605,7 @@ The evaluation report is a JSON file with the following top-level structure. The
 
 **Command: version**
 ```
-forge version
+eforge version
 
 Shows version information.
 ```
@@ -616,9 +616,9 @@ EvidenceForge uses Claude Code skills as the primary scenario authoring interfac
 
 #### Skill Files
 
-Skills live in `skills/forge/` in the repository and are installed via `forge install-skills`.
+Skills live in `skills/eforge/` in the repository and are installed via `eforge install-skills`.
 
-**`/forge scenario`** -- Guided scenario creation skill
+**`/eforge scenario`** -- Guided scenario creation skill
 
 Responsibilities:
 - Interview users about their scenario requirements using a hybrid flow
@@ -627,12 +627,12 @@ Responsibilities:
 - Reference the pre-built persona library and suggest appropriate personas
 - Generate valid scenario YAML conforming to the schema
 - Validate the generated YAML against known constraints before saving
-- Save the file and suggest next steps (`forge validate`, `forge generate`)
+- Save the file and suggest next steps (`eforge validate`, `eforge generate`)
 
-**`/forge generate`** -- Generation with troubleshooting skill
+**`/eforge generate`** -- Generation with troubleshooting skill
 
 Responsibilities:
-- Run `forge generate` on a scenario file
+- Run `eforge generate` on a scenario file
 - If generation fails, analyze the error output
 - Suggest fixes for common issues (schema errors, missing references, invalid time windows)
 - Optionally edit the scenario file to fix issues and retry
@@ -650,14 +650,14 @@ Responsibilities:
 
 ```
 # Install to current project (default)
-forge install-skills --project
-# Creates .claude/skills/forge-scenario.md
-# Creates .claude/skills/forge-generate.md
+eforge install-skills --project
+# Creates .claude/skills/eforge-scenario.md
+# Creates .claude/skills/eforge-generate.md
 
 # Install globally for all projects
-forge install-skills --global
-# Creates ~/.claude/skills/forge-scenario.md
-# Creates ~/.claude/skills/forge-generate.md
+eforge install-skills --global
+# Creates ~/.claude/skills/eforge-scenario.md
+# Creates ~/.claude/skills/eforge-generate.md
 ```
 
 Skills are plain Markdown files and can be version-controlled, customized, or extended by users.
@@ -724,8 +724,8 @@ Skills are plain Markdown files and can be version-controlled, customized, or ex
 - pytz for timezone handling
 
 **Skills:**
-- Claude Code skills (Markdown files in `skills/forge/`)
-- Installed via `forge install-skills` command
+- Claude Code skills (Markdown files in `skills/eforge/`)
+- Installed via `eforge install-skills` command
 - No runtime dependency on Claude Code for generation (skills are authoring-time only)
 
 **Testing:**
@@ -747,14 +747,14 @@ evidenceforge/
 +-- README.md
 +-- AGENTS.md                    # AI coding agent instructions
 +-- LICENSE
-+-- pyproject.toml               # uv project config (entry point: forge)
++-- pyproject.toml               # uv project config (entry point: eforge)
 +-- config.example.yaml          # Example configuration
 +-- .env.example                 # Example environment variables
 |
-+-- skills/                      # Claude Code skills (source, installed via forge install-skills)
-|   +-- forge/
-|       +-- scenario.md          # /forge scenario skill
-|       +-- generate.md          # /forge generate skill
++-- skills/                      # Claude Code skills (source, installed via eforge install-skills)
+|   +-- eforge/
+|       +-- scenario.md          # /eforge scenario skill
+|       +-- generate.md          # /eforge generate skill
 |
 +-- personas/                    # Pre-built persona library
 |   +-- developer.yaml
@@ -1072,30 +1072,28 @@ Required scenario files:
 
 ### MVP Deliverables
 
-1. **Two Claude Code skills**
-   - `/forge scenario`: Guided scenario creation with hybrid interview flow
-   - `/forge generate`: Generation execution with troubleshooting
-   - Note: Skill prompt content will be developed using the /skill-creator skill during implementation. The PRD defines what each skill does, not its exact prompt.
+1. **Three Claude Code skills**
+   - `/eforge scenario`: Guided scenario creation with hybrid interview flow, ENVIRONMENT.md generation, 10-tactic ATT&CK kill chain template
+   - `/eforge generate`: Generation execution with pre-flight validation, error diagnosis, ENVIRONMENT.md copying
+   - `/eforge validate`: Schema and cross-reference validation with auto-fix for simple issues
+   - Developed using /skill-creator with 2 iterations, 30/30 eval assertions passing
 
-2. **Evaluation framework**
-   - Format compliance checking
-   - Cross-reference consistency validation
-   - Statistical property analysis
-   - Ground truth IOC verification
-   - Note: Specific check implementations will be defined iteratively during development. The framework should be designed for extensibility.
-
-3. **Pre-built persona library** (10-15 personas)
-   - Persona files use the exact same YAML schema as the Persona model in scenario files. No metadata extensions for MVP.
+2. **Pre-built persona library** (15 personas)
+   - Persona files use the exact same YAML schema as the Persona model in scenario files
    - Complete set: developer, executive, analyst, sysadmin, help_desk, security_analyst, accountant, sales, hr, marketing, data_analyst, receptionist, intern, project_manager, legal_counsel
    - Each with realistic activity patterns, work hours, and risk profiles
 
+3. **`eforge install-skills` command**
+   - Installs skills, personas, and reference docs to `.claude/skills/` (project) or `~/.claude/skills/` (global)
+   - Bundled as package data via `importlib.resources` + hatch force-include
+   - Handles updates: overwrites changed files, removes stale files
+
 4. **Documentation**
    - This PRD
-   - Installation guide
-   - Scenario authoring reference
-   - Format definition reference
+   - Scenario authoring reference (`docs/scenario-reference.md`)
+   - README with skill-based workflow
 
-5. **Core generation engine** (already implemented)
+5. **Core generation engine** (implemented in Phases 1-2)
    - 7 log formats with emitters
    - Persona-based temporal activity distribution
    - Network visibility with TAP/SPAN sensor modeling
@@ -1103,13 +1101,20 @@ Required scenario files:
    - Progress reporting
    - Ground truth generation
    - Schema + cross-reference validation
-   - 526+ tests passing at 95%+ coverage
+   - 542+ tests passing
+
+### Post-MVP: Evaluation Framework
+
+Moved to Phase 4 (first post-MVP priority):
+- `eforge evaluate` command with extensible metrics framework
+- Format compliance, cross-reference consistency, ground truth IOC verification
+- JSON report generation (informational, no pass/fail thresholds)
 
 ### Current Implementation Status
 
 | Component | Status |
 |-----------|--------|
-| CLI (`forge init`, `forge generate`, `forge version`) | Complete |
+| CLI (`eforge init`, `eforge generate`, `eforge validate`, `eforge version`, `eforge install-skills`) | Complete |
 | Scenario Pydantic models | Complete |
 | 7 format definitions (YAML) | Complete |
 | 7 emitters (Windows, Zeek, ECAR, Syslog, Bash History, Snort, Web) | Complete |
@@ -1121,17 +1126,18 @@ Required scenario files:
 | Parallel emitter-level generation | Complete |
 | Progress reporting (Rich) | Complete |
 | Timezone handling | Complete |
-| `forge validate` command | Not yet implemented |
-| `forge evaluate` command | Not yet implemented |
-| `forge install-skills` command | Not yet implemented |
-| Skills (`/forge scenario`, `/forge generate`) | Not yet implemented |
-| Persona library files | Not yet implemented |
-| Evaluation framework | Not yet implemented |
+| OS-aware activity generation (Windows + Linux) | Complete |
+| `eforge validate` command | Complete |
+| `eforge install-skills` command | Complete |
+| Skills (`/eforge scenario`, `/eforge generate`, `/eforge validate`) | Complete |
+| Persona library files (15 personas) | Complete |
+| `eforge evaluate` command | Phase 4 (post-MVP) |
+| Evaluation framework | Phase 4 (post-MVP) |
 
 ### Future Enhancements
 
 **Short-term (post-MVP):**
-- Bedrock LLM client for semantic validation (`forge validate --semantic`)
+- Bedrock LLM client for semantic validation (`eforge validate --semantic`)
 - Checkpointing and resume for long-running generation jobs
 - Large dataset optimization (100M+ events, memory-mapped writes)
 - Config file inheritance/templating
@@ -1216,7 +1222,7 @@ class FormatDefinition:
 1. Can generate realistic 8-hour dataset for 100 users in < 30 seconds
 2. Generated logs pass format validation for all 7 formats
 3. Cross-log consistency checks pass (no orphaned references)
-4. `/forge scenario` skill can produce valid scenarios for common use cases
+4. `/eforge scenario` skill can produce valid scenarios for common use cases
 5. 95%+ test coverage achieved
 6. 3+ external users successfully generate custom scenarios
 7. Generated logs successfully imported into Splunk/ELK without errors

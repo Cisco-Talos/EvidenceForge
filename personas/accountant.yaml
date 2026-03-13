@@ -1,0 +1,14 @@
+name: accountant
+description: "Finance and accounting professional who manages financial records, reconciles accounts, and prepares reports"
+typical_activities:
+  - "Process invoices and expense reports"
+  - "Reconcile accounts and ledgers"
+  - "Prepare financial statements and reports"
+  - "Communicate with vendors via email"
+work_hours: "8am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "QuickBooks"
+  - "Excel"
+  - "Chrome"
+  - "Outlook"
+risk_profile: "low"

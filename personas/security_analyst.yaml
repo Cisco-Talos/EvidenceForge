@@ -1,0 +1,15 @@
+name: security_analyst
+description: "SOC analyst who monitors security events, investigates alerts, and performs forensic analysis"
+typical_activities:
+  - "Monitor SIEM dashboards for security alerts"
+  - "Investigate suspicious network traffic"
+  - "Perform packet capture and forensic analysis"
+  - "Write and tune detection rules"
+  - "Document incident response findings"
+work_hours: "9am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "Splunk"
+  - "Wireshark"
+  - "Chrome"
+  - "Terminal"
+risk_profile: "high"

@@ -12,7 +12,7 @@ EvidenceForge generates realistic synthetic security logs for cybersecurity thre
 
 This architecture combines LLM flexibility/realism with deterministic speed, cost-efficiency, and reproducibility.
 
-**Key Principle:** The `forge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation.
+**Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation.
 
 ## 🔴 MANDATORY: Implementation State Tracking
 
@@ -118,9 +118,9 @@ log-generator/
 ├── .env.example                 # Example environment variables
 │
 ├── skills/
-│   └── forge/                   # Claude Code Skills for scenario creation
-│       ├── scenario.md          # /forge scenario - guided scenario creation
-│       └── generate.md          # /forge generate - generation workflow
+│   └── eforge/                  # Claude Code Skills for scenario creation
+│       ├── scenario.md          # /eforge scenario - guided scenario creation
+│       └── generate.md          # /eforge generate - generation workflow
 │
 ├── personas/                    # Pre-built persona library
 │   └── ...                      # Persona YAML files (developer, accountant, etc.)
@@ -1351,30 +1351,30 @@ def test_state_manager_creates_unique_pids(user_count: int):
 
 Claude Code Skills handle the interactive, creative aspects of scenario creation -- work that was originally planned as a built-in conversational CLI.
 
-**Location:** `skills/forge/` directory
+**Location:** `skills/eforge/` directory
 
 **Installation:**
 ```bash
 # Install skills for the current project
-forge install-skills --project
+eforge install-skills --project
 
 # Install skills globally
-forge install-skills --global
+eforge install-skills --global
 ```
 
 **MVP Skills:**
-- `/forge scenario` -- Guided scenario creation through a structured interview, producing a validated YAML scenario file
-- `/forge generate` -- Generation workflow that validates a scenario and runs the deterministic engine
+- `/eforge scenario` -- Guided scenario creation through a structured interview, producing a validated YAML scenario file
+- `/eforge generate` -- Generation workflow that validates a scenario and runs the deterministic engine
 
 **Key design points:**
 - Skills are markdown prompt files (`.md`), not Python code
-- They run inside Claude Code, not inside the `forge` CLI process
+- They run inside Claude Code, not inside the `eforge` CLI process
 - Skills follow a hybrid interview pattern: structured questions first (environment, users, systems), then free-form refinement
 - Skills reference the scenario schema from `docs/scenario-reference.md`
 
 ### Adding a New Skill
 
-1. Create `skills/forge/{name}.md` with the skill prompt
+1. Create `skills/eforge/{name}.md` with the skill prompt
 2. Follow the hybrid interview pattern: structured questions first, then free-form elaboration
 3. Reference the scenario schema from `docs/scenario-reference.md` to ensure output validity
 4. Test interactively by running the skill in Claude Code

@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-forge = "log_generator.__main__:main"
+eforge = "log_generator.__main__:main"
 
 [project.optional-dependencies]
 dev = [
@@ -38,6 +38,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/log_generator"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"skills/eforge/scenario.md" = "log_generator/_data/skills/eforge/scenario.md"
+"skills/eforge/generate.md" = "log_generator/_data/skills/eforge/generate.md"
+"skills/eforge/validate.md" = "log_generator/_data/skills/eforge/validate.md"
+"docs/scenario-reference.md" = "log_generator/_data/references/scenario-reference.md"
+"personas" = "log_generator/_data/personas"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,6 +1,6 @@
 """CLI entry point for EvidenceForge log generator.
 
-This module provides the main entry point for the forge command-line tool.
+This module provides the main entry point for the eforge command-line tool.
 """
 
 from log_generator.cli.commands import main

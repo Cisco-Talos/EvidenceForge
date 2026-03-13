@@ -1,0 +1,14 @@
+name: analyst
+description: "Business and data analyst who queries databases, builds reports, and creates visualizations"
+typical_activities:
+  - "Query databases for business metrics"
+  - "Build and update dashboards"
+  - "Create reports and presentations"
+  - "Analyze trends in spreadsheets"
+work_hours: "8am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "Excel"
+  - "Chrome"
+  - "SQL Client"
+  - "Tableau"
+risk_profile: "medium"

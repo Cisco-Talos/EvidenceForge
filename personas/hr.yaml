@@ -1,0 +1,14 @@
+name: hr
+description: "Human resources professional who manages employee records, coordinates hiring, and handles benefits administration"
+typical_activities:
+  - "Review and process employee records"
+  - "Coordinate interviews and onboarding"
+  - "Manage benefits enrollment and inquiries"
+  - "Communicate company policies via email"
+work_hours: "9am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "Workday"
+  - "Outlook"
+  - "Chrome"
+  - "Teams"
+risk_profile: "low"

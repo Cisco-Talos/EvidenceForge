@@ -1,0 +1,16 @@
+name: project_manager
+description: "Project manager who tracks deliverables, coordinates cross-functional teams, and maintains project documentation"
+typical_activities:
+  - "Update and groom project boards and tickets"
+  - "Facilitate stand-ups and planning meetings"
+  - "Track milestones and project timelines"
+  - "Coordinate cross-functional team communication"
+  - "Maintain project documentation in Confluence"
+work_hours: "8am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "Jira"
+  - "Outlook"
+  - "Teams"
+  - "Chrome"
+  - "Confluence"
+risk_profile: "low"

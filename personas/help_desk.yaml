@@ -1,0 +1,14 @@
+name: help_desk
+description: "IT support specialist who resolves user tickets, provides remote assistance, and manages directory services"
+typical_activities:
+  - "Respond to and resolve support tickets"
+  - "Provide remote desktop assistance to users"
+  - "Reset passwords and manage user accounts"
+  - "Document troubleshooting procedures"
+work_hours: "8am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "Ticketing System"
+  - "Remote Desktop"
+  - "Chrome"
+  - "Active Directory"
+risk_profile: "medium"

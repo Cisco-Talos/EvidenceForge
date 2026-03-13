@@ -1,19 +1,15 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 2 - Scalability ✅ COMPLETE. Ready for Phase 3.
+**Status:** Phase 3 - MVP Release ✅ COMPLETE. Ready for Phase 4.
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-12 (Phase 2 complete)
+**Last Updated:** 2026-03-13 (Phase 3 complete, MVP ready)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
-- ✅ Phase 2.1: Parallel Generation with Threaded Emitters
-- ✅ Phase 2.2: 5 New Log Formats (eCAR, syslog, bash_history, snort_alert, web_access)
-- ✅ Phase 2.3: Progress Reporting
-- ✅ Phase 2.4: Enhanced Scenario Schema (work hours parsing, model expansion, timezone tests, validation, docs)
-- ✅ Phase 2.5: Network Visibility Architecture (sensor placement, TAP vs SPAN, direction filtering)
-- ✅ Phase 2.6: Persona-Based Activity Generation (work hours, peak hours, risk profiles, activity intensity)
-- ✅ Phase 2.8+2.9: Medium Dataset Support (100-user 8h in ~14s, memory <500MB, 526 tests)
-- ✅ Phase 2.10: OS-Aware Activity Generation (Windows + Linux support)
+- ✅ Phase 3.1: Claude Code Skills + Install Command (scenario, generate, validate skills; eforge install-skills)
+- ✅ Phase 3.2: Pre-Built Persona Library (15 personas)
+- ✅ Phase 3.3: Documentation (scenario reference, README, skill usage)
+- ✅ Phase 3.4: MVP Release Preparation
 
 ---
 
@@ -113,8 +109,8 @@
 
 - [x] `cli/commands.py` - Typer app setup with command structure
 - [x] `__main__.py` - CLI entry point
-- [x] Command: `forge init` - Write config.example.yaml to config.yaml
-- [x] Command: `forge generate` - Generate logs from simplified scenario file
+- [x] Command: `eforge init` - Write config.example.yaml to config.yaml
+- [x] Command: `eforge generate` - Generate logs from simplified scenario file
   - [x] Accept scenario file path
   - [x] Accept --config, --output flags
   - [x] Schema validation only (no LLM)
@@ -352,70 +348,100 @@
 
 ---
 
-## Phase 3: MVP Release (Skill-Based Architecture)
+## Phase 3: MVP Release (Skill-Based Architecture) ✅ COMPLETE
 
-**Goal:** Ship skills for scenario creation, evaluation framework, persona library, and updated documentation. Core generation engine is already complete.
+**Goal:** Ship skills for scenario creation, persona library, install command, and documentation. Core generation engine already complete from Phase 2.
 
-**Architecture shift:** Interactive/creative work (scenario creation) happens through Claude Code Skills, not a built-in LLM conversation engine. The `forge` CLI stays focused on deterministic operations (generate, validate, evaluate).
+**Architecture shift:** Interactive/creative work (scenario creation) happens through Claude Code Skills, not a built-in LLM conversation engine. The `eforge` CLI stays focused on deterministic operations (generate, validate, evaluate).
 
 ### 3.1 Claude Code Skills + Install Command
 
-- [ ] Create `skills/forge/scenario.md` — `/forge scenario` skill
-  - [ ] Hybrid interview flow: structured questions first, then free-form gap-filling
-  - [ ] Environment, network, personas, attacks, time window, output formats
-  - [ ] References persona library and scenario schema
-  - [ ] Generates valid scenario YAML, validates before saving
-  - [ ] Use `/skill-creator` to develop skill prompt content
-- [ ] Create `skills/forge/generate.md` — `/forge generate` skill
-  - [ ] Runs `forge generate` on scenario file
-  - [ ] Monitors output, diagnoses errors
-  - [ ] Suggests fixes for common issues
-- [ ] Add `forge install-skills` CLI command to `cli/commands.py`
-  - [ ] `--project` flag: copies to `.claude/skills/` (default)
-  - [ ] `--global` flag: copies to `~/.claude/skills/`
-  - [ ] Skills bundled as package data via `importlib.resources`
-- [ ] Test: install-skills copies files correctly
+- [x] Create `skills/eforge/scenario.md` — `/eforge scenario` skill
+  - [x] Hybrid interview flow: structured questions first, then free-form gap-filling
+  - [x] Environment, network, personas, attacks, time window, output formats
+  - [x] References persona library and scenario schema
+  - [x] Generates valid scenario YAML, validates before saving
+  - [x] Generates ENVIRONMENT.md student context document alongside scenario
+  - [x] 10-tactic MITRE ATT&CK kill chain template
+  - [x] Base64/encoded content must be generated via Bash, never fabricated
+  - [x] Use `/skill-creator` to develop skill prompt content (2 iterations, 30/30 assertions)
+- [x] Create `skills/eforge/generate.md` — `/eforge generate` skill
+  - [x] Runs `eforge generate` on scenario file
+  - [x] Runs `eforge validate` as pre-flight check
+  - [x] Monitors output, diagnoses errors
+  - [x] Suggests fixes for common issues, escalates structural problems to `/eforge scenario`
+  - [x] Copies ENVIRONMENT.md to output directory alongside GROUND_TRUTH.md
+- [x] Create `skills/eforge/validate.md` — `/eforge validate` skill
+  - [x] Runs `eforge validate` and interprets output
+  - [x] Fixes simple issues directly, escalates structural problems to `/eforge scenario`
+- [x] Add `eforge install-skills` CLI command to `cli/commands.py`
+  - [x] `--project` flag: copies to `.claude/skills/` (default)
+  - [x] `--global` flag: copies to `~/.claude/skills/`
+  - [x] Skills bundled as package data via `importlib.resources` + hatch force-include
+  - [x] Updates existing installations: overwrites changed files, removes stale files
+  - [x] Bundles skills, personas, and scenario-reference.md
+- [x] Test: install-skills copies files correctly (12 tests)
 
-### 3.2 Pre-Built Persona Library
+### 3.2 Pre-Built Persona Library ✅ COMPLETE
 
-- [ ] Create `personas/` directory with 15 YAML persona files
-  - [ ] Uses same schema as Persona model in scenario files
-  - [ ] developer, executive, analyst, sysadmin, help_desk, security_analyst
-  - [ ] accountant, sales, hr, marketing, data_analyst
-  - [ ] receptionist, intern, project_manager, legal_counsel
-  - [ ] Each with realistic work_hours, typical_activities, risk_profile
-- [ ] Skills reference persona library when creating scenarios
+- [x] Create `personas/` directory with 15 YAML persona files
+  - [x] Uses same schema as Persona model in scenario files
+  - [x] developer, executive, analyst, sysadmin, help_desk, security_analyst
+  - [x] accountant, sales, hr, marketing, data_analyst
+  - [x] receptionist, intern, project_manager, legal_counsel
+  - [x] Each with realistic work_hours, typical_activities, risk_profile
+- [x] Skills reference persona library when creating scenarios
+- [x] Personas bundled with `eforge install-skills` command
 
-### 3.3 Evaluation Framework
-
-- [ ] `evaluation/metrics.py` — Extensible metrics framework
-  - [ ] Format compliance (parse rate per format)
-  - [ ] Cross-reference consistency
-  - [ ] Ground truth IOC validation
-  - [ ] Specific checks defined iteratively during implementation
-- [ ] `evaluation/evaluator.py` — Main evaluation logic
-- [ ] `evaluation/report.py` — JSON report generation
-- [ ] Add `forge evaluate` CLI command
-  - [ ] `--report` flag for output path
-  - [ ] `--verbose` flag for detailed findings
-- [ ] Test: Evaluation metrics calculation
-- [ ] Test: Report generation
-
-### 3.4 Documentation
+### 3.3 Documentation
 
 - [ ] Update `docs/scenario-reference.md` (already exists, may need refresh)
 - [ ] Create skill usage guide
 - [ ] Update README with skill-based workflow
 - [ ] Update TODO with Phase 3 completion status
 
-### 3.5 MVP Release Preparation
+### 3.4 MVP Release Preparation
 
 - [ ] Run all tests
-- [ ] Manual testing: skills + generate + evaluate workflow
+- [ ] Manual testing: skills + generate workflow
 - [ ] Verify success metrics (see PRD Section 9)
 - [ ] Tag release: v1.0.0
 
-**Phase 3 Milestone:** Skills-based scenario creation, evaluation framework, persona library, and documentation. Core generation engine already complete from Phase 2.
+**Phase 3 Milestone:** ✅ Skills-based scenario creation (3 skills), persona library (15 personas), install command, and documentation. Core generation engine already complete from Phase 2. 542+ tests passing.
+
+---
+
+## Phase 4: Evaluation Framework (Post-MVP)
+
+**Goal:** Add a `eforge evaluate` command that assesses generated log quality with concrete, extensible metrics.
+
+### 4.1 Metrics Framework
+
+- [ ] `evaluation/metrics.py` — Extensible metrics framework
+  - [ ] Format compliance (parse rate per format)
+  - [ ] Cross-reference consistency
+  - [ ] Ground truth IOC validation
+  - [ ] Specific checks defined iteratively during implementation
+
+### 4.2 Evaluator and Reporting
+
+- [ ] `evaluation/evaluator.py` — Main evaluation logic
+- [ ] `evaluation/report.py` — JSON report generation
+
+### 4.3 CLI Command
+
+- [ ] Add `eforge evaluate` CLI command
+  - [ ] `--report` flag for output path
+  - [ ] `--verbose` flag for detailed findings
+- [ ] Report is informational only (no pass/fail thresholds)
+
+### 4.4 Tests
+
+- [ ] Test: Evaluation metrics calculation
+- [ ] Test: Report generation
+- [ ] Test: CLI integration
+
+**Phase 4 Milestone:** `eforge evaluate` command produces JSON quality reports for generated datasets.
 
 ---
 
@@ -424,7 +450,7 @@
 **Not part of MVP, but tracked here for future reference.**
 
 ### Short-term (Post-MVP)
-- [ ] Bedrock LLM client for semantic validation (`forge validate --semantic`)
+- [ ] Bedrock LLM client for semantic validation (`eforge validate --semantic`)
 - [ ] Checkpointing and resume for long-running generation
 - [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
@@ -433,7 +459,11 @@
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Network diagram ingestion: auto-infer sensor placement (span vs tap) from diagram topology
+- [ ] Per-user work hours jitter: randomize start/end/lunch times ±30min per user for realistic staggered arrivals
 - [ ] Performance optimizations (Rust extensions, better parallelization)
+- [ ] Full user directory export as separate CSV file for large scenarios (ENVIRONMENT.md enhancement)
+- [ ] Authentication and naming convention documentation in ENVIRONMENT.md
+- [ ] Separate student/instructor output packages (GROUND_TRUTH.md in instructor-only directory)
 
 ### Medium-term
 - [ ] Alternative LLM backends (OpenAI, Ollama, Anthropic native, Gemini)

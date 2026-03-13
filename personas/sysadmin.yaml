@@ -1,0 +1,15 @@
+name: sysadmin
+description: "System administrator who manages servers, networks, and infrastructure using remote access and admin tools"
+typical_activities:
+  - "Monitor and maintain server infrastructure"
+  - "Execute PowerShell scripts for automation"
+  - "Manage user accounts and group policies"
+  - "Troubleshoot network and system issues"
+  - "Apply patches and security updates"
+work_hours: "8am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "PowerShell"
+  - "Remote Desktop"
+  - "Event Viewer"
+  - "SSH"
+risk_profile: "high"

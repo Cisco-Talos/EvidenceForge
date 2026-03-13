@@ -1,0 +1,16 @@
+name: marketing
+description: "Marketing professional who creates campaigns, manages social media content, and analyzes web traffic metrics"
+typical_activities:
+  - "Design and schedule marketing campaigns"
+  - "Create visual content for social media"
+  - "Analyze website traffic and conversion metrics"
+  - "Coordinate with team via Slack"
+  - "Manage email marketing workflows"
+work_hours: "9am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "Chrome"
+  - "Slack"
+  - "Canva"
+  - "HubSpot"
+  - "Google Analytics"
+risk_profile: "low"

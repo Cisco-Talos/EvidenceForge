@@ -19,10 +19,10 @@ runner = CliRunner()
 
 
 class TestInitCommand:
-    """Tests for 'forge init' command."""
+    """Tests for 'eforge init' command."""
 
     def test_init_creates_config(self, tmp_path, monkeypatch):
-        """forge init should create config.yaml in current directory."""
+        """eforge init should create config.yaml in current directory."""
         monkeypatch.chdir(tmp_path)
 
         # Create config.example.yaml in tmp_path
@@ -57,7 +57,7 @@ logging:
         assert "bedrock" in config
 
     def test_init_with_existing_config(self, tmp_path, monkeypatch):
-        """forge init should handle existing config.yaml gracefully."""
+        """eforge init should handle existing config.yaml gracefully."""
         monkeypatch.chdir(tmp_path)
 
         # Create config.example.yaml
@@ -77,10 +77,10 @@ logging:
 
 
 class TestGenerateCommand:
-    """Tests for 'forge generate' command."""
+    """Tests for 'eforge generate' command."""
 
     def test_generate_file_not_found(self):
-        """forge generate with non-existent file should handle gracefully."""
+        """eforge generate with non-existent file should handle gracefully."""
         # Typer validates file existence before calling function
         # This test verifies the CLI handles it appropriately
         result = runner.invoke(app, ["generate", "nonexistent.yaml"])
@@ -152,7 +152,7 @@ logging:
 
     @patch('log_generator.cli.commands.GenerationEngine')
     def test_generate_success_minimal(self, mock_engine_class, scenarios_dir, tmp_path):
-        """forge generate with valid minimal scenario should succeed."""
+        """eforge generate with valid minimal scenario should succeed."""
         mock_engine = Mock()
         mock_engine_class.return_value = mock_engine
 

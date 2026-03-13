@@ -1,0 +1,16 @@
+name: developer
+description: "Software engineer who writes code, runs builds, and uses version control frequently"
+typical_activities:
+  - "Write and edit source code"
+  - "Run builds and tests"
+  - "Push/pull from git repositories"
+  - "Browse documentation and Stack Overflow"
+  - "Attend video meetings"
+work_hours: "9am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "VS Code"
+  - "Terminal"
+  - "Chrome"
+  - "Docker"
+  - "Git"
+risk_profile: "high"

@@ -1,0 +1,16 @@
+name: legal_counsel
+description: "Legal and compliance counsel who reviews contracts, manages document signatures, and researches regulatory requirements"
+typical_activities:
+  - "Review and redline contracts and agreements"
+  - "Manage document signing workflows"
+  - "Research regulatory and compliance requirements"
+  - "Advise internal teams on legal matters"
+  - "Maintain legal document repositories"
+work_hours: "8am-6pm (lunch 12pm-1pm)"
+application_usage:
+  - "DocuSign"
+  - "Outlook"
+  - "Chrome"
+  - "Legal Research DB"
+  - "Word"
+risk_profile: "low"

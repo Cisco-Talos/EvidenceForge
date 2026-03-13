@@ -1,0 +1,14 @@
+name: intern
+description: "Entry-level intern who performs basic tasks, learns company processes, and assists team members with routine work"
+typical_activities:
+  - "Complete assigned research tasks"
+  - "Draft and format documents"
+  - "Attend training sessions and meetings"
+  - "Assist team members with routine work"
+work_hours: "9am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "Chrome"
+  - "Outlook"
+  - "Word"
+  - "Excel"
+risk_profile: "low"

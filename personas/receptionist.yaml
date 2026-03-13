@@ -1,0 +1,14 @@
+name: receptionist
+description: "Front desk receptionist who greets visitors, manages phone calls, and coordinates office scheduling"
+typical_activities:
+  - "Manage incoming phone calls and transfers"
+  - "Register and direct visitors"
+  - "Schedule conference rooms and appointments"
+  - "Send and respond to routine emails"
+work_hours: "8am-5pm (lunch 12pm-1pm)"
+application_usage:
+  - "Phone System"
+  - "Outlook"
+  - "Chrome"
+  - "Visitor Management"
+risk_profile: "low"
