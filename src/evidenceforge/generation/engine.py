@@ -26,6 +26,7 @@ from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import Persona, Scenario, User, System
 from evidenceforge.utils.time import parse_duration, parse_iso8601, resolve_time_window
+from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
 
@@ -183,13 +184,18 @@ class GenerationEngine:
 
         for format_name in formats_to_generate:
             format_def = load_format(format_name)
-            output_file = self.output_dir / f"{format_name}{format_def.output.file_extension}"
+
+            # bash_history uses a directory (per-user-per-host files), not a single file
+            if format_name == 'bash_history':
+                output_path = self.output_dir / "bash_history"
+            else:
+                output_path = self.output_dir / f"{format_name}{format_def.output.file_extension}"
 
             emitter_class = emitter_classes[format_name]
-            emitter = emitter_class(format_def, output_file, threaded=True)
+            emitter = emitter_class(format_def, output_path, threaded=True)
 
             self.emitters[format_name] = emitter
-            logger.info(f"Initialized {format_name} emitter (threaded) -> {output_file}")
+            logger.info(f"Initialized {format_name} emitter (threaded) -> {output_path}")
 
         # Initialize network visibility engine (Phase 2.5)
         from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
@@ -429,7 +435,7 @@ class GenerationEngine:
             event_time = self._parse_storyline_time(storyline_event.time)
 
             # Find actor and system
-            actor = self._find_user(storyline_event.actor)
+            actor = self._find_actor(storyline_event.actor)
             system = self._find_system(storyline_event.system)
 
             if not actor or not system:
@@ -650,6 +656,33 @@ class GenerationEngine:
         for user in self.scenario.environment.users:
             if user.username == username:
                 return user
+        return None
+
+    def _find_actor(self, actor_name: str) -> Optional[User]:
+        """Find actor by name, checking users first then service/built-in accounts.
+
+        For service and built-in accounts, returns a synthetic User object
+        with the account name as the username.
+
+        Args:
+            actor_name: Actor name to resolve
+
+        Returns:
+            User object or None if not found
+        """
+        user = self._find_user(actor_name)
+        if user:
+            return user
+
+        service_accounts = set(self.scenario.environment.service_accounts)
+        if actor_name in BUILTIN_ACCOUNTS or actor_name in service_accounts:
+            return User(
+                username=actor_name,
+                full_name=actor_name,
+                email="",
+                enabled=True,
+            )
+
         return None
 
     def _find_system(self, hostname: str) -> Optional[System]:

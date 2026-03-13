@@ -12,6 +12,17 @@ from typing import Optional
 
 from evidenceforge.models import Scenario
 
+# Well-known OS built-in accounts that are always valid as storyline actors
+# without needing to be defined in the environment users list.
+BUILTIN_ACCOUNTS = {
+    # Windows
+    "SYSTEM", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE",
+    # Linux/macOS
+    "root", "nobody", "daemon", "www-data",
+    # Common service accounts
+    "mysql", "postgres", "apache", "nginx",
+}
+
 
 @dataclass
 class ValidationIssue:
@@ -63,6 +74,7 @@ class ScenarioValidator:
             if self.scenario.environment.network
             else set()
         )
+        self.service_accounts = set(self.scenario.environment.service_accounts)
 
     def validate(self) -> list[ValidationIssue]:
         """Run all validation checks and return issues found.
@@ -156,15 +168,21 @@ class ScenarioValidator:
         if not self.scenario.storyline:
             return
 
+        valid_actors = self.usernames | BUILTIN_ACCOUNTS | self.service_accounts
+
         for idx, event in enumerate(self.scenario.storyline):
-            # Validate actor (must be a defined username)
-            if event.actor not in self.usernames:
+            # Validate actor (must be a defined user, built-in account, or service account)
+            if event.actor not in valid_actors:
+                parts = [f"Available users: {', '.join(sorted(self.usernames))}"]
+                if self.service_accounts:
+                    parts.append(f"Service accounts: {', '.join(sorted(self.service_accounts))}")
+                parts.append(f"Built-in accounts: {', '.join(sorted(BUILTIN_ACCOUNTS))}")
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"storyline.{idx}.actor",
                         message=f"Storyline event references undefined actor '{event.actor}'",
-                        suggestion=f"Available users: {', '.join(sorted(self.usernames))}",
+                        suggestion=". ".join(parts),
                     )
                 )
 

@@ -33,6 +33,7 @@ environment:
       "AP-*": "Asia/Tokyo"
   users: [...]
   systems: [...]
+  service_accounts: [...]      # Optional: extra account names valid as storyline actors
   groups: [...]               # Optional
 ```
 
@@ -162,7 +163,7 @@ Storyline events define specific actions at specific times.
 ```yaml
 storyline:
   - time: "+2h30m"             # Required: ISO 8601, relative offset, or seconds
-    actor: attacker            # Required: username or "attacker"
+    actor: john.doe            # Required: username, built-in account (SYSTEM/root), or service_account
     system: WS-01              # Required: system hostname
     activity: "lateral movement"  # Required: activity description
     details:                   # Optional: activity-specific details

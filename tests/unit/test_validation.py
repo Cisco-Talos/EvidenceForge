@@ -21,6 +21,7 @@ from evidenceforge.models import (
 )
 from evidenceforge.utils import load_yaml
 from evidenceforge.validation import ScenarioValidator, ValidationIssue
+from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 
 class TestScenarioValidator:
@@ -999,6 +1000,116 @@ class TestScenarioValidator:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
         assert len(issues) == 0
+
+    @pytest.mark.parametrize("actor_name", ["SYSTEM", "root", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE"])
+    def test_builtin_accounts_valid_as_actors(self, actor_name):
+        """Built-in OS accounts should be valid storyline actors without being in users list."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            storyline=[
+                StorylineEvent(
+                    time="2024-01-15T10:30:00Z",
+                    actor=actor_name,
+                    system="TEST-01",
+                    activity="system-level activity",
+                    details={}
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        actor_issues = [i for i in issues if "actor" in i.field_path]
+        assert len(actor_issues) == 0
+
+    def test_custom_service_accounts_valid_as_actors(self):
+        """Custom service accounts in environment.service_accounts should be valid actors."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+                service_accounts=["svc_backup", "apache"],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            storyline=[
+                StorylineEvent(
+                    time="2024-01-15T10:30:00Z",
+                    actor="svc_backup",
+                    system="TEST-01",
+                    activity="backup service activity",
+                    details={}
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        actor_issues = [i for i in issues if "actor" in i.field_path]
+        assert len(actor_issues) == 0
+
+    def test_unknown_actor_still_rejected(self):
+        """Actors not in users, built-in accounts, or service_accounts should still fail."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="testuser", full_name="Test User", email="test@example.com")
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+                service_accounts=["svc_backup"],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            storyline=[
+                StorylineEvent(
+                    time="2024-01-15T10:30:00Z",
+                    actor="totally_unknown",
+                    system="TEST-01",
+                    activity="suspicious activity",
+                    details={}
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+        )
+
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        assert any(i.severity == "error" and "totally_unknown" in i.message for i in issues)
+
+    def test_builtin_accounts_constant_is_nonempty(self):
+        """BUILTIN_ACCOUNTS should contain well-known OS accounts."""
+        assert len(BUILTIN_ACCOUNTS) > 0
+        assert "SYSTEM" in BUILTIN_ACCOUNTS
+        assert "root" in BUILTIN_ACCOUNTS
 
 
 class TestNetworkValidation:

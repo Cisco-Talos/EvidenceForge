@@ -412,6 +412,7 @@ class Environment(BaseModel):
         timezone: Timezone configuration (default + optional overrides)
         users: List of users (at least one required)
         systems: List of systems (at least one required)
+        service_accounts: Optional list of service/system account names valid as storyline actors
         groups: Optional list of groups
         network: Optional network topology and sensor configuration
     """
@@ -420,6 +421,10 @@ class Environment(BaseModel):
     timezone: Timezone = Field(default_factory=lambda: Timezone(default="UTC"))
     users: list[User]
     systems: list[System]
+    service_accounts: list[str] = Field(
+        default_factory=list,
+        description="Service/system account names valid as storyline actors (e.g., svc_backup, apache)",
+    )
     groups: list[Group] | None = Field(default_factory=list)
     network: NetworkConfig | None = Field(
         None, description="Optional network topology and sensor config"

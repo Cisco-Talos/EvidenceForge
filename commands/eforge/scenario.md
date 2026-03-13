@@ -91,8 +91,8 @@ The username format should follow a consistent convention for the organization (
 **External attackers do NOT have their own accounts in the victim organization.** Never create a user called `attacker`, `hacker`, `threat_actor`, or anything obviously malicious. Real attackers operate by:
 
 - **Compromising legitimate accounts** — The attacker gains credentials for an existing user (via phishing, credential stuffing, password spraying, etc.) and uses that account. The storyline `actor` field is the compromised user's username. This is the most common case.
-- **Operating at the system level** — Some attacks don't involve user accounts at all (e.g., exploiting a vulnerable service). The actor can be a system account like `SYSTEM`, `NT AUTHORITY\SYSTEM`, `root`, or the service account running the exploited application.
-- **Creating new accounts (rare)** — If the attacker creates accounts for persistence, those accounts must have blending-in names like `svc_sqlbackup`, `admin.temp`, or `backup.service` — never `attacker1` or `evil_admin`.
+- **Operating at the system level** — Some attacks don't involve user accounts at all (e.g., exploiting a vulnerable service). The actor can be a system account like `SYSTEM`, `NT AUTHORITY\SYSTEM`, `root`, or the service account running the exploited application. Well-known OS built-in accounts (`SYSTEM`, `root`, `LOCAL SERVICE`, etc.) are automatically accepted by the validator. For custom service accounts (e.g., `svc_backup`, `apache`), add them to `environment.service_accounts`.
+- **Creating new accounts (rare)** — If the attacker creates accounts for persistence, those accounts must have blending-in names like `svc_sqlbackup`, `admin.temp`, or `backup.service` — never `attacker1` or `evil_admin`. Add these to `environment.service_accounts` so they're valid storyline actors.
 
 **Insider threats** use their own legitimate account — they're already in the users list with a normal name.
 
@@ -175,6 +175,8 @@ environment:
       assigned_user: marcus.chen  # Optional
       services: []               # Optional
 
+  service_accounts: []             # Optional: custom service/system accounts valid as storyline actors
+
   groups:                         # Optional
     - name: engineering
       members: [marcus.chen]
@@ -247,7 +249,7 @@ The scenario is validated before generation. Common issues to avoid:
 - Every `user.persona` must match a persona name (from inline personas or pre-built library)
 - Every `user.primary_system` must match a system hostname
 - Every `system.assigned_user` must match a username
-- Every storyline `actor` must be a username defined in the users list (or a system account like `SYSTEM`/`root`)
+- Every storyline `actor` must be a username defined in the users list, a well-known built-in account (e.g., `SYSTEM`, `root`), or listed in `environment.service_accounts`
 - Every storyline `system` must match a system hostname
 - Usernames, hostnames, and IPs must all be unique
 - Network segment `systems` must reference existing hostnames
