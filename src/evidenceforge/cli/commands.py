@@ -79,17 +79,31 @@ def init(
     """
     console.print("[bold blue]EvidenceForge Initialization[/bold blue]")
 
-    # Check if config.example.yaml exists
+    # Locate config.example.yaml: check CWD first, then bundled package data
     example_config = Path("config.example.yaml")
     if not example_config.exists():
-        console.print(
-            "[bold red]Error:[/bold red] config.example.yaml not found in current directory",
-            style="red"
-        )
-        console.print(
-            "Please run this command from the project root directory or create config.example.yaml"
-        )
-        raise typer.Exit(EXIT_INPUT_ERROR)
+        from importlib.resources import files
+
+        bundled = files("log_generator") / "_data" / "config.example.yaml"
+        if bundled.is_file():
+            example_config = Path(str(bundled))
+        else:
+            # Dev install: _data only exists in built wheels; check project root
+            pkg_dir = Path(str(files("log_generator")))
+            project_root = pkg_dir.parent.parent  # src/log_generator -> project root
+            candidate = project_root / "config.example.yaml"
+            if candidate.is_file():
+                example_config = candidate
+            else:
+                console.print(
+                    "[bold red]Error:[/bold red] config.example.yaml not found",
+                    style="red"
+                )
+                console.print(
+                    "Reinstall EvidenceForge or place config.example.yaml "
+                    "in the current directory"
+                )
+                raise typer.Exit(EXIT_INPUT_ERROR)
 
     # Check if config.yaml already exists
     target_config = Path("config.yaml")
@@ -106,7 +120,7 @@ def init(
         content = example_config.read_text()
         target_config.write_text(content)
         console.print(
-            f"[bold green]✓[/bold green] Created config.yaml from {example_config}",
+            "[bold green]✓[/bold green] Created config.yaml",
             style="green"
         )
         console.print("\nNext steps:")
