@@ -43,6 +43,8 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **The network** — What does the network look like? Subnets, segments, where sensors are placed. The user might describe this conversationally, paste a text-based network diagram, or ask you to design a realistic network for the environment type. Network topology drives which connections are visible in the generated logs — without it, all connections are visible to all sensors.
 
+**Log boundary** — Only include systems and logs that the victim organization would actually have access to. See the "Log Realism: What You'd Actually Have" section below for details. This is especially important for scenarios involving third parties, cloud services, or SaaS vendors.
+
 **Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call.
 
 **Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs.
@@ -111,6 +113,32 @@ Everything the attacker controls should look plausible at first glance. The whol
 - Bad: `attacker@external`, `hacker@evil.com`, `phishing@malicious.net`
 
 **Exception — real tool names:** When the scenario uses a well-known attack tool, use its real name. `mimikatz.exe` is mimikatz. `PsExec.exe` is PsExec. `nmap`, `Rubeus.exe`, `SharpHound.exe`, `Cobalt Strike` — all fine. The rule is: don't *invent* names that scream "malicious", but don't rename real tools either.
+
+### Log Realism: What You'd Actually Have
+
+A critical principle: **only generate logs that the victim organization would realistically collect.** The scenario must model the defender's actual visibility, not an omniscient view of the attack.
+
+**You have logs from systems you own and operate.** This includes:
+- Workstations, servers, and domain controllers in the org's own infrastructure
+- Network sensors (Zeek, Snort, firewall) deployed on the org's own network
+- On-prem applications the org runs itself
+
+**You do NOT have OS-level logs from third parties.** This is the most common mistake. If the scenario involves a SaaS vendor, cloud provider, MSP, or any external organization:
+- You would **never** have their syslog, Windows Event logs, bash_history, or any OS-level telemetry from their servers
+- You **might** have application-level audit logs from the service (e.g., SaaS admin console logs, OAuth token grants, API access logs) — but only if the scenario explicitly establishes this (e.g., "the contract includes audit log access")
+- You **would** see the network traffic between your systems and theirs (via your own network sensors)
+- You **would** see the effects on your own systems (e.g., a malicious update pushed from the compromised vendor hits your endpoints — you see that on your endpoints)
+
+**Examples of what this means in practice:**
+
+| Scenario Element | You HAVE | You DON'T Have |
+|---|---|---|
+| SaaS vendor compromised | Network connections to vendor IPs from your systems; effects on your endpoints when malicious update arrives | Vendor's server syslog, their internal lateral movement, their OS-level logs |
+| Cloud-hosted app (your tenant) | Application audit logs (if configured), network flows to cloud IPs | The cloud provider's hypervisor logs, their infrastructure syslog |
+| Partner VPN connection | Your firewall/VPN logs for the tunnel, traffic through your network sensors | The partner's internal network logs, their endpoint telemetry |
+| Attacker's C2 server | Outbound connections from your network to the C2 IP (via Zeek/Snort) | The C2 server's access logs, the attacker's tooling output |
+
+**When designing the systems list:** Do not add systems for third-party infrastructure. If a SaaS vendor's server is involved in the attack, it exists only as an external IP address that appears in network connections and storyline details — not as a system with a hostname, OS, and assigned user in your environment.
 
 ## Scenario YAML Schema
 
@@ -388,6 +416,7 @@ After the interview, generate both files:
    - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
    - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
    - **Environmental consistency**: Do the users, systems, and network make sense together? Would this org realistically have this infrastructure?
+   - **Log boundary**: Are all systems in the systems list owned by the victim org? Are there any third-party servers (SaaS, cloud provider, partner) that shouldn't be generating OS-level logs? External entities should only appear as IP addresses in network connections, never as systems with hostnames and OS-level log generation.
    - **Timing realism**: Are attack events spaced realistically? (Not crammed into 30 seconds, not dragged over days with no activity)
    - **Detection opportunity**: Is there enough signal for a hunter to find the attack while still requiring genuine effort?
    If you find issues, fix them. Tell the user what you changed and why.
