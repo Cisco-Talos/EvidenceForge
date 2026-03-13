@@ -171,7 +171,7 @@ uv run pytest tests/unit/test_network_visibility.py -v
 ### Architecture
 
 ```
-src/log_generator/
+src/evidenceforge/
   cli/            # Typer CLI commands
   formats/        # YAML format definitions + Jinja2 templates
   generation/     # Engine, activity generator, emitters, state manager

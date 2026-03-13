@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from log_generator.generation.engine import GenerationEngine
-from log_generator.models.scenario import Scenario
-from log_generator.utils.files import load_yaml
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.files import load_yaml
 
 
 @pytest.fixture(scope="module")

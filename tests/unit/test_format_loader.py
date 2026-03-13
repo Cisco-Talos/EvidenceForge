@@ -5,20 +5,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from log_generator.formats.format_def import (
+from evidenceforge.formats.format_def import (
     FieldDefinition,
     FieldType,
     FormatDefinition,
     OutputTemplate,
 )
-from log_generator.formats.loader import (
+from evidenceforge.formats.loader import (
     clear_cache,
     get_definitions_directory,
     get_format,
     load_all_formats,
     load_format,
 )
-from log_generator.models.exceptions import ConfigurationError
+from evidenceforge.models.exceptions import ConfigurationError
 
 
 class TestGetDefinitionsDirectory:
@@ -41,7 +41,7 @@ class TestGetDefinitionsDirectory:
         assert result.parent.name == "formats"
 
     @pytest.mark.skip(reason="Mocking Path is complex; covered by integration tests")
-    @patch("log_generator.formats.loader.Path")
+    @patch("evidenceforge.formats.loader.Path")
     def test_raises_error_if_not_exists(self, mock_path):
         """Test that error is raised if directory doesn't exist."""
         mock_definitions = MagicMock()
@@ -85,7 +85,7 @@ class TestClearCache:
         )
 
         # Import the cache directly to populate it
-        from log_generator.formats import loader
+        from evidenceforge.formats import loader
 
         loader._format_cache["test"] = mock_format
 
@@ -122,7 +122,7 @@ class TestGetFormat:
             output=OutputTemplate(format="text", template="t", file_extension=".txt"),
         )
 
-        from log_generator.formats import loader
+        from evidenceforge.formats import loader
 
         loader._format_cache["test"] = mock_format
 
@@ -159,8 +159,8 @@ class TestLoadFormat:
             assert "nonexistent_format" in error_msg
             assert ".yaml" in error_msg
 
-    @patch("log_generator.formats.loader.load_yaml")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_yaml")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_invalid_yaml_raises_error(self, mock_get_dir, mock_load_yaml):
         """Test that invalid YAML raises ConfigurationError."""
         # Mock the directory to exist
@@ -183,8 +183,8 @@ class TestLoadFormat:
         with pytest.raises(ConfigurationError, match="Invalid format definition"):
             load_format("test")
 
-    @patch("log_generator.formats.loader.load_yaml")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_yaml")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_load_valid_format(self, mock_get_dir, mock_load_yaml):
         """Test loading a valid format definition."""
         # Mock the directory
@@ -217,8 +217,8 @@ class TestLoadFormat:
         assert result.category == "host"
         assert len(result.fields) == 1
 
-    @patch("log_generator.formats.loader.load_yaml")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_yaml")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_caching_works(self, mock_get_dir, mock_load_yaml):
         """Test that second load uses cache."""
         # Mock the directory
@@ -253,8 +253,8 @@ class TestLoadFormat:
         # Verify both results are the same object
         assert result1 is result2
 
-    @patch("log_generator.formats.loader.load_yaml")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_yaml")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_force_reload_bypasses_cache(self, mock_get_dir, mock_load_yaml):
         """Test that force_reload=True bypasses cache."""
         # Mock the directory
@@ -298,8 +298,8 @@ class TestLoadAllFormats:
         """Clear cache after each test."""
         clear_cache()
 
-    @patch("log_generator.formats.loader.load_format")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_format")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_empty_directory_returns_empty_dict(self, mock_get_dir, mock_load):
         """Test that empty directory returns empty dict."""
         mock_dir = MagicMock()
@@ -311,8 +311,8 @@ class TestLoadAllFormats:
         assert result == {}
         mock_load.assert_not_called()
 
-    @patch("log_generator.formats.loader.load_format")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_format")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_loads_all_yaml_files(self, mock_get_dir, mock_load):
         """Test that all YAML files are loaded."""
         # Mock directory with multiple files
@@ -342,8 +342,8 @@ class TestLoadAllFormats:
         assert "format2" in result
         assert mock_load.call_count == 2
 
-    @patch("log_generator.formats.loader.load_format")
-    @patch("log_generator.formats.loader.get_definitions_directory")
+    @patch("evidenceforge.formats.loader.load_format")
+    @patch("evidenceforge.formats.loader.get_definitions_directory")
     def test_error_in_one_format_stops_loading(self, mock_get_dir, mock_load):
         """Test that error in one format raises and stops loading."""
         # Mock directory with files

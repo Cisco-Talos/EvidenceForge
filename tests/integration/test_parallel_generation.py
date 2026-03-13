@@ -11,8 +11,8 @@ import tempfile
 import json
 import xml.etree.ElementTree as ET
 
-from log_generator.generation.engine import GenerationEngine
-from log_generator.models.scenario import (
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.models.scenario import (
     Scenario, TimeWindow, Environment, User, System,
     BaselineActivity, StorylineEvent, OutputSpec
 )

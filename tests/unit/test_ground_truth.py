@@ -4,8 +4,8 @@ import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from log_generator.generation.ground_truth import GroundTruthGenerator
-from log_generator.models import (
+from evidenceforge.generation.ground_truth import GroundTruthGenerator
+from evidenceforge.models import (
     Scenario, Environment, User, System, TimeWindow,
     BaselineActivity, OutputSpec, StorylineEvent
 )

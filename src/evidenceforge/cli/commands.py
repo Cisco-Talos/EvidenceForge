@@ -23,9 +23,9 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from log_generator.generation import GenerationEngine
-from log_generator.models.scenario import Scenario
-from log_generator.utils import load_yaml
+from evidenceforge.generation import GenerationEngine
+from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils import load_yaml
 
 # Initialize Typer app and Rich console
 app = typer.Typer(
@@ -84,13 +84,13 @@ def init(
     if not example_config.exists():
         from importlib.resources import files
 
-        bundled = files("log_generator") / "_data" / "config.example.yaml"
+        bundled = files("evidenceforge") / "_data" / "config.example.yaml"
         if bundled.is_file():
             example_config = Path(str(bundled))
         else:
             # Dev install: _data only exists in built wheels; check project root
-            pkg_dir = Path(str(files("log_generator")))
-            project_root = pkg_dir.parent.parent  # src/log_generator -> project root
+            pkg_dir = Path(str(files("evidenceforge")))
+            project_root = pkg_dir.parent.parent  # src/evidenceforge -> project root
             candidate = project_root / "config.example.yaml"
             if candidate.is_file():
                 example_config = candidate
@@ -201,7 +201,7 @@ def generate(
             console.print(f"  Storyline events: {len(scenario.storyline)}")
 
         # Cross-reference validation (Phase 1.9)
-        from log_generator.validation import ScenarioValidator
+        from evidenceforge.validation import ScenarioValidator
 
         console.print("\n[bold]Validating cross-references...[/bold]")
         validator = ScenarioValidator(scenario)
@@ -422,7 +422,7 @@ def validate(
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
     # Step 3: Cross-reference validation
-    from log_generator.validation import ScenarioValidator
+    from evidenceforge.validation import ScenarioValidator
 
     console.print("\n[bold]Validating cross-references...[/bold]")
     validator = ScenarioValidator(scenario)
@@ -464,7 +464,7 @@ def install_skills_cmd(
     Existing installations are updated: new files are copied, changed files
     are overwritten, and stale files from previous versions are removed.
     """
-    from log_generator.cli.install_skills import install_skills
+    from evidenceforge.cli.install_skills import install_skills
 
     if global_install:
         target_dir = Path.home() / ".claude" / "skills"

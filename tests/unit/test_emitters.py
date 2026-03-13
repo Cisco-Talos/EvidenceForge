@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from log_generator.formats import load_format
-from log_generator.generation.emitters import WindowsEventEmitter, ZeekEmitter
-from log_generator.utils import generate_zeek_uid
+from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.utils import generate_zeek_uid
 
 
 class TestWindowsEventEmitter:

@@ -8,7 +8,7 @@ from datetime import datetime
 from threading import Thread, Barrier
 from collections import Counter
 
-from log_generator.generation.state_manager import StateManager
+from evidenceforge.generation.state_manager import StateManager
 
 
 class TestStateManagerThreadSafety:

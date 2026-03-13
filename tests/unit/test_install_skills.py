@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from log_generator.cli.commands import EXIT_SUCCESS, app
-from log_generator.cli.install_skills import install_skills
+from evidenceforge.cli.commands import EXIT_SUCCESS, app
+from evidenceforge.cli.install_skills import install_skills
 
 runner = CliRunner()
 

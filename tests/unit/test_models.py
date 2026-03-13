@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from log_generator.models import (
+from evidenceforge.models import (
     ActiveSession,
     AppConfig,
     AWSConfig,
@@ -27,7 +27,7 @@ from log_generator.models import (
     Timezone,
     User,
 )
-from log_generator.models.exceptions import EvidenceForgeError, ValidationError as VError
+from evidenceforge.models.exceptions import EvidenceForgeError, ValidationError as VError
 
 
 class TestExceptions:

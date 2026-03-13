@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from log_generator.formats.format_def import (
+from evidenceforge.formats.format_def import (
     EventVariant,
     FieldConstraint,
     FieldDefinition,

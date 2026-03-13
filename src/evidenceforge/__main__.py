@@ -3,7 +3,7 @@
 This module provides the main entry point for the eforge command-line tool.
 """
 
-from log_generator.cli.commands import main
+from evidenceforge.cli.commands import main
 
 if __name__ == "__main__":
     main()

@@ -33,13 +33,13 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run unit tests
-        run: uv run pytest tests/unit/ -v --cov=log_generator --cov-report=term --cov-report=xml
+        run: uv run pytest tests/unit/ -v --cov=evidenceforge --cov-report=term --cov-report=xml
 
       - name: Run integration tests
         run: uv run pytest tests/integration/ -v
 
       - name: Check coverage threshold
-        run: uv run pytest --cov=log_generator --cov-report=term --cov-fail-under=90 tests/unit/ tests/integration/
+        run: uv run pytest --cov=evidenceforge --cov-report=term --cov-fail-under=90 tests/unit/ tests/integration/
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from log_generator.formats.format_def import FormatDefinition
-from log_generator.generation.emitters.base import LogEmitter
+from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.emitters.base import LogEmitter
 
 
 class WindowsEventEmitter(LogEmitter):

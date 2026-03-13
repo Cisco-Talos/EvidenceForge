@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from log_generator.generation.state_manager import StateManager
-from log_generator.models.exceptions import StateError
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.exceptions import StateError
 
 
 class TestStateManagerInit:

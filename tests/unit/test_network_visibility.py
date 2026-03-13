@@ -3,8 +3,8 @@
 Phase 2.5: Tests NetworkVisibilityEngine for sensor-based connection filtering.
 """
 
-from log_generator.generation.network_visibility import NetworkVisibilityEngine
-from log_generator.models.scenario import (
+from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+from evidenceforge.models.scenario import (
     NetworkConfig,
     NetworkSegment,
     NetworkSensor,

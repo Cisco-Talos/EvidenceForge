@@ -11,10 +11,10 @@ from datetime import datetime
 from threading import local, get_ident, Lock
 from typing import Optional
 
-from log_generator.generation.emitters import WindowsEventEmitter, ZeekEmitter
-from log_generator.generation.state_manager import StateManager
-from log_generator.models.scenario import User, System
-from log_generator.utils.ids import generate_zeek_uid
+from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.scenario import User, System
+from evidenceforge.utils.ids import generate_zeek_uid
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,7 @@ class ActivityGenerator:
 
         # Network visibility (Phase 2.5): default to all-visible if not provided
         if network_visibility is None:
-            from log_generator.generation.network_visibility import NetworkVisibilityEngine
+            from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
             network_visibility = NetworkVisibilityEngine(None, [])
         self.network_visibility = network_visibility
 

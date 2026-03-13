@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from log_generator.generation.activity import ActivityGenerator, BASELINE_PATTERNS
-from log_generator.generation.engine import GenerationEngine
-from log_generator.models.scenario import (
+from evidenceforge.generation.activity import ActivityGenerator, BASELINE_PATTERNS
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
     OutputSpec,

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from log_generator.models import (
+from evidenceforge.models import (
     BaselineActivity,
     Environment,
     Group,
@@ -19,8 +19,8 @@ from log_generator.models import (
     TimeWindow,
     User,
 )
-from log_generator.utils import load_yaml
-from log_generator.validation import ScenarioValidator, ValidationIssue
+from evidenceforge.utils import load_yaml
+from evidenceforge.validation import ScenarioValidator, ValidationIssue
 
 
 class TestScenarioValidator:

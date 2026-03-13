@@ -11,9 +11,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
-from log_generator.formats import load_format
-from log_generator.generation.activity import ActivityGenerator
-from log_generator.generation.emitters import (
+from evidenceforge.formats import load_format
+from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.emitters import (
     WindowsEventEmitter,
     ZeekEmitter,
     EcarEmitter,
@@ -22,10 +22,10 @@ from log_generator.generation.emitters import (
     SnortEmitter,
     WebEmitter,
 )
-from log_generator.generation.ground_truth import GroundTruthGenerator
-from log_generator.generation.state_manager import StateManager
-from log_generator.models.scenario import Persona, Scenario, User, System
-from log_generator.utils.time import parse_duration, parse_iso8601, resolve_time_window
+from evidenceforge.generation.ground_truth import GroundTruthGenerator
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.scenario import Persona, Scenario, User, System
+from evidenceforge.utils.time import parse_duration, parse_iso8601, resolve_time_window
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ class GenerationEngine:
             logger.info(f"Initialized {format_name} emitter (threaded) -> {output_file}")
 
         # Initialize network visibility engine (Phase 2.5)
-        from log_generator.generation.network_visibility import NetworkVisibilityEngine
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
         visibility_engine = NetworkVisibilityEngine(
             network_config=self.scenario.environment.network,
             systems=self.scenario.environment.systems,

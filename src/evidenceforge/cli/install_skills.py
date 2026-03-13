@@ -4,7 +4,7 @@ import importlib.resources
 import shutil
 from pathlib import Path
 
-from log_generator.utils.files import ensure_directory
+from evidenceforge.utils.files import ensure_directory
 
 
 # Relative paths within the installed eforge/ directory that we expect to exist.
@@ -24,7 +24,7 @@ def _get_data_root() -> Path:
     """Resolve the root directory containing bundled data files.
 
     In an installed package (pip install / uv tool install), files live under
-    log_generator/_data/ via hatch force-include. In development (editable install),
+    evidenceforge/_data/ via hatch force-include. In development (editable install),
     they live at the project root in their original locations.
 
     Returns:
@@ -32,7 +32,7 @@ def _get_data_root() -> Path:
     """
     # Try importlib.resources first (installed package)
     try:
-        data_pkg = importlib.resources.files("log_generator._data")
+        data_pkg = importlib.resources.files("evidenceforge._data")
         # Check that it actually has content (not just the __init__.py)
         skills_dir = data_pkg / "skills" / "eforge" / "scenario.md"
         # Traversable.is_file() works for both filesystem and zip paths

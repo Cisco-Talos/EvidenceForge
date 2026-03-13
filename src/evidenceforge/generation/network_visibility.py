@@ -10,7 +10,7 @@ import ipaddress
 import logging
 from typing import Optional
 
-from log_generator.models.scenario import NetworkConfig, NetworkSensor, System
+from evidenceforge.models.scenario import NetworkConfig, NetworkSensor, System
 
 logger = logging.getLogger(__name__)
 

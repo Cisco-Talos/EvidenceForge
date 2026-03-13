@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from log_generator.models.scenario import Scenario, StorylineEvent
+from evidenceforge.models.scenario import Scenario, StorylineEvent
 
 logger = logging.getLogger(__name__)
 

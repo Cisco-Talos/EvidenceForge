@@ -136,8 +136,8 @@ class TestZeekFormatAccuracy:
         exactly 6 decimal places for the epoch timestamp.
         """
         from datetime import datetime
-        from log_generator.generation.emitters.zeek import ZeekEmitter
-        from log_generator.formats import load_format
+        from evidenceforge.generation.emitters.zeek import ZeekEmitter
+        from evidenceforge.formats import load_format
         from pathlib import Path
         import tempfile
         import json

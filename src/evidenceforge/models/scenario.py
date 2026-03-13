@@ -207,7 +207,7 @@ class Persona(BaseModel):
         if self.work_hours_parsed is None and self.work_hours:
             try:
                 # Import here to avoid circular dependency
-                from log_generator.utils.time import parse_work_hours
+                from evidenceforge.utils.time import parse_work_hours
                 self.work_hours_parsed = parse_work_hours(self.work_hours)
             except Exception:
                 # If parsing fails, leave work_hours_parsed as None

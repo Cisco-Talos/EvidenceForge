@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from log_generator.models.config import LoggingConfig
+from evidenceforge.models.config import LoggingConfig
 
 
 def setup_logging(config: LoggingConfig) -> None:

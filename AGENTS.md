@@ -109,7 +109,7 @@ Use markdown checkboxes organized by phase/feature:
 ## Project Structure
 
 ```
-log-generator/
+evidence-forge/
 ├── pyproject.toml               # uv project config
 ├── README.md
 ├── AGENTS.md                    # This file
@@ -126,7 +126,7 @@ log-generator/
 │   └── ...                      # Persona YAML files (developer, accountant, etc.)
 │
 ├── src/
-│   └── log_generator/
+│   └── evidenceforge/
 │       ├── __init__.py
 │       ├── __main__.py          # CLI entry point
 │       │
@@ -245,7 +245,7 @@ uv add "package-name>=1.0,<2.0"
 uv run pytest
 
 # Run the CLI
-uv run python -m log_generator --help
+uv run python -m evidenceforge --help
 
 # Run with specific Python version
 uv run --python 3.11 pytest
@@ -492,7 +492,7 @@ def load_scenario(scenario_path: str) -> Scenario:  # String path
 
 Loaded in this order (later overrides earlier):
 1. Default values in code
-2. System-wide config: `~/.config/log-generator/config.yaml` (if exists)
+2. System-wide config: `~/.config/evidence-forge/config.yaml` (if exists)
 3. `.env` file (if exists, search from CWD upward to home, stop at first found)
 4. Project config: `./config.yaml`
 5. Command-line arguments
@@ -1027,7 +1027,7 @@ from pathlib import Path
 from typing import Annotated
 
 app = typer.Typer(
-    name="log-generator",
+    name="evidence-forge",
     help="Generate realistic synthetic security logs",
     add_completion=False  # Disable shell completion for MVP
 )
@@ -1190,7 +1190,7 @@ tests/
 ```python
 import pytest
 from pathlib import Path
-from log_generator.models.scenario import Scenario, ValidationError
+from evidenceforge.models.scenario import Scenario, ValidationError
 
 def test_scenario_load_valid_file_returns_scenario(tmp_path: Path):
     """Test that loading a valid scenario file returns a Scenario object."""
@@ -1234,8 +1234,8 @@ def test_conversation_creates_valid_scenario():
 ```python
 import pytest
 from pathlib import Path
-from log_generator.models.config import Config
-from log_generator.models.scenario import Scenario
+from evidenceforge.models.config import Config
+from evidenceforge.models.scenario import Scenario
 
 @pytest.fixture
 def tmp_output_dir(tmp_path: Path) -> Path:
@@ -1270,7 +1270,7 @@ def mock_llm_client(monkeypatch):
             return "Mock LLM response"
 
     client = MockLLMClient()
-    monkeypatch.setattr("log_generator.llm.client.BedrockClient", lambda *args, **kwargs: client)
+    monkeypatch.setattr("evidenceforge.llm.client.BedrockClient", lambda *args, **kwargs: client)
     return client
 ```
 
@@ -1302,7 +1302,7 @@ def test_event_timestamp_uses_current_time():
     """Test that events use current time."""
     fixed_time = datetime(2026, 1, 1, 12, 0, 0)
 
-    with patch("log_generator.generation.engine.datetime") as mock_datetime:
+    with patch("evidenceforge.generation.engine.datetime") as mock_datetime:
         mock_datetime.now.return_value = fixed_time
         mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
 
@@ -1587,7 +1587,7 @@ uv sync
 uv run pytest
 
 # Run CLI
-uv run python -m log_generator --help
+uv run python -m evidenceforge --help
 ```
 
 **Questions?** Refer to PRD first, then make engineering decisions that align with project goals. Document decisions in code comments or update this file.

@@ -7,7 +7,7 @@ from datetime import datetime
 
 import pytest
 
-from log_generator.formats import load_all_formats, load_format, validate_event
+from evidenceforge.formats import load_all_formats, load_format, validate_event
 
 
 class TestWindowsEventFormat:
@@ -380,7 +380,7 @@ class TestLoadAllFormats:
 
     def test_formats_cached(self):
         """Test that formats are cached after loading."""
-        from log_generator.formats import get_format
+        from evidenceforge.formats import get_format
 
         # Load all formats
         load_all_formats()
@@ -391,7 +391,7 @@ class TestLoadAllFormats:
 
     def test_clear_cache_works(self):
         """Test that cache clearing works."""
-        from log_generator.formats import clear_cache, get_format
+        from evidenceforge.formats import clear_cache, get_format
 
         # Load formats
         load_all_formats()

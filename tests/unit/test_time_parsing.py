@@ -5,7 +5,7 @@ Phase 2.4: Tests parse_work_hours() function for temporal activity distribution.
 
 import pytest
 
-from log_generator.utils.time import parse_work_hours
+from evidenceforge.utils.time import parse_work_hours
 
 
 class TestParseWorkHours:

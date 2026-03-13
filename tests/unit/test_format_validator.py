@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from log_generator.formats.format_def import (
+from evidenceforge.formats.format_def import (
     FieldConstraint,
     FieldDefinition,
     FieldType,
@@ -12,7 +12,7 @@ from log_generator.formats.format_def import (
     EventVariant,
     OutputTemplate,
 )
-from log_generator.formats.validator import (
+from evidenceforge.formats.validator import (
     ValidationResult,
     validate_event,
     validate_field,

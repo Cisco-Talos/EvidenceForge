@@ -8,10 +8,10 @@ from threading import Thread, Barrier
 from datetime import datetime
 import time
 
-from log_generator.generation.activity import _get_rng, ActivityGenerator
-from log_generator.generation.state_manager import StateManager
-from log_generator.generation.emitters import WindowsEventEmitter, ZeekEmitter
-from log_generator.formats import load_format
+from evidenceforge.generation.activity import _get_rng, ActivityGenerator
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.formats import load_format
 from pathlib import Path
 import tempfile
 
@@ -152,7 +152,7 @@ class TestThreadLocalRNG:
             ag = ActivityGenerator(sm, emitters)
 
             # Create dummy user and system with all required fields
-            from log_generator.models.scenario import User, System
+            from evidenceforge.models.scenario import User, System
             user = User(
                 username="testuser",
                 full_name="Test User",

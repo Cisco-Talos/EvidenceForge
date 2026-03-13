@@ -6,7 +6,7 @@ when loading scenarios with multiple timezone overrides.
 
 from datetime import datetime, timezone
 
-from log_generator.models.scenario import (
+from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
     OutputSpec,
@@ -17,7 +17,7 @@ from log_generator.models.scenario import (
     TimeWindow,
     User,
 )
-from log_generator.utils.time import convert_to_output_timezone, get_system_timezone
+from evidenceforge.utils.time import convert_to_output_timezone, get_system_timezone
 
 
 class TestMultiTimezoneScenario:

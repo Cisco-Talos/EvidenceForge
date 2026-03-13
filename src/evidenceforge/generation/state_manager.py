@@ -8,8 +8,8 @@ import logging
 from datetime import datetime, timedelta
 from threading import RLock
 
-from log_generator.models.exceptions import StateError
-from log_generator.models.state import (
+from evidenceforge.models.exceptions import StateError
+from evidenceforge.models.state import (
     ActiveSession,
     GeneratorState,
     OpenConnection,

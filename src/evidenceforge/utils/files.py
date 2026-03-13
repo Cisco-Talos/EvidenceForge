@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from log_generator.models.exceptions import ConfigurationError
+from evidenceforge.models.exceptions import ConfigurationError
 
 
 def load_yaml(path: Path | str) -> dict:

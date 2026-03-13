@@ -10,7 +10,7 @@ import ipaddress
 from dataclasses import dataclass
 from typing import Optional
 
-from log_generator.models import Scenario
+from evidenceforge.models import Scenario
 
 
 @dataclass

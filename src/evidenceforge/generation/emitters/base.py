@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from jinja2 import Template
 
-from log_generator.formats.format_def import FormatDefinition
+from evidenceforge.formats.format_def import FormatDefinition
 
 logger = logging.getLogger(__name__)
 

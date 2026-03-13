@@ -8,8 +8,8 @@ import yaml
 from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 
-from log_generator.models.config import AppConfig
-from log_generator.models.exceptions import ConfigurationError
+from evidenceforge.models.config import AppConfig
+from evidenceforge.models.exceptions import ConfigurationError
 
 
 def interpolate_env_vars(yaml_content: str) -> str:
@@ -89,7 +89,7 @@ def load_config(
 
     Precedence (later overrides earlier):
     1. Default values in AppConfig model
-    2. System config: ~/.config/log-generator/config.yaml (if exists)
+    2. System config: ~/.config/evidence-forge/config.yaml (if exists)
     3. .env file (search from CWD upward, stop at first found)
     4. Project config: ./config.yaml or specified config_path
     5. Command-line arguments (not handled here, merged in CLI)
@@ -108,7 +108,7 @@ def load_config(
     config_data = {}
 
     # 1. Load system-wide config (optional)
-    system_config = Path.home() / ".config" / "log-generator" / "config.yaml"
+    system_config = Path.home() / ".config" / "evidence-forge" / "config.yaml"
     if system_config.exists():
         config_data = load_yaml_with_interpolation(system_config)
 

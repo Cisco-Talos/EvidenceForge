@@ -9,8 +9,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from log_generator.models.exceptions import ConfigurationError
-from log_generator.utils.files import load_yaml
+from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.utils.files import load_yaml
 
 from .format_def import FormatDefinition
 
@@ -29,7 +29,7 @@ def get_definitions_directory() -> Path:
     Raises:
         ConfigurationError: If definitions directory does not exist
     """
-    # Get package root (src/log_generator)
+    # Get package root (src/evidenceforge)
     package_root = Path(__file__).parent.parent
     definitions_dir = package_root / "formats" / "definitions"
 

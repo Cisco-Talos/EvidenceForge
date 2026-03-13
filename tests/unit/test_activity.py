@@ -4,15 +4,15 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import Mock, MagicMock, patch
 
-from log_generator.generation.activity import (
+from evidenceforge.generation.activity import (
     ActivityGenerator,
     _is_invalid_network_connection,
     BASELINE_PATTERNS,
     PROCESS_TEMPLATES,
     EXTERNAL_IPS
 )
-from log_generator.generation.state_manager import StateManager
-from log_generator.models import User, System
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models import User, System
 
 
 class TestNetworkValidation:
@@ -468,7 +468,7 @@ class TestActivityGenerator:
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
 
         # Mock EXTERNAL_IPS to have only one IP that matches source
-        with patch('log_generator.generation.activity.EXTERNAL_IPS', {
+        with patch('evidenceforge.generation.activity.EXTERNAL_IPS', {
             'connection_test': ["10.0.100.10"]  # Only IP matches source
         }):
             activity_gen.execute_baseline_activity(test_user, system, timestamp, 'connection_test')

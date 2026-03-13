@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch, call, MagicMock
 
-from log_generator.generation.engine import GenerationEngine
-from log_generator.models import (
+from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.models import (
     Scenario, Environment, User, System, TimeWindow,
     BaselineActivity, OutputSpec, StorylineEvent
 )
@@ -23,11 +23,11 @@ class TestGenerationEngine:
         7 emitters. This fixture mocks the 5 new ones so existing tests
         that only patch WindowsEventEmitter and ZeekEmitter still work.
         """
-        with patch('log_generator.generation.engine.EcarEmitter') as m1, \
-             patch('log_generator.generation.engine.SyslogEmitter') as m2, \
-             patch('log_generator.generation.engine.BashHistoryEmitter') as m3, \
-             patch('log_generator.generation.engine.SnortEmitter') as m4, \
-             patch('log_generator.generation.engine.WebEmitter') as m5:
+        with patch('evidenceforge.generation.engine.EcarEmitter') as m1, \
+             patch('evidenceforge.generation.engine.SyslogEmitter') as m2, \
+             patch('evidenceforge.generation.engine.BashHistoryEmitter') as m3, \
+             patch('evidenceforge.generation.engine.SnortEmitter') as m4, \
+             patch('evidenceforge.generation.engine.WebEmitter') as m5:
             yield m1, m2, m3, m4, m5
 
     @pytest.fixture
@@ -139,10 +139,10 @@ class TestGenerationEngine:
             ]
         )
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_creates_emitters(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -163,10 +163,10 @@ class TestGenerationEngine:
         assert 'windows_event_security' in engine.emitters
         assert 'zeek_conn' in engine.emitters
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_resolves_time_window(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -183,10 +183,10 @@ class TestGenerationEngine:
         assert engine.start_time == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         assert engine.end_time == datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_creates_output_directory(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -202,10 +202,10 @@ class TestGenerationEngine:
 
         assert output_dir.exists()
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_sets_state_manager_time(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -317,10 +317,10 @@ class TestGenerationEngine:
 
         assert times == []
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_generate_baseline_filters_enabled_users(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -352,10 +352,10 @@ class TestGenerationEngine:
         # (or possibly zero times if no events generated due to randomness)
         assert mock_activity_instance.get_baseline_pattern.called
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_generate_baseline_hour_by_hour(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -452,11 +452,11 @@ class TestGenerationEngine:
 
         assert events == ['process']
 
-    @patch('log_generator.generation.engine.GroundTruthGenerator')
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.GroundTruthGenerator')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_tracks_malicious_events(
         self, mock_load_format, mock_windows, mock_zeek,
         mock_activity_gen, mock_gt_gen, scenario_with_storyline, tmp_path
@@ -481,11 +481,11 @@ class TestGenerationEngine:
         assert engine.malicious_events[0]['actor'] == 'attacker'
         assert engine.malicious_events[0]['system'] == 'TEST-01'
 
-    @patch('log_generator.generation.engine.GroundTruthGenerator')
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.GroundTruthGenerator')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_generate_calls_ground_truth_when_malicious_events(
         self, mock_load_format, mock_windows, mock_zeek,
         mock_activity_gen, mock_gt_gen, scenario_with_storyline, tmp_path
@@ -511,11 +511,11 @@ class TestGenerationEngine:
         assert mock_gt_gen.called
         assert mock_gt_instance.generate.called
 
-    @patch('log_generator.generation.engine.GroundTruthGenerator')
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.GroundTruthGenerator')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_generate_skips_ground_truth_without_malicious_events(
         self, mock_load_format, mock_windows, mock_zeek,
         mock_activity_gen, mock_gt_gen, minimal_scenario, tmp_path
@@ -535,10 +535,10 @@ class TestGenerationEngine:
         # Ground truth generator should NOT be called
         assert not mock_gt_gen.called
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_finalize_closes_emitters(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -561,10 +561,10 @@ class TestGenerationEngine:
         assert mock_windows_instance.stop_thread.called
         assert mock_zeek_instance.stop_thread.called
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_progress_callback_invoked(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -594,10 +594,10 @@ class TestGenerationEngine:
         assert len(phase_starts) > 0
         assert len(phase_ends) > 0
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_progress_callback_not_required(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -628,10 +628,10 @@ class TestGenerationEngine:
         assert id2 == id1 + 1
         assert id3 == id2 + 1
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_event_logon_type(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         scenario_with_storyline, tmp_path
@@ -658,10 +658,10 @@ class TestGenerationEngine:
         call_args = mock_activity_instance.generate_logon.call_args
         assert call_args[1]['logon_type'] == 3
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_event_connection_validation(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         scenario_with_storyline, tmp_path
@@ -690,10 +690,10 @@ class TestGenerationEngine:
         call_args = mock_activity_instance.generate_connection.call_args
         assert call_args[1]['dst_ip'] == "198.51.100.10"
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_generate_user_activity_uses_primary_system(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         minimal_scenario, tmp_path
@@ -721,10 +721,10 @@ class TestGenerationEngine:
         call_args = mock_activity_instance.execute_baseline_activity.call_args
         assert call_args[1]['system'].hostname == "TEST-01"
 
-    @patch('log_generator.generation.engine.ActivityGenerator')
-    @patch('log_generator.generation.engine.ZeekEmitter')
-    @patch('log_generator.generation.engine.WindowsEventEmitter')
-    @patch('log_generator.generation.engine.load_format')
+    @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekEmitter')
+    @patch('evidenceforge.generation.engine.WindowsEventEmitter')
+    @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_skips_missing_actor(
         self, mock_load_format, mock_windows, mock_zeek, mock_activity_gen,
         scenario_with_storyline, tmp_path

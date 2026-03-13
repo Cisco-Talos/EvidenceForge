@@ -10,8 +10,8 @@ from datetime import datetime
 import tempfile
 import time
 
-from log_generator.generation.emitters import WindowsEventEmitter, ZeekEmitter
-from log_generator.formats import load_format
+from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.formats import load_format
 
 
 class TestEmitterThreadSafety:

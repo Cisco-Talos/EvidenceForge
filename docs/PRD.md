@@ -1,6 +1,6 @@
 # PRD: EvidenceForge
 
-> **Naming conventions:** "EvidenceForge" is the product name, `log_generator` is the Python package name, `eforge` is the CLI command name.
+> **Naming conventions:** "EvidenceForge" is the product name, `evidenceforge` is the Python package name, `eforge` is the CLI command name.
 
 ## 1. Overview
 
@@ -305,7 +305,7 @@ output:
 
 #### Format Definition Schema
 
-**Format Definitions** (`src/log_generator/formats/definitions/{format_name}.yaml`)
+**Format Definitions** (`src/evidenceforge/formats/definitions/{format_name}.yaml`)
 ```yaml
 format:
   name: string
@@ -765,7 +765,7 @@ evidenceforge/
 |   +-- ...                      # 10-15 common personas
 |
 +-- src/
-|   +-- log_generator/
+|   +-- evidenceforge/
 |       +-- __init__.py
 |       +-- __main__.py          # CLI entry point
 |       +-- py.typed             # PEP 561 marker
@@ -879,7 +879,7 @@ evidenceforge/
 
 **Configuration Hierarchy** (later overrides earlier):
 1. Default values in code
-2. System-wide config (if exists): `~/.config/log-generator/config.yaml`
+2. System-wide config (if exists): `~/.config/evidence-forge/config.yaml`
 3. .env file (if exists): Search from current working directory upward to home directory, stop at first found (don't merge multiple)
 4. Project config: `./config.yaml`
 5. Command-line arguments

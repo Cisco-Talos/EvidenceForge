@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from log_generator.models import (
+from evidenceforge.models import (
     AppConfig,
     Environment,
     LoggingConfig,
@@ -15,7 +15,7 @@ from log_generator.models import (
     Timezone,
     User,
 )
-from log_generator.utils import (
+from evidenceforge.utils import (
     convert_to_output_timezone,
     ensure_directory,
     get_system_timezone,
@@ -95,7 +95,7 @@ aws:
 
     def test_load_config_invalid_yaml(self, tmp_path, monkeypatch):
         """Test that invalid YAML raises ConfigurationError."""
-        from log_generator.models.exceptions import ConfigurationError
+        from evidenceforge.models.exceptions import ConfigurationError
 
         monkeypatch.chdir(tmp_path)
         config_file = tmp_path / "config.yaml"
@@ -106,7 +106,7 @@ aws:
 
     def test_load_config_invalid_config(self, tmp_path, monkeypatch):
         """Test that invalid config data raises ConfigurationError."""
-        from log_generator.models.exceptions import ConfigurationError
+        from evidenceforge.models.exceptions import ConfigurationError
 
         monkeypatch.chdir(tmp_path)
         config_file = tmp_path / "config.yaml"
@@ -128,7 +128,7 @@ logging:
         monkeypatch.chdir(tmp_path)
 
         # Create system config
-        system_config_dir = tmp_path / ".config" / "log-generator"
+        system_config_dir = tmp_path / ".config" / "evidence-forge"
         system_config_dir.mkdir(parents=True)
         system_config = system_config_dir / "config.yaml"
         system_config.write_text(
@@ -389,7 +389,7 @@ class TestFileUtils:
 
     def test_load_yaml_invalid_yaml(self, tmp_path):
         """Test loading invalid YAML raises ConfigurationError."""
-        from log_generator.models.exceptions import ConfigurationError
+        from evidenceforge.models.exceptions import ConfigurationError
 
         yaml_file = tmp_path / "invalid.yaml"
         yaml_file.write_text("invalid: yaml: [content")
@@ -424,7 +424,7 @@ class TestFileUtilsErrors:
 
     def test_load_yaml_invalid_yaml(self, tmp_path):
         """Test loading invalid YAML raises ConfigurationError."""
-        from log_generator.models.exceptions import ConfigurationError
+        from evidenceforge.models.exceptions import ConfigurationError
 
         yaml_file = tmp_path / "invalid.yaml"
         yaml_file.write_text("invalid: yaml: [content")

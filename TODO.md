@@ -20,7 +20,7 @@
 ### 1.1 Project Setup & Infrastructure
 
 - [x] Initialize uv project with pyproject.toml
-- [x] Set up src/log_generator/ package structure
+- [x] Set up src/evidenceforge/ package structure
 - [x] Create tests/ directory structure (unit/, integration/, live/, fixtures/)
 - [x] Set up pytest with pytest.ini and coverage configuration
 - [x] Create .env.example with AWS_PROFILE, AWS_REGION placeholders

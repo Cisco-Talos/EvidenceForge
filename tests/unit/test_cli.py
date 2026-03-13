@@ -7,7 +7,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from log_generator.cli.commands import (
+from evidenceforge.cli.commands import (
     EXIT_GENERATION_ERROR,
     EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
@@ -103,7 +103,7 @@ name: test
         assert result.exit_code == EXIT_SCHEMA_VALIDATION
         assert "validation" in result.stdout.lower()
 
-    @patch('log_generator.cli.commands.GenerationEngine')
+    @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_with_custom_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """--output flag should use custom output directory."""
         mock_engine = Mock()
@@ -121,7 +121,7 @@ name: test
         assert mock_engine_class.called
         assert mock_engine.generate.called
 
-    @patch('log_generator.cli.commands.GenerationEngine')
+    @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_with_config_flag(self, mock_engine_class, scenarios_dir, tmp_path):
         """--config flag should load custom config file."""
         mock_engine = Mock()
@@ -150,7 +150,7 @@ logging:
         # Should succeed (config loaded)
         assert result.exit_code == EXIT_SUCCESS
 
-    @patch('log_generator.cli.commands.GenerationEngine')
+    @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_success_minimal(self, mock_engine_class, scenarios_dir, tmp_path):
         """eforge generate with valid minimal scenario should succeed."""
         mock_engine = Mock()
@@ -166,7 +166,7 @@ logging:
         assert "✓" in result.stdout or "complete" in result.stdout.lower()
         assert mock_engine.generate.called
 
-    @patch('log_generator.cli.commands.GenerationEngine')
+    @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_verbose_mode(self, mock_engine_class, scenarios_dir, tmp_path):
         """--verbose flag should enable verbose logging."""
         mock_engine = Mock()
@@ -226,7 +226,7 @@ output:
         assert "validation" in result.stdout.lower()
         assert "nonexistent_persona" in result.stdout
 
-    @patch('log_generator.cli.commands.GenerationEngine')
+    @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_with_progress_callback(self, mock_engine_class, scenarios_dir, tmp_path):
         """Generate should invoke progress callback during generation."""
         mock_engine = Mock()
@@ -244,7 +244,7 @@ output:
         assert 'progress_callback' in call_kwargs
         assert callable(call_kwargs['progress_callback'])
 
-    @patch('log_generator.cli.commands.GenerationEngine')
+    @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_handles_generation_error(self, mock_engine_class, scenarios_dir, tmp_path):
         """Generation errors should be handled gracefully."""
         mock_engine = Mock()

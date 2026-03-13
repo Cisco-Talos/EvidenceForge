@@ -1,13 +1,13 @@
 """Log emitters for generating output in various formats."""
 
-from log_generator.generation.emitters.base import LogEmitter
-from log_generator.generation.emitters.windows import WindowsEventEmitter
-from log_generator.generation.emitters.zeek import ZeekEmitter
-from log_generator.generation.emitters.ecar import EcarEmitter
-from log_generator.generation.emitters.syslog import SyslogEmitter
-from log_generator.generation.emitters.bash_history import BashHistoryEmitter
-from log_generator.generation.emitters.snort import SnortEmitter
-from log_generator.generation.emitters.web import WebEmitter
+from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.syslog import SyslogEmitter
+from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
+from evidenceforge.generation.emitters.snort import SnortEmitter
+from evidenceforge.generation.emitters.web import WebEmitter
 
 __all__ = [
     "LogEmitter",

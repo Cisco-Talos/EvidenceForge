@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytz
 
-from log_generator.models.scenario import Environment, TimeWindow
+from evidenceforge.models.scenario import Environment, TimeWindow
 
 
 def parse_duration(duration_str: str) -> timedelta:

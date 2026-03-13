@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from log_generator.models.scenario import (
+from evidenceforge.models.scenario import (
     Environment,
     System,
     Timezone,
     User,
 )
-from log_generator.utils.time import convert_to_output_timezone, get_system_timezone
+from evidenceforge.utils.time import convert_to_output_timezone, get_system_timezone
 
 
 def _make_environment(tz_default="UTC", tz_systems=None):
