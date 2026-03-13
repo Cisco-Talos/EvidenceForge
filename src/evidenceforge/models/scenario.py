@@ -80,7 +80,7 @@ class User(BaseModel):
         primary_system: Primary system hostname for this user (optional)
     """
 
-    username: str = Field(..., pattern="^[a-zA-Z0-9_-]+$")
+    username: str = Field(..., pattern=r"^[a-zA-Z0-9._-]+$")
     full_name: str
     email: str
     groups: list[str] = Field(default_factory=list)

@@ -40,9 +40,9 @@ build-backend = "hatchling.build"
 packages = ["src/evidenceforge"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"skills/eforge/scenario.md" = "evidenceforge/_data/skills/eforge/scenario.md"
-"skills/eforge/generate.md" = "evidenceforge/_data/skills/eforge/generate.md"
-"skills/eforge/validate.md" = "evidenceforge/_data/skills/eforge/validate.md"
+"commands/eforge/scenario.md" = "evidenceforge/_data/commands/eforge/scenario.md"
+"commands/eforge/generate.md" = "evidenceforge/_data/commands/eforge/generate.md"
+"commands/eforge/validate.md" = "evidenceforge/_data/commands/eforge/validate.md"
 "docs/scenario-reference.md" = "evidenceforge/_data/references/scenario-reference.md"
 "personas" = "evidenceforge/_data/personas"
 "config.example.yaml" = "evidenceforge/_data/config.example.yaml"

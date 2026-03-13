@@ -452,14 +452,14 @@ def validate(
 @app.command("install-skills")
 def install_skills_cmd(
     global_install: bool = typer.Option(
-        False, "--global", help="Install to ~/.claude/skills/ (global)"
+        False, "--global", help="Install to ~/.claude/commands/ (global)"
     ),
 ) -> None:
-    """Install EvidenceForge Claude Code skills.
+    """Install EvidenceForge Claude Code skills as custom slash commands.
 
     Copies skill files, persona library, and reference docs to the Claude Code
-    skills directory. By default installs to .claude/skills/ in the current
-    directory (project scope). Use --global to install to ~/.claude/skills/.
+    commands directory. By default installs to .claude/commands/ in the current
+    directory (project scope). Use --global to install to ~/.claude/commands/.
 
     Existing installations are updated: new files are copied, changed files
     are overwritten, and stale files from previous versions are removed.
@@ -467,10 +467,10 @@ def install_skills_cmd(
     from evidenceforge.cli.install_skills import install_skills
 
     if global_install:
-        target_dir = Path.home() / ".claude" / "skills"
+        target_dir = Path.home() / ".claude" / "commands"
         scope = "global"
     else:
-        target_dir = Path.cwd() / ".claude" / "skills"
+        target_dir = Path.cwd() / ".claude" / "commands"
         scope = "project"
 
     console.print(f"[bold blue]Installing EvidenceForge skills ({scope})[/bold blue]")

@@ -117,7 +117,7 @@ evidence-forge/
 ├── config.example.yaml          # Example configuration
 ├── .env.example                 # Example environment variables
 │
-├── skills/
+├── commands/
 │   └── eforge/                  # Claude Code Skills for scenario creation
 │       ├── scenario.md          # /eforge scenario - guided scenario creation
 │       └── generate.md          # /eforge generate - generation workflow
@@ -1351,7 +1351,7 @@ def test_state_manager_creates_unique_pids(user_count: int):
 
 Claude Code Skills handle the interactive, creative aspects of scenario creation -- work that was originally planned as a built-in conversational CLI.
 
-**Location:** `skills/eforge/` directory
+**Location:** `commands/eforge/` directory
 
 **Installation:**
 ```bash
@@ -1374,7 +1374,7 @@ eforge install-skills --global
 
 ### Adding a New Skill
 
-1. Create `skills/eforge/{name}.md` with the skill prompt
+1. Create `commands/eforge/{name}.md` with the skill prompt
 2. Follow the hybrid interview pattern: structured questions first, then free-form elaboration
 3. Reference the scenario schema from `docs/scenario-reference.md` to ensure output validity
 4. Test interactively by running the skill in Claude Code

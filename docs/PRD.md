@@ -114,9 +114,9 @@ eforge init [--force]
 ```bash
 eforge install-skills [--project | --global]
 ```
-1. Copies skill files from the repo's `skills/eforge/` directory
-2. `--project` (default): Installs to `.claude/skills/` in the current project
-3. `--global`: Installs to `~/.claude/skills/`
+1. Copies skill files from the repo's `commands/eforge/` directory
+2. `--project` (default): Installs to `.claude/commands/` in the current project
+3. `--global`: Installs to `~/.claude/commands/`
 4. Reports which skills were installed and their slash-command triggers
 
 #### Workflow 4: Validate Scenario
@@ -518,8 +518,8 @@ Non-interactive: Simply copies the example config with all options documented.
 eforge install-skills [--project | --global]
 
 Options:
-  --project    Install skills to .claude/skills/ in the current project (default)
-  --global     Install skills to ~/.claude/skills/
+  --project    Install skills to .claude/commands/ in the current project (default)
+  --global     Install skills to ~/.claude/commands/
 
 Copies EvidenceForge skill files to the appropriate Claude Code skills location.
 Skill files are bundled as package data and loaded via importlib.resources at runtime.
@@ -616,7 +616,7 @@ EvidenceForge uses Claude Code skills as the primary scenario authoring interfac
 
 #### Skill Files
 
-Skills live in `skills/eforge/` in the repository and are installed via `eforge install-skills`.
+Skills live in `commands/eforge/` in the repository and are installed via `eforge install-skills`.
 
 **`/eforge scenario`** -- Guided scenario creation skill
 
@@ -651,13 +651,13 @@ Responsibilities:
 ```
 # Install to current project (default)
 eforge install-skills --project
-# Creates .claude/skills/eforge-scenario.md
-# Creates .claude/skills/eforge-generate.md
+# Creates .claude/commands/eforge-scenario.md
+# Creates .claude/commands/eforge-generate.md
 
 # Install globally for all projects
 eforge install-skills --global
-# Creates ~/.claude/skills/eforge-scenario.md
-# Creates ~/.claude/skills/eforge-generate.md
+# Creates ~/.claude/commands/eforge-scenario.md
+# Creates ~/.claude/commands/eforge-generate.md
 ```
 
 Skills are plain Markdown files and can be version-controlled, customized, or extended by users.
@@ -724,7 +724,7 @@ Skills are plain Markdown files and can be version-controlled, customized, or ex
 - pytz for timezone handling
 
 **Skills:**
-- Claude Code skills (Markdown files in `skills/eforge/`)
+- Claude Code skills (Markdown files in `commands/eforge/`)
 - Installed via `eforge install-skills` command
 - No runtime dependency on Claude Code for generation (skills are authoring-time only)
 
@@ -751,7 +751,7 @@ evidenceforge/
 +-- config.example.yaml          # Example configuration
 +-- .env.example                 # Example environment variables
 |
-+-- skills/                      # Claude Code skills (source, installed via eforge install-skills)
++-- commands/                      # Claude Code skills (source, installed via eforge install-skills)
 |   +-- eforge/
 |       +-- scenario.md          # /eforge scenario skill
 |       +-- generate.md          # /eforge generate skill
@@ -1084,7 +1084,7 @@ Required scenario files:
    - Each with realistic activity patterns, work hours, and risk profiles
 
 3. **`eforge install-skills` command**
-   - Installs skills, personas, and reference docs to `.claude/skills/` (project) or `~/.claude/skills/` (global)
+   - Installs skills, personas, and reference docs to `.claude/commands/` (project) or `~/.claude/commands/` (global)
    - Bundled as package data via `importlib.resources` + hatch force-include
    - Handles updates: overwrites changed files, removes stale files
 

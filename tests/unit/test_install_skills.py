@@ -118,24 +118,24 @@ class TestInstallSkillsCli:
     """Tests for the CLI command integration."""
 
     def test_install_skills_project_default(self, tmp_path, monkeypatch):
-        """eforge install-skills copies files to .claude/skills/ in cwd."""
+        """eforge install-skills copies files to .claude/commands/ in cwd."""
         monkeypatch.chdir(tmp_path)
 
         result = runner.invoke(app, ["install-skills"])
 
         assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
-        assert (tmp_path / ".claude" / "skills" / "eforge" / "scenario.md").is_file()
-        assert (tmp_path / ".claude" / "skills" / "eforge" / "generate.md").is_file()
-        assert (tmp_path / ".claude" / "skills" / "eforge" / "validate.md").is_file()
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "generate.md").is_file()
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "validate.md").is_file()
 
     def test_install_skills_global(self, tmp_path, monkeypatch):
-        """eforge install-skills --global copies files to ~/.claude/skills/."""
+        """eforge install-skills --global copies files to ~/.claude/commands/."""
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
         result = runner.invoke(app, ["install-skills", "--global"])
 
         assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
-        assert (tmp_path / ".claude" / "skills" / "eforge" / "scenario.md").is_file()
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
 
     def test_install_skills_shows_file_list(self, tmp_path, monkeypatch):
         """Command output lists installed files."""

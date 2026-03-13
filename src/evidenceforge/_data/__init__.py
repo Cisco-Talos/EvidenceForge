@@ -1,1 +1,1 @@
-"""Package data for EvidenceForge (skills, personas, reference docs)."""
+"""Package data for EvidenceForge (commands, personas, reference docs)."""

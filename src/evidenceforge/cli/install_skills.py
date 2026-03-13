@@ -1,4 +1,4 @@
-"""Install EvidenceForge Claude Code skills to .claude/skills/ directory."""
+"""Install EvidenceForge Claude Code commands to .claude/commands/ directory."""
 
 import importlib.resources
 import shutil
@@ -34,7 +34,7 @@ def _get_data_root() -> Path:
     try:
         data_pkg = importlib.resources.files("evidenceforge._data")
         # Check that it actually has content (not just the __init__.py)
-        skills_dir = data_pkg / "skills" / "eforge" / "scenario.md"
+        skills_dir = data_pkg / "commands" / "eforge" / "scenario.md"
         # Traversable.is_file() works for both filesystem and zip paths
         if skills_dir.is_file():
             return Path(str(data_pkg))
@@ -45,7 +45,7 @@ def _get_data_root() -> Path:
     current = Path(__file__).resolve().parent
     for _ in range(5):
         current = current.parent
-        if (current / "skills" / "eforge" / "scenario.md").exists():
+        if (current / "commands" / "eforge" / "scenario.md").exists():
             return current
 
     raise FileNotFoundError(
@@ -57,22 +57,19 @@ def _get_data_root() -> Path:
 def _collect_source_files(data_root: Path) -> dict[str, Path]:
     """Build a mapping of relative target paths to source file paths.
 
-    Handles both installed layout (_data/skills/eforge/, _data/personas/, _data/references/)
-    and development layout (skills/eforge/, personas/, docs/).
+    Handles both installed layout (_data/commands/eforge/, _data/personas/, _data/references/)
+    and development layout (commands/eforge/, personas/, docs/).
 
     Returns:
         Dict mapping relative path within eforge/ -> absolute source path.
     """
     manifest: dict[str, Path] = {}
 
-    # Detect layout: installed has _data/skills/eforge/, dev has skills/eforge/
-    installed_skills = data_root / "skills" / "eforge"
-    dev_skills = data_root / "skills" / "eforge"
-
-    if (data_root / "skills" / "eforge" / "scenario.md").exists():
-        skills_dir = data_root / "skills" / "eforge"
+    # Detect layout: installed has _data/commands/eforge/, dev has commands/eforge/
+    if (data_root / "commands" / "eforge" / "scenario.md").exists():
+        skills_dir = data_root / "commands" / "eforge"
     else:
-        raise FileNotFoundError(f"Skills not found under {data_root}")
+        raise FileNotFoundError(f"Command files not found under {data_root}")
 
     # Skill markdown files
     for skill_file in SKILL_FILES:
@@ -132,7 +129,7 @@ def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     Overwrites existing files and removes stale files from previous installs.
 
     Args:
-        target_dir: Parent directory (e.g., .claude/skills/)
+        target_dir: Parent directory (e.g., .claude/commands/)
 
     Returns:
         Tuple of (installed_files, removed_files) as relative path lists.

@@ -356,7 +356,7 @@
 
 ### 3.1 Claude Code Skills + Install Command
 
-- [x] Create `skills/eforge/scenario.md` — `/eforge scenario` skill
+- [x] Create `commands/eforge/scenario.md` — `/eforge scenario` skill
   - [x] Hybrid interview flow: structured questions first, then free-form gap-filling
   - [x] Environment, network, personas, attacks, time window, output formats
   - [x] References persona library and scenario schema
@@ -365,18 +365,18 @@
   - [x] 10-tactic MITRE ATT&CK kill chain template
   - [x] Base64/encoded content must be generated via Bash, never fabricated
   - [x] Use `/skill-creator` to develop skill prompt content (2 iterations, 30/30 assertions)
-- [x] Create `skills/eforge/generate.md` — `/eforge generate` skill
+- [x] Create `commands/eforge/generate.md` — `/eforge generate` skill
   - [x] Runs `eforge generate` on scenario file
   - [x] Runs `eforge validate` as pre-flight check
   - [x] Monitors output, diagnoses errors
   - [x] Suggests fixes for common issues, escalates structural problems to `/eforge scenario`
   - [x] Copies ENVIRONMENT.md to output directory alongside GROUND_TRUTH.md
-- [x] Create `skills/eforge/validate.md` — `/eforge validate` skill
+- [x] Create `commands/eforge/validate.md` — `/eforge validate` skill
   - [x] Runs `eforge validate` and interprets output
   - [x] Fixes simple issues directly, escalates structural problems to `/eforge scenario`
 - [x] Add `eforge install-skills` CLI command to `cli/commands.py`
-  - [x] `--project` flag: copies to `.claude/skills/` (default)
-  - [x] `--global` flag: copies to `~/.claude/skills/`
+  - [x] `--project` flag: copies to `.claude/commands/` (default)
+  - [x] `--global` flag: copies to `~/.claude/commands/`
   - [x] Skills bundled as package data via `importlib.resources` + hatch force-include
   - [x] Updates existing installations: overwrites changed files, removes stale files
   - [x] Bundles skills, personas, and scenario-reference.md
