@@ -13,6 +13,9 @@ from typing import Any
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
 from evidenceforge.evaluation.dimensions.record_fidelity import RecordFidelityScorer
 from evidenceforge.evaluation.dimensions.signal_integrity import SignalIntegrityScorer
+from evidenceforge.evaluation.dimensions.cross_source import CrossSourceScorer
+from evidenceforge.evaluation.dimensions.noise_realism import NoiseRealismScorer
+from evidenceforge.evaluation.dimensions.temporal import TemporalRealismScorer
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
     DimensionScore,
@@ -26,8 +29,10 @@ logger = logging.getLogger(__name__)
 # Registered dimension scorers (add new dimensions here as they're implemented)
 DIMENSION_SCORERS: list[DimensionScorer] = [
     RecordFidelityScorer(),
+    CrossSourceScorer(),
+    NoiseRealismScorer(),
+    TemporalRealismScorer(),
     SignalIntegrityScorer(),
-    # Future: TemporalRealismScorer(), CrossSourceScorer(), NoiseRealismScorer()
 ]
 
 # Acceptance criteria definitions

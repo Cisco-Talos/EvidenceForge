@@ -1,0 +1,57 @@
+# Causal pair definitions for Temporal Realism (Dimension 4).
+# Each pair defines a "before" and "after" event that must be correctly ordered.
+# match_fields lists field names that must match between the two records to form a pair.
+
+pairs:
+  - name: "Logon before process creation"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4624
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4688
+    match_fields:
+      before: TargetLogonId
+      after: SubjectLogonId
+
+  - name: "Logon before logoff"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4624
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4634
+    match_fields:
+      before: TargetLogonId
+      after: TargetLogonId
+
+  - name: "eCAR login before process create"
+    before:
+      format: ecar
+      condition:
+        object: USER_SESSION
+        action: LOGIN
+    after:
+      format: ecar
+      condition:
+        object: PROCESS
+        action: CREATE
+    match_fields:
+      before: principal
+      after: principal
+    extra_match: hostname
+
+  - name: "SSH accept before bash commands"
+    before:
+      format: syslog
+      message_contains: "Accepted"
+    after:
+      format: bash_history
+      condition: {}
+    match_fields:
+      before: hostname
+      after: hostname
