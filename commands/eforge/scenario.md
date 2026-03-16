@@ -421,7 +421,32 @@ After the interview, generate both files:
    - **Log boundary**: Are all systems in the systems list owned by the victim org? Are there any third-party servers (SaaS, cloud provider, partner) that shouldn't be generating OS-level logs? External entities should only appear as IP addresses in network connections, never as systems with hostnames and OS-level log generation.
    - **Timing realism**: Are attack events spaced realistically? (Not crammed into 30 seconds, not dragged over days with no activity)
    - **Detection opportunity**: Is there enough signal for a hunter to find the attack while still requiring genuine effort?
+   - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
    If you find issues, fix them. Tell the user what you changed and why.
+
+### Sensor Coverage Verification
+
+Before finalizing the scenario, verify that every storyline event is **discoverable** given the declared topology, log formats, and sensor placement. A storyline event that produces zero log traces is invisible to the hunter and defeats the purpose of the exercise.
+
+**Check each storyline event against these rules:**
+
+1. **Host log coverage** — The system where the event occurs must have at least one matching log format enabled in `output.logs`:
+   - Windows systems need `windows_event_security` (or `ecar`) for logon/process events
+   - Linux systems need `syslog` and/or `bash_history` for authentication and command execution
+   - If a system's OS doesn't match any enabled format, the event will produce no host-level traces
+
+2. **Network sensor coverage** — If the storyline event involves a network connection (lateral movement, C2 communication, exfiltration, scanning):
+   - At least one network sensor must monitor the segment where the source or destination system resides
+   - Check `network.sensors[].monitoring_segments` against the segments containing the storyline systems
+   - A TAP sensor only sees cross-segment traffic; a SPAN sensor sees intra-segment traffic too
+   - If no network sensors cover the relevant segments, add one or warn the user about the visibility gap
+
+3. **Format enablement** — Verify the formats listed in each sensor's `log_formats` are also listed in `output.logs`. A sensor configured to generate `snort_alert` won't produce output if `snort_alert` isn't in the output logs list.
+
+**If you find coverage gaps:**
+- Flag the specific storyline event(s) that may not be discoverable
+- Suggest concrete fixes: add a sensor, enable a log format, or adjust the network topology
+- Let the user decide whether to fix the gap or accept it (some scenarios intentionally have blind spots to test whether hunters notice)
 4. **Validate** — Run `uv run eforge validate <scenario-file>` to check schema and cross-references
 5. If validation fails, fix the issues and re-validate
 6. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
