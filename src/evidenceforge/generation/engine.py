@@ -59,18 +59,21 @@ class GenerationEngine:
         self,
         scenario: Scenario,
         output_dir: Path,
-        progress_callback: Optional[Callable[[str, dict], None]] = None
+        progress_callback: Optional[Callable[[str, dict], None]] = None,
+        ground_truth_dir: Optional[Path] = None,
     ):
         """Initialize generation engine.
 
         Args:
             scenario: Validated scenario object
-            output_dir: Output directory path
+            output_dir: Output directory path for generated log files
             progress_callback: Optional callback for progress reporting.
                 Called with (event_type: str, data: dict) at key milestones.
+            ground_truth_dir: Directory for GROUND_TRUTH.md. Defaults to output_dir.
         """
         self.scenario = scenario
         self.output_dir = output_dir
+        self.ground_truth_dir = ground_truth_dir or output_dir
         self.progress_callback = progress_callback
         self.state_manager = StateManager()
         self.emitters: dict[str, WindowsEventEmitter | ZeekEmitter | EcarEmitter | SyslogEmitter | BashHistoryEmitter | SnortEmitter | WebEmitter] = {}
@@ -724,7 +727,8 @@ class GenerationEngine:
         Creates comprehensive attack documentation including narrative,
         timeline, and IOCs for threat hunting training.
         """
-        output_path = self.output_dir / "GROUND_TRUTH.md"
+        self.ground_truth_dir.mkdir(parents=True, exist_ok=True)
+        output_path = self.ground_truth_dir / "GROUND_TRUTH.md"
 
         generator = GroundTruthGenerator(
             scenario=self.scenario,

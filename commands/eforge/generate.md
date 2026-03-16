@@ -76,15 +76,28 @@ cd /Users/dabianco/projects/SURGe/data-gen-test
 uv run eforge generate <scenario-file> --verbose
 ```
 
-Always use `--verbose` so you can see progress and diagnose issues. Generation creates a timestamped output directory like `output/scenario-name-20240115-100000/`.
+Always use `--verbose` so you can see progress and diagnose issues. Generation writes log files to a `data/` subdirectory alongside the scenario file:
+
+```
+scenarios/<scenario-name>/
+  scenario.yaml          ← input
+  ENVIRONMENT.md         ← created by /eforge scenario
+  GROUND_TRUTH.md        ← generated (answer key)
+  data/                  ← generated log files
+    windows_event_security.xml
+    zeek_conn.json
+    ...
+```
+
+Re-running generation overwrites the previous `data/` directory.
 
 ### 3. Post-Generation
 
 After successful generation:
 - List the generated files and their sizes
 - Check that expected formats were produced
-- If the scenario had a storyline, note that `GROUND_TRUTH.md` was generated in the output directory — this is the answer key containing the full attack timeline and IOCs
-- If an `ENVIRONMENT.md` exists alongside the scenario file (created by `/eforge scenario`), copy it into the output directory so it sits alongside the generated logs and GROUND_TRUTH.md
+- If the scenario had a storyline, note that `GROUND_TRUTH.md` was generated alongside the scenario file — this is the answer key containing the full attack timeline and IOCs
+- `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
 - Summarize the output for the user
 
 ### 4. Diagnose Errors

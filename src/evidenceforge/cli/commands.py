@@ -259,18 +259,24 @@ def generate(
 
     # Determine output directory
     if output:
-        output_dir = output
-    elif scenario.output.destination:
-        output_dir = Path(scenario.output.destination)
+        # Explicit --output flag: use as data directory directly
+        data_dir = output
+        ground_truth_dir = output
     else:
-        output_dir = Path("./output")
+        # Default: derive from scenario file location
+        # scenarios/<name>/scenario.yaml → data goes to scenarios/<name>/data/
+        scenario_dir = scenario_file.parent
+        data_dir = scenario_dir / "data"
+        ground_truth_dir = scenario_dir
 
-    # Create timestamped subdirectory
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_dir = output_dir / f"{scenario.name}-{timestamp}"
+    console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
+    console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
 
-    console.print(f"\n[bold]Output directory:[/bold] {output_dir}")
+    # Clear previous data on re-generation
+    if data_dir.exists():
+        import shutil
+        shutil.rmtree(data_dir)
+        console.print("[dim]Cleared previous data[/dim]")
 
     # Generate logs
     try:
@@ -333,22 +339,32 @@ def generate(
             # Generate logs with progress reporting
             engine = GenerationEngine(
                 scenario=scenario,
-                output_dir=output_dir,
-                progress_callback=progress_callback
+                output_dir=data_dir,
+                progress_callback=progress_callback,
+                ground_truth_dir=ground_truth_dir,
             )
             engine.generate()
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")
-        console.print(f"\nGenerated logs:")
-        console.print(f"  Directory: {output_dir}")
+        console.print(f"\nGenerated files:")
+        console.print(f"  Scenario directory: {ground_truth_dir}")
 
-        # List generated files
-        if output_dir.exists():
-            for file in sorted(output_dir.iterdir()):
-                if file.is_file():
+        # List files in scenario root (GROUND_TRUTH.md)
+        if ground_truth_dir.exists():
+            for file in sorted(ground_truth_dir.iterdir()):
+                if file.is_file() and file.name == "GROUND_TRUTH.md":
                     size = file.stat().st_size
                     size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
                     console.print(f"  • {file.name} ({size_str})")
+
+        # List generated log files in data/
+        if data_dir.exists():
+            console.print(f"  Data: {data_dir}")
+            for file in sorted(data_dir.iterdir()):
+                if file.is_file():
+                    size = file.stat().st_size
+                    size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+                    console.print(f"    • {file.name} ({size_str})")
 
         # Success - exit normally
         return

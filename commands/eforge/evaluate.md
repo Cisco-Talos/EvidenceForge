@@ -27,24 +27,34 @@ If they don't have generated output yet, suggest using `/eforge generate` first.
 
 ### Step 1: Locate the Output
 
-The user needs to provide:
-1. **Output directory** — the directory containing generated log files (e.g., `output/retail-store-ftp-attack-20260316-140908/`)
-2. **Scenario file** — the YAML scenario used for generation
+The user needs to provide (or you can infer) the scenario directory. The standard layout is:
 
-If the user doesn't specify, look for the most recent output directory under `output/` or wherever they typically generate. Ask if you can't find it.
+```
+scenarios/<scenario-name>/
+  scenario.yaml
+  ENVIRONMENT.md
+  GROUND_TRUTH.md
+  data/              ← this is the output_dir for eforge eval
+```
+
+If the user provides the scenario directory (e.g., `scenarios/retail-store-ftp-attack/`), derive:
+- Data directory: `scenarios/<name>/data/`
+- Scenario file: `scenarios/<name>/scenario.yaml`
+
+If they don't specify, look for scenario directories under `scenarios/`. Ask if you can't find it.
 
 ### Step 2: Run the Evaluation
 
 Run both text and JSON output:
 
 ```bash
-uv run eforge eval <output_dir> --scenario <scenario.yaml> --verbose
+uv run eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --verbose
 ```
 
 Also capture the JSON for programmatic analysis:
 
 ```bash
-uv run eforge eval <output_dir> --scenario <scenario.yaml> --format json 2>/dev/null
+uv run eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --format json 2>/dev/null
 ```
 
 ### Step 3: Interpret Results

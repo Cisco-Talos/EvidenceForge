@@ -411,8 +411,8 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 
 After the interview, generate both files:
 
-1. **Scenario YAML** — Write to the user's chosen path (default: `scenarios/<scenario-name>.yaml`)
-2. **ENVIRONMENT.md** — Write alongside the scenario YAML
+1. **Scenario YAML** — Write to the user's chosen path (default: `scenarios/<scenario-name>/scenario.yaml`)
+2. **ENVIRONMENT.md** — Write alongside the scenario YAML (default: `scenarios/<scenario-name>/ENVIRONMENT.md`)
 3. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
    - **Attack realism**: Does the attack chain make sense? Would a real attacker do this in this order? Are there missing steps (e.g., no reconnaissance before lateral movement, no persistence after initial access)?
    - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
