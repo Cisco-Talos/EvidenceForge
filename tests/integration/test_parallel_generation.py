@@ -207,10 +207,11 @@ class TestParallelGeneration:
             # Extract cross-references
             windows_events = parse_windows_log(Path(tmpdir) / "windows_event_security.xml")
 
-            # Verify LogonID uniqueness
-            logon_ids = [e.get('TargetLogonId') for e in windows_events if e.get('TargetLogonId')]
+            # Verify LogonID uniqueness (only in logon events; logoff events reuse the same ID)
+            logon_ids = [e.get('TargetLogonId') for e in windows_events
+                         if e.get('TargetLogonId') and e.get('EventID') == '4624']
             assert len(logon_ids) > 0
-            assert len(logon_ids) == len(set(logon_ids)), "Duplicate LogonIDs found!"
+            assert len(logon_ids) == len(set(logon_ids)), "Duplicate LogonIDs found in logon events!"
 
             # Verify PID uniqueness per system
             pids_per_system = {}

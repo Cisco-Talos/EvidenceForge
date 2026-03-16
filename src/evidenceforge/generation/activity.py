@@ -66,24 +66,36 @@ def _get_os_category(os_string: str) -> str:
 # Format: (activity_type, probability)
 BASELINE_PATTERNS = {
     'developer': [
-        ('logon', 0.8),          # 80% chance of logon
-        ('process_code', 0.6),   # 60% chance of code editor
-        ('connection_git', 0.4), # 40% chance of git operation
-        ('process_build', 0.3),  # 30% chance of build
+        ('logon', 0.8),              # 80% chance of logon
+        ('process_code', 0.6),       # 60% chance of code editor
+        ('connection_git', 0.4),     # 40% chance of git operation
+        ('process_build', 0.3),      # 30% chance of build
+        ('process_user_apps', 0.25), # 25% chance of user app activity
     ],
     'executive': [
         ('logon', 0.9),
         ('connection_web', 0.7),
         ('connection_email', 0.6),
+        ('process_user_apps', 0.5),  # 50% chance of Office/browser activity
     ],
     'analyst': [
         ('logon', 0.85),
         ('process_query', 0.5),
         ('connection_db', 0.4),
+        ('process_user_apps', 0.3),
+    ],
+    'sysadmin': [
+        ('logon', 0.9),
+        ('process_code', 0.3),
+        ('process_query', 0.3),
+        ('connection_web', 0.3),
+        ('process_system', 0.4),
+        ('process_user_apps', 0.2),
     ],
     'default': [
         ('logon', 0.75),
         ('connection_web', 0.5),
+        ('process_user_apps', 0.35),
     ],
 }
 
@@ -92,14 +104,42 @@ PROCESS_TEMPLATES = {
     'process_code': [
         ('C:\\Program Files\\Microsoft VS Code\\Code.exe', 'Code.exe --no-sandbox'),
         ('C:\\Program Files (x86)\\Notepad++\\notepad++.exe', 'notepad++ document.txt'),
+        ('C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe', 'idea64.exe'),
+        ('C:\\Program Files\\Sublime Text\\sublime_text.exe', 'sublime_text.exe project.py'),
     ],
     'process_build': [
         ('C:\\Windows\\System32\\msbuild.exe', 'msbuild.exe solution.sln /t:Build'),
         ('C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c npm run build'),
+        ('C:\\Program Files\\dotnet\\dotnet.exe', 'dotnet.exe build -c Release'),
+        ('C:\\Program Files\\nodejs\\node.exe', 'node.exe scripts/build.js'),
     ],
     'process_query': [
         ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S localhost -Q "SELECT * FROM users"'),
         ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "Get-EventLog -LogName Security -Newest 100"'),
+    ],
+    'process_user_apps': [
+        ('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'chrome.exe --type=renderer --enable-features=NetworkService'),
+        ('C:\\Program Files\\Mozilla Firefox\\firefox.exe', 'firefox.exe -contentproc -childID 3'),
+        ('C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE', 'OUTLOOK.EXE'),
+        ('C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE', 'WINWORD.EXE /n'),
+        ('C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE', 'EXCEL.EXE'),
+        ('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', 'msedge.exe --type=renderer'),
+        ('C:\\Users\\{username}\\AppData\\Local\\Microsoft\\Teams\\current\\Teams.exe', 'Teams.exe --type=utility'),
+        ('C:\\Users\\{username}\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe', 'OneDrive.exe /background'),
+        ('C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe', 'Acrobat.exe'),
+        ('C:\\Program Files\\7-Zip\\7zFM.exe', '7zFM.exe'),
+    ],
+    'process_system': [
+        ('C:\\Windows\\System32\\svchost.exe', 'svchost.exe -k netsvcs -p -s Schedule'),
+        ('C:\\Windows\\System32\\svchost.exe', 'svchost.exe -k LocalServiceNetworkRestricted -p -s EventLog'),
+        ('C:\\Windows\\System32\\svchost.exe', 'svchost.exe -k DcomLaunch -p'),
+        ('C:\\Windows\\explorer.exe', 'C:\\Windows\\explorer.exe'),
+        ('C:\\Windows\\System32\\RuntimeBroker.exe', 'C:\\Windows\\System32\\RuntimeBroker.exe -Embedding'),
+        ('C:\\Windows\\System32\\SearchIndexer.exe', 'C:\\Windows\\System32\\SearchIndexer.exe /Embedding'),
+        ('C:\\Windows\\System32\\taskhostw.exe', 'taskhostw.exe'),
+        ('C:\\Windows\\System32\\conhost.exe', 'conhost.exe 0x4'),
+        ('C:\\Windows\\System32\\dllhost.exe', 'dllhost.exe /Processid:{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}'),
+        ('C:\\Windows\\System32\\sihost.exe', 'sihost.exe'),
     ],
 }
 
@@ -109,17 +149,67 @@ PROCESS_TEMPLATES_LINUX = {
         ('/usr/bin/vim', 'vim /home/user/script.py'),
         ('/usr/bin/nano', 'nano /etc/config.conf'),
         ('/usr/bin/code', 'code --no-sandbox /home/user/project'),
+        ('/usr/bin/emacs', 'emacs -nw /home/user/main.go'),
     ],
     'process_build': [
         ('/usr/bin/make', 'make -j4'),
         ('/usr/bin/gcc', 'gcc -o output source.c'),
         ('/usr/bin/npm', 'npm run build'),
+        ('/usr/bin/cargo', 'cargo build --release'),
+        ('/usr/bin/python3', 'python3 setup.py install'),
     ],
     'process_query': [
         ('/usr/bin/mysql', 'mysql -u root -p database'),
         ('/usr/bin/psql', 'psql -U postgres -d mydb'),
+        ('/usr/bin/redis-cli', 'redis-cli GET session:abc123'),
+    ],
+    'process_user_apps': [
+        ('/usr/bin/firefox', 'firefox --new-tab'),
+        ('/usr/bin/thunderbird', 'thunderbird'),
+        ('/usr/bin/git', 'git pull origin main'),
+        ('/usr/bin/docker', 'docker ps'),
+        ('/usr/bin/python3', 'python3 -m pytest tests/'),
+        ('/usr/bin/ssh', 'ssh user@remote-host'),
+        ('/usr/bin/curl', 'curl -s https://api.example.com/status'),
+        ('/usr/bin/kubectl', 'kubectl get pods -n production'),
+    ],
+    'process_system': [
+        ('/usr/lib/systemd/systemd', 'systemd --user'),
+        ('/usr/sbin/cron', '/usr/sbin/cron -f'),
+        ('/usr/sbin/sshd', '/usr/sbin/sshd -D'),
+        ('/usr/sbin/rsyslogd', '/usr/sbin/rsyslogd -n'),
+        ('/usr/sbin/NetworkManager', '/usr/sbin/NetworkManager --no-daemon'),
+        ('/usr/bin/dbus-daemon', 'dbus-daemon --system --address=systemd:'),
+        ('/usr/sbin/atd', '/usr/sbin/atd -f'),
     ],
 }
+
+# Per-persona process type weights (Phase 5.1)
+# Maps persona name to relative probability of each process template category
+PERSONA_PROCESS_WEIGHTS = {
+    'developer': {'process_code': 0.5, 'process_build': 0.3, 'process_user_apps': 0.15, 'process_system': 0.05},
+    'executive': {'process_code': 0.05, 'process_build': 0.0, 'process_user_apps': 0.8, 'process_system': 0.15},
+    'analyst': {'process_code': 0.1, 'process_build': 0.05, 'process_query': 0.5, 'process_user_apps': 0.3, 'process_system': 0.05},
+    'sysadmin': {'process_code': 0.2, 'process_build': 0.1, 'process_query': 0.2, 'process_user_apps': 0.1, 'process_system': 0.4},
+    'default': {'process_code': 0.15, 'process_build': 0.05, 'process_user_apps': 0.6, 'process_system': 0.2},
+}
+
+# Zeek connection state distribution with matching history strings (Phase 5.1)
+# Format: (conn_state, weight, history_string)
+CONN_STATE_DISTRIBUTION = [
+    ('SF', 85, 'ShADadfF'),      # Normal completion (SYN, SYN-ACK, data, FIN)
+    ('S0', 5, 'S'),              # Connection attempt, no reply
+    ('S1', 3, 'ShR'),            # SYN-ACK seen, no final ACK from originator
+    ('REJ', 2, 'Sr'),            # Connection rejected (RST from responder)
+    ('RSTO', 3, 'ShADaR'),       # Connection reset by originator after data
+    ('RSTR', 1, 'ShADadR'),      # Connection reset by responder after data
+    ('OTH', 1, 'Cc'),            # Midstream traffic (no SYN/SYN-ACK seen)
+]
+
+# Pre-extract for random.choices
+_CONN_STATES = [s[0] for s in CONN_STATE_DISTRIBUTION]
+_CONN_WEIGHTS = [s[1] for s in CONN_STATE_DISTRIBUTION]
+_CONN_HISTORY = {s[0]: s[2] for s in CONN_STATE_DISTRIBUTION}
 
 # External IPs for network connections (non-RFC1918)
 EXTERNAL_IPS = {
@@ -206,6 +296,7 @@ class ActivityGenerator:
         emitters: dict[str, WindowsEventEmitter | ZeekEmitter],
         event_record_counter: int = 10000,
         network_visibility=None,
+        sid_registry: Optional[dict[str, str]] = None,
     ):
         """Initialize activity generator.
 
@@ -214,11 +305,13 @@ class ActivityGenerator:
             emitters: Dict of emitters by format name
             event_record_counter: Starting EventRecordID
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
+            sid_registry: Optional dict mapping usernames to Windows SIDs
         """
         self.state_manager = state_manager
         self.emitters = emitters
         self.event_record_counter = event_record_counter
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
+        self.sid_registry = sid_registry or {}
 
         # Network visibility (Phase 2.5): default to all-visible if not provided
         if network_visibility is None:
@@ -276,6 +369,8 @@ class ActivityGenerator:
                 'ExecutionProcessID': 4,    # System process
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 # Logon variant fields
+                'SubjectUserSid': self._get_sid('SYSTEM'),  # lsass reports logon events
+                'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
                 'TargetDomainName': 'CORP',  # Phase 1: Fixed domain
                 'TargetLogonId': logon_id,
@@ -313,39 +408,74 @@ class ActivityGenerator:
         user: User,
         system: System,
         time: datetime,
-        logon_id: str
+        logon_id: str,
+        logon_type: int = 2,
     ) -> None:
-        """Generate logoff event and emit Windows 4634.
+        """Generate logoff event across OS-appropriate formats.
 
-        Ends session in StateManager and emits Windows Event 4634 (logoff).
+        Ends session in StateManager and emits:
+        - Windows: Event 4634 (logoff)
+        - Linux: syslog "session closed"
+        - eCAR: USER_SESSION/LOGOUT (if available)
 
         Args:
             user: User logging off
             system: System being logged off from
             time: Logoff timestamp
             logon_id: LogonID from the logon event
+            logon_type: Logon type for the session being ended
         """
         # End session in StateManager
         self.state_manager.end_session(logon_id)
 
-        # Emit Windows Event 4634 (An account was logged off)
-        event_data = {
-            'EventID': 4634,
-            'TimeCreated': time,
-            'Computer': system.hostname,
-            'Channel': 'Security',
-            'Level': 0,
-            'EventRecordID': self._get_next_event_record_id(),
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': _get_rng().randint(100, 500),
-            # Logoff variant fields
-            'TargetUserName': user.username,
-            'TargetDomainName': 'CORP',
-            'TargetLogonId': logon_id,
-            'LogonType': 2,  # Phase 1: Assume interactive
-        }
+        # Phase 5.1: OS-aware multi-format emission
+        os_category = _get_os_category(system.os)
 
-        self.emitters['windows_event_security'].emit_event(event_data)
+        if os_category == 'windows':
+            # Emit Windows Event 4634 (An account was logged off)
+            event_data = {
+                'EventID': 4634,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': _get_rng().randint(100, 500),
+                # Logoff variant fields
+                'TargetUserSid': self._get_sid(user.username),
+                'TargetUserName': user.username,
+                'TargetDomainName': 'CORP',
+                'TargetLogonId': logon_id,
+                'LogonType': logon_type,
+            }
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+        elif os_category == 'linux':
+            # Emit syslog session closed message
+            if 'syslog' in self.emitters:
+                event_data = {
+                    'timestamp': time,
+                    'hostname': system.hostname,
+                    'facility': 10,  # authpriv
+                    'severity': 6,   # info
+                    'app_name': 'sshd' if logon_type == 3 else 'login',
+                    'pid': _get_rng().randint(1000, 9999),
+                    'message': f'session closed for user {user.username}',
+                }
+                self.emitters['syslog'].emit_event(event_data)
+
+        # Emit eCAR USER_SESSION/LOGOUT if available
+        if 'ecar' in self.emitters:
+            event_data = {
+                'timestamp': time,
+                'hostname': system.hostname,
+                'object': 'USER_SESSION',
+                'action': 'LOGOUT',
+                'principal': user.username,
+            }
+            self.emitters['ecar'].emit_event(event_data)
+
         logger.debug(f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})")
 
     def generate_process(
@@ -400,6 +530,7 @@ class ActivityGenerator:
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 # Process variant fields
+                'SubjectUserSid': self._get_sid(user.username),
                 'SubjectUserName': user.username,
                 'SubjectDomainName': 'CORP',
                 'SubjectLogonId': logon_id,
@@ -490,8 +621,30 @@ class ActivityGenerator:
         if orig_bytes is not None and resp_bytes is not None:
             self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
-        # Determine connection state and other Zeek-specific fields
-        conn_state = 'SF' if duration else 'S0'  # SF = normal termination, S0 = connection attempt seen, no reply
+        # Phase 5.1: Probabilistic connection state selection
+        rng = _get_rng()
+        if duration is not None:
+            # Caller specified duration → use weighted distribution (mostly SF)
+            conn_state = rng.choices(_CONN_STATES, weights=_CONN_WEIGHTS, k=1)[0]
+        else:
+            # No duration → connection attempt with no completion
+            conn_state = 'S0'
+
+        history = _CONN_HISTORY[conn_state]
+
+        # Adjust bytes/duration for consistency with connection state
+        if conn_state in ('S0', 'REJ'):
+            # Failed connections: no response data, no duration
+            duration = None
+            resp_bytes = 0
+            if conn_state == 'REJ':
+                orig_bytes = orig_bytes if orig_bytes else 0
+        elif conn_state in ('RSTO', 'RSTR'):
+            # Reset connections: may have partial data, shorter duration
+            if duration is not None:
+                duration = duration * rng.uniform(0.1, 0.5)
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
 
         # Calculate packet counts (rough estimate: 1 packet per 1500 bytes)
         orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else None
@@ -516,7 +669,7 @@ class ActivityGenerator:
             'local_orig': True,  # Phase 1: Assume local originator
             'local_resp': False,  # Phase 1: Assume remote responder
             'missed_bytes': 0,
-            'history': 'ShADadfF' if conn_state == 'SF' else '^',  # Simplified history
+            'history': history,
             'orig_pkts': orig_pkts,
             'orig_ip_bytes': orig_ip_bytes,
             'resp_pkts': resp_pkts,
@@ -668,6 +821,9 @@ class ActivityGenerator:
             if os_category == 'windows' and activity_type in PROCESS_TEMPLATES:
                 # Use Windows process templates
                 process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES[activity_type])
+                # Phase 5.1: Substitute username placeholder in paths
+                process_name = process_name.replace('{username}', user.username)
+                command_line = command_line.replace('{username}', user.username)
                 self.generate_process(user, system, time, logon_id, process_name, command_line)
 
             elif os_category == 'linux' and activity_type in PROCESS_TEMPLATES_LINUX:
@@ -738,6 +894,28 @@ class ActivityGenerator:
         with self._counter_lock:
             self.event_record_counter += 1
             return self.event_record_counter
+
+    # Well-known Windows SIDs (always available regardless of registry)
+    _WELL_KNOWN_SIDS = {
+        'SYSTEM': 'S-1-5-18',
+        'LOCAL SERVICE': 'S-1-5-19',
+        'NETWORK SERVICE': 'S-1-5-20',
+    }
+
+    def _get_sid(self, username: str) -> str:
+        """Look up Windows SID for a username.
+
+        Args:
+            username: Username to look up
+
+        Returns:
+            SID string, or a fallback SID if username not in registry
+        """
+        if username in self.sid_registry:
+            return self.sid_registry[username]
+        if username in self._WELL_KNOWN_SIDS:
+            return self._WELL_KNOWN_SIDS[username]
+        return 'S-1-5-21-0-0-0-0'
 
     def _emit_ecar_logon(
         self,

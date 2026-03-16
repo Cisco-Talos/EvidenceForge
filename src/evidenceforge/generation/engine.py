@@ -207,12 +207,16 @@ class GenerationEngine:
             systems=self.scenario.environment.systems,
         )
 
+        # Phase 5.1: Generate domain SID and per-user SID registry
+        sid_registry = self._build_sid_registry()
+
         # Initialize activity generator
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
             emitters=self.emitters,
             event_record_counter=self.event_record_counter,
             network_visibility=visibility_engine,
+            sid_registry=sid_registry,
         )
         logger.info("Initialized activity generator")
 
@@ -274,6 +278,9 @@ class GenerationEngine:
                     for event_time in event_times:
                         self._generate_user_activity(user, event_time)
 
+            # Phase 5.1: Generate logoffs for sessions that should end this hour
+            self._generate_logoffs_for_hour(enabled_users, current_hour)
+
             # Barrier flush - ensure all events for this hour are written
             # before proceeding to next hour (temporal consistency)
             self._barrier_flush_all_emitters()
@@ -282,6 +289,60 @@ class GenerationEngine:
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
+
+    def _generate_logoffs_for_hour(
+        self,
+        users: list[User],
+        current_hour: datetime,
+    ) -> None:
+        """Generate logoff events for sessions that should end this hour.
+
+        For each user with active sessions, probabilistically end sessions:
+        - 30% chance per session if session age > 1 hour
+        - 60% chance if current hour is outside user's work hours
+
+        Args:
+            users: List of enabled users
+            current_hour: Start of the current hour
+        """
+        for user in users:
+            sessions = self.state_manager.get_sessions_for_user(user.username)
+            if not sessions:
+                continue
+
+            persona = self._get_user_persona(user)
+            is_outside_work_hours = False
+            if persona and persona.work_hours_parsed:
+                is_outside_work_hours = current_hour.hour not in persona.work_hours_parsed.get('hours', range(24))
+
+            # Find the system for this user (for logoff emission)
+            system = None
+            if user.primary_system:
+                systems = [s for s in self.scenario.environment.systems if s.hostname == user.primary_system]
+                if systems:
+                    system = systems[0]
+            if not system:
+                assigned = [s for s in self.scenario.environment.systems if s.assigned_user == user.username]
+                system = assigned[0] if assigned else self.scenario.environment.systems[0]
+
+            for session in list(sessions):  # Copy list since we modify during iteration
+                session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
+                if session_age_hours < 0.5:
+                    continue  # Too new to logoff
+
+                logoff_probability = 0.6 if is_outside_work_hours else 0.3 if session_age_hours > 1 else 0.1
+                if random.random() < logoff_probability:
+                    # Generate logoff at a random time within the hour
+                    logoff_offset = random.uniform(0, 3599)
+                    logoff_time = current_hour + timedelta(seconds=logoff_offset)
+                    self.state_manager.set_current_time(logoff_time)
+                    self.activity_generator.generate_logoff(
+                        user=user,
+                        system=system,
+                        time=logoff_time,
+                        logon_id=session.logon_id,
+                        logon_type=session.logon_type,
+                    )
 
     def _barrier_flush_all_emitters(self) -> None:
         """Flush all emitters and wait for completion (hour-level barrier).
@@ -737,6 +798,43 @@ class GenerationEngine:
 
         generator.generate(output_path)
         logger.info(f"Ground truth documentation generated: {output_path}")
+
+    def _build_sid_registry(self) -> dict[str, str]:
+        """Build a SID registry mapping usernames to Windows SIDs.
+
+        Generates a domain base SID (S-1-5-21-{3 sub-authorities}) and assigns
+        each user a unique RID starting at 1001. Well-known SIDs are included
+        for system accounts.
+
+        Returns:
+            Dict mapping username to full SID string
+        """
+        # Generate domain base SID with 3 random sub-authority values
+        rng = random.Random(hash(self.scenario.name))  # Deterministic per scenario
+        base_sid = (
+            f"S-1-5-21-{rng.randint(1000000000, 3999999999)}"
+            f"-{rng.randint(1000000000, 3999999999)}"
+            f"-{rng.randint(1000000000, 3999999999)}"
+        )
+
+        registry: dict[str, str] = {
+            # Well-known SIDs
+            'SYSTEM': 'S-1-5-18',
+            'LOCAL SERVICE': 'S-1-5-19',
+            'NETWORK SERVICE': 'S-1-5-20',
+        }
+
+        # Assign per-user RIDs starting at 1001
+        for i, user in enumerate(self.scenario.environment.users):
+            registry[user.username] = f"{base_sid}-{1001 + i}"
+
+        # Also assign SIDs for service accounts
+        for j, svc in enumerate(self.scenario.environment.service_accounts):
+            if svc not in registry:
+                registry[svc] = f"{base_sid}-{2001 + j}"
+
+        logger.info(f"Built SID registry: {len(registry)} entries (domain: {base_sid})")
+        return registry
 
     def _get_next_event_record_id(self) -> int:
         """Get next EventRecordID for Windows events.

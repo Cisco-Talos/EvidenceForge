@@ -1,0 +1,224 @@
+"""Unit tests for Phase 5.1.1: SID generation and population."""
+
+import re
+import pytest
+from datetime import datetime, timezone
+from unittest.mock import Mock
+
+from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models import User, System
+
+# Valid SID pattern: S-1-5-21-{3 sub-authorities}-{RID}
+SID_PATTERN = re.compile(r'^S-1-5-21-\d+-\d+-\d+-\d+$')
+WELL_KNOWN_SIDS = {
+    'SYSTEM': 'S-1-5-18',
+    'LOCAL SERVICE': 'S-1-5-19',
+    'NETWORK SERVICE': 'S-1-5-20',
+}
+
+
+@pytest.fixture
+def state_manager():
+    return StateManager()
+
+
+@pytest.fixture
+def mock_emitters():
+    return {
+        'windows_event_security': Mock(),
+        'zeek_conn': Mock(),
+    }
+
+
+@pytest.fixture
+def sid_registry():
+    """Build a test SID registry."""
+    base = 'S-1-5-21-1234567890-2345678901-3456789012'
+    return {
+        'SYSTEM': 'S-1-5-18',
+        'LOCAL SERVICE': 'S-1-5-19',
+        'NETWORK SERVICE': 'S-1-5-20',
+        'alice.smith': f'{base}-1001',
+        'bob.jones': f'{base}-1002',
+    }
+
+
+@pytest.fixture
+def activity_gen(state_manager, mock_emitters, sid_registry):
+    return ActivityGenerator(state_manager, mock_emitters, sid_registry=sid_registry)
+
+
+@pytest.fixture
+def test_user():
+    return User(username="alice.smith", full_name="Alice Smith", email="alice@corp.com", enabled=True)
+
+
+@pytest.fixture
+def test_system():
+    return System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+
+
+@pytest.fixture
+def timestamp():
+    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+
+class TestSIDRegistry:
+    """Tests for SID registry lookup."""
+
+    def test_get_sid_known_user(self, activity_gen):
+        assert activity_gen._get_sid('alice.smith') == 'S-1-5-21-1234567890-2345678901-3456789012-1001'
+
+    def test_get_sid_system(self, activity_gen):
+        assert activity_gen._get_sid('SYSTEM') == 'S-1-5-18'
+
+    def test_get_sid_unknown_user_returns_fallback(self, activity_gen):
+        sid = activity_gen._get_sid('unknown.user')
+        assert sid == 'S-1-5-21-0-0-0-0'
+
+    def test_sid_format_valid(self, sid_registry):
+        for username, sid in sid_registry.items():
+            if username in WELL_KNOWN_SIDS:
+                assert sid == WELL_KNOWN_SIDS[username]
+            else:
+                assert SID_PATTERN.match(sid), f"SID for {username} has invalid format: {sid}"
+
+    def test_sid_registry_consistency(self, activity_gen):
+        """Same user always gets same SID."""
+        sid1 = activity_gen._get_sid('alice.smith')
+        sid2 = activity_gen._get_sid('alice.smith')
+        assert sid1 == sid2
+
+
+class TestSIDInWindowsEvents:
+    """Tests that SID fields are populated in emitted Windows events."""
+
+    def test_logon_4624_has_sids(self, activity_gen, test_user, test_system, timestamp, state_manager, mock_emitters):
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_logon(test_user, test_system, timestamp)
+
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        assert event_data['SubjectUserSid'] == 'S-1-5-18'  # SYSTEM
+        assert SID_PATTERN.match(event_data['TargetUserSid'])
+        assert event_data['TargetUserSid'] == activity_gen._get_sid('alice.smith')
+
+    def test_logoff_4634_has_sid(self, activity_gen, test_user, test_system, timestamp, state_manager, mock_emitters):
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        mock_emitters['windows_event_security'].reset_mock()
+
+        activity_gen.generate_logoff(test_user, test_system, timestamp, logon_id)
+
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        assert event_data['EventID'] == 4634
+        assert SID_PATTERN.match(event_data['TargetUserSid'])
+        assert event_data['TargetUserSid'] == activity_gen._get_sid('alice.smith')
+
+    def test_process_4688_has_sids(self, activity_gen, test_user, test_system, timestamp, state_manager, mock_emitters):
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        mock_emitters['windows_event_security'].reset_mock()
+
+        activity_gen.generate_process(
+            test_user, test_system, timestamp, logon_id,
+            'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
+        )
+
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        assert event_data['EventID'] == 4688
+        assert SID_PATTERN.match(event_data['SubjectUserSid'])
+        assert event_data['SubjectUserSid'] == activity_gen._get_sid('alice.smith')
+
+    def test_no_sid_registry_uses_fallback(self, state_manager, mock_emitters, timestamp):
+        """ActivityGenerator without sid_registry still works with fallback SIDs."""
+        gen = ActivityGenerator(state_manager, mock_emitters)
+        user = User(username="noone", full_name="No One", email="no@one.com", enabled=True)
+        system = System(hostname="WKS-02", ip="10.0.10.2", os="Windows 10", type="workstation")
+        state_manager.set_current_time(timestamp)
+
+        gen.generate_logon(user, system, timestamp)
+
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        assert event_data['SubjectUserSid'] == 'S-1-5-18'  # SYSTEM always known
+        assert event_data['TargetUserSid'] == 'S-1-5-21-0-0-0-0'  # Fallback
+
+
+class TestEngineSIDRegistry:
+    """Tests for SID registry creation in the engine."""
+
+    def test_build_sid_registry(self):
+        """Engine._build_sid_registry creates valid registry."""
+        from evidenceforge.generation.engine import GenerationEngine
+        from evidenceforge.models.scenario import Scenario, Environment, TimeWindow, BaselineActivity, OutputSpec
+        from pathlib import Path
+
+        scenario = Scenario(
+            name="test-sid",
+            description="Test SID generation",
+            time_window=TimeWindow(start="2024-01-15T08:00:00Z", duration="2h"),
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="user.one", full_name="User One", email="u1@test.com", enabled=True),
+                    User(username="user.two", full_name="User Two", email="u2@test.com", enabled=True),
+                ],
+                systems=[
+                    System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
+                ],
+                service_accounts=["svc_backup"],
+            ),
+            baseline_activity=BaselineActivity(description="Test baseline", intensity="low", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            personas=[],
+        )
+
+        engine = GenerationEngine(scenario, Path("/tmp/test-sid-output"))
+        registry = engine._build_sid_registry()
+
+        # Well-known SIDs
+        assert registry['SYSTEM'] == 'S-1-5-18'
+        assert registry['LOCAL SERVICE'] == 'S-1-5-19'
+        assert registry['NETWORK SERVICE'] == 'S-1-5-20'
+
+        # User SIDs with valid format
+        assert SID_PATTERN.match(registry['user.one'])
+        assert SID_PATTERN.match(registry['user.two'])
+
+        # Unique RIDs
+        rid_one = int(registry['user.one'].rsplit('-', 1)[1])
+        rid_two = int(registry['user.two'].rsplit('-', 1)[1])
+        assert rid_one != rid_two
+        assert rid_one == 1001
+        assert rid_two == 1002
+
+        # Service account SID
+        assert SID_PATTERN.match(registry['svc_backup'])
+        rid_svc = int(registry['svc_backup'].rsplit('-', 1)[1])
+        assert rid_svc == 2001
+
+    def test_build_sid_registry_deterministic(self):
+        """Same scenario name produces same domain base SID."""
+        from evidenceforge.generation.engine import GenerationEngine
+        from evidenceforge.models.scenario import Scenario, Environment, TimeWindow, BaselineActivity, OutputSpec
+        from pathlib import Path
+
+        def make_engine():
+            scenario = Scenario(
+                name="deterministic-test",
+                description="Test",
+                time_window=TimeWindow(start="2024-01-15T08:00:00Z", duration="2h"),
+                environment=Environment(
+                    description="Test",
+                    users=[User(username="u1", full_name="U1", email="u1@t.com", enabled=True)],
+                    systems=[System(hostname="S1", ip="10.0.0.1", os="Windows 10", type="workstation")],
+                ),
+                baseline_activity=BaselineActivity(description="Test baseline", intensity="low", variation="low"),
+                output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+                personas=[],
+            )
+            return GenerationEngine(scenario, Path("/tmp/test"))
+
+        r1 = make_engine()._build_sid_registry()
+        r2 = make_engine()._build_sid_registry()
+        assert r1['u1'] == r2['u1']
