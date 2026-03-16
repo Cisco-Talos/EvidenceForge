@@ -679,7 +679,7 @@ class GenerationEngine:
             return User(
                 username=actor_name,
                 full_name=actor_name,
-                email="",
+                email=f"{actor_name.lower().replace(' ', '.')}@system.local",
                 enabled=True,
             )
 
