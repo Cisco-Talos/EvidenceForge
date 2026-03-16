@@ -43,6 +43,7 @@ packages = ["src/evidenceforge"]
 "commands/eforge/scenario.md" = "evidenceforge/_data/commands/eforge/scenario.md"
 "commands/eforge/generate.md" = "evidenceforge/_data/commands/eforge/generate.md"
 "commands/eforge/validate.md" = "evidenceforge/_data/commands/eforge/validate.md"
+"commands/eforge/evaluate.md" = "evidenceforge/_data/commands/eforge/evaluate.md"
 "docs/scenario-reference.md" = "evidenceforge/_data/references/scenario-reference.md"
 "personas" = "evidenceforge/_data/personas"
 "config.example.yaml" = "evidenceforge/_data/config.example.yaml"
