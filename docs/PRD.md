@@ -210,7 +210,12 @@ environment:
       os: string
       type: string           # workstation|server|domain_controller
       assigned_user: string  # Optional, for workstations
-      services: list[string] # Service names like "IIS", "SSH", "SQL Server" (not ports)
+      services: list[string] # Optional: Service names like "IIS", "SSH", "SQL Server" (not ports)
+                             # If omitted, auto-populated from OS type:
+                             #   Windows: ["dns-client", "ntp-client", "smb", "windows-update"]
+                             #   Linux: ["dns-client", "ntp-client", "syslog"]
+                             # Server roles auto-detected from hostname hints (e.g., "dc-*" → add "active-directory")
+                             # Explicit values override auto-population entirely (no merge)
 
   groups:
     - name: string
@@ -1103,12 +1108,50 @@ Required scenario files:
    - Schema + cross-reference validation
    - 542+ tests passing
 
-### Post-MVP: Evaluation Framework
+### Post-MVP: Evaluation Framework ✅ COMPLETE (Phase 4)
 
-Moved to Phase 4 (first post-MVP priority):
-- `eforge evaluate` command with extensible metrics framework
-- Format compliance, cross-reference consistency, ground truth IOC verification
-- JSON report generation (informational, no pass/fail thresholds)
+- `eforge evaluate` command with 5 quality dimensions, 23 sub-scores, acceptance criteria
+- `/eforge evaluate` skill for qualitative LLM review
+- Full details in `docs/data-quality-prd.md`
+
+### Post-MVP: Data Realism Improvements (Phase 5)
+
+Phase 4 evaluation revealed that while signal integrity is excellent (100/100), the background noise is too shallow and uniform for the data to pass casual inspection by an experienced analyst. Phase 5 addresses these generator-level limitations in 5 incremental sub-phases.
+
+**Problem statement:** An experienced threat hunter would identify the data as synthetic within minutes due to: uniform Zeek conn_states, zero UDP/ICMP traffic, only 11 destination IPs, only 2 Windows Event IDs in baseline, metronomic timing, and statistically interchangeable users.
+
+**Target outcome:** Overall eval score ≥ 85, all hard acceptance criteria pass, no "instant tells" on qualitative review.
+
+#### 5.1 Record Fidelity Quick Wins
+- **SID generation**: Populate `SubjectUserSid`/`TargetUserSid` with realistic Windows SIDs (`S-1-5-21-{domain}-{rid}`). Per-domain base SID at engine init, per-user RID mapping, well-known SIDs for system accounts.
+- **Session lifecycle**: Baseline activity generates logoff events (Windows 4634, eCAR USER_SESSION/LOGOUT). Sessions have realistic lifetimes with probabilistic termination.
+- **Zeek conn_state diversity**: Replace hardcoded `SF`/`ShADadfF` with probabilistic selection (SF 85%, S0 5%, REJ 2%, RSTO 3%, etc.) with history strings and byte counts consistent with state.
+- **Process path expansion**: Expand from 14 to 50+ unique process paths including OS backbone (svchost, lsass, explorer, csrss) and common applications (browsers, Office, Teams). Per-persona weighting.
+
+#### 5.2 Event Type Diversity
+- **Additional Windows Event IDs**: 4625 (failed logon), 4672 (special privileges), 4689 (process termination), 4648 (explicit credential logon), 5156 (firewall allow). Update format definition, templates, and validation.
+- **Failed logon generation**: 5-15% of logon attempts fail with realistic reasons (bad password, locked account, expired password).
+- **eCAR object type expansion**: Generate FILE/CREATE, FILE/MODIFY, REGISTRY/MODIFY, FLOW/CONNECT, MODULE/LOAD events alongside existing USER_SESSION and PROCESS types.
+- **Process termination**: Pair 4689 with 4688, track running processes, terminate after realistic durations.
+
+#### 5.3 Protocol & Network Diversity
+- **UDP traffic**: DNS queries (UDP 53) preceding TCP connections, NTP sync (UDP 123), DHCP (UDP 67/68), mDNS/LLMNR, QUIC (UDP 443).
+- **ICMP traffic**: Periodic pings between same-segment systems, ICMP unreachable for failed connections.
+- **Service registry**: Internal consistency model — tracks which internal IPs run which services (ports). Declared systems + auto-generated infrastructure. Connection success/failure consistent with whether port is open on the target.
+- **External IP expansion**: Grow from ~9 to 50+ fixed IPs per category plus random generation for CDN/cloud long-tail. Target hundreds of unique destinations per scenario.
+- **Zeek dns.log format**: New format definition for DNS query/response logging.
+
+#### 5.4 Background Traffic & System Activity
+- **System model enhancement**: Optional inline `services` field on System (e.g., `services: ["dns-client", "ntp-client", "smb"]`). Auto-populated from OS type if not specified. Hybrid approach: auto-generate defaults, allow scenario overrides. No separate records for host and services — all in one System definition.
+- **System traffic loop**: New generation pass per hour for OS-appropriate system traffic (DNS lookups, NTP sync, Windows Update, SMB browsing). Target ~20-30% of total output.
+- **System process trees**: Generate OS-appropriate boot processes at scenario start (Windows: System→smss→csrss→wininit→services→svchost; Linux: init/systemd→cron, sshd, rsyslogd).
+- **Scheduled tasks**: Periodic system activities (Windows Defender scans, logrotate, package update checks) at regular intervals with slight jitter.
+
+#### 5.5 Temporal Realism
+- **Soft work-hour ramp**: Replace binary on/off with sigmoid curve. Gradual morning ramp (10%→100% over ~1 hour), soft lunch dip (50% not 0%), evening tail (20% for 1-2 hours post-end), occasional late-night activity (1-3% probability).
+- **Activity clusters**: Replace uniform event distribution with burst model. Each "activity" becomes a cluster of 3-15 correlated events over 5-30 seconds (e.g., logon→process spawns→connections). Inter-cluster gaps follow exponential distribution (2-15 minutes).
+- **Per-user work hour jitter**: Randomize each user's start/end/lunch ±30min from persona defaults. Applied once at init, consistent throughout scenario.
+- **Per-persona behavioral differentiation**: Distinct cluster templates per persona type. Developers: long sustained coding sessions. Executives: short frequent email/calendar bursts. Analysts: medium DB-heavy clusters.
 
 ### Current Implementation Status
 
@@ -1131,13 +1174,14 @@ Moved to Phase 4 (first post-MVP priority):
 | `eforge install-skills` command | Complete |
 | Skills (`/eforge scenario`, `/eforge generate`, `/eforge validate`) | Complete |
 | Persona library files (15 personas) | Complete |
-| `eforge evaluate` command | Phase 4 (post-MVP) |
-| Evaluation framework | Phase 4 (post-MVP) |
+| `eforge evaluate` command | Complete (Phase 4) |
+| Evaluation framework (5 dimensions, 23 sub-scores) | Complete (Phase 4) |
+| `/eforge evaluate` skill | Complete (Phase 4) |
+| Data realism improvements (SIDs, event diversity, protocol mix, timing) | Phase 5 (planned) |
 
 ### Future Enhancements
 
 **Short-term (post-MVP):**
-- Bedrock LLM client for semantic validation (`eforge validate --semantic`)
 - Checkpointing and resume for long-running generation jobs
 - Large dataset optimization (100M+ events, memory-mapped writes)
 - Config file inheritance/templating
@@ -1145,11 +1189,10 @@ Moved to Phase 4 (first post-MVP priority):
 - PyPI package distribution
 
 **Medium-term:**
-- Alternative LLM backends (OpenAI, Ollama, Anthropic native, Gemini)
+- Poisson/Hawkes process timing model (upgrade from Phase 5.5 activity clusters to self-exciting point process for statistically rigorous inter-arrival distributions)
 - Web UI for scenario creation
 - Streaming output to SIEM/data lakes
 - Log format auto-detection from samples
-- Realism scoring beyond concrete metrics
 
 **Long-term:**
 - OT/ICS environment simulation

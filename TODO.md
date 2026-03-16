@@ -23,14 +23,14 @@
 - [x] Set up src/evidenceforge/ package structure
 - [x] Create tests/ directory structure (unit/, integration/, live/, fixtures/)
 - [x] Set up pytest with pytest.ini and coverage configuration
-- [x] Create .env.example with AWS_PROFILE, AWS_REGION placeholders
-- [x] Create config.example.yaml with documented parameters
+- [x] ~~Create .env.example with AWS_PROFILE, AWS_REGION placeholders~~ REMOVED (no Bedrock integration)
+- [x] ~~Create config.example.yaml with documented parameters~~ REMOVED (no config.yaml needed)
 - [x] Add LICENSE file (TBD)
 - [x] Set up GitHub Actions for CI (unit + integration tests only)
 
 ### 1.2 Core Data Models (Pydantic)
 
-- [x] `models/config.py` - Config models (AWS, Bedrock, output, logging)
+- [x] ~~`models/config.py` - Config models (AWS, Bedrock, output, logging)~~ REMOVED
 - [x] `models/scenario.py` - Simplified scenario schema (Phase 1 subset)
   - [x] Basic TimeWindow, Environment, User, System models
   - [x] Simple persona structure (no LLM expansion yet)
@@ -40,11 +40,11 @@
 
 ### 1.3 Configuration & Utilities
 
-- [x] `utils/config.py` - Config loader with env var interpolation (${VAR_NAME})
-- [x] `utils/logging.py` - Logging setup (console vs file, level filtering)
+- [x] ~~`utils/config.py` - Config loader with env var interpolation~~ REMOVED
+- [x] `utils/logging.py` - Logging utilities (redact_secrets)
 - [x] `utils/time.py` - Time parsing utilities (ISO 8601, duration strings)
 - [x] `utils/files.py` - File I/O utilities, path validation
-- [x] Test: Config loading from multiple sources (defaults, .env, config.yaml, CLI)
+- [x] ~~Test: Config loading from multiple sources~~ REMOVED
 
 ### 1.4 State Management
 
@@ -109,10 +109,10 @@
 
 - [x] `cli/commands.py` - Typer app setup with command structure
 - [x] `__main__.py` - CLI entry point
-- [x] Command: `eforge init` - Write config.example.yaml to config.yaml
+- [x] ~~Command: `eforge init`~~ REMOVED (no config.yaml needed)
 - [x] Command: `eforge generate` - Generate logs from simplified scenario file
   - [x] Accept scenario file path
-  - [x] Accept --config, --output flags
+  - [x] Accept --output flag
   - [x] Schema validation only (no LLM)
   - [x] Call generation engine
   - [x] Exit codes: 0 (success), 1 (input error), 2 (schema validation), 21 (generation error), 130 (SIGINT)
@@ -496,6 +496,195 @@
 - Dim 4 (Temporal): 67 — work hours too concentrated, burstiness low
 - Dim 5 (Signal Integrity): 100 — all storyline events found with correct indicators
 
+**Evaluation on ironforge-source-theft (80K records, 3 sources):**
+- Overall: 76/100 | Acceptance: FAIL (parsability 59.3% < 98%)
+- Dim 1 (Record Fidelity): 69 — empty SID fields sole cause of parsability failure
+- Dim 2 (Cross-Source): 94 — strong agreement, minor storyline trace gaps in Windows
+- Dim 3 (Noise Realism): 52 — volume ratio 4,179:1 vs 10,000:1 target, 87% user pairwise similarity
+- Dim 4 (Temporal): 60 — perfect causal ordering but uniform timing, no burstiness
+- Dim 5 (Signal Integrity): 100 — all 19 attack events present, linkable, correctly timed
+- Qualitative assessment: "An experienced threat hunter would spot this as synthetic within minutes"
+
+**Key qualitative tells identified:**
+1. All Zeek connections SF/ShADadfF (no failed connections, resets, timeouts)
+2. Zero UDP/ICMP (no DNS, NTP, DHCP, mDNS)
+3. Only 11 destination IPs across 14,799 connections
+4. Only 2 Windows Event IDs (4624, 4688) — no logoffs, failures, privilege events
+5. Only 12 unique process paths — no system backbone processes (svchost, lsass, explorer)
+6. Only 2 eCAR object types (USER_SESSION, PROCESS) — no file/registry/network
+7. Metronomic inter-event timing, hard rectangular work-hour profile
+8. Users statistically interchangeable regardless of persona
+
+---
+
+## Phase 5: Data Realism Improvements
+
+**Goal:** Address generator-level limitations identified by Phase 4 evaluation and qualitative review. Make generated data indistinguishable from real data at casual inspection. Organized in 5 sub-phases, each independently shippable.
+
+**Target outcome:** Overall eval score ≥ 85, parsability ≥ 98% (PASS), qualitative review finds no "instant tells."
+
+### 5.1 Record Fidelity Quick Wins
+
+**Goal:** Fix the hard acceptance failure (parsability) and the most obvious per-record tells. Smallest changes, biggest eval score impact.
+
+- [ ] **Fix empty SID fields in Windows events**
+  - Generate realistic SIDs: `S-1-5-21-{domain_sub_authorities}-{user_rid}`
+  - Assign per-domain base SID at engine init (e.g., `S-1-5-21-3623811015-3361044348-30300820`)
+  - Map each user to a unique RID (starting at 1001, incrementing)
+  - Well-known SIDs for system accounts: `S-1-5-18` (SYSTEM), `S-1-5-19` (LOCAL SERVICE), `S-1-5-20` (NETWORK SERVICE)
+  - Populate `SubjectUserSid` and `TargetUserSid` in all Windows event data dicts in `activity.py`
+  - Files: `activity.py`, `engine.py` (SID registry initialization)
+- [ ] **Add logoff generation to baseline activity**
+  - Track active sessions per user; probabilistically end sessions (e.g., 30% chance per hour after first hour)
+  - Emit Windows 4634 (logoff) and eCAR USER_SESSION/LOGOUT
+  - Ensure logon→activity→logoff ordering within each session
+  - Files: `activity.py` (`execute_baseline_activity`), `engine.py` (`_generate_baseline`)
+- [ ] **Vary Zeek conn_state and history strings**
+  - Replace hardcoded `SF`/`ShADadfF` with probabilistic selection
+  - Connection states: SF (85%), S0 (5%), S1 (3%), REJ (2%), RSTO (3%), RSTR (1%), OTH (1%)
+  - Generate history strings that match conn_state (e.g., S0→`S`, REJ→`Sr`, RSTO→`ShADaR`)
+  - Adjust orig_bytes/resp_bytes to be consistent (e.g., S0 = 0 resp_bytes)
+  - Files: `activity.py` (`generate_connection`)
+- [ ] **Expand process template pools**
+  - Windows: add system backbone (svchost.exe, lsass.exe, explorer.exe, services.exe, csrss.exe, RuntimeBroker.exe, SearchIndexer.exe) + user apps (chrome.exe, firefox.exe, outlook.exe, teams.exe, OneDrive.exe)
+  - Linux: add system processes (systemd, cron, sshd, rsyslogd, NetworkManager) + user apps (firefox, thunderbird, git, docker, python3)
+  - Per-persona weighting: developers see more compilers/editors, executives see more Office/browser
+  - Files: `activity.py` (PROCESS_TEMPLATES, PROCESS_TEMPLATES_LINUX)
+- [ ] Test: Parsability score ≥ 98% (SIDs valid format)
+- [ ] Test: Logoff events present in output, paired with logons
+- [ ] Test: conn_state distribution is varied (not 100% SF)
+- [ ] Test: Process path count > 30 unique paths
+
+### 5.2 Event Type Diversity
+
+**Goal:** Expand the vocabulary of events generated. Address "only 2 Event IDs" and "only 2 eCAR object types."
+
+- [ ] **Add Windows Event IDs to format definition and emitters**
+  - 4625: Failed logon (account does not exist, bad password, account locked)
+  - 4672: Special privileges assigned to new logon (admin logons)
+  - 4689: Process termination (pair with 4688)
+  - 4648: Explicit credential logon (RunAs, scheduled tasks)
+  - 5156: Windows Filtering Platform connection allowed (host firewall)
+  - Update `windows_event_security.yaml` schema, Jinja2 templates, and validation rules
+  - Files: `formats/definitions/windows_event_security.yaml`, `generation/emitters/windows.py`
+- [ ] **Generate failed logons in baseline**
+  - 5-15% of logon attempts fail (configurable via persona risk_profile)
+  - Failure reasons: bad password (most common), account locked, expired password
+  - Emit Windows 4625 + eCAR USER_SESSION/LOGON_FAILURE
+  - Files: `activity.py` (`generate_logon` or new `generate_failed_logon`)
+- [ ] **Add eCAR object type diversity**
+  - FILE/CREATE, FILE/MODIFY, FILE/DELETE — generated alongside process activity
+  - REGISTRY/MODIFY — Windows system processes and app installs
+  - FLOW/CONNECT — parallel to Zeek connections for eCAR-equipped hosts
+  - MODULE/LOAD — DLL loads for Windows processes
+  - Files: `activity.py` (new methods), `generation/emitters/ecar.py`
+- [ ] **Add process termination events**
+  - Pair 4689 with 4688: terminate processes after realistic duration (seconds to hours)
+  - Track running processes in StateManager, probabilistically terminate
+  - Files: `activity.py`, `state_manager.py`
+- [ ] Test: ≥ 6 unique Windows Event IDs in output
+- [ ] Test: ≥ 5 unique eCAR object types in output
+- [ ] Test: Failed logon rate between 5-15% of total logon events
+- [ ] Test: Process termination events present, paired with creation
+
+### 5.3 Protocol & Network Diversity
+
+**Goal:** Eliminate the "zero UDP/ICMP" and "only 11 IPs" tells. Add realistic network protocol mix.
+
+- [ ] **Add UDP traffic generation**
+  - DNS queries (UDP 53): every TCP connection preceded by a DNS lookup; add `generate_dns_query()` that emits Zeek dns.log-style conn records
+  - NTP sync (UDP 123): periodic per-system (every 5-15 minutes to 1-3 NTP servers)
+  - DHCP (UDP 67/68): at session start for dynamic-IP systems
+  - mDNS/LLMNR (UDP 5353/5355): periodic local name resolution
+  - QUIC (UDP 443): percentage of HTTPS traffic uses QUIC
+  - Files: `activity.py` (new methods), `engine.py` (system traffic loop)
+- [ ] **Add ICMP traffic generation**
+  - Periodic ping (ICMP echo) between systems on same segment
+  - Occasional ICMP unreachable for failed connections
+  - Files: `activity.py` (`generate_icmp`)
+- [ ] **Implement service registry for internal IP consistency**
+  - At engine init, build a registry of which internal IPs run which services (ports)
+  - Sources: declared systems + auto-generated infrastructure IPs (DNS server, mail server, DC, file server, NTP server)
+  - All connections to internal IPs check the registry; connection success/failure is consistent with whether the port is open
+  - Files: new `generation/service_registry.py`, `engine.py` (initialization)
+- [ ] **Expand external destination IP pools**
+  - Grow to ~50+ IPs per category with realistic assignments (CDN ranges, cloud provider ranges, SaaS IPs)
+  - Add random IP generation for long-tail destinations (simulate CDN edge nodes, ad networks, analytics)
+  - Total unique destination IPs per scenario should be hundreds, not 11
+  - Files: `activity.py` (EXTERNAL_IPS → larger pools + generator)
+- [ ] **Add Zeek dns.log format definition** (new format)
+  - Query name, query type, response code, answers
+  - Files: new `formats/definitions/zeek_dns.yaml`, new `generation/emitters/zeek_dns.py`
+- [ ] Test: UDP traffic present (proto=udp in Zeek output)
+- [ ] Test: DNS queries present for TCP connection destinations
+- [ ] Test: ≥ 100 unique destination IPs in medium dataset
+- [ ] Test: Internal IP service consistency (no successful connections to closed ports)
+
+### 5.4 Background Traffic & System Activity
+
+**Goal:** Generate OS-appropriate system/service traffic independent of user activity. Eliminate the "all traffic is user-initiated" tell.
+
+- [ ] **Add optional `services` field to System model (inline)**
+  - Extend `System` in `models/scenario.py` with optional `services: list[str]` field (e.g., `["dns", "ntp", "http", "smb"]`)
+  - Auto-populate defaults based on OS if not specified: Windows gets `["dns-client", "ntp-client", "smb", "windows-update"]`, Linux gets `["dns-client", "ntp-client", "syslog"]`
+  - Servers auto-detect from role/hostname hints (e.g., hostname contains "dc" or "dns" → add `dns-server`)
+  - Files: `models/scenario.py`, `validation/schema.py`
+- [ ] **Add system traffic generation loop in engine**
+  - New `_generate_system_traffic()` method called per-hour alongside user activity
+  - Generates: DNS lookups, NTP sync, Windows Update checks, SMB browsing, DHCP renewals
+  - System processes: svchost.exe spawns, scheduled tasks, service startups
+  - Volume: system traffic should be ~20-30% of total traffic
+  - Files: `engine.py` (`_generate_baseline` calls new system traffic method)
+- [ ] **Generate system process trees**
+  - Windows: System(4) → smss.exe → csrss.exe, wininit.exe → services.exe → svchost.exe (multiple instances)
+  - Linux: init/systemd → cron, sshd, rsyslogd, NetworkManager
+  - Generate at scenario start time, persist through time window
+  - Files: `activity.py` (new `generate_system_boot_processes`)
+- [ ] **Add scheduled task / cron simulation**
+  - Windows: periodic svchost activity, Windows Defender scans, Update checks
+  - Linux: cron jobs (logrotate, package updates, monitoring scripts)
+  - Regular intervals with slight jitter (±5% of period)
+  - Files: `engine.py` or `activity.py`
+- [ ] Test: System-generated events present without user activity
+- [ ] Test: System processes appear at scenario start
+- [ ] Test: DNS/NTP traffic at regular intervals
+- [ ] Test: System traffic is ~20-30% of total output
+
+### 5.5 Temporal Realism
+
+**Goal:** Replace uniform event distribution with realistic human timing patterns. Address "metronomic spacing" and "hard rectangular work hours."
+
+- [ ] **Soft ramp-up/ramp-down for work hours**
+  - Replace binary on/off with sigmoid curve: 10% activity at work_start-1h, ramp to 100% by work_start+1h
+  - Soft lunch dip (50% reduction, not 0%)
+  - Evening tail: 20% activity for 1-2 hours after work_end
+  - Occasional late-night activity (1-3% probability per user per night)
+  - Files: `engine.py` (`_calculate_events_for_hour`)
+- [ ] **Activity cluster model**
+  - Replace `_distribute_events_in_hour()` uniform distribution with cluster generation
+  - Each "activity" becomes a burst of 3-15 correlated events over 5-30 seconds
+  - Cluster types per persona: developer (editor→compile→test→git), executive (email→calendar→browser), analyst (query→export→review)
+  - Inter-cluster gaps: 2-15 minutes (exponential distribution)
+  - Files: `engine.py` (`_distribute_events_in_hour` → `_generate_activity_clusters`), `activity.py` (cluster templates)
+- [ ] **Per-user work hour jitter**
+  - Randomize each user's actual start/end/lunch times ±30min from persona defaults
+  - Applied once at engine init, consistent throughout scenario
+  - Early arrivals, late starters, short/long lunches
+  - Files: `engine.py` (init), `engine.py` (`_calculate_events_for_hour`)
+- [ ] **Per-persona behavioral differentiation**
+  - Developers: longer clusters (sustained coding sessions), more process events, fewer web connections
+  - Executives: short frequent clusters (meetings → quick email checks), more web/email, fewer processes
+  - Analysts: medium clusters with heavy DB/query activity
+  - Each persona type gets distinct cluster templates and inter-cluster timing
+  - Files: `activity.py` (persona-specific cluster definitions)
+- [ ] Test: Events cluster with sub-second intra-cluster timing
+- [ ] Test: Inter-cluster gaps follow non-uniform distribution
+- [ ] Test: Work hour profile shows gradual ramp (not step function)
+- [ ] Test: Per-user timing varies (different arrival times)
+- [ ] Test: Human burstiness CV > 1.0 (eval dimension)
+
+**Phase 5 Milestone:** Generated data passes qualitative review — no instant tells. Eval score ≥ 85, all hard acceptance criteria pass. Background noise has protocol diversity (TCP+UDP+ICMP), event type depth (≥ 6 Windows Event IDs, ≥ 5 eCAR objects), realistic timing patterns, and hundreds of unique destination IPs.
+
 ---
 
 ## Post-MVP Enhancements (Future)
@@ -512,11 +701,12 @@
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Network diagram ingestion: auto-infer sensor placement (span vs tap) from diagram topology
-- [ ] Per-user work hours jitter: randomize start/end/lunch times ±30min per user for realistic staggered arrivals
+- [ ] ~~Per-user work hours jitter~~ → Moved to Phase 5.5
 - [ ] Performance optimizations (Rust extensions, better parallelization)
 - [ ] Full user directory export as separate CSV file for large scenarios (ENVIRONMENT.md enhancement)
 - [ ] Authentication and naming convention documentation in ENVIRONMENT.md
 - [ ] Separate student/instructor output packages (GROUND_TRUTH.md in instructor-only directory)
+- [ ] Poisson/Hawkes process timing model: replace Phase 5.5 activity clusters with self-exciting point process for statistically rigorous inter-arrival times (CV naturally 1-3)
 
 ### Medium-term
 - [ ] ~~Alternative LLM backends (OpenAI, Ollama, Anthropic native, Gemini)~~ → No code-level LLM calls; skills use whatever model the user's Claude Code runs

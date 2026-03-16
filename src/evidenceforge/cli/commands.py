@@ -66,73 +66,6 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
 
 
 @app.command()
-def init(
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Overwrite existing config.yaml if it exists"
-    )
-) -> None:
-    """Initialize EvidenceForge by creating config.yaml from template.
-
-    Copies config.example.yaml to config.yaml in the current directory.
-    """
-    console.print("[bold blue]EvidenceForge Initialization[/bold blue]")
-
-    # Locate config.example.yaml: check CWD first, then bundled package data
-    example_config = Path("config.example.yaml")
-    if not example_config.exists():
-        from importlib.resources import files
-
-        bundled = files("evidenceforge") / "_data" / "config.example.yaml"
-        if bundled.is_file():
-            example_config = Path(str(bundled))
-        else:
-            # Dev install: _data only exists in built wheels; check project root
-            pkg_dir = Path(str(files("evidenceforge")))
-            project_root = pkg_dir.parent.parent  # src/evidenceforge -> project root
-            candidate = project_root / "config.example.yaml"
-            if candidate.is_file():
-                example_config = candidate
-            else:
-                console.print(
-                    "[bold red]Error:[/bold red] config.example.yaml not found",
-                    style="red"
-                )
-                console.print(
-                    "Reinstall EvidenceForge or place config.example.yaml "
-                    "in the current directory"
-                )
-                raise typer.Exit(EXIT_INPUT_ERROR)
-
-    # Check if config.yaml already exists
-    target_config = Path("config.yaml")
-    if target_config.exists() and not force:
-        console.print(
-            "[bold yellow]Warning:[/bold yellow] config.yaml already exists",
-            style="yellow"
-        )
-        console.print("Use --force to overwrite, or edit config.yaml manually")
-        raise typer.Exit(EXIT_SUCCESS)
-
-    # Copy config.example.yaml to config.yaml
-    try:
-        content = example_config.read_text()
-        target_config.write_text(content)
-        console.print(
-            "[bold green]✓[/bold green] Created config.yaml",
-            style="green"
-        )
-        console.print("\nNext steps:")
-        console.print("1. Edit config.yaml to configure AWS credentials and output settings")
-        console.print("2. Run 'eforge generate <scenario.yaml>' to generate logs")
-    except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] Failed to create config.yaml: {e}", style="red")
-        raise typer.Exit(EXIT_INPUT_ERROR)
-
-
-@app.command()
 def generate(
     scenario_file: Path = typer.Argument(
         ...,
@@ -147,16 +80,6 @@ def generate(
         "--output",
         "-o",
         help="Output directory for generated logs (overrides scenario setting)",
-    ),
-    config: Optional[Path] = typer.Option(
-        None,
-        "--config",
-        "-c",
-        help="Path to configuration file (default: config.yaml)",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
     ),
     verbose: bool = typer.Option(
         False,

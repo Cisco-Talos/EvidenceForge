@@ -46,15 +46,10 @@ htmlcov/
 .DS_Store
 
 # Project specific
-config.yaml
 .env
 output/
 *.log
 checkpoints/
-
-# Keep example files
-!config.example.yaml
-!.env.example
 
 # Claude Code sessions
 .claude/

@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import (
@@ -16,64 +15,6 @@ from evidenceforge.cli.commands import (
 )
 
 runner = CliRunner()
-
-
-class TestInitCommand:
-    """Tests for 'eforge init' command."""
-
-    def test_init_creates_config(self, tmp_path, monkeypatch):
-        """eforge init should create config.yaml in current directory."""
-        monkeypatch.chdir(tmp_path)
-
-        # Create config.example.yaml in tmp_path
-        example_config = tmp_path / "config.example.yaml"
-        example_config.write_text("""
-aws:
-  profile: default
-  region: us-east-1
-
-bedrock:
-  model_id: anthropic.claude-sonnet-4-6
-  max_tokens: 4096
-  temperature: 1.0
-
-output:
-  buffer_size: 10000
-
-logging:
-  level: INFO
-  file: null
-""")
-
-        result = runner.invoke(app, ["init"])
-
-        assert result.exit_code == EXIT_SUCCESS
-        assert (tmp_path / "config.yaml").exists()
-        assert "Created" in result.stdout
-
-        # Verify config file has expected content
-        config = yaml.safe_load((tmp_path / "config.yaml").read_text())
-        assert "aws" in config
-        assert "bedrock" in config
-
-    def test_init_with_existing_config(self, tmp_path, monkeypatch):
-        """eforge init should handle existing config.yaml gracefully."""
-        monkeypatch.chdir(tmp_path)
-
-        # Create config.example.yaml
-        example_config = tmp_path / "config.example.yaml"
-        example_config.write_text("test: config\n")
-
-        # Create existing config
-        existing_config = tmp_path / "config.yaml"
-        existing_config.write_text("existing: content\n")
-
-        result = runner.invoke(app, ["init"])
-
-        # Should exit successfully but not overwrite (without --force)
-        assert result.exit_code == EXIT_SUCCESS
-        assert existing_config.exists()
-        assert "already exists" in result.stdout.lower()
 
 
 class TestGenerateCommand:
@@ -120,35 +61,6 @@ name: test
         # Should create engine and call generate
         assert mock_engine_class.called
         assert mock_engine.generate.called
-
-    @patch('evidenceforge.cli.commands.GenerationEngine')
-    def test_generate_with_config_flag(self, mock_engine_class, scenarios_dir, tmp_path):
-        """--config flag should load custom config file."""
-        mock_engine = Mock()
-        mock_engine_class.return_value = mock_engine
-
-        config_file = tmp_path / "custom_config.yaml"
-        config_file.write_text("""
-aws:
-  profile: test
-  region: us-west-2
-bedrock:
-  model_id: anthropic.claude-sonnet-4-6
-output:
-  buffer_size: 5000
-logging:
-  level: DEBUG
-""")
-
-        result = runner.invoke(app, [
-            "generate",
-            str(scenarios_dir / "minimal.yaml"),
-            "--config", str(config_file),
-            "--output", str(tmp_path / "out")
-        ])
-
-        # Should succeed (config loaded)
-        assert result.exit_code == EXIT_SUCCESS
 
     @patch('evidenceforge.cli.commands.GenerationEngine')
     def test_generate_success_minimal(self, mock_engine_class, scenarios_dir, tmp_path):

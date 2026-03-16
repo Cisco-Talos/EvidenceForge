@@ -7,9 +7,7 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.models import (
-    AppConfig,
     Environment,
-    LoggingConfig,
     System,
     TimeWindow,
     Timezone,
@@ -19,173 +17,18 @@ from evidenceforge.utils import (
     convert_to_output_timezone,
     ensure_directory,
     get_system_timezone,
-    interpolate_env_vars,
-    load_config,
     load_yaml,
     parse_duration,
     parse_iso8601,
     redact_secrets,
     resolve_time_window,
-    setup_logging,
     validate_output_path,
     write_yaml,
 )
 
 
-class TestConfigUtils:
-    """Tests for config loading utilities."""
-
-    def test_interpolate_env_vars_simple(self, monkeypatch):
-        """Test simple environment variable interpolation."""
-        monkeypatch.setenv("MY_VAR", "test_value")
-        yaml_str = "key: ${MY_VAR}"
-        result = interpolate_env_vars(yaml_str)
-        assert result == "key: test_value"
-
-    def test_interpolate_env_vars_with_default(self):
-        """Test interpolation with default value."""
-        yaml_str = "key: ${MISSING_VAR:-default_value}"
-        result = interpolate_env_vars(yaml_str)
-        assert result == "key: default_value"
-
-    def test_interpolate_env_vars_missing_no_default(self):
-        """Test interpolation with missing var and no default."""
-        yaml_str = "key: ${TOTALLY_MISSING_VAR}"
-        result = interpolate_env_vars(yaml_str)
-        assert result == "key: "
-
-    def test_load_config_from_file(self, tmp_path, monkeypatch):
-        """Test loading config from YAML file."""
-        monkeypatch.chdir(tmp_path)
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            """
-aws:
-  profile: test-profile
-  region: us-west-2
-"""
-        )
-
-        config = load_config(config_path=config_file)
-        assert config.aws.profile == "test-profile"
-        assert config.aws.region == "us-west-2"
-
-    def test_load_config_with_env_vars(self, tmp_path, monkeypatch):
-        """Test config loading with env var interpolation."""
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("AWS_PROFILE", "prod")
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            """
-aws:
-  profile: ${AWS_PROFILE}
-  region: us-east-1
-"""
-        )
-
-        config = load_config(config_path=config_file)
-        assert config.aws.profile == "prod"
-
-    def test_load_config_defaults(self, tmp_path, monkeypatch):
-        """Test that defaults are used when no config file exists."""
-        monkeypatch.chdir(tmp_path)
-        config = load_config(config_path="nonexistent.yaml")
-        assert config.aws.profile == "default"
-        assert config.bedrock.model_primary.startswith("anthropic")
-
-    def test_load_config_invalid_yaml(self, tmp_path, monkeypatch):
-        """Test that invalid YAML raises ConfigurationError."""
-        from evidenceforge.models.exceptions import ConfigurationError
-
-        monkeypatch.chdir(tmp_path)
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text("invalid: yaml: content: [")
-
-        with pytest.raises(ConfigurationError, match="Invalid YAML"):
-            load_config(config_path=config_file)
-
-    def test_load_config_invalid_config(self, tmp_path, monkeypatch):
-        """Test that invalid config data raises ConfigurationError."""
-        from evidenceforge.models.exceptions import ConfigurationError
-
-        monkeypatch.chdir(tmp_path)
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            """
-aws:
-  profile: test
-  region: invalid-region-123
-logging:
-  level: INVALID_LEVEL
-"""
-        )
-
-        with pytest.raises(ConfigurationError, match="Invalid configuration"):
-            load_config(config_path=config_file)
-
-    def test_load_config_with_system_config(self, tmp_path, monkeypatch):
-        """Test loading with system-wide config."""
-        monkeypatch.chdir(tmp_path)
-
-        # Create system config
-        system_config_dir = tmp_path / ".config" / "evidence-forge"
-        system_config_dir.mkdir(parents=True)
-        system_config = system_config_dir / "config.yaml"
-        system_config.write_text(
-            """
-aws:
-  profile: system-profile
-  region: us-west-1
-"""
-        )
-
-        # Mock home directory
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        config = load_config()
-        assert config.aws.profile == "system-profile"
-        assert config.aws.region == "us-west-1"
-
-    @pytest.mark.skip(reason="Env file loading edge case - functionality works in practice")
-    def test_load_config_with_env_file(self, tmp_path, monkeypatch):
-        """Test loading with explicit .env file."""
-        monkeypatch.chdir(tmp_path)
-        env_file = tmp_path / ".env"
-        env_file.write_text("AWS_PROFILE=env-profile\n")
-
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(
-            """
-aws:
-  profile: ${AWS_PROFILE}
-"""
-        )
-
-        config = load_config(config_path=config_file, env_file=str(env_file))
-        assert config.aws.profile == "env-profile"
-
-
-class TestLoggingUtils:
-    """Tests for logging utilities."""
-
-    def test_setup_logging_console_only(self):
-        """Test logging setup with console handler only."""
-        config = LoggingConfig(level="info", console_level="warning")
-        setup_logging(config)
-
-        logger = logging.getLogger()
-        assert logger.level == logging.INFO
-        assert len(logger.handlers) >= 1
-
-    def test_setup_logging_with_file(self, tmp_path):
-        """Test logging setup with file handler."""
-        log_file = tmp_path / "test.log"
-        config = LoggingConfig(level="debug", console_level="warning", file=str(log_file))
-        setup_logging(config)
-
-        logger = logging.getLogger()
-        assert len(logger.handlers) >= 2
-        assert log_file.parent.exists()
+class TestRedactSecrets:
+    """Tests for secret redaction utility."""
 
     def test_redact_secrets(self):
         """Test sensitive data redaction."""

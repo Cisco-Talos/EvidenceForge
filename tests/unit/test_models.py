@@ -7,16 +7,11 @@ from pydantic import ValidationError
 
 from evidenceforge.models import (
     ActiveSession,
-    AppConfig,
-    AWSConfig,
     BaselineActivity,
-    BedrockConfig,
     Environment,
     GeneratorState,
     Group,
-    LoggingConfig,
     OpenConnection,
-    OutputConfig,
     OutputSpec,
     Persona,
     RunningProcess,
@@ -44,74 +39,6 @@ class TestExceptions:
         err = VError("validation failed")
         assert isinstance(err, EvidenceForgeError)
         assert isinstance(err, Exception)
-
-
-class TestConfigModels:
-    """Tests for configuration models."""
-
-    def test_aws_config_defaults(self):
-        """Test AWS config with defaults."""
-        config = AWSConfig()
-        assert config.profile == "default"
-        assert config.region == "us-east-1"
-
-    def test_aws_config_custom(self):
-        """Test AWS config with custom values."""
-        config = AWSConfig(profile="dev", region="us-west-2")
-        assert config.profile == "dev"
-        assert config.region == "us-west-2"
-
-    def test_aws_config_frozen(self):
-        """Test that AWS config is immutable."""
-        config = AWSConfig()
-        with pytest.raises(ValidationError):
-            config.profile = "new-profile"  # type: ignore
-
-    def test_bedrock_config_defaults(self):
-        """Test Bedrock config defaults."""
-        config = BedrockConfig()
-        assert "claude" in config.model_primary.lower()
-        assert "claude" in config.model_research.lower()
-        assert "claude" in config.model_generation.lower()
-
-    def test_output_config_defaults(self):
-        """Test output config defaults."""
-        config = OutputConfig()
-        assert config.base_directory == "./output"
-
-    def test_logging_config_defaults(self):
-        """Test logging config defaults."""
-        config = LoggingConfig()
-        assert config.level == "info"
-        assert config.console_level == "warning"
-        assert config.file is None
-
-    def test_logging_config_invalid_level(self):
-        """Test that invalid logging levels are rejected."""
-        with pytest.raises(ValidationError):
-            LoggingConfig(level="invalid")
-
-    def test_app_config_full(self):
-        """Test complete app config."""
-        config = AppConfig()
-        assert config.aws.profile == "default"
-        assert config.bedrock.model_primary.startswith("anthropic")
-        assert config.output.base_directory == "./output"
-        assert config.logging.level == "info"
-
-    def test_app_config_custom(self):
-        """Test app config with custom values."""
-        config = AppConfig(
-            aws=AWSConfig(profile="prod", region="eu-west-1"),
-            logging=LoggingConfig(level="debug", console_level="info"),
-        )
-        assert config.aws.profile == "prod"
-        assert config.logging.level == "debug"
-
-    def test_config_rejects_extra_fields(self):
-        """Test that extra fields are rejected."""
-        with pytest.raises(ValidationError):
-            AWSConfig(profile="default", region="us-east-1", unknown_field="value")  # type: ignore
 
 
 class TestTimeWindow:
