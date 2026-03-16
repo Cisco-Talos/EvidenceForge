@@ -1,0 +1,147 @@
+# Co-occurrence rules for Tier B record-level fidelity checks.
+# Each rule checks that when a condition matches, required field constraints hold.
+
+windows_event_security:
+  - name: "Network logon (type 3) requires valid IP"
+    condition:
+      EventID: 4624
+      LogonType: 3
+    checks:
+      - field: IpAddress
+        not_equal: "-"
+      - field: IpAddress
+        not_equal: ""
+
+  - name: "Interactive logon (type 2) uses local workstation"
+    condition:
+      EventID: 4624
+      LogonType: 2
+    checks:
+      - field: WorkstationName
+        not_equal: ""
+
+  - name: "Process creation has process name"
+    condition:
+      EventID: 4688
+    checks:
+      - field: NewProcessName
+        min_length: 1
+
+  - name: "Logoff must have a logon type"
+    condition:
+      EventID: 4634
+    checks:
+      - field: LogonType
+        present: true
+
+  - name: "Logon has valid SID"
+    condition:
+      EventID: 4624
+    checks:
+      - field: TargetUserSid
+        not_equal: ""
+
+zeek_conn:
+  - name: "Completed connection (SF) has duration"
+    condition:
+      conn_state: "SF"
+    checks:
+      - field: duration
+        present: true
+
+  - name: "Completed connection (SF) has byte counts"
+    condition:
+      conn_state: "SF"
+    checks:
+      - field: orig_bytes
+        present: true
+      - field: resp_bytes
+        present: true
+
+  - name: "Connection has valid protocol"
+    condition: {}
+    checks:
+      - field: proto
+        in: ["tcp", "udp", "icmp"]
+
+ecar:
+  - name: "PROCESS events have image_path or command_line"
+    condition:
+      object: "PROCESS"
+      action: "CREATE"
+    checks:
+      - field: image_path
+        present: true
+
+  - name: "FLOW events have network fields"
+    condition:
+      object: "FLOW"
+    checks:
+      - field: src_ip
+        present: true
+      - field: dst_ip
+        present: true
+
+  - name: "USER_SESSION LOGIN has principal"
+    condition:
+      object: "USER_SESSION"
+      action: "LOGIN"
+    checks:
+      - field: principal
+        present: true
+
+syslog:
+  - name: "Syslog has non-empty message"
+    condition: {}
+    checks:
+      - field: message
+        min_length: 1
+
+  - name: "Syslog has hostname"
+    condition: {}
+    checks:
+      - field: hostname
+        not_equal: ""
+
+snort_alert:
+  - name: "Alert has valid priority"
+    condition: {}
+    checks:
+      - field: priority
+        min_value: 1
+        max_value: 4
+
+  - name: "Alert has source and destination"
+    condition: {}
+    checks:
+      - field: src_ip
+        present: true
+      - field: dst_ip
+        present: true
+
+web_access:
+  - name: "Request has valid status code"
+    condition: {}
+    checks:
+      - field: status_code
+        min_value: 100
+        max_value: 599
+
+  - name: "Request has HTTP method"
+    condition: {}
+    checks:
+      - field: method
+        in: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"]
+
+bash_history:
+  - name: "Command is non-empty"
+    condition: {}
+    checks:
+      - field: command
+        min_length: 1
+
+  - name: "Has username"
+    condition: {}
+    checks:
+      - field: username
+        not_equal: ""

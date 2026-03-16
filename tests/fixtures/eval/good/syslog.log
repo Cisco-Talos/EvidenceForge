@@ -1,0 +1,3 @@
+Mar 15 10:15:00 SRV-WEB-01 sshd[12345]: Accepted publickey for admin from 10.0.10.50 port 54321 ssh2
+Mar 15 10:20:00 SRV-WEB-01 sudo[12346]: admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl restart nginx
+Mar 15 10:25:00 SRV-WEB-01 sshd[12345]: Disconnected from user admin 10.0.10.50 port 54321

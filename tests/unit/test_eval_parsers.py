@@ -1,0 +1,266 @@
+"""Tests for evaluation log parsers."""
+
+from pathlib import Path
+
+import pytest
+
+GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
+
+
+class TestWindowsEventParser:
+    def test_parses_all_events(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+        assert len(records) == 3
+
+    def test_extracts_event_ids(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+        event_ids = [r.fields["EventID"] for r in records]
+        assert event_ids == [4624, 4688, 4634]
+
+    def test_extracts_timestamps(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+        assert all(r.timestamp is not None for r in records)
+        assert records[0].timestamp.hour == 10
+        assert records[0].timestamp.minute == 15
+
+    def test_extracts_computer_name(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+        assert all(r.fields["Computer"] == "WS-ANALYST-01" for r in records)
+
+    def test_extracts_eventdata_fields(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+        logon = records[0]
+        assert logon.fields["TargetUserName"] == "jsmith"
+        assert logon.fields["IpAddress"] == "10.0.10.50"
+        assert logon.fields["LogonType"] == 3
+
+    def test_no_parse_errors(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+        assert all(len(r.parse_errors) == 0 for r in records)
+
+    def test_can_parse_correct_file(self):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        assert parser.can_parse(Path("windows_event_security.xml"))
+        assert not parser.can_parse(Path("zeek_conn.json"))
+
+
+class TestZeekConnParser:
+    def test_parses_all_records(self):
+        from evidenceforge.evaluation.parsers.zeek import ZeekConnParser
+
+        parser = ZeekConnParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "zeek_conn.json"))
+        assert len(records) == 3
+
+    def test_extracts_fields(self):
+        from evidenceforge.evaluation.parsers.zeek import ZeekConnParser
+
+        parser = ZeekConnParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "zeek_conn.json"))
+        first = records[0]
+        assert first.fields["id.orig_h"] == "10.0.10.50"
+        assert first.fields["id.resp_p"] == 443
+        assert first.fields["proto"] == "tcp"
+        assert first.fields["conn_state"] == "SF"
+
+    def test_extracts_timestamps(self):
+        from evidenceforge.evaluation.parsers.zeek import ZeekConnParser
+
+        parser = ZeekConnParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "zeek_conn.json"))
+        assert all(r.timestamp is not None for r in records)
+
+    def test_no_parse_errors(self):
+        from evidenceforge.evaluation.parsers.zeek import ZeekConnParser
+
+        parser = ZeekConnParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "zeek_conn.json"))
+        assert all(len(r.parse_errors) == 0 for r in records)
+
+
+class TestEcarParser:
+    def test_parses_all_records(self):
+        from evidenceforge.evaluation.parsers.ecar import EcarParser
+
+        parser = EcarParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "ecar.json"))
+        assert len(records) == 3
+
+    def test_flattens_properties(self):
+        from evidenceforge.evaluation.parsers.ecar import EcarParser
+
+        parser = EcarParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "ecar.json"))
+        process = records[0]
+        assert process.fields["object"] == "PROCESS"
+        assert process.fields["command_line"] == "cmd.exe /c ipconfig"
+        assert process.fields["image_path"] == "C:\\Windows\\System32\\cmd.exe"
+
+    def test_extracts_timestamps(self):
+        from evidenceforge.evaluation.parsers.ecar import EcarParser
+
+        parser = EcarParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "ecar.json"))
+        assert all(r.timestamp is not None for r in records)
+
+
+class TestSyslogParser:
+    def test_parses_all_lines(self):
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "syslog.log"))
+        assert len(records) == 3
+
+    def test_extracts_fields(self):
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "syslog.log"))
+        first = records[0]
+        assert first.fields["hostname"] == "SRV-WEB-01"
+        assert first.fields["app_name"] == "sshd"
+        assert first.fields["pid"] == 12345
+        assert "Accepted publickey" in first.fields["message"]
+
+    def test_extracts_timestamps(self):
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "syslog.log"))
+        assert all(r.timestamp is not None for r in records)
+
+
+class TestSnortAlertParser:
+    def test_parses_all_alerts(self):
+        from evidenceforge.evaluation.parsers.snort import SnortAlertParser
+
+        parser = SnortAlertParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "snort_alert.alert"))
+        assert len(records) == 2
+
+    def test_extracts_fields(self):
+        from evidenceforge.evaluation.parsers.snort import SnortAlertParser
+
+        parser = SnortAlertParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "snort_alert.alert"))
+        first = records[0]
+        assert first.fields["sid"] == 2013382
+        assert first.fields["priority"] == 1
+        assert first.fields["protocol"] == "TCP"
+        assert first.fields["src_ip"] == "203.0.113.50"
+        assert first.fields["src_port"] == 443
+        assert first.fields["dst_ip"] == "10.0.10.50"
+        assert first.fields["dst_port"] == 54321
+
+
+class TestWebAccessParser:
+    def test_parses_all_lines(self):
+        from evidenceforge.evaluation.parsers.web import WebAccessParser
+
+        parser = WebAccessParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "web_access.log"))
+        assert len(records) == 3
+
+    def test_extracts_fields(self):
+        from evidenceforge.evaluation.parsers.web import WebAccessParser
+
+        parser = WebAccessParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "web_access.log"))
+        first = records[0]
+        assert first.fields["client_ip"] == "10.0.10.50"
+        assert first.fields["username"] == "jsmith"
+        assert first.fields["method"] == "GET"
+        assert first.fields["path"] == "/dashboard"
+        assert first.fields["status_code"] == 200
+
+    def test_handles_missing_username(self):
+        from evidenceforge.evaluation.parsers.web import WebAccessParser
+
+        parser = WebAccessParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "web_access.log"))
+        second = records[1]
+        assert "username" not in second.fields  # "-" is excluded
+
+    def test_extracts_timestamps(self):
+        from evidenceforge.evaluation.parsers.web import WebAccessParser
+
+        parser = WebAccessParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "web_access.log"))
+        assert all(r.timestamp is not None for r in records)
+
+
+class TestBashHistoryParser:
+    def test_parses_all_commands(self):
+        from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser
+
+        parser = BashHistoryParser()
+        history_file = GOOD_FIXTURES / "bash_history" / "SRV-WEB-01" / "admin.history"
+        records = list(parser.parse_file(history_file))
+        assert len(records) == 3
+
+    def test_extracts_metadata_from_path(self):
+        from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser
+
+        parser = BashHistoryParser()
+        history_file = GOOD_FIXTURES / "bash_history" / "SRV-WEB-01" / "admin.history"
+        records = list(parser.parse_file(history_file))
+        assert all(r.fields["hostname"] == "SRV-WEB-01" for r in records)
+        assert all(r.fields["username"] == "admin" for r in records)
+
+    def test_extracts_commands(self):
+        from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser
+
+        parser = BashHistoryParser()
+        history_file = GOOD_FIXTURES / "bash_history" / "SRV-WEB-01" / "admin.history"
+        records = list(parser.parse_file(history_file))
+        commands = [r.fields["command"] for r in records]
+        assert "whoami" in commands
+        assert "ls -la /var/log" in commands
+
+    def test_extracts_timestamps(self):
+        from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser
+
+        parser = BashHistoryParser()
+        history_file = GOOD_FIXTURES / "bash_history" / "SRV-WEB-01" / "admin.history"
+        records = list(parser.parse_file(history_file))
+        assert all(r.timestamp is not None for r in records)
+
+
+class TestParserDiscovery:
+    def test_discovers_all_formats_in_good_fixtures(self):
+        from evidenceforge.evaluation.parsers import discover_log_files
+
+        files = discover_log_files(GOOD_FIXTURES)
+        assert "windows_event_security" in files
+        assert "zeek_conn" in files
+        assert "ecar" in files
+        assert "syslog" in files
+        assert "snort_alert" in files
+        assert "web_access" in files
+        assert "bash_history" in files
+
+    def test_all_parsers_registered(self):
+        from evidenceforge.evaluation.parsers import _PARSER_CLASSES
+
+        assert len(_PARSER_CLASSES) == 7

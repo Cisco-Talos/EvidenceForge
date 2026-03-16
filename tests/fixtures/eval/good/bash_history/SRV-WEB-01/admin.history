@@ -1,0 +1,6 @@
+#1742036100
+whoami
+#1742036200
+ls -la /var/log
+#1742036300
+sudo systemctl restart nginx

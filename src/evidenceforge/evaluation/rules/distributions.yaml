@@ -1,0 +1,65 @@
+# Reference distribution profiles for Tier C population statistics checks.
+# Each format lists fields with expected distributions and divergence tolerances.
+# Distributions are educated estimates; refine with real-world data over time.
+
+windows_event_security:
+  - field: EventID
+    reference:
+      4624: 0.35
+      4634: 0.30
+      4688: 0.35
+    tolerance: 0.20
+
+zeek_conn:
+  - field: proto
+    reference:
+      tcp: 0.80
+      udp: 0.18
+      icmp: 0.02
+    tolerance: 0.25
+
+  - field: conn_state
+    reference:
+      SF: 0.55
+      S0: 0.15
+      S1: 0.05
+      REJ: 0.05
+      RSTO: 0.05
+      RSTR: 0.05
+      OTH: 0.10
+    tolerance: 0.30
+
+ecar:
+  - field: object
+    reference:
+      PROCESS: 0.40
+      FILE: 0.15
+      FLOW: 0.20
+      USER_SESSION: 0.15
+      REGISTRY: 0.05
+      MODULE: 0.05
+    tolerance: 0.30
+
+  - field: action
+    reference:
+      CREATE: 0.30
+      TERMINATE: 0.10
+      CONNECT: 0.15
+      LOGIN: 0.10
+      LOGOUT: 0.10
+      MODIFY: 0.10
+      WRITE: 0.05
+      READ: 0.05
+      LOAD: 0.05
+    tolerance: 0.30
+
+web_access:
+  - field: method
+    reference:
+      GET: 0.75
+      POST: 0.15
+      PUT: 0.03
+      DELETE: 0.02
+      HEAD: 0.03
+      OPTIONS: 0.02
+    tolerance: 0.25

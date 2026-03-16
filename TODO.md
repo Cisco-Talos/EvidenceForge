@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 3 - MVP Release ✅ COMPLETE. Ready for Phase 4.
+**Status:** Phase 3 - MVP Release ✅ COMPLETE. Phase 4 planned.
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-13 (Phase 3 complete, MVP ready)
+**Last Updated:** 2026-03-16 (Phase 4 Data Quality Evaluation planned, PRD at docs/data-quality-prd.md)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -411,37 +411,106 @@
 
 ---
 
-## Phase 4: Evaluation Framework (Post-MVP)
+## Phase 4: Data Quality Evaluation Framework (Post-MVP)
 
-**Goal:** Add a `eforge evaluate` command that assesses generated log quality with concrete, extensible metrics.
+**Goal:** Add `eforge eval` command that scores generated datasets across 5 quality dimensions with 23 sub-scores. Focused on threat hunting realism. All scoring is deterministic/statistical (no LLM required). Optional LLM spot-check layer for qualitative review.
 
-### 4.1 Metrics Framework
+**PRD:** See `docs/data-quality-prd.md` for full rationale, scoring formulas, and design decisions.
 
-- [ ] `evaluation/metrics.py` — Extensible metrics framework
-  - [ ] Format compliance (parse rate per format)
-  - [ ] Cross-reference consistency
-  - [ ] Ground truth IOC validation
-  - [ ] Specific checks defined iteratively during implementation
+**Scoring model:** 5 dimensions roll up to an overall 0-100 score. Each dimension has weighted sub-scores. Acceptance criteria are a separate pass/fail layer on top of scores.
 
-### 4.2 Evaluator and Reporting
+### 4.1 Report Framework & CLI Command
 
-- [ ] `evaluation/evaluator.py` — Main evaluation logic
-- [ ] `evaluation/report.py` — JSON report generation
+- [ ] Create `src/evidenceforge/evaluation/` package structure
+- [ ] `evaluation/engine.py` — Orchestrator: runs all dimensions, collects scores, applies acceptance criteria
+- [ ] `evaluation/report.py` — Report formatting (Rich text + JSON output)
+- [ ] Add `eforge eval` CLI command to `cli/commands.py`
+  - [ ] Args: `<output_directory> --scenario <scenario.yaml>`
+  - [ ] Flags: `--format json|text`, `--verbose`, `--llm-review`
+- [ ] Data model for scores: DimensionScore, SubScore, AcceptanceCriterion, QualityReport
+- [ ] Test: CLI argument parsing, report formatting
 
-### 4.3 CLI Command
+### 4.2 Dimension 1 — Record-Level Fidelity (weight: 0.15)
 
-- [ ] Add `eforge evaluate` CLI command
-  - [ ] `--report` flag for output path
-  - [ ] `--verbose` flag for detailed findings
-- [ ] Report is informational only (no pass/fail thresholds)
+- [ ] `evaluation/dimensions/record_fidelity.py`
+- [ ] **Tier A: Parsability & Structure** (0.40) — parse every record, check required fields, validate types
+  - [ ] Reuse/extend `src/evidenceforge/formats/validator.py` for per-record validation
+  - [ ] Format-specific parsers: XML (Windows), JSON (Zeek, eCAR), regex (syslog, web, snort, bash_history)
+- [ ] **Tier B: Co-occurrence Rules** (0.35) — field combination checks
+  - [ ] `evaluation/rules/co_occurrence.py` — rule engine + initial YAML rule sets per format
+  - [ ] Start with 5-10 rules per format (e.g., Win 4624 LogonType=3 requires IpAddress; Zeek dns requires port 53)
+  - [ ] Rules stored as YAML data files alongside format definitions
+- [ ] **Tier C: Population Statistics** (0.25) — aggregate distribution checks
+  - [ ] `evaluation/rules/distributions.py` — reference profiles + divergence scoring
+  - [ ] Event type distribution, user agent diversity, process name frequency
+- [ ] Test: known-good fixtures score high, known-bad fixtures score low
 
-### 4.4 Tests
+### 4.3 Dimension 5 — Signal Integrity (weight: 0.20)
 
-- [ ] Test: Evaluation metrics calculation
-- [ ] Test: Report generation
-- [ ] Test: CLI integration
+- [ ] `evaluation/dimensions/signal_integrity.py`
+- [ ] **Event Presence** (0.25) — storyline events visible within sensor coverage produced traces
+- [ ] **Indicator Accuracy** (0.25) — present events carry correct IPs, usernames, hostnames, processes
+- [ ] **Pivot Linkability** (0.25) — consecutive storyline steps share pivotable indicators
+- [ ] **Storyline Temporal Integrity** (0.25) — events in correct order at correct times
+- [ ] Parse scenario storyline + build expected trace mapping
+- [ ] Test: scenarios with missing/wrong indicators score appropriately
 
-**Phase 4 Milestone:** `eforge evaluate` command produces JSON quality reports for generated datasets.
+### 4.4 Dimension 4 — Temporal Realism (weight: 0.15)
+
+- [ ] `evaluation/dimensions/temporal.py`
+- [ ] **Work Hour Distribution** (0.20) — user events cluster in persona work hours (80-95%)
+- [ ] **Human Burstiness** (0.20) — CV of inter-event times per user (target: 1-3)
+- [ ] **System Process Regularity** (0.20) — autocorrelation of system event timestamps
+- [ ] **Causal Ordering** (0.20) — known causal pairs correctly sequenced
+  - [ ] `evaluation/rules/causal_pairs.py` — causal pair definitions per format
+- [ ] **Timing Plausibility** (0.20) — no physically impossible timing
+- [ ] Test: uniform-distribution data scores low on burstiness; correctly-ordered data scores high on causality
+
+### 4.5 Dimension 2 — Cross-Source Coherence (weight: 0.25)
+
+- [ ] `evaluation/dimensions/cross_source.py`
+- [ ] `evaluation/visibility.py` — build visibility model from scenario topology
+  - [ ] Which hosts have which logging (OS → format mapping)
+  - [ ] Which network sensors see which traffic (reuse NetworkVisibilityEngine patterns)
+- [ ] **Source Correctness** (0.20) — no records in wrong sources (Windows cmds in bash_history, syslog from Windows hosts)
+- [ ] **Storyline Trace Coverage** (0.20) — expected traces found in visible sources
+- [ ] **Cross-Source Field Agreement** (0.20) — timestamps (UTC-normalized, ±30s tolerance), IPs, usernames agree
+- [ ] **Baseline Coherence — Sampled** (0.20) — random 5-10% sample of baseline events checked
+- [ ] **Baseline Coherence — Aggregate** (0.20) — per-user/system event counts proportional across sources
+- [ ] Test: cross-OS mismatch fixtures, missing trace fixtures
+
+### 4.6 Dimension 3 — Background Noise Realism (weight: 0.25)
+
+- [ ] `evaluation/dimensions/noise_realism.py`
+- [ ] `evaluation/anomaly.py` — lightweight statistical anomaly detector
+- [ ] **Volume Adequacy** (0.25) — noise-to-signal ratio meets intensity thresholds (low ~500:1, med ~5K:1, high ~10K:1+)
+- [ ] **User Behavioral Diversity** (0.25) — entropy/pairwise similarity of per-user event distributions
+- [ ] **Activity Plausibility** (0.25) — activities match persona/system/OS assignments
+- [ ] **Organic Anomaly Rate** (0.25) — 1-5% of background flagged as anomalous (too clean = bad, too chaotic = bad)
+- [ ] Test: cookie-cutter user activity scores low on diversity; clean-only background scores low on anomaly rate
+
+### 4.7 LLM Spot-Check Layer (optional)
+
+- [ ] Implement `--llm-review` flag in eval command
+- [ ] Sample 20-50 records for qualitative LLM assessment
+- [ ] Three check types: Record Realism, Narrative Coherence, Hunting Feasibility
+- [ ] Append commentary to report (does not affect numeric scores)
+
+### 4.8 Integration & Acceptance Criteria
+
+- [ ] Acceptance criteria engine: hard requirements (reject) + quality targets (flag)
+  - [ ] Hard: Dim1 Tier A >= 98%, Dim2 Source Correctness >= 95%, Dim4 Causal Ordering >= 99%, Dim5 Event Presence >= 90%
+  - [ ] Targets: Overall >= 70, each dimension >= 60, Dim3 anomaly rate 1-5%
+- [ ] Supplementary metrics: Difficulty Estimate (indicator distinctiveness, signal ratio)
+- [ ] Integration test: `eforge generate` + `eforge eval` pipeline on test scenarios
+- [ ] Run eval on existing fixtures (minimal, attack, retail-store) to establish baselines
+
+### 4.9 Scenario Skill Update
+
+- [ ] Update `commands/eforge/scenario.md` to check sensor coverage during authoring
+- [ ] Flag when storyline events may not be discoverable given declared topology
+
+**Phase 4 Milestone:** `eforge eval` produces comprehensive quality reports with 5-dimension scoring, acceptance criteria, and optional LLM spot-checks. Reports feed back into generation improvements.
 
 ---
 
@@ -454,7 +523,7 @@
 - [ ] Checkpointing and resume for long-running generation
 - [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
-- [ ] Subjective realism evaluation (LLM-based)
+- [ ] ~~Subjective realism evaluation (LLM-based)~~ → Moved to Phase 4.7 (LLM Spot-Check Layer)
 - [ ] Config file inheritance/templating
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
@@ -470,7 +539,7 @@
 - [ ] Web UI for scenario creation
 - [ ] Streaming output to SIEM/data lakes
 - [ ] Log format auto-detection from samples
-- [ ] Machine learning-based realism scoring
+- [ ] ~~Machine learning-based realism scoring~~ → Superseded by Phase 4 statistical scoring approach
 
 ### Long-term
 - [ ] OT/ICS environment simulation
