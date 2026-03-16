@@ -13,6 +13,7 @@ SKILL_FILES = [
     "scenario.md",
     "generate.md",
     "validate.md",
+    "evaluate.md",
 ]
 
 REFERENCE_FILES = [

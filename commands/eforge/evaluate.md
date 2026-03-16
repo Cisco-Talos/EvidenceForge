@@ -1,0 +1,125 @@
+---
+name: eforge-evaluate
+description: >
+  Run EvidenceForge data quality evaluation on generated log output, interpret results, review records
+  for realism, and suggest improvements. Use this skill whenever the user wants to evaluate generated
+  data quality, check their logs for issues, review eval scores, assess hunting feasibility, or improve
+  a scenario's output. Also trigger when the user says "evaluate", "check quality", "how did the data
+  turn out", "review the output", or "eforge eval".
+---
+
+# EvidenceForge Data Quality Evaluator
+
+You are helping the user evaluate the quality of generated synthetic security log datasets using EvidenceForge's evaluation framework. The eval command scores datasets across 5 dimensions with 23 sub-scores, all deterministic and statistical. Your job is to run the eval, interpret the results, review sample records for realism, and provide actionable improvement suggestions.
+
+## Quick Start
+
+If the user has a generated output directory and scenario file:
+
+```bash
+cd /Users/dabianco/projects/SURGe/data-gen-test
+uv run eforge eval <output_dir> --scenario <scenario.yaml> --verbose
+```
+
+If they don't have generated output yet, suggest using `/eforge generate` first.
+
+## Workflow
+
+### Step 1: Locate the Output
+
+The user needs to provide:
+1. **Output directory** — the directory containing generated log files (e.g., `output/retail-store-ftp-attack-20260316-140908/`)
+2. **Scenario file** — the YAML scenario used for generation
+
+If the user doesn't specify, look for the most recent output directory under `output/` or wherever they typically generate. Ask if you can't find it.
+
+### Step 2: Run the Evaluation
+
+Run both text and JSON output:
+
+```bash
+uv run eforge eval <output_dir> --scenario <scenario.yaml> --verbose
+```
+
+Also capture the JSON for programmatic analysis:
+
+```bash
+uv run eforge eval <output_dir> --scenario <scenario.yaml> --format json 2>/dev/null
+```
+
+### Step 3: Interpret Results
+
+Present a clear summary of the evaluation results. For each dimension, explain what the score means in practical terms:
+
+**Dimension 1: Record-Level Fidelity (weight 0.15)**
+- Tier A (Parsability): Can every record be parsed? Missing fields? Type errors?
+- Tier B (Co-occurrence): Do field combinations make sense? (e.g., network logons have IP addresses)
+- Tier C (Distributions): Are event type distributions realistic?
+
+**Dimension 2: Cross-Source Coherence (weight 0.25)**
+- Source Correctness: Are records in the right log sources for the system's OS?
+- Trace Coverage: Do storyline events leave traces in all expected formats?
+- Field Agreement: Do timestamps and identifiers match across sources?
+
+**Dimension 3: Background Noise Realism (weight 0.25)**
+- Volume Adequacy: Is there enough background noise relative to the attack signal?
+- User Diversity: Do different users behave differently, or are they cookie-cutter?
+- Activity Plausibility: Are activities appropriate for the system/OS/persona?
+- Anomaly Rate: Is there a realistic 1-5% rate of anomalous-but-benign events?
+
+**Dimension 4: Temporal Realism (weight 0.15)**
+- Work Hours: Do user events cluster in persona-defined work hours?
+- Burstiness: Are inter-event times bursty (realistic) or metronomic (robotic)?
+- Causal Ordering: Are logon→process→logoff sequences correctly ordered?
+- Timing Plausibility: No impossible timing (50 commands in 3 seconds)?
+
+**Dimension 5: Signal Integrity (weight 0.20)**
+- Event Presence: Are all storyline events visible in the logs?
+- Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames?
+- Pivot Linkability: Can a hunter pivot between consecutive attack steps?
+- Temporal Integrity: Are attack events in the right order at the right times?
+
+### Step 4: Qualitative Record Review
+
+Sample ~10 records from the output directory across different formats. Read them and assess:
+
+1. **Record Realism** — Do individual records look like they came from a real system? Flag anything that looks synthetic, implausible, or templated.
+2. **Narrative Coherence** — Read 15-20 events around a storyline step. Does the sequence tell a coherent story? Any gaps or contradictions?
+3. **Hunting Feasibility** — Given the scenario description and data, could a hunter realistically discover this attack? What approach would work? What obstacles exist?
+
+Present these as qualitative observations, clearly separated from the numeric scores.
+
+### Step 5: Suggest Improvements
+
+For any sub-score below 70, provide specific, actionable suggestions:
+
+| Common Issue | Suggestion |
+|-------------|-----------|
+| Low parsability | Check for empty required fields in the generator (e.g., empty SIDs) |
+| Low volume adequacy | Increase `baseline_activity.intensity` or add more users/systems |
+| Low user diversity | Add more persona types with different work patterns and activities |
+| Low burstiness | Known generator limitation — events are near-uniformly distributed |
+| Low work hour distribution | Check persona work_hours definitions; may need off-hours event generation |
+| Low anomaly rate | Generator may need more variation in baseline (failed logons, errors) |
+
+If multiple issues trace back to the same root cause (e.g., generator limitations), group them and explain the root cause once.
+
+### Step 6: Acceptance Criteria
+
+Report whether hard acceptance criteria pass or fail:
+- Parsability ≥ 98%
+- Source Correctness ≥ 95%
+- Causal Ordering ≥ 99%
+- Event Presence ≥ 90%
+
+If any hard criterion fails, explain what would need to change to pass.
+
+## Command Reference
+
+```
+eforge eval <output_dir> --scenario <scenario.yaml> [--format json|text] [--verbose]
+```
+
+- `--format text` (default): Rich terminal output with colored scores
+- `--format json`: Machine-readable JSON (status messages go to stderr)
+- `--verbose`: Show sample failures and detailed sub-score information

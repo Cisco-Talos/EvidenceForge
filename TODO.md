@@ -293,9 +293,9 @@
 - [x] Backward compatible: no persona = uniform activity at all hours
 - [x] 13 tests in `tests/unit/test_persona_activity.py`
 
-### 2.7 LLM Integration (Bedrock Client) — DEFERRED TO PHASE 3
+### 2.7 LLM Integration (Bedrock Client) — ✅ OBSOLETE
 
-**Moved to Phase 3.1** - LLM client and retry logic are only needed for the conversational interface. Will be implemented alongside Phase 3.1 (Conversational Interface).
+**Replaced by Claude Code Skills.** Phase 3 adopted a skills-based architecture where all LLM-driven work (scenario creation, validation, evaluation review) happens through Claude Code skills rather than a built-in Bedrock client. No code-level LLM calls are needed.
 
 ### 2.8+2.9 Medium Dataset Support & Phase 2 Completion ✅ COMPLETE
 
@@ -340,7 +340,7 @@
 
 **Phase 2 Status: ✅ COMPLETE**
 - ✅ All phases complete: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.8+2.9, 2.10
-- 🔀 Deferred: 2.7 (LLM Integration) → folded into Phase 3.1
+- ✅ Obsolete: 2.7 (LLM Integration) → replaced by Claude Code Skills architecture
 
 **Phase 2 Milestone:** Can generate datasets across 7 formats in parallel with threaded emitters. 100-user 8-hour scenarios complete in ~14 seconds. Persona-based temporal distributions, network visibility with TAP/SPAN sensors, OS-aware log routing, and cross-log consistency. 526 tests passing.
 
@@ -468,10 +468,11 @@
 - [x] Organic Anomaly Rate (1-5% target)
 - [x] Tests: 13 tests
 
-### 4.7 LLM Spot-Check Layer (optional) — DEFERRED
+### 4.7 Evaluate Skill (`/eforge evaluate`) ✅ COMPLETE
 
-- [ ] Deferred until LLM client is available (Bedrock integration)
-- [ ] `--llm-review` flag placeholder in CLI (accepted but not yet functional)
+- [x] Create `commands/eforge/evaluate.md` — runs `eforge eval`, interprets results, provides qualitative LLM review
+- [x] Replaces the originally planned Bedrock-based LLM spot-check layer
+- [x] Qualitative review (record realism, narrative coherence, hunting feasibility) handled conversationally by the skill
 
 ### 4.8 Integration & Acceptance Criteria ✅ COMPLETE
 
@@ -485,7 +486,7 @@
 - [ ] Update `commands/eforge/scenario.md` to check sensor coverage during authoring
 - [ ] Flag when storyline events may not be discoverable given declared topology
 
-**Phase 4 Status:** ✅ All 5 scoring dimensions complete (23 sub-scores). `eforge eval` produces comprehensive quality reports. 653+ tests. LLM spot-check deferred.
+**Phase 4 Status:** ✅ COMPLETE. All 5 scoring dimensions (23 sub-scores), acceptance criteria, `/eforge evaluate` skill. 653+ tests.
 
 **Baseline scores on retail-store-ftp-attack (24K records, 4 sources):**
 - Overall: 78/100
@@ -502,11 +503,11 @@
 **Not part of MVP, but tracked here for future reference.**
 
 ### Short-term (Post-MVP)
-- [ ] Bedrock LLM client for semantic validation (`eforge validate --semantic`)
+- [ ] ~~Bedrock LLM client for semantic validation~~ → Handled by `/eforge validate` skill
 - [ ] Checkpointing and resume for long-running generation
 - [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
-- [ ] ~~Subjective realism evaluation (LLM-based)~~ → Moved to Phase 4.7 (LLM Spot-Check Layer)
+- [ ] ~~Subjective realism evaluation (LLM-based)~~ → Handled by `/eforge evaluate` skill
 - [ ] Config file inheritance/templating
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
@@ -518,7 +519,7 @@
 - [ ] Separate student/instructor output packages (GROUND_TRUTH.md in instructor-only directory)
 
 ### Medium-term
-- [ ] Alternative LLM backends (OpenAI, Ollama, Anthropic native, Gemini)
+- [ ] ~~Alternative LLM backends (OpenAI, Ollama, Anthropic native, Gemini)~~ → No code-level LLM calls; skills use whatever model the user's Claude Code runs
 - [ ] Web UI for scenario creation
 - [ ] Streaming output to SIEM/data lakes
 - [ ] Log format auto-detection from samples
