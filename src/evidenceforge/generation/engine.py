@@ -237,6 +237,13 @@ class GenerationEngine:
 
         # Set initial state manager time
         self.state_manager.set_current_time(self.start_time)
+
+        # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
+        self._infra_ips = self._detect_infrastructure_ips()
+        self._system_service_defaults = self._build_service_defaults()
+        self._system_pids: dict[str, dict[str, int]] = {}  # hostname -> {role: pid}
+        self._seed_system_process_trees()
+
         logger.info("Initialization complete")
 
     def _generate_baseline(self) -> None:
@@ -299,6 +306,9 @@ class GenerationEngine:
                     # Generate user activity at each time
                     for event_time in event_times:
                         self._generate_user_activity(user, event_time)
+
+            # Phase 5.4: Generate system traffic (DNS, NTP, scheduled tasks)
+            self._generate_system_traffic(current_hour)
 
             # Phase 5.2: Terminate stale processes
             self._terminate_stale_processes(current_hour)
@@ -1071,3 +1081,263 @@ class GenerationEngine:
         """
         self.event_record_counter += 1
         return self.event_record_counter
+
+    # --- Phase 5.4: System Process Trees & Background Traffic ---
+
+    def _detect_infrastructure_ips(self) -> dict[str, str | list[str]]:
+        """Detect infrastructure IPs from scenario systems.
+
+        Scans system hostnames/types for role hints (dc, dns, ntp) and
+        maps them to IPs. Falls back to defaults for missing roles.
+        """
+        infra: dict[str, str | list[str]] = {
+            'dns': '10.0.0.1',
+            'ntp': ['129.6.15.28', '132.163.97.1'],
+            'dc': '10.0.0.1',
+        }
+
+        for system in self.scenario.environment.systems:
+            hn = system.hostname.lower()
+            stype = system.type.lower() if system.type else ''
+            if 'dc' in hn or stype == 'domain_controller':
+                infra['dc'] = system.ip
+                infra['dns'] = system.ip  # DCs usually run DNS
+            elif 'dns' in hn:
+                infra['dns'] = system.ip
+            elif 'ntp' in hn:
+                infra['ntp'] = [system.ip]
+
+        return infra
+
+    def _build_service_defaults(self) -> dict[str, list[str]]:
+        """Build per-system service lists, auto-populating defaults if empty."""
+        from evidenceforge.generation.activity import _get_os_category
+
+        defaults: dict[str, list[str]] = {}
+        for system in self.scenario.environment.systems:
+            if system.services:
+                defaults[system.hostname] = list(system.services)
+            else:
+                os_cat = _get_os_category(system.os)
+                if os_cat == 'windows':
+                    svcs = ['dns-client', 'ntp-client', 'smb-client']
+                    if system.type and system.type.lower() in ('server', 'domain_controller'):
+                        svcs.append('smb-server')
+                else:
+                    svcs = ['dns-client', 'ntp-client', 'syslog']
+                defaults[system.hostname] = svcs
+        return defaults
+
+    def _seed_system_process_trees(self) -> None:
+        """Pre-seed StateManager with long-running system processes.
+
+        These processes were started at boot (before the scenario window).
+        We register them silently (no log events) so they exist as valid
+        parents for child processes spawned during the scenario.
+        """
+        from evidenceforge.generation.activity import _get_os_category
+
+        for system in self.scenario.environment.systems:
+            os_cat = _get_os_category(system.os)
+            pids: dict[str, int] = {}
+
+            if os_cat == 'windows':
+                self._seed_windows_process_tree(system, pids)
+            else:
+                self._seed_linux_process_tree(system, pids)
+
+            self._system_pids[system.hostname] = pids
+
+        total = sum(len(p) for p in self._system_pids.values())
+        logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
+
+    def _seed_windows_process_tree(self, system: System, pids: dict[str, int]) -> None:
+        """Seed Windows system process tree in StateManager."""
+        sm = self.state_manager
+        hn = system.hostname
+
+        def _c(parent, image, cmd, user):
+            return sm.create_process(hn, parent, image, cmd, user, 'System')
+
+        # Level 1: smss.exe (child of System PID 4)
+        pids['smss'] = _c(4, r'C:\Windows\System32\smss.exe', 'smss.exe', 'SYSTEM')
+
+        # Level 2: csrss.exe, wininit.exe (children of smss)
+        pids['csrss_s0'] = _c(pids['smss'], r'C:\Windows\System32\csrss.exe', 'csrss.exe', 'SYSTEM')
+        pids['wininit'] = _c(pids['smss'], r'C:\Windows\System32\wininit.exe', 'wininit.exe', 'SYSTEM')
+
+        # Level 3: services.exe, lsass.exe (children of wininit)
+        pids['services'] = _c(pids['wininit'], r'C:\Windows\System32\services.exe', 'services.exe', 'SYSTEM')
+        pids['lsass'] = _c(pids['wininit'], r'C:\Windows\System32\lsass.exe', 'lsass.exe', 'SYSTEM')
+
+        # Level 4: svchost instances (children of services.exe)
+        svchost_groups = [
+            ('svchost_dcom', 'svchost.exe -k DcomLaunch', 'SYSTEM'),
+            ('svchost_local_system', 'svchost.exe -k LocalSystem', 'SYSTEM'),
+            ('svchost_netsvcs', 'svchost.exe -k netsvcs', 'NETWORK SERVICE'),
+            ('svchost_local_svc', 'svchost.exe -k LocalService', 'LOCAL SERVICE'),
+            ('svchost_net_svc', 'svchost.exe -k NetworkService', 'NETWORK SERVICE'),
+            ('svchost_local_nr', 'svchost.exe -k LocalServiceNetworkRestricted', 'LOCAL SERVICE'),
+            ('svchost_local_nn', 'svchost.exe -k LocalServiceNoNetwork', 'LOCAL SERVICE'),
+            ('svchost_wusvcs', 'svchost.exe -k wusvcs', 'SYSTEM'),
+        ]
+        for name, cmdline, user in svchost_groups:
+            pids[name] = _c(pids['services'], r'C:\Windows\System32\svchost.exe', cmdline, user)
+
+        # Other services.exe children
+        pids['msmpeng'] = _c(pids['services'], r'C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe', 'MsMpEng.exe', 'SYSTEM')
+        pids['search_indexer'] = _c(pids['services'], r'C:\Windows\System32\SearchIndexer.exe', 'SearchIndexer.exe', 'SYSTEM')
+        pids['taskhostw'] = _c(pids['services'], r'C:\Windows\System32\taskhostw.exe', 'taskhostw.exe', 'SYSTEM')
+
+        # Session 1 processes
+        pids['csrss_s1'] = _c(pids['smss'], r'C:\Windows\System32\csrss.exe', 'csrss.exe', 'SYSTEM')
+        pids['dwm'] = _c(pids['csrss_s0'], r'C:\Windows\System32\dwm.exe', 'dwm.exe', 'SYSTEM')
+        pids['runtime_broker'] = _c(pids['svchost_local_system'], r'C:\Windows\System32\RuntimeBroker.exe', 'RuntimeBroker.exe', 'SYSTEM')
+
+    def _seed_linux_process_tree(self, system: System, pids: dict[str, int]) -> None:
+        """Seed Linux system process tree in StateManager."""
+        sm = self.state_manager
+        hn = system.hostname
+        os_str = system.os.lower()
+
+        # Determine distro-specific details
+        is_rhel = any(d in os_str for d in ('centos', 'rhel', 'red hat', 'rocky', 'alma'))
+
+        def _c(parent, image, cmd, user):
+            return sm.create_process(hn, parent, image, cmd, user, 'System')
+
+        # PID 1: systemd (parent_pid=0 is allowed like PID 4)
+        pids['systemd'] = _c(0, '/usr/lib/systemd/systemd', '/usr/lib/systemd/systemd --system --deserialize 26', 'root')
+
+        # Direct children of systemd
+        journal_path = '/usr/lib/systemd/systemd-journald'
+        pids['journald'] = _c(pids['systemd'], journal_path, journal_path, 'root')
+
+        udev_path = '/usr/lib/systemd/systemd-udevd' if is_rhel else '/lib/systemd/systemd-udevd'
+        pids['udevd'] = _c(pids['systemd'], udev_path, udev_path, 'root')
+
+        pids['rsyslogd'] = _c(pids['systemd'], '/usr/sbin/rsyslogd', 'rsyslogd -n', 'syslog')
+        pids['networkmanager'] = _c(pids['systemd'], '/usr/sbin/NetworkManager', '/usr/sbin/NetworkManager --no-daemon', 'root')
+        pids['dbus'] = _c(pids['systemd'], '/usr/bin/dbus-daemon', '/usr/bin/dbus-daemon --system', 'messagebus')
+
+        logind_path = '/usr/lib/systemd/systemd-logind'
+        pids['logind'] = _c(pids['systemd'], logind_path, logind_path, 'root')
+
+        pids['sshd'] = _c(pids['systemd'], '/usr/sbin/sshd', '/usr/sbin/sshd -D [listener]', 'root')
+
+        cron_name = '/usr/sbin/crond' if is_rhel else '/usr/sbin/cron'
+        cron_cmd = '/usr/sbin/crond -n' if is_rhel else '/usr/sbin/cron -f'
+        pids['cron'] = _c(pids['systemd'], cron_name, cron_cmd, 'root')
+
+        pids['agetty1'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty1 linux', 'root')
+        pids['agetty2'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty2 linux', 'root')
+
+    def _generate_system_traffic(self, current_hour: datetime) -> None:
+        """Generate system-initiated background traffic for all systems.
+
+        Called once per hour. Generates DNS lookups, NTP syncs, SMB browsing,
+        and scheduled task activity independently of user activity.
+        """
+        from evidenceforge.generation.activity import _get_os_category
+
+        rng = random.Random(hash(f"{self.scenario.name}_sys_{current_hour}"))
+        dns_ip = self._infra_ips.get('dns', '10.0.0.1')
+        ntp_ips = self._infra_ips.get('ntp', ['129.6.15.28'])
+        if isinstance(ntp_ips, str):
+            ntp_ips = [ntp_ips]
+
+        for system in self.scenario.environment.systems:
+            services = self._system_service_defaults.get(system.hostname, [])
+            os_cat = _get_os_category(system.os)
+            sys_pids = self._system_pids.get(system.hostname, {})
+
+            # DNS lookups: 2-6 per hour
+            if 'dns-client' in services:
+                num_dns = rng.randint(2, 6)
+                for _ in range(num_dns):
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=dns_ip if isinstance(dns_ip, str) else dns_ip,
+                        time=ts,
+                        dst_port=53,
+                        proto='udp',
+                        service='dns',
+                        duration=rng.uniform(0.001, 0.05),
+                        orig_bytes=rng.randint(40, 120),
+                        resp_bytes=rng.randint(80, 512),
+                    )
+
+            # NTP sync: 0-1 per hour
+            if 'ntp-client' in services and rng.random() < 0.6:
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                ntp_ip = rng.choice(ntp_ips)
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=ntp_ip,
+                    time=ts,
+                    dst_port=123,
+                    proto='udp',
+                    service='ntp',
+                    duration=rng.uniform(0.01, 0.1),
+                    orig_bytes=48,
+                    resp_bytes=48,
+                )
+
+            # SMB browsing: 1-3 per hour (Windows workstations only)
+            if 'smb-client' in services and os_cat == 'windows':
+                dc_ip = self._infra_ips.get('dc', '10.0.0.1')
+                if isinstance(dc_ip, str) and dc_ip != system.ip:
+                    num_smb = rng.randint(1, 3)
+                    for _ in range(num_smb):
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=dc_ip,
+                            time=ts,
+                            dst_port=445,
+                            proto='tcp',
+                            service='smb',
+                            duration=rng.uniform(0.1, 2.0),
+                            orig_bytes=rng.randint(200, 2000),
+                            resp_bytes=rng.randint(500, 5000),
+                        )
+
+            # Scheduled tasks: 0-2 per hour
+            if rng.random() < 0.6:
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+
+                if os_cat == 'windows':
+                    parent_pid = sys_pids.get('svchost_local_system', sys_pids.get('services', 4))
+                    tasks = [
+                        (r'C:\Windows\System32\svchost.exe', 'svchost.exe -k netsvcs -p -s Schedule'),
+                        (r'C:\Windows\System32\taskhostw.exe', 'taskhostw.exe /Run'),
+                        (r'C:\Windows\System32\usoclient.exe', 'usoclient.exe StartScan'),
+                    ]
+                    task_name, task_cmd = rng.choice(tasks)
+                    self.activity_generator.generate_system_process(
+                        system=system, time=ts,
+                        process_name=task_name, command_line=task_cmd,
+                        parent_pid=parent_pid, username='SYSTEM',
+                    )
+                else:
+                    parent_pid = sys_pids.get('cron', 0)
+                    tasks = [
+                        ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
+                        ('/usr/bin/apt-get', '/usr/bin/apt-get -qq update'),
+                        ('/usr/lib/update-notifier/apt-check', '/usr/lib/update-notifier/apt-check --human-readable'),
+                    ]
+                    task_name, task_cmd = rng.choice(tasks)
+                    self.activity_generator.generate_system_process(
+                        system=system, time=ts,
+                        process_name=task_name, command_line=task_cmd,
+                        parent_pid=parent_pid, username='root',
+                    )

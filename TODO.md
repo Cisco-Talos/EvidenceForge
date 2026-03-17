@@ -624,31 +624,33 @@
 
 **Goal:** Generate OS-appropriate system/service traffic independent of user activity. Eliminate the "all traffic is user-initiated" tell.
 
-- [ ] **Add optional `services` field to System model (inline)**
-  - Extend `System` in `models/scenario.py` with optional `services: list[str]` field (e.g., `["dns", "ntp", "http", "smb"]`)
-  - Auto-populate defaults based on OS if not specified: Windows gets `["dns-client", "ntp-client", "smb", "windows-update"]`, Linux gets `["dns-client", "ntp-client", "syslog"]`
-  - Servers auto-detect from role/hostname hints (e.g., hostname contains "dc" or "dns" → add `dns-server`)
-  - Files: `models/scenario.py`, `validation/schema.py`
-- [ ] **Add system traffic generation loop in engine**
-  - New `_generate_system_traffic()` method called per-hour alongside user activity
-  - Generates: DNS lookups, NTP sync, Windows Update checks, SMB browsing, DHCP renewals
-  - System processes: svchost.exe spawns, scheduled tasks, service startups
-  - Volume: system traffic should be ~20-30% of total traffic
-  - Files: `engine.py` (`_generate_baseline` calls new system traffic method)
-- [ ] **Generate system process trees**
-  - Windows: System(4) → smss.exe → csrss.exe, wininit.exe → services.exe → svchost.exe (multiple instances)
-  - Linux: init/systemd → cron, sshd, rsyslogd, NetworkManager
-  - Generate at scenario start time, persist through time window
-  - Files: `activity.py` (new `generate_system_boot_processes`)
-- [ ] **Add scheduled task / cron simulation**
-  - Windows: periodic svchost activity, Windows Defender scans, Update checks
-  - Linux: cron jobs (logrotate, package updates, monitoring scripts)
-  - Regular intervals with slight jitter (±5% of period)
-  - Files: `engine.py` or `activity.py`
-- [ ] Test: System-generated events present without user activity
-- [ ] Test: System processes appear at scenario start
-- [ ] Test: DNS/NTP traffic at regular intervals
-- [ ] Test: System traffic is ~20-30% of total output
+- [x] **Add optional `services` field to System model (inline)**
+  - `System.services: list[str]` already existed; auto-populate defaults in engine if empty
+  - Windows workstation: `["dns-client", "ntp-client", "smb-client"]`, Linux: `["dns-client", "ntp-client", "syslog"]`
+  - Auto-detect DC/DNS/NTP from hostname hints, override infra IPs
+  - Files: `engine.py` (`_build_service_defaults`, `_detect_infrastructure_ips`)
+- [x] **Add system traffic generation loop in engine**
+  - New `_generate_system_traffic()` method called per-hour in `_generate_baseline`
+  - Generates: DNS lookups (UDP/53, 2-6/hr), NTP sync (UDP/123, ~1/hr), SMB browsing (TCP/445, 1-3/hr Windows)
+  - Scheduled tasks: svchost/cron child processes with realistic command lines
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [x] **Pre-seed system process trees (no log output)**
+  - Windows: System(4) → smss → csrss, wininit → services (8 svchost groups), lsass, MsMpEng, SearchIndexer, dwm, RuntimeBroker (19 processes)
+  - Linux: systemd → journald, udevd, rsyslogd (syslog user), NetworkManager, dbus (messagebus user), logind, sshd, cron/crond, 2x agetty (11 processes)
+  - Distro-aware: Ubuntu vs RHEL/CentOS paths and daemon names
+  - Silent seeding (StateManager only, no events) — systems already booted before scenario window
+  - Files: `engine.py` (`_seed_system_process_trees`, `_seed_windows_process_tree`, `_seed_linux_process_tree`)
+- [x] **Add scheduled task / cron simulation**
+  - Windows: svchost Schedule, taskhostw, usoclient as children of services.exe svchost
+  - Linux: logrotate, apt-get update, apt-check as children of cron
+  - Integrated into `_generate_system_traffic` per-hour loop
+- [x] **New `generate_system_process` method in activity.py**
+  - Emits Windows 4688, syslog, and eCAR for system-initiated processes
+  - Uses SYSTEM SID (S-1-5-18) / root, no user session required
+- [x] Test: System process tree seeded correctly (hierarchy, SIDs, users)
+- [x] Test: DNS/NTP UDP connections emitted via generate_connection
+- [x] Test: Scheduled tasks are children of correct parent PIDs
+- [x] Test: Infrastructure IP detection from scenario systems
 
 ### 5.5 Temporal Realism
 

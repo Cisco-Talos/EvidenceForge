@@ -911,6 +911,95 @@ class ActivityGenerator:
         self.emitters['bash_history'].emit_event(event_data)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
 
+    def generate_system_process(
+        self,
+        system: System,
+        time: datetime,
+        process_name: str,
+        command_line: str,
+        parent_pid: int = 4,
+        username: str = "SYSTEM",
+    ) -> int:
+        """Generate a system process creation event (no user session required).
+
+        Used for scheduled tasks, service spawns, and other system-initiated
+        processes that don't have an associated user logon session.
+
+        Args:
+            system: System where process is created
+            time: Process creation timestamp
+            process_name: Full path to executable
+            command_line: Command line string
+            parent_pid: Parent process PID
+            username: System account name (SYSTEM, root, etc.)
+
+        Returns:
+            PID of the new process
+        """
+        pid = self.state_manager.create_process(
+            system=system.hostname,
+            parent_pid=parent_pid,
+            image=process_name,
+            command_line=command_line,
+            username=username,
+            integrity_level='System',
+        )
+
+        os_category = _get_os_category(system.os)
+
+        if os_category == 'windows':
+            sid = self.sid_registry.get(username, 'S-1-5-18') if self.sid_registry else 'S-1-5-18'
+            event_data = {
+                'EventID': 4688,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': _get_rng().randint(100, 999),
+                'SubjectUserSid': sid,
+                'SubjectUserName': username,
+                'SubjectDomainName': 'NT AUTHORITY',
+                'SubjectLogonId': '0x3e7',
+                'NewProcessId': hex(pid),
+                'NewProcessName': process_name,
+                'TokenElevationType': '%%1936',
+                'ProcessId': hex(parent_pid),
+                'CommandLine': command_line,
+                'ParentProcessName': '',
+                'MandatoryLabel': 'S-1-16-16384',
+            }
+            if 'windows_event_security' in self.emitters:
+                self.emitters['windows_event_security'].emit_event(event_data)
+
+        elif os_category == 'linux':
+            if 'syslog' in self.emitters:
+                self.emitters['syslog'].emit_event({
+                    'timestamp': time,
+                    'hostname': system.hostname,
+                    'app_name': process_name.split('/')[-1],
+                    'facility': 1,
+                    'severity': 6,
+                    'message': f'{process_name.split("/")[-1]}[{pid}]: started: {command_line}',
+                })
+
+        # eCAR emission (direct, since _emit_ecar_process expects a User object)
+        if 'ecar' in self.emitters:
+            self.emitters['ecar'].emit_event({
+                'timestamp': time,
+                'hostname': system.hostname,
+                'object': 'PROCESS',
+                'action': 'CREATE',
+                'pid': pid,
+                'ppid': parent_pid,
+                'principal': username,
+                'image_path': process_name,
+                'command_line': command_line,
+            })
+
+        return pid
+
     def get_baseline_pattern(
         self,
         persona_name: Optional[str],
