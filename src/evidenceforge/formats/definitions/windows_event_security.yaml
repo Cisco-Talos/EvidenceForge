@@ -544,10 +544,10 @@ output:
         <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
         <Data Name="LmPackageName">{{ LmPackageName | default('-') }}</Data>
         <Data Name="KeyLength">{{ KeyLength | default(0) }}</Data>
-        <Data Name="ProcessId">{{ ProcessId }}</Data>
-        <Data Name="ProcessName">{{ ProcessName }}</Data>
+        <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
+        <Data Name="ProcessName">{{ ProcessName | default('-') }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
-        <Data Name="IpPort">{{ IpPort }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
         <Data Name="ImpersonationLevel">{{ ImpersonationLevel | default('%%1833') }}</Data>
         <Data Name="RestrictedAdminMode">{{ RestrictedAdminMode | default('-') }}</Data>
         <Data Name="TargetOutboundUserName">{{ TargetOutboundUserName | default('-') }}</Data>
@@ -565,11 +565,11 @@ output:
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
         <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
         <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
-        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
-        <Data Name="NewProcessId">{{ NewProcessId }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId | default('0x0') }}</Data>
+        <Data Name="NewProcessId">{{ NewProcessId | default('0x0') }}</Data>
         <Data Name="NewProcessName">{{ NewProcessName }}</Data>
         <Data Name="TokenElevationType">{{ TokenElevationType }}</Data>
-        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
         <Data Name="CommandLine">{{ CommandLine | default('') }}</Data>
         <Data Name="TargetUserSid">{{ TargetUserSid | default('-') }}</Data>
         <Data Name="TargetUserName">{{ TargetUserName | default('-') }}</Data>
@@ -603,15 +603,15 @@ output:
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
         <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
         <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
-        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId | default('0x0') }}</Data>
         <Data Name="PrivilegeList">{{ PrivilegeList }}</Data>
         {% elif EventID == 4689 %}
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
         <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
         <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
-        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
-        <Data Name="Status">{{ Status }}</Data>
-        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId | default('0x0') }}</Data>
+        <Data Name="Status">{{ Status | default('0x0') }}</Data>
+        <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
         <Data Name="ProcessName">{{ ProcessName }}</Data>
         {% endif %}
       </EventData>

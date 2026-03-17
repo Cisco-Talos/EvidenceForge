@@ -507,16 +507,21 @@ class ActivityGenerator:
                 'EventRecordID': self._get_next_event_record_id(),
                 'ExecutionProcessID': 4,    # System process
                 'ExecutionThreadID': _get_rng().randint(100, 500),
-                # Logon variant fields
-                'SubjectUserSid': self._get_sid('SYSTEM'),  # lsass reports logon events
+                # Logon variant fields — Subject is SYSTEM (lsass reports logon events)
+                'SubjectUserSid': self._get_sid('SYSTEM'),
+                'SubjectUserName': 'SYSTEM',
+                'SubjectDomainName': 'NT AUTHORITY',
+                'SubjectLogonId': '0x3e7',
                 'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
                 'TargetDomainName': 'CORP',  # Phase 1: Fixed domain
                 'TargetLogonId': logon_id,
                 'LogonType': logon_type,
                 'WorkstationName': system.hostname,
+                'ProcessId': '0x2e0',  # lsass.exe PID
+                'ProcessName': r'C:\Windows\System32\lsass.exe',
                 'IpAddress': source_ip,
-                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else None,
+                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
                 'LogonProcessName': 'User32' if logon_type == 2 else 'NtLmSsp',
                 'AuthenticationPackageName': 'Negotiate',
             }
@@ -597,8 +602,11 @@ class ActivityGenerator:
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(),
                 'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
+                'ExecutionThreadID': _get_rng().randint(100, 9999),
                 'SubjectUserSid': self._get_sid('SYSTEM'),
+                'SubjectUserName': 'SYSTEM',
+                'SubjectDomainName': 'NT AUTHORITY',
+                'SubjectLogonId': '0x3e7',
                 'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
                 'TargetDomainName': 'CORP',

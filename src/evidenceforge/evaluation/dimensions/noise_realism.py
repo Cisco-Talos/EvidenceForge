@@ -33,6 +33,32 @@ logger = logging.getLogger(__name__)
 _VOLUME_TARGETS = {"low": 500, "medium": 5000, "high": 10000}
 
 
+def _process_category(process_path: str) -> str:
+    """Categorize a process path for user diversity feature extraction."""
+    p = process_path.lower()
+    if any(x in p for x in ["chrome", "firefox", "edge", "iexplore", "safari", "opera"]):
+        return "browser"
+    if any(x in p for x in ["word", "excel", "outlook", "powerpoint", "teams",
+                             "onedrive", "acrobat", "onenote", "libreoffice",
+                             "thunderbird"]):
+        return "office"
+    if any(x in p for x in ["code", "vim", "nvim", "emacs", "devenv", "idea",
+                             "pycharm", "git", "node", "python", "java", "dotnet",
+                             "npm", "cargo", "make", "cmake", "gcc", "msbuild",
+                             "pytest", "docker", "kubectl"]):
+        return "dev_tool"
+    if any(x in p for x in ["powershell", "cmd.exe", "regedit", "mmc", "taskmgr",
+                             "eventvwr", "compmgmt", "services.msc", "wmic",
+                             "netstat", "ipconfig", "ssh", "curl", "wget"]):
+        return "admin_tool"
+    if any(x in p for x in ["svchost", "lsass", "csrss", "winlogon", "services.exe",
+                             "smss", "wininit", "spoolsv", "searchindexer",
+                             "taskhostw", "conhost", "explorer.exe",
+                             "systemd", "cron", "sshd", "rsyslog"]):
+        return "system"
+    return "other"
+
+
 def _extract_event_type(record: ParsedRecord) -> str:
     """Extract an event-type key from a record for diversity analysis."""
     fmt = record.source_format
@@ -40,10 +66,19 @@ def _extract_event_type(record: ParsedRecord) -> str:
 
     if fmt == "windows_event_security":
         eid = f.get("EventID")
+        if eid == 4688:
+            proc = f.get("NewProcessName", "")
+            return f"win_4688_{_process_category(proc)}"
+        if eid == 4624:
+            logon_type = f.get("LogonType", 0)
+            return f"win_4624_type{logon_type}"
         return f"win_{eid}" if eid else "win_unknown"
     if fmt == "ecar":
         obj = f.get("object", "?")
         act = f.get("action", "?")
+        if obj == "PROCESS" and act == "CREATE":
+            proc = f.get("image_path", "")
+            return f"ecar_PROCESS_CREATE_{_process_category(proc)}"
         return f"ecar_{obj}_{act}"
     if fmt == "bash_history":
         cmd = f.get("command", "")
@@ -55,7 +90,8 @@ def _extract_event_type(record: ParsedRecord) -> str:
         code = f.get("status_code", 0)
         return f"web_{method}_{code // 100}xx"
     if fmt == "zeek_conn":
-        return f"zeek_{f.get('proto', 'unknown')}"
+        svc = f.get("service", f.get("proto", "unknown"))
+        return f"zeek_{svc}"
 
     return fmt
 

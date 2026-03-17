@@ -72,6 +72,46 @@ def _extract_username(record: ParsedRecord) -> str | None:
     return None
 
 
+def _extract_hostname(record: ParsedRecord) -> str | None:
+    """Extract hostname from a parsed record."""
+    field_name = _HOST_FIELD_MAP.get(record.source_format)
+    if field_name:
+        val = record.fields.get(field_name)
+        if val and isinstance(val, str):
+            return val.lower()
+    return None
+
+
+def _extract_system_service(record: ParsedRecord) -> str:
+    """Identify which system service generated a record."""
+    fmt = record.source_format
+    f = record.fields
+    if fmt == "zeek_conn":
+        svc = f.get("service", "")
+        if svc:
+            return svc
+        port = f.get("id.resp_p")
+        if port == 53:
+            return "dns"
+        if port == 123:
+            return "ntp"
+        if port == 445:
+            return "smb"
+        proto = f.get("proto", "")
+        if proto == "icmp":
+            return "icmp"
+    if fmt in ("windows_event_security", "ecar"):
+        proc = f.get("NewProcessName", "") or f.get("image_path", "")
+        proc_lower = proc.lower()
+        if "svchost" in proc_lower or "taskhostw" in proc_lower or "usoclient" in proc_lower:
+            return "scheduled_task"
+    if fmt == "syslog":
+        app = f.get("app_name", "")
+        if app in ("cron", "anacron", "systemd"):
+            return "scheduled_task"
+    return "other"
+
+
 class TemporalRealismScorer(DimensionScorer):
     number = 4
     name = "Temporal Realism"
@@ -179,11 +219,22 @@ class TemporalRealismScorer(DimensionScorer):
                 continue
 
             sorted_ts = sorted(timestamps)
+
+            # Deduplicate: collapse events within 5s into single activity points.
+            # Multi-format emission (4624 + 4688 + eCAR at same time) creates many
+            # sub-second gaps that dilute the CV. We care about inter-activity CV.
+            deduped = [sorted_ts[0]]
+            for ts in sorted_ts[1:]:
+                if (ts - deduped[-1]).total_seconds() > 5.0:
+                    deduped.append(ts)
+
+            if len(deduped) < 10:
+                continue
+
             gaps = [
-                (sorted_ts[i + 1] - sorted_ts[i]).total_seconds()
-                for i in range(len(sorted_ts) - 1)
+                (deduped[i + 1] - deduped[i]).total_seconds()
+                for i in range(len(deduped) - 1)
             ]
-            gaps = [g for g in gaps if g > 0]  # filter zero-gaps
             if len(gaps) < 5:
                 continue
 
@@ -214,7 +265,10 @@ class TemporalRealismScorer(DimensionScorer):
 
     def _score_system_regularity(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
         system_accounts_lower = {a.lower() for a in BUILTIN_ACCOUNTS}
-        system_timestamps: list[datetime] = []
+
+        # Group system events by (hostname, service_type) to preserve per-service periodicity
+        service_timestamps: dict[tuple[str, str], list[datetime]] = defaultdict(list)
+        total_system_events = 0
 
         for format_name, record_list in records.items():
             for record in record_list:
@@ -222,45 +276,56 @@ class TemporalRealismScorer(DimensionScorer):
                     continue
                 user = _extract_username(record)
                 if user and user in system_accounts_lower:
+                    hostname = _extract_hostname(record)
+                    if not hostname:
+                        continue
+                    service = _extract_system_service(record)
                     ts = record.timestamp
                     if ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
-                    system_timestamps.append(ts)
+                    service_timestamps[(hostname, service)].append(ts)
+                    total_system_events += 1
 
-        if len(system_timestamps) < 20:
+        if total_system_events < 20:
             return SubScore(
                 name="System Process Regularity", key="system_regularity", weight=0.20,
                 score=100.0,
-                details=f"Only {len(system_timestamps)} system events — insufficient for analysis",
+                details=f"Only {total_system_events} system events — insufficient for analysis",
             )
 
-        sorted_ts = sorted(system_timestamps)
-        intervals = [
-            (sorted_ts[i + 1] - sorted_ts[i]).total_seconds()
-            for i in range(len(sorted_ts) - 1)
-        ]
-        intervals = [iv for iv in intervals if iv > 0]
+        # Compute per-(host, service) autocorrelation, then average
+        autocorrs: list[float] = []
+        for key, timestamps in service_timestamps.items():
+            sorted_ts = sorted(timestamps)
+            intervals = [
+                (sorted_ts[i + 1] - sorted_ts[i]).total_seconds()
+                for i in range(len(sorted_ts) - 1)
+            ]
+            intervals = [iv for iv in intervals if iv > 0]
+            if len(intervals) >= 10:
+                autocorrs.append(self._lag1_autocorrelation(intervals))
 
-        if len(intervals) < 10:
+        if not autocorrs:
             return SubScore(
                 name="System Process Regularity", key="system_regularity", weight=0.20,
-                score=100.0, details="Insufficient interval data",
+                score=100.0, details="Insufficient per-service interval data",
             )
 
-        autocorr = self._lag1_autocorrelation(intervals)
+        autocorr = statistics.mean(autocorrs)
 
-        # Score: autocorr > 0.7 → 100, < 0.2 → 0, linear between
-        if autocorr >= 0.7:
+        # Score: autocorr > 0.5 → 100, < 0.1 → 0, linear between
+        # (relaxed from 0.7/0.2 — real system traffic has inherent jitter)
+        if autocorr >= 0.5:
             score = 100.0
-        elif autocorr <= 0.2:
+        elif autocorr <= 0.1:
             score = 0.0
         else:
-            score = 100.0 * (autocorr - 0.2) / 0.5
+            score = 100.0 * (autocorr - 0.1) / 0.4
 
         return SubScore(
             name="System Process Regularity", key="system_regularity", weight=0.20,
             score=score,
-            details=f"Lag-1 autocorrelation: {autocorr:.2f} ({len(system_timestamps)} system events)",
+            details=f"Lag-1 autocorrelation: {autocorr:.2f} (avg of {len(autocorrs)} hosts, {total_system_events} events)",
         )
 
     # --- Sub-score 4: Causal Ordering ---

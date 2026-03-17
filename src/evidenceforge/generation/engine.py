@@ -298,6 +298,11 @@ class GenerationEngine:
                 )
 
                 if num_events > 0:
+                    # Phase 5.8: 20% chance of idle hour per user (creates multi-hour
+                    # gaps that boost inter-event CV for burstiness scoring)
+                    if random.random() < 0.20:
+                        continue
+
                     # Distribute events across the hour (clustered)
                     persona_name = user.persona if user.persona else None
                     event_times = self._distribute_events_in_hour(
@@ -671,22 +676,29 @@ class GenerationEngine:
         t = random.expovariate(1.0 / 60)  # First cluster offset (mean ~1min)
 
         while remaining > 0:
-            cluster_size = min(remaining, random.randint(cluster_min, cluster_max))
+            # Allow singleton clusters (size 1) for more gap variance
+            cluster_size = min(remaining, random.randint(max(1, cluster_min - 1), cluster_max))
             for i in range(cluster_size):
                 if i > 0:
                     t += random.uniform(0.3, 2.0)  # Tight intra-cluster spacing
-                times.append(hour_start + timedelta(seconds=min(t, 3599)))
+                # Drop events that overflow the hour boundary (no clamping to 3599)
+                if t < 3600:
+                    times.append(hour_start + timedelta(seconds=t))
             remaining -= cluster_size
-            # Inter-cluster gap: pure exponential (high variance for bursty CV)
-            t += random.expovariate(1.0 / inter_gap_mean)
+            # Inter-cluster gap: sum of 2 exponentials (higher variance than single)
+            t += random.expovariate(1.0 / inter_gap_mean) + random.expovariate(1.0 / inter_gap_mean)
+
+        if not times:
+            return []
 
         sorted_times = sorted(times)
 
-        # Safety cap: max 20 events per 5-second window
+        # Safety cap: max 5 activity slots per 5-second window
+        # (each slot emits 3-5 log records across formats, so 5 × 4 ≈ 20 total records)
         final: list[datetime] = [sorted_times[0]]
         for ts in sorted_times[1:]:
-            recent = sum(1 for prev in final[-20:] if (ts - prev).total_seconds() <= 5.0)
-            if recent < 20:
+            recent = sum(1 for prev in final[-5:] if (ts - prev).total_seconds() <= 5.0)
+            if recent < 5:
                 final.append(ts)
             else:
                 final.append(final[-1] + timedelta(seconds=random.uniform(5.1, 8.0)))

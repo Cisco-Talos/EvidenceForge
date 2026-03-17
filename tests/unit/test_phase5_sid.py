@@ -98,7 +98,8 @@ class TestSIDInWindowsEvents:
         state_manager.set_current_time(timestamp)
         activity_gen.generate_logon(test_user, test_system, timestamp)
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        # First call is always 4624 (may also emit 4672 for special privileges)
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert event_data['SubjectUserSid'] == 'S-1-5-18'  # SYSTEM
         assert SID_PATTERN.match(event_data['TargetUserSid'])
         assert event_data['TargetUserSid'] == activity_gen._get_sid('alice.smith')
@@ -139,7 +140,8 @@ class TestSIDInWindowsEvents:
 
         gen.generate_logon(user, system, timestamp)
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        # First call is always 4624 (may also emit 4672 for special privileges)
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert event_data['SubjectUserSid'] == 'S-1-5-18'  # SYSTEM always known
         assert event_data['TargetUserSid'] == 'S-1-5-21-0-0-0-0'  # Fallback
 

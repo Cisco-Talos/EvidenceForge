@@ -309,6 +309,7 @@ class SignalIntegrityScorer(DimensionScorer):
                     f.get("object") == "PROCESS"
                     and f.get("action") == "CREATE"
                     and self._host_matches(f.get("hostname"), event.system)
+                    and self._user_matches(f.get("principal"), event.actor)
                 )
 
         elif event_type == "connection":

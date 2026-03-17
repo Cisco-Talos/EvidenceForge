@@ -200,12 +200,27 @@ class TestAnomalyRate:
 
 class TestEventTypeExtraction:
     def test_windows(self):
-        r = _record("windows_event_security", {"EventID": 4624})
-        assert _extract_event_type(r) == "win_4624"
+        r = _record("windows_event_security", {"EventID": 4634})
+        assert _extract_event_type(r) == "win_4634"
+
+    def test_windows_4624_by_logon_type(self):
+        r = _record("windows_event_security", {"EventID": 4624, "LogonType": 3})
+        assert _extract_event_type(r) == "win_4624_type3"
+
+    def test_windows_4688_categorized(self):
+        r = _record("windows_event_security", {
+            "EventID": 4688,
+            "NewProcessName": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        })
+        assert _extract_event_type(r) == "win_4688_browser"
 
     def test_ecar(self):
-        r = _record("ecar", {"object": "PROCESS", "action": "CREATE"})
-        assert _extract_event_type(r) == "ecar_PROCESS_CREATE"
+        r = _record("ecar", {"object": "PROCESS", "action": "CREATE", "image_path": "/usr/bin/git"})
+        assert _extract_event_type(r) == "ecar_PROCESS_CREATE_dev_tool"
+
+    def test_ecar_non_process(self):
+        r = _record("ecar", {"object": "FILE", "action": "CREATE"})
+        assert _extract_event_type(r) == "ecar_FILE_CREATE"
 
     def test_bash(self):
         r = _record("bash_history", {"command": "ls -la /tmp"})

@@ -5,7 +5,7 @@ Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 """
 
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Any
 
 from evidenceforge.evaluation.dimensions.temporal import _extract_username
@@ -14,9 +14,42 @@ from evidenceforge.models.scenario import Scenario
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 # Failed operation indicators
-_FAILED_EVENT_IDS: set[int] = set()  # Individual failed logons are expected noise, not anomalies
+_FAILED_EVENT_IDS = {4625}  # Failed logon (flagged only in burst context)
 _FAILED_HTTP_CODES = set(range(400, 600))
-_FAILED_SYSLOG_KEYWORDS = ["failed", "denied", "error", "invalid", "unauthorized"]
+# Specific failure patterns (not bare keywords — avoids false positives on benign logs)
+_FAILED_SYSLOG_PATTERNS = [
+    "authentication failure", "failed password", "permission denied",
+    "access denied", "invalid user", "connection refused",
+    "unauthorized access", "login failed",
+]
+
+# Common application ports that are expected even if not in scenario services
+_COMMON_APP_PORTS = {
+    21, 22, 25, 53, 80, 123, 443, 445, 587, 993, 995,  # Standard services
+    1433, 3306, 3389, 5432, 5353,                         # Database/RDP/mDNS
+    8080, 8443, 3128, 8888, 9090,                         # Proxy/dev ports
+}
+
+
+def _build_failed_logon_bursts(
+    records: dict[str, list[ParsedRecord]],
+) -> set[tuple[str, int]]:
+    """Identify (user, 10min_bucket) pairs with 3+ failed logons.
+
+    Isolated failed logons are normal; bursts suggest brute-force and are anomalous.
+    """
+    bucket_counts: Counter[tuple[str, int]] = Counter()
+    win_records = records.get("windows_event_security", [])
+    for rec in win_records:
+        if rec.fields.get("EventID") != 4625 or rec.timestamp is None:
+            continue
+        user = rec.fields.get("TargetUserName", "")
+        if not user or user == "-":
+            continue
+        bucket = int(rec.timestamp.timestamp()) // 600  # 10-minute buckets
+        bucket_counts[(user.lower(), bucket)] += 1
+
+    return {key for key, count in bucket_counts.items() if count >= 3}
 
 
 def detect_anomalies(
@@ -32,6 +65,7 @@ def detect_anomalies(
     persona_hours = _build_persona_hours(scenario)
     service_ports = _build_service_ports(scenario)
     process_freq = _build_process_frequency(records)
+    failed_logon_bursts = _build_failed_logon_bursts(records)
 
     # Collect all valid records, then sample for efficiency
     all_valid: list[tuple[str, ParsedRecord]] = []
@@ -53,7 +87,7 @@ def detect_anomalies(
     for format_name, record in sample:
         is_anomalous = (
             _is_off_hours(record, persona_hours)
-            or _is_failed_operation(record, format_name)
+            or _is_failed_operation(record, format_name, failed_logon_bursts)
             or _is_rare_process(record, format_name, process_freq)
             or _is_unexpected_port(record, format_name, service_ports)
         )
@@ -133,17 +167,30 @@ def _is_off_hours(record: ParsedRecord, persona_hours: dict[str, list[int]]) -> 
     return record.timestamp.hour not in hours
 
 
-def _is_failed_operation(record: ParsedRecord, fmt: str) -> bool:
-    """Check if event represents a failed operation."""
+def _is_failed_operation(
+    record: ParsedRecord, fmt: str,
+    failed_logon_bursts: set[tuple[str, int]] | None = None,
+) -> bool:
+    """Check if event represents a failed operation.
+
+    For Windows 4625, only flags events that are part of a burst (3+ in 10 min).
+    Isolated failed logons are normal noise, not anomalous.
+    """
     f = record.fields
     if fmt == "windows_event_security":
-        return f.get("EventID") in _FAILED_EVENT_IDS
+        eid = f.get("EventID")
+        if eid == 4625 and failed_logon_bursts and record.timestamp:
+            user = f.get("TargetUserName", "")
+            if user and user != "-":
+                bucket = int(record.timestamp.timestamp()) // 600
+                return (user.lower(), bucket) in failed_logon_bursts
+        return False
     if fmt == "web_access":
         code = f.get("status_code")
         return isinstance(code, int) and code in _FAILED_HTTP_CODES
     if fmt == "syslog":
         msg = f.get("message", "").lower()
-        return any(kw in msg for kw in _FAILED_SYSLOG_KEYWORDS)
+        return any(pattern in msg for pattern in _FAILED_SYSLOG_PATTERNS)
     return False
 
 
@@ -155,12 +202,12 @@ def _is_rare_process(
     if not proc or not process_freq:
         return False
 
-    # Bottom 1% by frequency = rare (tightened from 5% for Phase 5 process diversity)
+    # Bottom 3% by frequency = rare
     total_procs = sum(process_freq.values())
     if total_procs == 0:
         return False
 
-    threshold = max(2, total_procs * 0.01 / len(process_freq))
+    threshold = max(1, total_procs * 0.03 / len(process_freq))
     return process_freq[proc] <= threshold
 
 
@@ -168,7 +215,7 @@ def _is_unexpected_port(
     record: ParsedRecord, fmt: str, service_ports: set[int],
 ) -> bool:
     """Check if connection goes to a port not associated with declared services."""
-    if fmt != "zeek_conn" or not service_ports:
+    if fmt != "zeek_conn":
         return False
 
     resp_port = record.fields.get("id.resp_p")
@@ -176,12 +223,11 @@ def _is_unexpected_port(
         return False
 
     # Common always-expected ports
-    always_ok = {80, 443, 53, 22}
-    if resp_port in always_ok or resp_port in service_ports:
+    if resp_port in _COMMON_APP_PORTS or resp_port in service_ports:
         return False
 
-    # High ports (ephemeral) are not unexpected
-    if resp_port > 1024:
-        return False
-
-    return True
+    # Only well-known ports (1-1023) not in known sets are suspicious.
+    # Registered/high ports are common for legitimate applications.
+    if resp_port <= 1023:
+        return True
+    return False
