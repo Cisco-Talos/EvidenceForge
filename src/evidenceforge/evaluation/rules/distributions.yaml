@@ -56,6 +56,22 @@ ecar:
       LOAD: 0.05
     tolerance: 0.30
 
+zeek_dns:
+  - field: qtype_name
+    reference:
+      A: 0.60
+      AAAA: 0.25
+      CNAME: 0.10
+      PTR: 0.05
+    tolerance: 0.30
+
+  - field: rcode_name
+    reference:
+      NOERROR: 0.92
+      NXDOMAIN: 0.06
+      SERVFAIL: 0.02
+    tolerance: 0.25
+
 web_access:
   - field: method
     reference:

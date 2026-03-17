@@ -7,7 +7,7 @@ coordinates them across multiple log formats for consistency.
 
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import local, get_ident, Lock
 from typing import Optional
 
@@ -212,28 +212,143 @@ _CONN_WEIGHTS = [s[1] for s in CONN_STATE_DISTRIBUTION]
 _CONN_HISTORY = {s[0]: s[2] for s in CONN_STATE_DISTRIBUTION}
 
 # External IPs for network connections (non-RFC1918)
+# Phase 5.3: Expanded from 9 to 50+ IPs for destination diversity
 EXTERNAL_IPS = {
     'connection_web': [
-        '93.184.216.34',   # example.com
-        '172.217.14.206',  # google.com
-        '151.101.1.140',   # reddit.com
+        # Google
+        '172.217.14.206', '142.250.80.46', '142.250.185.206', '142.250.191.46',
+        # Cloudflare
+        '104.16.132.229', '104.18.32.7', '104.18.25.35', '104.21.67.152',
+        # Fastly (Reddit, GitHub Pages, etc.)
+        '151.101.1.140', '151.101.65.140', '151.101.129.140', '151.101.193.140',
+        # Akamai
+        '23.45.67.89', '23.72.134.56', '23.196.25.38', '23.205.100.42',
+        # AWS CloudFront
+        '52.84.123.45', '54.230.67.89', '54.230.129.180', '13.35.42.100',
+        # Azure CDN / Microsoft
+        '13.107.42.14', '13.107.213.70', '204.79.197.200', '13.107.246.40',
+        # Other popular sites
+        '93.184.216.34',     # example.com
+        '31.13.65.36',       # facebook.com
+        '44.238.149.75',     # stackoverflow.com
+        '199.232.64.133',    # npmjs.org
+        '185.199.108.153',   # github.io
+        '52.85.83.55',       # aws.amazon.com
     ],
     'connection_email': [
-        '52.97.145.162',   # Office 365
-        '209.85.233.27',   # Gmail
+        # Office 365
+        '52.97.145.162', '52.97.151.18', '52.97.200.30', '52.97.166.42',
+        '40.107.22.52', '40.107.22.53',
+        # Gmail / Google Workspace
+        '209.85.233.27', '209.85.128.25', '74.125.68.27', '74.125.200.27',
+        '108.177.96.27', '108.177.97.27',
     ],
     'connection_git': [
-        '140.82.121.3',    # github.com
-        '104.26.7.33',     # gitlab.com
+        # GitHub
+        '140.82.121.3', '140.82.121.4', '140.82.112.22', '140.82.114.3',
+        # GitLab
+        '104.26.7.33', '172.65.251.78', '104.26.6.33',
+        # Bitbucket
+        '185.166.143.48', '185.166.143.49',
     ],
     'connection_db': [
-        # For internal DB connections, use dedicated DB server IPs in separate subnet
-        # This prevents matching workstation IPs (10.0.10.x) which would create
-        # same source/destination connections that network sensors can't observe
-        '10.0.100.10',     # Internal DB server (separate subnet)
-        '10.0.100.11',     # Internal DB replica
+        # Internal DB servers (separate subnet to avoid self-connections)
+        '10.0.100.10', '10.0.100.11', '10.0.100.12',
+    ],
+    'connection_saas': [
+        # SharePoint / OneDrive
+        '13.107.6.156', '13.107.18.10', '52.109.8.20', '52.109.12.22',
+        # Azure AD / Entra ID
+        '40.126.28.17', '40.126.28.19', '20.190.159.64',
+        # Slack
+        '34.237.161.42', '52.26.132.56', '54.187.91.57',
+        # Zoom
+        '3.21.137.128', '3.235.69.6', '18.205.93.88',
+        # Salesforce
+        '13.108.0.20', '13.110.54.8',
     ],
 }
+
+# Reverse DNS mapping: IP → hostname (for DNS query generation)
+REVERSE_DNS: dict[str, str] = {
+    # Google
+    '172.217.14.206': 'www.google.com', '142.250.80.46': 'accounts.google.com',
+    '142.250.185.206': 'drive.google.com', '142.250.191.46': 'calendar.google.com',
+    # Cloudflare
+    '104.16.132.229': 'www.cloudflare.com', '104.18.32.7': 'dash.cloudflare.com',
+    '104.18.25.35': 'api.cloudflare.com', '104.21.67.152': 'blog.example.com',
+    # Fastly
+    '151.101.1.140': 'www.reddit.com', '151.101.65.140': 'i.redd.it',
+    '151.101.129.140': 'old.reddit.com', '151.101.193.140': 'v.redd.it',
+    # Akamai
+    '23.45.67.89': 'cdn.example.com', '23.72.134.56': 'static.akamai.net',
+    '23.196.25.38': 'download.windowsupdate.com', '23.205.100.42': 'media.akamai.net',
+    # AWS
+    '52.84.123.45': 'd1234.cloudfront.net', '54.230.67.89': 'd5678.cloudfront.net',
+    '54.230.129.180': 'cdn.jsdelivr.net', '13.35.42.100': 'api.example.com',
+    # Microsoft
+    '13.107.42.14': 'www.office.com', '13.107.213.70': 'outlook.office365.com',
+    '204.79.197.200': 'www.bing.com', '13.107.246.40': 'teams.microsoft.com',
+    # Other
+    '93.184.216.34': 'www.example.com', '31.13.65.36': 'www.facebook.com',
+    '44.238.149.75': 'stackoverflow.com', '199.232.64.133': 'registry.npmjs.org',
+    '185.199.108.153': 'pages.github.io', '52.85.83.55': 'aws.amazon.com',
+    # Email
+    '52.97.145.162': 'outlook.office365.com', '52.97.151.18': 'smtp.office365.com',
+    '52.97.200.30': 'protection.outlook.com', '52.97.166.42': 'outlook.office.com',
+    '40.107.22.52': 'mail.protection.outlook.com', '40.107.22.53': 'mx.office365.com',
+    '209.85.233.27': 'smtp.gmail.com', '209.85.128.25': 'imap.gmail.com',
+    '74.125.68.27': 'smtp-relay.gmail.com', '74.125.200.27': 'pop.gmail.com',
+    '108.177.96.27': 'aspmx.l.google.com', '108.177.97.27': 'alt1.aspmx.l.google.com',
+    # Git
+    '140.82.121.3': 'github.com', '140.82.121.4': 'api.github.com',
+    '140.82.112.22': 'ssh.github.com', '140.82.114.3': 'gist.github.com',
+    '104.26.7.33': 'gitlab.com', '172.65.251.78': 'registry.gitlab.com',
+    '104.26.6.33': 'api.gitlab.com',
+    '185.166.143.48': 'bitbucket.org', '185.166.143.49': 'api.bitbucket.org',
+    # SaaS
+    '13.107.6.156': 'sharepoint.com', '13.107.18.10': 'onedrive.live.com',
+    '52.109.8.20': 'cdn.onenote.net', '52.109.12.22': 'onenote.officeapps.live.com',
+    '40.126.28.17': 'login.microsoftonline.com', '40.126.28.19': 'graph.microsoft.com',
+    '20.190.159.64': 'login.live.com',
+    '34.237.161.42': 'slack.com', '52.26.132.56': 'api.slack.com',
+    '54.187.91.57': 'files.slack.com',
+    '3.21.137.128': 'zoom.us', '3.235.69.6': 'us02web.zoom.us',
+    '18.205.93.88': 'us06web.zoom.us',
+    '13.108.0.20': 'login.salesforce.com', '13.110.54.8': 'na139.salesforce.com',
+    # Internal
+    '10.0.100.10': 'db-primary.corp.local', '10.0.100.11': 'db-replica.corp.local',
+    '10.0.100.12': 'db-analytics.corp.local',
+}
+
+# Cloud/CDN IP ranges for random long-tail destination generation
+_CDN_RANGES = [
+    (13, 32), (13, 35), (13, 107), (13, 108), (13, 110),    # Azure / Salesforce
+    (52, 84), (52, 85), (54, 230), (54, 187),                # AWS CloudFront
+    (104, 16), (104, 18), (104, 21), (104, 26),              # Cloudflare
+    (142, 250), (172, 217), (172, 253),                       # Google
+    (23, 45), (23, 72), (23, 196), (23, 205),                # Akamai
+    (151, 101), (199, 232),                                    # Fastly
+]
+
+
+def _generate_random_external_ip(rng) -> str:
+    """Generate a random plausible external IP from common cloud/CDN ranges."""
+    prefix = rng.choice(_CDN_RANGES)
+    return f"{prefix[0]}.{prefix[1]}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+
+
+def _generate_random_hostname(rng, ip: str) -> str:
+    """Generate a plausible hostname for a random CDN/cloud IP."""
+    templates = [
+        f"cdn-{rng.randint(1000, 9999)}.cloudfront.net",
+        f"edge-{rng.randint(100, 999)}.akamai.net",
+        f"server-{rng.randint(10, 99)}-{rng.randint(100, 999)}.compute.amazonaws.com",
+        f"lb-{rng.randint(1, 50)}.{rng.choice(['us-east-1', 'eu-west-1', 'ap-south-1'])}.elb.amazonaws.com",
+        f"{rng.randint(1, 255)}-{rng.randint(1, 255)}-{rng.randint(1, 255)}.bc.googleusercontent.com",
+        f"a{rng.randint(100, 999)}.dscg.akamaiedge.net",
+    ]
+    return rng.choice(templates)
 
 
 def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]:
@@ -1000,6 +1115,90 @@ class ActivityGenerator:
 
         return pid
 
+    def _emit_dns_lookup(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        time: datetime,
+    ) -> None:
+        """Emit a DNS lookup preceding a TCP connection.
+
+        Generates both a Zeek conn.log UDP/53 record and a Zeek dns.log record
+        with consistent fields. The dns.log answers field contains the dst_ip
+        that the subsequent TCP connection will use.
+
+        Args:
+            src_ip: IP of the system making the query
+            dst_ip: IP that will be resolved (the "answer")
+            time: Timestamp of the DNS query (should precede TCP connection)
+        """
+        from evidenceforge.utils.ids import generate_zeek_uid
+
+        rng = _get_rng()
+
+        # Look up hostname for this IP, or generate one
+        hostname = REVERSE_DNS.get(dst_ip)
+        if not hostname:
+            hostname = _generate_random_hostname(rng, dst_ip)
+
+        # Determine DNS server IP from network visibility or use default
+        dns_server_ip = getattr(self, '_dns_server_ip', '10.0.0.1')
+
+        # Shared UID for the DNS conn.log and dns.log records
+        dns_uid = generate_zeek_uid()
+        src_port = rng.randint(49152, 65535)
+
+        # Emit Zeek conn.log UDP/53 record
+        dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
+        self.generate_connection(
+            src_ip=src_ip,
+            dst_ip=dns_server_ip,
+            time=dns_time,
+            dst_port=53,
+            proto='udp',
+            service='dns',
+            duration=rng.uniform(0.001, 0.03),
+            orig_bytes=rng.randint(40, 100),
+            resp_bytes=rng.randint(80, 400),
+        )
+
+        # Emit Zeek dns.log record
+        if 'zeek_dns' in self.emitters:
+            qtype_roll = rng.random()
+            if qtype_roll < 0.60:
+                qtype, qtype_name = 1, 'A'
+            elif qtype_roll < 0.85:
+                qtype, qtype_name = 28, 'AAAA'
+            elif qtype_roll < 0.95:
+                qtype, qtype_name = 5, 'CNAME'
+            else:
+                qtype, qtype_name = 12, 'PTR'
+
+            self.emitters['zeek_dns'].emit_event({
+                'ts': dns_time,
+                'uid': dns_uid,
+                'id.orig_h': src_ip,
+                'id.orig_p': src_port,
+                'id.resp_h': dns_server_ip,
+                'id.resp_p': 53,
+                'proto': 'udp',
+                'trans_id': rng.randint(1, 65535),
+                'query': hostname,
+                'qclass': 1,
+                'qclass_name': 'C_INTERNET',
+                'qtype': qtype,
+                'qtype_name': qtype_name,
+                'rcode': 0,
+                'rcode_name': 'NOERROR',
+                'AA': False,
+                'TC': False,
+                'RD': True,
+                'RA': True,
+                'answers': dst_ip,
+                'TTLs': str(rng.choice([60, 300, 3600, 86400])),
+                'rejected': False,
+            })
+
     def get_baseline_pattern(
         self,
         persona_name: Optional[str],
@@ -1107,25 +1306,27 @@ class ActivityGenerator:
 
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
-            # Choose random destination IP (exclude source system's IP)
-            available_destinations = [
-                ip for ip in EXTERNAL_IPS[activity_type]
-                if ip != system.ip
-            ]
+            rng = _get_rng()
 
-            if not available_destinations:
-                # No valid destinations (all IPs match source)
-                logger.debug(
-                    f"Skipping {activity_type} for {system.hostname}: "
-                    f"no valid destination IPs (all match source {system.ip})"
-                )
-                return
-
-            dst_ip = _get_rng().choice(available_destinations)
+            # Phase 5.3: 30% chance of random CDN/cloud IP for destination diversity
+            if activity_type in ('connection_web', 'connection_saas') and rng.random() < 0.30:
+                dst_ip = _generate_random_external_ip(rng)
+            else:
+                available_destinations = [
+                    ip for ip in EXTERNAL_IPS[activity_type]
+                    if ip != system.ip
+                ]
+                if not available_destinations:
+                    logger.debug(
+                        f"Skipping {activity_type} for {system.hostname}: "
+                        f"no valid destination IPs (all match source {system.ip})"
+                    )
+                    return
+                dst_ip = rng.choice(available_destinations)
 
             # Set service and port based on activity type
-            if activity_type == 'connection_web':
-                service = _get_rng().choice(['http', 'https'])
+            if activity_type in ('connection_web', 'connection_saas'):
+                service = rng.choice(['http', 'https'])
                 dst_port = 443 if service == 'https' else 80
             elif activity_type == 'connection_email':
                 service = 'smtp'
@@ -1140,10 +1341,13 @@ class ActivityGenerator:
                 service = None
                 dst_port = 443
 
+            # Phase 5.3: Emit DNS lookup before TCP connection
+            self._emit_dns_lookup(system.ip, dst_ip, time)
+
             # Generate realistic traffic sizes
-            orig_bytes = _get_rng().randint(500, 5000)
-            resp_bytes = _get_rng().randint(1000, 50000)
-            duration = _get_rng().uniform(0.1, 5.0)
+            orig_bytes = rng.randint(500, 5000)
+            resp_bytes = rng.randint(1000, 50000)
+            duration = rng.uniform(0.1, 5.0)
 
             self.generate_connection(
                 src_ip=system.ip,

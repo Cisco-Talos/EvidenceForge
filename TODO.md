@@ -591,34 +591,30 @@
 
 **Goal:** Eliminate the "zero UDP/ICMP" and "only 11 IPs" tells. Add realistic network protocol mix.
 
-- [ ] **Add UDP traffic generation**
-  - DNS queries (UDP 53): every TCP connection preceded by a DNS lookup; add `generate_dns_query()` that emits Zeek dns.log-style conn records
-  - NTP sync (UDP 123): periodic per-system (every 5-15 minutes to 1-3 NTP servers)
-  - DHCP (UDP 67/68): at session start for dynamic-IP systems
-  - mDNS/LLMNR (UDP 5353/5355): periodic local name resolution
-  - QUIC (UDP 443): percentage of HTTPS traffic uses QUIC
-  - Files: `activity.py` (new methods), `engine.py` (system traffic loop)
-- [ ] **Add ICMP traffic generation**
-  - Periodic ping (ICMP echo) between systems on same segment
-  - Occasional ICMP unreachable for failed connections
-  - Files: `activity.py` (`generate_icmp`)
-- [ ] **Implement service registry for internal IP consistency**
-  - At engine init, build a registry of which internal IPs run which services (ports)
-  - Sources: declared systems + auto-generated infrastructure IPs (DNS server, mail server, DC, file server, NTP server)
-  - All connections to internal IPs check the registry; connection success/failure is consistent with whether the port is open
-  - Files: new `generation/service_registry.py`, `engine.py` (initialization)
-- [ ] **Expand external destination IP pools**
-  - Grow to ~50+ IPs per category with realistic assignments (CDN ranges, cloud provider ranges, SaaS IPs)
-  - Add random IP generation for long-tail destinations (simulate CDN edge nodes, ad networks, analytics)
-  - Total unique destination IPs per scenario should be hundreds, not 11
-  - Files: `activity.py` (EXTERNAL_IPS → larger pools + generator)
-- [ ] **Add Zeek dns.log format definition** (new format)
-  - Query name, query type, response code, answers
-  - Files: new `formats/definitions/zeek_dns.yaml`, new `generation/emitters/zeek_dns.py`
-- [ ] Test: UDP traffic present (proto=udp in Zeek output)
-- [ ] Test: DNS queries present for TCP connection destinations
-- [ ] Test: ≥ 100 unique destination IPs in medium dataset
-- [ ] Test: Internal IP service consistency (no successful connections to closed ports)
+- [x] **Add UDP traffic generation**
+  - DNS queries (UDP 53): `_emit_dns_lookup()` emits both Zeek conn.log UDP/53 and dns.log records before every user TCP connection
+  - NTP sync (UDP 123): periodic per-system in `_generate_system_traffic()` (Phase 5.4)
+  - Deferred: DHCP, mDNS/LLMNR, QUIC
+- [x] **Add ICMP traffic generation**
+  - 1-3 ICMP echo pings per hour between systems on same subnet
+  - Added to `_generate_system_traffic()` in engine.py
+- [ ] **Implement service registry for internal IP consistency** — DEFERRED
+- [x] **Expand external destination IP pools**
+  - EXTERNAL_IPS expanded from 9 to 50+ IPs across 5 categories (web, email, git, db, saas)
+  - Added REVERSE_DNS mapping (IP → hostname) for DNS query generation
+  - Added `_generate_random_external_ip()` for CDN/cloud long-tail destinations (30% chance per connection)
+  - Added `_generate_random_hostname()` for plausible CDN hostnames
+- [x] **Add Zeek dns.log format definition** (new format, 8th format total)
+  - `formats/definitions/zeek_dns.yaml` — 18 fields matching real Zeek dns.log
+  - `generation/emitters/zeek_dns.py` — NDJSON emitter with JSON compaction
+  - `evaluation/parsers/zeek_dns.py` — eval parser for dns.log records
+  - Eval rules: qtype_name distribution + rcode_name distribution + co-occurrence rules
+- [x] **Cross-record consistency**: DNS answers match subsequent TCP connection dst_ip, same source IP, temporal ordering
+- [x] Test: UDP traffic present (proto=udp in Zeek output)
+- [x] Test: DNS queries emitted for TCP connection destinations
+- [x] Test: dns.log format loads, emitter produces valid NDJSON, parser reads correctly
+- [ ] Test: ≥ 100 unique destination IPs in medium dataset — DEFERRED (needs integration test)
+- [ ] Test: Internal IP service consistency — DEFERRED (service registry not implemented)
 
 ### 5.4 Background Traffic & System Activity
 

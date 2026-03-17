@@ -8,11 +8,13 @@ from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.generation.emitters.web import WebEmitter
+from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
 __all__ = [
     "LogEmitter",
     "WindowsEventEmitter",
     "ZeekEmitter",
+    "ZeekDnsEmitter",
     "EcarEmitter",
     "SyslogEmitter",
     "BashHistoryEmitter",

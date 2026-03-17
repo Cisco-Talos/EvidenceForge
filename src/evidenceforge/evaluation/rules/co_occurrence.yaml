@@ -158,6 +158,19 @@ web_access:
       - field: method
         in: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"]
 
+zeek_dns:
+  - name: "DNS query has non-empty query field"
+    condition: {}
+    checks:
+      - field: query
+        min_length: 1
+
+  - name: "DNS response has rcode"
+    condition: {}
+    checks:
+      - field: rcode_name
+        present: true
+
 bash_history:
   - name: "Command is non-empty"
     condition: {}

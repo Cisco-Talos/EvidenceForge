@@ -17,6 +17,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.emitters import (
     WindowsEventEmitter,
     ZeekEmitter,
+    ZeekDnsEmitter,
     EcarEmitter,
     SyslogEmitter,
     BashHistoryEmitter,
@@ -168,6 +169,7 @@ class GenerationEngine:
         formats_to_generate = [
             'windows_event_security',  # Phase 1 - Temporary (activity.py still uses this)
             'zeek_conn',               # Phase 1 - Network visibility
+            'zeek_dns',                # Phase 5.3 - DNS query logging (NEW)
             'ecar',                    # Phase 2.2 - Primary host EDR/XDR (NEW)
             'syslog',                  # Phase 2.2 - Linux native logs (NEW)
             'bash_history',            # Phase 2.2 - Command history (NEW)
@@ -179,6 +181,7 @@ class GenerationEngine:
         emitter_classes = {
             'windows_event_security': WindowsEventEmitter,
             'zeek_conn': ZeekEmitter,
+            'zeek_dns': ZeekDnsEmitter,
             'ecar': EcarEmitter,
             'syslog': SyslogEmitter,
             'bash_history': BashHistoryEmitter,
@@ -1341,3 +1344,29 @@ class GenerationEngine:
                         process_name=task_name, command_line=task_cmd,
                         parent_pid=parent_pid, username='root',
                     )
+
+        # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour)
+        systems = self.scenario.environment.systems
+        if len(systems) >= 2:
+            num_pings = rng.randint(1, 3)
+            for _ in range(num_pings):
+                src_sys = rng.choice(systems)
+                dst_sys = rng.choice(systems)
+                if src_sys.ip == dst_sys.ip:
+                    continue
+                # Simple same-subnet check (first 3 octets match)
+                if src_sys.ip.rsplit('.', 1)[0] != dst_sys.ip.rsplit('.', 1)[0]:
+                    continue
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=src_sys.ip,
+                    dst_ip=dst_sys.ip,
+                    time=ts,
+                    dst_port=0,
+                    proto='icmp',
+                    duration=rng.uniform(0.0005, 0.005),
+                    orig_bytes=64,
+                    resp_bytes=64,
+                )

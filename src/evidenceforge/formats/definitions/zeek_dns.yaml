@@ -1,0 +1,156 @@
+name: zeek_dns
+version: "1.0"
+description: "Zeek dns.log format (JSON output) - DNS query/response logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of DNS query"
+
+  - name: uid
+    type: string
+    required: true
+    description: "Unique connection identifier (shared with conn.log UDP record)"
+    constraints:
+      pattern: "^[A-Za-z0-9]{18}$"
+
+  - name: id.orig_h
+    type: ip_address
+    required: true
+    description: "Originator (querying) IP address"
+
+  - name: id.orig_p
+    type: port
+    required: true
+    description: "Originator port"
+
+  - name: id.resp_h
+    type: ip_address
+    required: true
+    description: "Responder (DNS server) IP address"
+
+  - name: id.resp_p
+    type: port
+    required: true
+    description: "Responder port (usually 53)"
+
+  - name: proto
+    type: string
+    required: true
+    description: "Transport protocol"
+    constraints:
+      allowed_values: ["udp", "tcp"]
+
+  - name: trans_id
+    type: integer
+    required: true
+    description: "DNS transaction ID"
+    constraints:
+      min_value: 0
+      max_value: 65535
+
+  - name: query
+    type: string
+    required: true
+    description: "Domain name queried"
+
+  - name: qclass
+    type: integer
+    required: false
+    description: "Query class (1 = C_INTERNET)"
+
+  - name: qclass_name
+    type: string
+    required: false
+    description: "Query class name"
+
+  - name: qtype
+    type: integer
+    required: false
+    description: "Query type (1=A, 28=AAAA, 5=CNAME)"
+
+  - name: qtype_name
+    type: string
+    required: true
+    description: "Query type name"
+    constraints:
+      allowed_values: ["A", "AAAA", "CNAME", "MX", "NS", "PTR", "SOA", "SRV", "TXT"]
+
+  - name: rcode
+    type: integer
+    required: false
+    description: "Response code (0=NOERROR, 3=NXDOMAIN)"
+
+  - name: rcode_name
+    type: string
+    required: true
+    description: "Response code name"
+    constraints:
+      allowed_values: ["NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED", "NOTIMP"]
+
+  - name: AA
+    type: boolean
+    required: false
+    description: "Authoritative Answer flag"
+
+  - name: TC
+    type: boolean
+    required: false
+    description: "Truncation flag"
+
+  - name: RD
+    type: boolean
+    required: false
+    description: "Recursion Desired flag"
+
+  - name: RA
+    type: boolean
+    required: false
+    description: "Recursion Available flag"
+
+  - name: answers
+    type: string
+    required: false
+    description: "Answer records (comma-separated)"
+
+  - name: TTLs
+    type: string
+    required: false
+    description: "Answer TTLs (comma-separated)"
+
+  - name: rejected
+    type: boolean
+    required: false
+    description: "Whether the query was rejected"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts }},
+      "uid": "{{ uid }}",
+      "id.orig_h": "{{ id_orig_h }}",
+      "id.orig_p": {{ id_orig_p }},
+      "id.resp_h": "{{ id_resp_h }}",
+      "id.resp_p": {{ id_resp_p }},
+      "proto": "{{ proto }}",
+      "trans_id": {{ trans_id }},
+      "query": "{{ query }}",
+      "qclass": {{ qclass | default(1) }},
+      "qclass_name": "{{ qclass_name | default('C_INTERNET') }}",
+      "qtype": {{ qtype | default(1) }},
+      "qtype_name": "{{ qtype_name | default('A') }}",
+      "rcode": {{ rcode | default(0) }},
+      "rcode_name": "{{ rcode_name | default('NOERROR') }}",
+      "AA": {%- if AA is defined and AA %} true {%- else %} false {%- endif %},
+      "TC": {%- if TC is defined and TC %} true {%- else %} false {%- endif %},
+      "RD": {%- if RD is defined and RD %} true {%- else %} false {%- endif %},
+      "RA": {%- if RA is defined and RA %} true {%- else %} false {%- endif %},
+      "answers": "{{ answers | default('-') }}",
+      "TTLs": "{{ TTLs | default('-') }}",
+      "rejected": {%- if rejected is defined and rejected %} true {%- else %} false {%- endif %}
+    }
