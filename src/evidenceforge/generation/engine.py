@@ -666,20 +666,32 @@ class GenerationEngine:
             gap_bias = 1.0 + offsets.get('inter_gap_bias', 0)
             inter_gap_mean = max(60, inter_gap_mean * gap_bias)
 
-        times = []
+        times: list[datetime] = []
         remaining = num_events
         t = random.expovariate(1.0 / 60)  # First cluster offset (mean ~1min)
 
         while remaining > 0:
             cluster_size = min(remaining, random.randint(cluster_min, cluster_max))
             for i in range(cluster_size):
-                event_t = t + random.uniform(0.5, 3.0) * i
-                times.append(hour_start + timedelta(seconds=min(event_t, 3599)))
+                if i > 0:
+                    t += random.uniform(0.3, 2.0)  # Tight intra-cluster spacing
+                times.append(hour_start + timedelta(seconds=min(t, 3599)))
             remaining -= cluster_size
-            # Inter-cluster gap: exponential distribution
-            t += cluster_size * 2.0 + random.expovariate(1.0 / inter_gap_mean)
+            # Inter-cluster gap: pure exponential (high variance for bursty CV)
+            t += random.expovariate(1.0 / inter_gap_mean)
 
-        return sorted(times)
+        sorted_times = sorted(times)
+
+        # Safety cap: max 20 events per 5-second window
+        final: list[datetime] = [sorted_times[0]]
+        for ts in sorted_times[1:]:
+            recent = sum(1 for prev in final[-20:] if (ts - prev).total_seconds() <= 5.0)
+            if recent < 20:
+                final.append(ts)
+            else:
+                final.append(final[-1] + timedelta(seconds=random.uniform(5.1, 8.0)))
+
+        return sorted(final)
 
     def _generate_user_activity(self, user: User, event_time: datetime) -> None:
         """Generate activity for user at specified time.
@@ -1240,6 +1252,9 @@ class GenerationEngine:
 
         Called once per hour. Generates DNS lookups, NTP syncs, SMB browsing,
         and scheduled task activity independently of user activity.
+
+        Uses periodic-with-jitter timing to produce realistic autocorrelation
+        in system event intervals.
         """
         from evidenceforge.generation.activity import _get_os_category
 
@@ -1254,11 +1269,13 @@ class GenerationEngine:
             os_cat = _get_os_category(system.os)
             sys_pids = self._system_pids.get(system.hostname, {})
 
-            # DNS lookups: 2-6 per hour
+            # DNS lookups: 2-6 per hour, evenly spaced with jitter
             if 'dns-client' in services:
                 num_dns = rng.randint(2, 6)
-                for _ in range(num_dns):
-                    offset = rng.uniform(0, 3599)
+                base_interval = 3600 / (num_dns + 1)
+                for i in range(num_dns):
+                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                    offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
@@ -1273,9 +1290,10 @@ class GenerationEngine:
                         resp_bytes=rng.randint(80, 512),
                     )
 
-            # NTP sync: 0-1 per hour
+            # NTP sync: 0-1 per hour, anchored to per-system offset
             if 'ntp-client' in services and rng.random() < 0.6:
-                offset = rng.uniform(0, 3599)
+                offset = (hash(system.hostname) % 3600) + rng.gauss(0, 30)
+                offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 ntp_ip = rng.choice(ntp_ips)
@@ -1291,13 +1309,15 @@ class GenerationEngine:
                     resp_bytes=48,
                 )
 
-            # SMB browsing: 1-3 per hour (Windows workstations only)
+            # SMB browsing: 1-3 per hour (Windows workstations only), evenly spaced
             if 'smb-client' in services and os_cat == 'windows':
                 dc_ip = self._infra_ips.get('dc', '10.0.0.1')
                 if isinstance(dc_ip, str) and dc_ip != system.ip:
                     num_smb = rng.randint(1, 3)
-                    for _ in range(num_smb):
-                        offset = rng.uniform(0, 3599)
+                    base_interval = 3600 / (num_smb + 1)
+                    for i in range(num_smb):
+                        offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                        offset = max(0, min(3599, offset))
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_connection(
@@ -1312,9 +1332,12 @@ class GenerationEngine:
                             resp_bytes=rng.randint(500, 5000),
                         )
 
-            # Scheduled tasks: 0-2 per hour
+            # Scheduled tasks: 0-2 per hour, anchored to quarter-hour marks
             if rng.random() < 0.6:
-                offset = rng.uniform(0, 3599)
+                # Pick a quarter-hour slot (0, 900, 1800, 2700) with jitter
+                slot = rng.choice([0, 900, 1800, 2700])
+                offset = slot + rng.gauss(0, 30)
+                offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
 
@@ -1345,11 +1368,12 @@ class GenerationEngine:
                         parent_pid=parent_pid, username='root',
                     )
 
-        # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour)
+        # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour), evenly spaced
         systems = self.scenario.environment.systems
         if len(systems) >= 2:
             num_pings = rng.randint(1, 3)
-            for _ in range(num_pings):
+            base_interval = 3600 / (num_pings + 1)
+            for i in range(num_pings):
                 src_sys = rng.choice(systems)
                 dst_sys = rng.choice(systems)
                 if src_sys.ip == dst_sys.ip:
@@ -1357,7 +1381,8 @@ class GenerationEngine:
                 # Simple same-subnet check (first 3 octets match)
                 if src_sys.ip.rsplit('.', 1)[0] != dst_sys.ip.rsplit('.', 1)[0]:
                     continue
-                offset = rng.uniform(0, 3599)
+                offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(

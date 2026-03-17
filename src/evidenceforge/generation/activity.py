@@ -62,35 +62,36 @@ def _get_os_category(os_string: str) -> str:
         return 'unknown'
 
 
-# Fixed baseline activity patterns for Phase 1 (no LLM expansion)
+# Fixed baseline activity patterns (no LLM expansion)
 # Format: (activity_type, probability)
+# Phase 5.6: Widened probability gaps for user diversity scoring
 BASELINE_PATTERNS = {
     'developer': [
-        ('logon', 0.8),              # 80% chance of logon
-        ('process_code', 0.6),       # 60% chance of code editor
-        ('connection_git', 0.4),     # 40% chance of git operation
-        ('process_build', 0.3),      # 30% chance of build
-        ('process_user_apps', 0.25), # 25% chance of user app activity
+        ('logon', 0.7),
+        ('process_code', 0.75),       # Dominant: code editors
+        ('connection_git', 0.5),      # Heavy git usage
+        ('process_build', 0.45),      # Frequent builds
+        ('process_user_apps', 0.15),  # Minimal app usage
     ],
     'executive': [
         ('logon', 0.9),
-        ('connection_web', 0.7),
-        ('connection_email', 0.6),
-        ('process_user_apps', 0.5),  # 50% chance of Office/browser activity
+        ('connection_web', 0.8),      # Dominant: browsing
+        ('connection_email', 0.75),   # Heavy email
+        ('process_user_apps', 0.7),   # Heavy Office/apps
     ],
     'analyst': [
         ('logon', 0.85),
-        ('process_query', 0.5),
-        ('connection_db', 0.4),
-        ('process_user_apps', 0.3),
+        ('process_query', 0.7),       # Dominant: database queries
+        ('connection_db', 0.6),       # Heavy DB connections
+        ('process_user_apps', 0.45),  # Moderate apps (Excel, etc.)
     ],
     'sysadmin': [
         ('logon', 0.9),
-        ('process_code', 0.3),
+        ('process_system', 0.65),     # Dominant: system tools
+        ('process_code', 0.35),
         ('process_query', 0.3),
-        ('connection_web', 0.3),
-        ('process_system', 0.4),
-        ('process_user_apps', 0.2),
+        ('connection_web', 0.2),
+        ('process_user_apps', 0.1),   # Minimal app usage
     ],
     'default': [
         ('logon', 0.75),
@@ -192,6 +193,29 @@ PERSONA_PROCESS_WEIGHTS = {
     'analyst': {'process_code': 0.1, 'process_build': 0.05, 'process_query': 0.5, 'process_user_apps': 0.3, 'process_system': 0.05},
     'sysadmin': {'process_code': 0.2, 'process_build': 0.1, 'process_query': 0.2, 'process_user_apps': 0.1, 'process_system': 0.4},
     'default': {'process_code': 0.15, 'process_build': 0.05, 'process_user_apps': 0.6, 'process_system': 0.2},
+}
+
+# Per-persona app subsets for process_user_apps (Phase 5.6: user diversity)
+# Each persona favors a different mix of applications from PROCESS_TEMPLATES['process_user_apps']
+# Index references into PROCESS_TEMPLATES['process_user_apps']:
+#   0=Chrome, 1=Firefox, 2=Outlook, 3=Word, 4=Excel, 5=Edge, 6=Teams, 7=OneDrive, 8=Acrobat, 9=7-Zip
+PERSONA_APP_INDICES = {
+    'developer': [0, 6, 7, 9],          # Chrome, Teams, OneDrive, 7-Zip
+    'executive': [2, 3, 5, 6, 8],       # Outlook, Word, Edge, Teams, Acrobat
+    'analyst': [0, 4, 2, 6, 8],         # Chrome, Excel, Outlook, Teams, Acrobat
+    'sysadmin': [1, 5, 6, 9],           # Firefox, Edge, Teams, 7-Zip
+    'default': [0, 2, 6, 7],            # Chrome, Outlook, Teams, OneDrive
+}
+
+# Per-persona app subsets for Linux process_user_apps
+# Index references into PROCESS_TEMPLATES_LINUX['process_user_apps']:
+#   0=firefox, 1=thunderbird, 2=git, 3=docker, 4=pytest, 5=ssh, 6=curl, 7=kubectl
+PERSONA_APP_INDICES_LINUX = {
+    'developer': [0, 2, 3, 4, 6],       # firefox, git, docker, pytest, curl
+    'executive': [0, 1],                 # firefox, thunderbird
+    'analyst': [0, 5, 6],               # firefox, ssh, curl
+    'sysadmin': [2, 3, 5, 6, 7],        # git, docker, ssh, curl, kubectl
+    'default': [0, 2, 5, 6],            # firefox, git, ssh, curl
 }
 
 # Zeek connection state distribution with matching history strings (Phase 5.1)
@@ -740,20 +764,23 @@ class ActivityGenerator:
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(),
                 'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
+                'ExecutionThreadID': _get_rng().randint(100, 9999),
                 # Process variant fields
                 'SubjectUserSid': self._get_sid(user.username),
                 'SubjectUserName': user.username,
                 'SubjectDomainName': 'CORP',
                 'SubjectLogonId': logon_id,
-                'NewProcessId': f'0x{pid:x}',  # Hex format
+                'NewProcessId': f'0x{pid:x}',
                 'NewProcessName': process_name,
-                'TokenElevationType': '%%1936',  # Limited token
-                'ProcessId': f'0x{parent_pid:x}',  # Parent PID in hex
+                'TokenElevationType': '%%1938',  # Limited token (UAC filtered)
+                'ProcessId': f'0x{parent_pid:x}',
                 'CommandLine': command_line,
+                'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
                 'TargetDomainName': 'CORP',
                 'TargetLogonId': logon_id,
+                'ParentProcessName': r'C:\Windows\explorer.exe',
+                'MandatoryLabel': 'S-1-16-8192',  # Medium integrity
             }
             self.emitters['windows_event_security'].emit_event(event_data)
 
@@ -1064,6 +1091,8 @@ class ActivityGenerator:
 
         if os_category == 'windows':
             sid = self.sid_registry.get(username, 'S-1-5-18') if self.sid_registry else 'S-1-5-18'
+            system_logon_ids = {'SYSTEM': '0x3e7', 'LOCAL SERVICE': '0x3e5', 'NETWORK SERVICE': '0x3e4'}
+            logon_id = system_logon_ids.get(username, '0x3e7')
             event_data = {
                 'EventID': 4688,
                 'TimeCreated': time,
@@ -1072,18 +1101,22 @@ class ActivityGenerator:
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(),
                 'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 999),
+                'ExecutionThreadID': _get_rng().randint(100, 9999),
                 'SubjectUserSid': sid,
                 'SubjectUserName': username,
                 'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': '0x3e7',
-                'NewProcessId': hex(pid),
+                'SubjectLogonId': logon_id,
+                'NewProcessId': f'0x{pid:x}',
                 'NewProcessName': process_name,
-                'TokenElevationType': '%%1936',
-                'ProcessId': hex(parent_pid),
+                'TokenElevationType': '%%1936',  # Default token (no UAC split for SYSTEM)
+                'ProcessId': f'0x{parent_pid:x}',
                 'CommandLine': command_line,
-                'ParentProcessName': '',
-                'MandatoryLabel': 'S-1-16-16384',
+                'TargetUserSid': sid,
+                'TargetUserName': username,
+                'TargetDomainName': 'NT AUTHORITY',
+                'TargetLogonId': logon_id,
+                'ParentProcessName': r'C:\Windows\System32\services.exe',
+                'MandatoryLabel': 'S-1-16-16384',  # System integrity
             }
             if 'windows_event_security' in self.emitters:
                 self.emitters['windows_event_security'].emit_event(event_data)
@@ -1289,16 +1322,26 @@ class ActivityGenerator:
             # Phase 2.10: OS-aware process template selection
             os_category = _get_os_category(system.os)
             if os_category == 'windows' and activity_type in PROCESS_TEMPLATES:
-                # Use Windows process templates
-                process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES[activity_type])
+                # Phase 5.6: Per-persona app pool for user diversity
+                pool = PROCESS_TEMPLATES[activity_type]
+                if activity_type == 'process_user_apps':
+                    persona_key = (user.persona or 'default').lower()
+                    indices = PERSONA_APP_INDICES.get(persona_key, PERSONA_APP_INDICES['default'])
+                    pool = [pool[i] for i in indices if i < len(pool)]
+                process_name, command_line = _get_rng().choice(pool)
                 # Phase 5.1: Substitute username placeholder in paths
                 process_name = process_name.replace('{username}', user.username)
                 command_line = command_line.replace('{username}', user.username)
                 self.generate_process(user, system, time, logon_id, process_name, command_line)
 
             elif os_category == 'linux' and activity_type in PROCESS_TEMPLATES_LINUX:
-                # Use Linux process templates
-                process_name, command_line = _get_rng().choice(PROCESS_TEMPLATES_LINUX[activity_type])
+                # Phase 5.6: Per-persona app pool for Linux user diversity
+                pool = PROCESS_TEMPLATES_LINUX[activity_type]
+                if activity_type == 'process_user_apps':
+                    persona_key = (user.persona or 'default').lower()
+                    indices = PERSONA_APP_INDICES_LINUX.get(persona_key, PERSONA_APP_INDICES_LINUX['default'])
+                    pool = [pool[i] for i in indices if i < len(pool)]
+                process_name, command_line = _get_rng().choice(pool)
                 self.generate_process(user, system, time, logon_id, process_name, command_line)
 
                 # Also generate bash history for Linux

@@ -14,7 +14,7 @@ from evidenceforge.models.scenario import Scenario
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 # Failed operation indicators
-_FAILED_EVENT_IDS = {4625}  # Windows failed logon
+_FAILED_EVENT_IDS: set[int] = set()  # Individual failed logons are expected noise, not anomalies
 _FAILED_HTTP_CODES = set(range(400, 600))
 _FAILED_SYSLOG_KEYWORDS = ["failed", "denied", "error", "invalid", "unauthorized"]
 
@@ -155,12 +155,12 @@ def _is_rare_process(
     if not proc or not process_freq:
         return False
 
-    # Bottom 5% by frequency = rare
+    # Bottom 1% by frequency = rare (tightened from 5% for Phase 5 process diversity)
     total_procs = sum(process_freq.values())
     if total_procs == 0:
         return False
 
-    threshold = max(1, total_procs * 0.05 / len(process_freq))
+    threshold = max(2, total_procs * 0.01 / len(process_freq))
     return process_freq[proc] <= threshold
 
 

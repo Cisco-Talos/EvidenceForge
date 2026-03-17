@@ -117,9 +117,10 @@ class TestActivityGenerator:
         assert sessions[0].logon_id == logon_id
         assert sessions[0].username == test_user.username
 
-        # Verify Windows emitter received 4624 event
+        # Verify Windows emitter received 4624 event (may also emit 4672 for special privileges)
         assert mock_emitters['windows_event_security'].emit_event.called
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        calls = mock_emitters['windows_event_security'].emit_event.call_args_list
+        event_data = calls[0][0][0]  # First call is always 4624
         assert event_data['EventID'] == 4624
         assert event_data['TargetUserName'] == test_user.username
         assert event_data['TargetLogonId'] == logon_id
@@ -131,7 +132,8 @@ class TestActivityGenerator:
 
         activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        # First call is always 4624 (may also emit 4672 for special privileges)
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert event_data['LogonType'] == 2
         assert event_data['IpAddress'] == test_system.ip
 
@@ -143,7 +145,8 @@ class TestActivityGenerator:
 
         activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=3, source_ip=source_ip)
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        # First call is always 4624 (may also emit 4672 for special privileges)
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert event_data['LogonType'] == 3
         assert event_data['IpAddress'] == source_ip
 
@@ -313,8 +316,8 @@ class TestActivityGenerator:
         pattern = activity_gen.get_baseline_pattern("developer")
 
         assert pattern == BASELINE_PATTERNS['developer']
-        assert ('logon', 0.8) in pattern
-        assert ('process_code', 0.6) in pattern
+        assert ('logon', 0.7) in pattern
+        assert ('process_code', 0.75) in pattern
 
     def test_get_baseline_pattern_executive(self, activity_gen):
         """Should return executive pattern for executive persona."""
@@ -322,7 +325,7 @@ class TestActivityGenerator:
 
         assert pattern == BASELINE_PATTERNS['executive']
         assert ('logon', 0.9) in pattern
-        assert ('connection_email', 0.6) in pattern
+        assert ('connection_email', 0.75) in pattern
 
     def test_get_baseline_pattern_case_insensitive(self, activity_gen):
         """Persona name should be case-insensitive."""
@@ -352,7 +355,7 @@ class TestActivityGenerator:
 
         # Verify Windows emitter received logon event (4624 success or 4625 failed)
         assert mock_emitters['windows_event_security'].emit_event.called
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
+        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert event_data['EventID'] in (4624, 4625)
 
     def test_execute_baseline_activity_process_creates_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
@@ -405,7 +408,9 @@ class TestActivityGenerator:
         event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
         assert event_data['service'] in ['http', 'https']
         assert event_data['id.resp_p'] in [80, 443]
-        assert event_data['id.resp_h'] in EXTERNAL_IPS['connection_web']
+        # Phase 5.3: 30% chance of random CDN/cloud IP, so check it's a valid external IP
+        dst_ip = event_data['id.resp_h']
+        assert dst_ip in EXTERNAL_IPS['connection_web'] or not dst_ip.startswith('10.')
 
     def test_execute_baseline_activity_connection_email(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should handle email connection."""
