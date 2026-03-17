@@ -160,17 +160,34 @@ class NoiseRealismScorer(DimensionScorer):
                 score=100.0, details="Fewer than 2 users with sufficient data — skipped",
             )
 
-        # Compute pairwise cosine similarity
-        user_list = list(users_with_data.keys())
-        similarities: list[float] = []
+        # Compute pairwise cosine similarity (sample pairs for large user counts)
+        import random as _rng
+        import itertools
 
-        for i in range(len(user_list)):
-            for j in range(i + 1, len(user_list)):
-                sim = self._cosine_similarity(
-                    users_with_data[user_list[i]],
-                    users_with_data[user_list[j]],
-                )
-                similarities.append(sim)
+        user_list = list(users_with_data.keys())
+        total_pairs = len(user_list) * (len(user_list) - 1) // 2
+        max_pairs = 200
+
+        if total_pairs <= max_pairs:
+            # Small enough to compute all pairs
+            pairs = list(itertools.combinations(range(len(user_list)), 2))
+        else:
+            # Sample random pairs
+            pairs = set()
+            while len(pairs) < max_pairs:
+                i = _rng.randrange(len(user_list))
+                j = _rng.randrange(len(user_list))
+                if i != j:
+                    pairs.add((min(i, j), max(i, j)))
+            pairs = list(pairs)
+
+        similarities: list[float] = []
+        for i, j in pairs:
+            sim = self._cosine_similarity(
+                users_with_data[user_list[i]],
+                users_with_data[user_list[j]],
+            )
+            similarities.append(sim)
 
         avg_sim = sum(similarities) / len(similarities) if similarities else 0.0
 

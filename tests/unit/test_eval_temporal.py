@@ -93,7 +93,8 @@ class TestWorkHourDistribution:
                     ts=datetime(2024, 1, 15, 3, 0, 0, tzinfo=timezone.utc)),
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_work_hours(records, scenario)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_work_hours(user_events, scenario)
         # ~86% in work hours → within 80-95% target
         assert result.score >= 50.0
 
@@ -107,7 +108,8 @@ class TestWorkHourDistribution:
             for i in range(10)
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_work_hours(records, scenario)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_work_hours(user_events, scenario)
         assert result.score < 50.0
 
     def test_no_personas(self):
@@ -118,7 +120,8 @@ class TestWorkHourDistribution:
                     ts=T0 + timedelta(hours=1))
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_work_hours(records, scenario)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_work_hours(user_events, scenario)
         assert result.score == 100.0
 
 
@@ -136,7 +139,8 @@ class TestHumanBurstiness:
             for t in timestamps
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_burstiness(records)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_burstiness(user_events)
         # CV should be high (bursty) → good score
         assert result.score > 50.0
 
@@ -148,7 +152,8 @@ class TestHumanBurstiness:
             for t in timestamps
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_burstiness(records)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_burstiness(user_events)
         # CV near 0 → low score
         assert result.score < 20.0
 
@@ -217,7 +222,8 @@ class TestTimingPlausibility:
             for t in timestamps
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_timing_plausibility(records)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_timing_plausibility(user_events, records)
         assert result.score == 100.0
 
     def test_impossible_rate(self):
@@ -228,7 +234,8 @@ class TestTimingPlausibility:
             for t in timestamps
         ]}
         scorer = TemporalRealismScorer()
-        result = scorer._score_timing_plausibility(records)
+        user_events = scorer._group_by_user(records)
+        result = scorer._score_timing_plausibility(user_events, records)
         assert result.score < 100.0
 
 

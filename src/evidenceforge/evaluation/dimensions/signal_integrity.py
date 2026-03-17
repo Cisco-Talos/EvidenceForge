@@ -8,6 +8,7 @@ Sub-scores (0.25 each):
 """
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -180,34 +181,81 @@ class SignalIntegrityScorer(DimensionScorer):
         resolved: list[ResolvedEvent],
         records: dict[str, list[ParsedRecord]],
     ) -> None:
-        """Search parsed records for traces of each storyline event."""
+        """Search parsed records for traces of each storyline event.
+
+        Uses a host-time index for O(1) lookups instead of scanning all records.
+        """
+        # Build host-time index: (hostname_lower|minute_bucket) -> format -> records
+        host_time_index: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        for format_name, record_list in records.items():
+            for rec in record_list:
+                if rec.timestamp is None:
+                    continue
+                # Extract hostname from various field names
+                hostname = None
+                for field in ("Computer", "hostname"):
+                    val = rec.fields.get(field)
+                    if val and isinstance(val, str):
+                        hostname = val
+                        break
+                # For zeek/snort, index by originator IP too
+                ts = rec.timestamp
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                bucket = int(ts.timestamp()) // 60
+                if hostname:
+                    host_time_index[f"{hostname.lower()}|{bucket}"][format_name].append(rec)
+                orig_ip = rec.fields.get("id.orig_h")
+                if orig_ip:
+                    host_time_index[f"{orig_ip}|{bucket}"][format_name].append(rec)
+
         for event in resolved:
             for event_type in event.event_types:
-                traces = self._search_for_event(event, event_type, records)
+                traces = self._search_for_event_indexed(
+                    event, event_type, host_time_index
+                )
                 event.traces.extend(traces)
 
-    def _search_for_event(
+    def _search_for_event_indexed(
         self,
         event: ResolvedEvent,
         event_type: str,
-        records: dict[str, list[ParsedRecord]],
+        host_time_index: dict[str, dict[str, list[ParsedRecord]]],
     ) -> list[ParsedRecord]:
-        """Search records for a specific event type trace."""
+        """Search for event traces using host-time index."""
         found: list[ParsedRecord] = []
+        evt_time = event.time
+        if evt_time.tzinfo is None:
+            evt_time = evt_time.replace(tzinfo=timezone.utc)
+        evt_bucket = int(evt_time.timestamp()) // 60
 
-        for format_name, record_list in records.items():
-            for record in record_list:
-                if record.timestamp is None:
+        # Lookup keys: system hostname + system IP
+        lookup_keys = [event.system.lower()]
+        if event.system_ip:
+            lookup_keys.append(event.system_ip)
+
+        seen: set[int] = set()  # Deduplicate records found via multiple keys
+        for hostname_key in lookup_keys:
+            for b in range(evt_bucket - 2, evt_bucket + 3):
+                key = f"{hostname_key}|{b}"
+                if key not in host_time_index:
                     continue
-                # Time check first (cheapest filter)
-                ts = record.timestamp
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                if abs((ts - event.time).total_seconds()) > TIME_TOLERANCE.total_seconds():
-                    continue
-                # Format+type specific matching
-                if self._record_matches(record, format_name, event, event_type):
-                    found.append(record)
+                for format_name, recs in host_time_index[key].items():
+                    for record in recs:
+                        if id(record) in seen:
+                            continue
+                        ts = record.timestamp
+                        if ts is None:
+                            continue
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        if abs((ts - evt_time).total_seconds()) > TIME_TOLERANCE.total_seconds():
+                            continue
+                        if self._record_matches(record, format_name, event, event_type):
+                            found.append(record)
+                            seen.add(id(record))
 
         return found
 

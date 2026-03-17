@@ -83,12 +83,15 @@ class TemporalRealismScorer(DimensionScorer):
         scenario: Scenario,
         progress: ProgressCallback = _noop_callback,
     ) -> DimensionScore:
+        # Pre-compute user→timestamps grouping (used by 3 sub-scores)
+        user_events = self._group_by_user(records)
+
         progress("sub_score_start", {"name": "Work Hour Distribution", "step": 1, "total": 5})
-        s1 = self._score_work_hours(records, scenario)
+        s1 = self._score_work_hours(user_events, scenario)
         progress("sub_score_done", {"name": "Work Hour Distribution", "score": s1.score})
 
         progress("sub_score_start", {"name": "Human Burstiness", "step": 2, "total": 5})
-        s2 = self._score_burstiness(records)
+        s2 = self._score_burstiness(user_events)
         progress("sub_score_done", {"name": "Human Burstiness", "score": s2.score})
 
         progress("sub_score_start", {"name": "System Process Regularity", "step": 3, "total": 5})
@@ -100,7 +103,7 @@ class TemporalRealismScorer(DimensionScorer):
         progress("sub_score_done", {"name": "Causal Ordering", "score": s4.score})
 
         progress("sub_score_start", {"name": "Timing Plausibility", "step": 5, "total": 5})
-        s5 = self._score_timing_plausibility(records)
+        s5 = self._score_timing_plausibility(user_events, records)
         progress("sub_score_done", {"name": "Timing Plausibility", "score": s5.score})
 
         sub_scores = [s1, s2, s3, s4, s5]
@@ -114,7 +117,9 @@ class TemporalRealismScorer(DimensionScorer):
     # --- Sub-score 1: Work Hour Distribution ---
 
     def _score_work_hours(
-        self, records: dict[str, list[ParsedRecord]], scenario: Scenario,
+        self,
+        user_events: dict[str, list[datetime]],
+        scenario: Scenario,
     ) -> SubScore:
         # Build user→persona work hours mapping
         persona_map = {}
@@ -134,12 +139,12 @@ class TemporalRealismScorer(DimensionScorer):
                 score=100.0, details="No persona work hours defined — skipped",
             )
 
-        # Group events by user and check work hour adherence
+        # Check work hour adherence using pre-computed user events
         user_scores: list[float] = []
         for username, work_hours in user_to_hours.items():
             if not work_hours:
                 continue
-            events = self._get_user_events(records, username)
+            events = user_events.get(username, [])
             if len(events) < 5:
                 continue
 
@@ -163,8 +168,7 @@ class TemporalRealismScorer(DimensionScorer):
 
     # --- Sub-score 2: Human Burstiness ---
 
-    def _score_burstiness(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        user_events = self._group_by_user(records)
+    def _score_burstiness(self, user_events: dict[str, list[datetime]]) -> SubScore:
         cv_scores: list[float] = []
         system_accounts_lower = {a.lower() for a in BUILTIN_ACCOUNTS}
 
@@ -356,13 +360,16 @@ class TemporalRealismScorer(DimensionScorer):
 
     # --- Sub-score 5: Timing Plausibility ---
 
-    def _score_timing_plausibility(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_timing_plausibility(
+        self,
+        user_events: dict[str, list[datetime]],
+        records: dict[str, list[ParsedRecord]] | None = None,
+    ) -> SubScore:
         total_checks = 0
         plausible = 0
         failures: list[str] = []
 
         # Check 1: Command rate per user per 5-second window
-        user_events = self._group_by_user(records)
         system_accounts_lower = {a.lower() for a in BUILTIN_ACCOUNTS}
 
         for username, timestamps in user_events.items():
@@ -393,7 +400,8 @@ class TemporalRealismScorer(DimensionScorer):
                 i = j if j > i else i + 1
 
         # Check 2: Zeek transfer speed
-        for record in records.get("zeek_conn", []):
+        zeek_records = records.get("zeek_conn", []) if records else []
+        for record in zeek_records:
             duration = record.fields.get("duration")
             orig_bytes = record.fields.get("orig_bytes")
             if duration and orig_bytes and isinstance(duration, (int, float)) and duration > 0:

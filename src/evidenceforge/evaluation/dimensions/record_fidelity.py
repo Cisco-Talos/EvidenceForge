@@ -126,21 +126,28 @@ class RecordFidelityScorer(DimensionScorer):
         """Tier B: Co-occurrence Rules.
 
         Checks field combinations that must co-occur or have specific values.
+        Samples up to 2,000 records per format for efficiency.
         """
+        import random
+
         co_occurrence_rules = load_rules_file("co_occurrence.yaml")
         total_applicable = 0
         passing = 0
         failures: list[str] = []
+
+        max_sample_per_format = 2000
 
         for format_name, record_list in records.items():
             rules = co_occurrence_rules.get(format_name, [])
             if not rules:
                 continue
 
-            for record in record_list:
-                if record.parse_errors:
-                    continue
+            # Filter to valid records, then sample
+            valid_records = [r for r in record_list if not r.parse_errors]
+            if len(valid_records) > max_sample_per_format:
+                valid_records = random.sample(valid_records, max_sample_per_format)
 
+            for record in valid_records:
                 for rule in rules:
                     if self._condition_matches(rule.get("condition", {}), record.fields):
                         total_applicable += 1

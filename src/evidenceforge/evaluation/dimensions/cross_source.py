@@ -73,12 +73,15 @@ class CrossSourceScorer(DimensionScorer):
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
 
+        # Build host-time index for O(1) lookups (shared by sub-scores 2, 3, 4)
+        host_time_index = self._build_host_time_index(records)
+
         progress("sub_score_start", {"name": "Source Correctness", "step": 1, "total": 5})
         s1 = self._score_source_correctness(records, vis)
         progress("sub_score_done", {"name": "Source Correctness", "score": s1.score})
 
         progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 2, "total": 5})
-        s2 = self._score_storyline_trace_coverage(records, scenario, vis)
+        s2 = self._score_storyline_trace_coverage(records, scenario, vis, host_time_index)
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s2.score})
 
         progress("sub_score_start", {"name": "Cross-Source Field Agreement", "step": 3, "total": 5})
@@ -86,7 +89,7 @@ class CrossSourceScorer(DimensionScorer):
         progress("sub_score_done", {"name": "Cross-Source Field Agreement", "score": s3.score})
 
         progress("sub_score_start", {"name": "Baseline Coherence (Sampled)", "step": 4, "total": 5})
-        s4 = self._score_baseline_sampled(records, vis)
+        s4 = self._score_baseline_sampled(records, vis, host_time_index)
         progress("sub_score_done", {"name": "Baseline Coherence (Sampled)", "score": s4.score})
 
         progress("sub_score_start", {"name": "Baseline Coherence (Aggregate)", "step": 5, "total": 5})
@@ -100,6 +103,33 @@ class CrossSourceScorer(DimensionScorer):
             number=self.number, name=self.name, weight=self.weight,
             score=dim_score, sub_scores=sub_scores,
         )
+
+    # --- Host-Time Index ---
+
+    @staticmethod
+    def _build_host_time_index(
+        records: dict[str, list[ParsedRecord]],
+    ) -> dict[str, dict[str, list[ParsedRecord]]]:
+        """Build index: (hostname_lower|minute_bucket) -> format -> records.
+
+        Enables O(1) lookups for finding records near a given host+time,
+        replacing O(n) linear scans.
+        """
+        index: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        for format_name, record_list in records.items():
+            for rec in record_list:
+                if rec.timestamp is None:
+                    continue
+                hostname = _extract_hostname(rec)
+                if not hostname:
+                    continue
+                ts = _normalize_ts(rec.timestamp)
+                bucket = int(ts.timestamp()) // 60
+                key = f"{hostname.lower()}|{bucket}"
+                index[key][format_name].append(rec)
+        return dict(index)
 
     # --- Sub-score 1: Source Correctness ---
 
@@ -152,6 +182,7 @@ class CrossSourceScorer(DimensionScorer):
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
         vis: VisibilityModel,
+        host_time_index: dict[str, dict[str, list[ParsedRecord]]],
     ) -> SubScore:
         storyline = scenario.storyline or []
         if not storyline:
@@ -162,7 +193,6 @@ class CrossSourceScorer(DimensionScorer):
 
         from evidenceforge.evaluation.dimensions.signal_integrity import (
             SignalIntegrityScorer,
-            TIME_TOLERANCE,
         )
 
         si = SignalIntegrityScorer()
@@ -175,17 +205,21 @@ class CrossSourceScorer(DimensionScorer):
         for event in resolved:
             # Determine expected formats for this event's system
             expected_formats = vis.get_expected_formats(event.system)
+            evt_time = _normalize_ts(event.time)
+            evt_bucket = int(evt_time.timestamp()) // 60
 
             for fmt in expected_formats:
                 if fmt not in records:
                     continue
                 total_expected += 1
 
-                # Search for a trace in this specific format
-                has_trace = any(
-                    self._record_near_event(rec, event, fmt)
-                    for rec in records[fmt]
-                )
+                # Index lookup: check ±2 minute buckets for traces
+                has_trace = False
+                for b in range(evt_bucket - 2, evt_bucket + 3):
+                    key = f"{event.system.lower()}|{b}"
+                    if key in host_time_index and fmt in host_time_index[key]:
+                        has_trace = True
+                        break
                 if has_trace:
                     found += 1
                 elif len(failures) < 10:
@@ -200,22 +234,6 @@ class CrossSourceScorer(DimensionScorer):
             details=f"{found}/{total_expected} expected format-traces found",
             sample_failures=failures,
         )
-
-    @staticmethod
-    def _record_near_event(record: ParsedRecord, event: Any, fmt: str) -> bool:
-        """Check if a record is temporally and contextually near a storyline event."""
-        if record.timestamp is None:
-            return False
-        ts = _normalize_ts(record.timestamp)
-        evt_time = _normalize_ts(event.time)
-        if abs((ts - evt_time).total_seconds()) > 120:
-            return False
-
-        hostname = _extract_hostname(record)
-        if hostname and hostname.lower() != event.system.lower():
-            return False
-
-        return True
 
     # --- Sub-score 3: Cross-Source Field Agreement ---
 
@@ -276,23 +294,20 @@ class CrossSourceScorer(DimensionScorer):
     def _timestamps_agree(
         recs_a: list[ParsedRecord], recs_b: list[ParsedRecord],
     ) -> bool:
-        """Check if any pair of records from two formats are within timestamp tolerance."""
-        for a in recs_a:
-            if a.timestamp is None:
-                continue
-            ts_a = _normalize_ts(a.timestamp)
-            for b in recs_b:
-                if b.timestamp is None:
-                    continue
-                ts_b = _normalize_ts(b.timestamp)
-                if abs((ts_a - ts_b).total_seconds()) <= _TIMESTAMP_TOLERANCE.total_seconds():
-                    return True
-        return False
+        """Check if records from two formats are within timestamp tolerance.
+
+        Since records are already grouped into 30s buckets by the caller,
+        any non-empty pair of lists inherently agrees on timestamps.
+        """
+        return bool(recs_a) and bool(recs_b)
 
     # --- Sub-score 4: Baseline Coherence (Sampled) ---
 
     def _score_baseline_sampled(
-        self, records: dict[str, list[ParsedRecord]], vis: VisibilityModel,
+        self,
+        records: dict[str, list[ParsedRecord]],
+        vis: VisibilityModel,
+        host_time_index: dict[str, dict[str, list[ParsedRecord]]],
     ) -> SubScore:
         # Collect all records with timestamps and hostnames
         all_records: list[ParsedRecord] = []
@@ -307,8 +322,8 @@ class CrossSourceScorer(DimensionScorer):
                 score=100.0, details="Too few records for sampling",
             )
 
-        # Sample 5%
-        sample_size = max(10, len(all_records) // 20)
+        # Sample 5%, capped at 500 (statistically sufficient)
+        sample_size = min(500, max(10, len(all_records) // 20))
         sample = random.sample(all_records, min(sample_size, len(all_records)))
 
         total = 0
@@ -326,14 +341,15 @@ class CrossSourceScorer(DimensionScorer):
                 if fmt not in records:
                     continue
                 total += 1
-                # Check if there's a temporally close record in the other format
+                # Index lookup: check ±1 minute buckets for nearby records
                 ts = _normalize_ts(rec.timestamp)
-                has_nearby = any(
-                    r.timestamp is not None
-                    and abs((_normalize_ts(r.timestamp) - ts).total_seconds()) <= 60
-                    and _extract_hostname(r) and _extract_hostname(r).lower() == hostname.lower()
-                    for r in records[fmt]
-                )
+                bucket = int(ts.timestamp()) // 60
+                has_nearby = False
+                for b in (bucket - 1, bucket, bucket + 1):
+                    key = f"{hostname.lower()}|{b}"
+                    if key in host_time_index and fmt in host_time_index[key]:
+                        has_nearby = True
+                        break
                 if has_nearby:
                     found += 1
 

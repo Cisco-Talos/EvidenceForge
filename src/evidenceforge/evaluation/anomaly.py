@@ -4,6 +4,7 @@ Flags events that are anomalous-but-benign (realistic noise for hunters).
 Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 """
 
+import random
 from collections import Counter
 from typing import Any
 
@@ -31,25 +32,33 @@ def detect_anomalies(
     persona_hours = _build_persona_hours(scenario)
     service_ports = _build_service_ports(scenario)
     process_freq = _build_process_frequency(records)
-    system_accounts = {a.lower() for a in BUILTIN_ACCOUNTS}
 
-    total = 0
-    anomalous = 0
-
+    # Collect all valid records, then sample for efficiency
+    all_valid: list[tuple[str, ParsedRecord]] = []
     for format_name, record_list in records.items():
         for record in record_list:
-            if record.parse_errors:
-                continue
-            total += 1
+            if not record.parse_errors:
+                all_valid.append((format_name, record))
 
-            is_anomalous = (
-                _is_off_hours(record, persona_hours)
-                or _is_failed_operation(record, format_name)
-                or _is_rare_process(record, format_name, process_freq)
-                or _is_unexpected_port(record, format_name, service_ports)
-            )
-            if is_anomalous:
-                anomalous += 1
+    # Sample up to 5,000 records (statistically sufficient for rate estimation)
+    max_sample = 5000
+    if len(all_valid) > max_sample:
+        sample = random.sample(all_valid, max_sample)
+    else:
+        sample = all_valid
+
+    total = len(sample)
+    anomalous = 0
+
+    for format_name, record in sample:
+        is_anomalous = (
+            _is_off_hours(record, persona_hours)
+            or _is_failed_operation(record, format_name)
+            or _is_rare_process(record, format_name, process_freq)
+            or _is_unexpected_port(record, format_name, service_ports)
+        )
+        if is_anomalous:
+            anomalous += 1
 
     return anomalous, total
 
