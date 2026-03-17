@@ -401,6 +401,31 @@ variants:
           min_value: 0
           max_value: 65535
 
+      - name: TransmittedServices
+        type: string
+        required: false
+        description: "List of transmitted services"
+
+      - name: LmPackageName
+        type: string
+        required: false
+        description: "LAN Manager package name"
+
+      - name: KeyLength
+        type: integer
+        required: false
+        description: "Length of NTLM session security key"
+
+      - name: ProcessId
+        type: hex_string
+        required: false
+        description: "Process ID of the logon process"
+
+      - name: ProcessName
+        type: string
+        required: false
+        description: "Full path of the logon process executable"
+
   # EventID 4672: Special privileges assigned to new logon
   - name: special_privileges
     event_id: "4672"

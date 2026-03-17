@@ -1,11 +1,15 @@
 """Unit tests for Phase 5.2.4: eCAR object type diversity."""
 
+import json
 import pytest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.formats.loader import load_format
 from evidenceforge.models import User, System
 
 
@@ -129,6 +133,62 @@ class TestEcarDiversityInProcessCreation:
         assert 'USER_SESSION' in object_types  # From logon
         # With 50 processes at 40% file + 30% module + 20% registry, should see at least 2 more
         assert len(object_types) >= 3, f"Only {len(object_types)} object types: {object_types}"
+
+
+class TestEcarRegistryBackslashEscaping:
+    """Test that REGISTRY events with Windows paths produce valid NDJSON."""
+
+    def test_registry_key_with_backslashes_produces_valid_json(self, tmp_path):
+        """Registry keys with backslashes must be properly escaped in JSON output."""
+        fmt_def = load_format("ecar")
+        output_file = tmp_path / "ecar.json"
+        emitter = EcarEmitter(fmt_def, output_file, threaded=False)
+
+        event_data = {
+            'timestamp': datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
+            'hostname': 'WKS-01',
+            'object': 'REGISTRY',
+            'action': 'MODIFY',
+            'pid': 1234,
+            'principal': 'alice.smith',
+            'registry_key': r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings',
+            'registry_value': 'ProxyEnable',
+        }
+        emitter.emit_event(event_data)
+        emitter.flush()
+
+        content = output_file.read_text()
+        lines = [l for l in content.strip().splitlines() if l.strip()]
+        assert len(lines) == 1, f"Expected single-line NDJSON, got {len(lines)} lines"
+
+        parsed = json.loads(lines[0])
+        assert parsed['object'] == 'REGISTRY'
+        assert parsed['action'] == 'MODIFY'
+        assert parsed['properties']['registry_key'] == r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        assert parsed['properties']['registry_value'] == 'ProxyEnable'
+
+    def test_registry_value_with_quotes_escaped(self, tmp_path):
+        """Registry values containing quotes must be JSON-escaped."""
+        fmt_def = load_format("ecar")
+        output_file = tmp_path / "ecar.json"
+        emitter = EcarEmitter(fmt_def, output_file, threaded=False)
+
+        event_data = {
+            'timestamp': datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
+            'hostname': 'WKS-01',
+            'object': 'REGISTRY',
+            'action': 'MODIFY',
+            'pid': 1234,
+            'principal': 'alice.smith',
+            'registry_key': r'HKCU\Software\Test',
+            'registry_value': 'Value with "quotes"',
+        }
+        emitter.emit_event(event_data)
+        emitter.flush()
+
+        content = output_file.read_text()
+        parsed = json.loads(content.strip())
+        assert parsed['properties']['registry_value'] == 'Value with "quotes"'
 
 
 class TestEcarFlowFromConnection:

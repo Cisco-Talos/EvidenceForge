@@ -4,6 +4,8 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
+from evidenceforge.formats.loader import load_format
+from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import User, System
@@ -110,6 +112,47 @@ class TestFailedLogonEcar:
         assert event_data['object'] == 'USER_SESSION'
         assert event_data['action'] == 'LOGIN'
         assert event_data['failure_reason'] == 'bad_password'
+
+
+class TestFailedLogonFormatValidation:
+    """Test that 4625 events pass format validation with all fields."""
+
+    def test_4625_with_all_fields_validates(self):
+        """A 4625 event with TransmittedServices, LmPackageName, KeyLength, ProcessId, ProcessName should validate."""
+        fmt_def = load_format("windows_event_security")
+        event = {
+            'EventID': 4625,
+            'TimeCreated': '2024-03-15T10:00:00Z',
+            'Computer': 'WKS-01.corp.local',
+            'Channel': 'Security',
+            'Level': 0,
+            'EventRecordID': 1001,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': 64,
+            'SubjectUserSid': 'S-1-5-18',
+            'SubjectUserName': '-',
+            'SubjectDomainName': '-',
+            'SubjectLogonId': '0x0',
+            'TargetUserSid': 'S-1-0-0',
+            'TargetUserName': 'alice.smith',
+            'TargetDomainName': 'CORP',
+            'Status': '0xc000006d',
+            'SubStatus': '0xc0000064',
+            'FailureReason': '%%2313',
+            'LogonType': 3,
+            'LogonProcessName': 'NtLmSsp',
+            'AuthenticationPackageName': 'NTLM',
+            'WorkstationName': 'WKS-02',
+            'IpAddress': '10.0.10.2',
+            'IpPort': 49152,
+            'TransmittedServices': '-',
+            'LmPackageName': '-',
+            'KeyLength': 0,
+            'ProcessId': '0x0',
+            'ProcessName': '-',
+        }
+        result = validate_event(fmt_def, event, variant_name='failed_logon')
+        assert result.valid, f"Validation errors: {result.errors}"
 
 
 class TestFailedLogonRate:

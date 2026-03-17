@@ -350,10 +350,10 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'logon')
 
-        # Verify Windows emitter received 4624 event
+        # Verify Windows emitter received logon event (4624 success or 4625 failed)
         assert mock_emitters['windows_event_security'].emit_event.called
         event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4624
+        assert event_data['EventID'] in (4624, 4625)
 
     def test_execute_baseline_activity_process_creates_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should create session before process if needed."""

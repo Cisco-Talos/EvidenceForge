@@ -527,39 +527,39 @@
 
 **Goal:** Fix the hard acceptance failure (parsability) and the most obvious per-record tells. Smallest changes, biggest eval score impact.
 
-- [ ] **Fix empty SID fields in Windows events**
+- [x] **Fix empty SID fields in Windows events**
   - Generate realistic SIDs: `S-1-5-21-{domain_sub_authorities}-{user_rid}`
   - Assign per-domain base SID at engine init (e.g., `S-1-5-21-3623811015-3361044348-30300820`)
   - Map each user to a unique RID (starting at 1001, incrementing)
   - Well-known SIDs for system accounts: `S-1-5-18` (SYSTEM), `S-1-5-19` (LOCAL SERVICE), `S-1-5-20` (NETWORK SERVICE)
   - Populate `SubjectUserSid` and `TargetUserSid` in all Windows event data dicts in `activity.py`
   - Files: `activity.py`, `engine.py` (SID registry initialization)
-- [ ] **Add logoff generation to baseline activity**
+- [x] **Add logoff generation to baseline activity**
   - Track active sessions per user; probabilistically end sessions (e.g., 30% chance per hour after first hour)
   - Emit Windows 4634 (logoff) and eCAR USER_SESSION/LOGOUT
   - Ensure logon→activity→logoff ordering within each session
   - Files: `activity.py` (`execute_baseline_activity`), `engine.py` (`_generate_baseline`)
-- [ ] **Vary Zeek conn_state and history strings**
+- [x] **Vary Zeek conn_state and history strings**
   - Replace hardcoded `SF`/`ShADadfF` with probabilistic selection
   - Connection states: SF (85%), S0 (5%), S1 (3%), REJ (2%), RSTO (3%), RSTR (1%), OTH (1%)
   - Generate history strings that match conn_state (e.g., S0→`S`, REJ→`Sr`, RSTO→`ShADaR`)
   - Adjust orig_bytes/resp_bytes to be consistent (e.g., S0 = 0 resp_bytes)
   - Files: `activity.py` (`generate_connection`)
-- [ ] **Expand process template pools**
+- [x] **Expand process template pools**
   - Windows: add system backbone (svchost.exe, lsass.exe, explorer.exe, services.exe, csrss.exe, RuntimeBroker.exe, SearchIndexer.exe) + user apps (chrome.exe, firefox.exe, outlook.exe, teams.exe, OneDrive.exe)
   - Linux: add system processes (systemd, cron, sshd, rsyslogd, NetworkManager) + user apps (firefox, thunderbird, git, docker, python3)
   - Per-persona weighting: developers see more compilers/editors, executives see more Office/browser
   - Files: `activity.py` (PROCESS_TEMPLATES, PROCESS_TEMPLATES_LINUX)
-- [ ] Test: Parsability score ≥ 98% (SIDs valid format)
-- [ ] Test: Logoff events present in output, paired with logons
-- [ ] Test: conn_state distribution is varied (not 100% SF)
-- [ ] Test: Process path count > 30 unique paths
+- [x] Test: Parsability score ≥ 98% (SIDs valid format)
+- [x] Test: Logoff events present in output, paired with logons
+- [x] Test: conn_state distribution is varied (not 100% SF)
+- [x] Test: Process path count > 30 unique paths
 
 ### 5.2 Event Type Diversity
 
 **Goal:** Expand the vocabulary of events generated. Address "only 2 Event IDs" and "only 2 eCAR object types."
 
-- [ ] **Add Windows Event IDs to format definition and emitters**
+- [x] **Add Windows Event IDs to format definition and emitters**
   - 4625: Failed logon (account does not exist, bad password, account locked)
   - 4672: Special privileges assigned to new logon (admin logons)
   - 4689: Process termination (pair with 4688)
@@ -567,25 +567,25 @@
   - 5156: Windows Filtering Platform connection allowed (host firewall)
   - Update `windows_event_security.yaml` schema, Jinja2 templates, and validation rules
   - Files: `formats/definitions/windows_event_security.yaml`, `generation/emitters/windows.py`
-- [ ] **Generate failed logons in baseline**
+- [x] **Generate failed logons in baseline**
   - 5-15% of logon attempts fail (configurable via persona risk_profile)
   - Failure reasons: bad password (most common), account locked, expired password
   - Emit Windows 4625 + eCAR USER_SESSION/LOGON_FAILURE
   - Files: `activity.py` (`generate_logon` or new `generate_failed_logon`)
-- [ ] **Add eCAR object type diversity**
+- [x] **Add eCAR object type diversity**
   - FILE/CREATE, FILE/MODIFY, FILE/DELETE — generated alongside process activity
   - REGISTRY/MODIFY — Windows system processes and app installs
   - FLOW/CONNECT — parallel to Zeek connections for eCAR-equipped hosts
   - MODULE/LOAD — DLL loads for Windows processes
   - Files: `activity.py` (new methods), `generation/emitters/ecar.py`
-- [ ] **Add process termination events**
+- [x] **Add process termination events**
   - Pair 4689 with 4688: terminate processes after realistic duration (seconds to hours)
   - Track running processes in StateManager, probabilistically terminate
   - Files: `activity.py`, `state_manager.py`
-- [ ] Test: ≥ 6 unique Windows Event IDs in output
-- [ ] Test: ≥ 5 unique eCAR object types in output
-- [ ] Test: Failed logon rate between 5-15% of total logon events
-- [ ] Test: Process termination events present, paired with creation
+- [x] Test: ≥ 6 unique Windows Event IDs in output
+- [x] Test: ≥ 5 unique eCAR object types in output
+- [x] Test: Failed logon rate between 5-15% of total logon events
+- [x] Test: Process termination events present, paired with creation
 
 ### 5.3 Protocol & Network Diversity
 
@@ -654,34 +654,34 @@
 
 **Goal:** Replace uniform event distribution with realistic human timing patterns. Address "metronomic spacing" and "hard rectangular work hours."
 
-- [ ] **Soft ramp-up/ramp-down for work hours**
+- [x] **Soft ramp-up/ramp-down for work hours**
   - Replace binary on/off with sigmoid curve: 10% activity at work_start-1h, ramp to 100% by work_start+1h
   - Soft lunch dip (50% reduction, not 0%)
   - Evening tail: 20% activity for 1-2 hours after work_end
   - Occasional late-night activity (1-3% probability per user per night)
   - Files: `engine.py` (`_calculate_events_for_hour`)
-- [ ] **Activity cluster model**
+- [x] **Activity cluster model**
   - Replace `_distribute_events_in_hour()` uniform distribution with cluster generation
   - Each "activity" becomes a burst of 3-15 correlated events over 5-30 seconds
   - Cluster types per persona: developer (editor→compile→test→git), executive (email→calendar→browser), analyst (query→export→review)
   - Inter-cluster gaps: 2-15 minutes (exponential distribution)
   - Files: `engine.py` (`_distribute_events_in_hour` → `_generate_activity_clusters`), `activity.py` (cluster templates)
-- [ ] **Per-user work hour jitter**
+- [x] **Per-user work hour jitter**
   - Randomize each user's actual start/end/lunch times ±30min from persona defaults
   - Applied once at engine init, consistent throughout scenario
   - Early arrivals, late starters, short/long lunches
   - Files: `engine.py` (init), `engine.py` (`_calculate_events_for_hour`)
-- [ ] **Per-persona behavioral differentiation**
+- [x] **Per-persona behavioral differentiation**
   - Developers: longer clusters (sustained coding sessions), more process events, fewer web connections
   - Executives: short frequent clusters (meetings → quick email checks), more web/email, fewer processes
   - Analysts: medium clusters with heavy DB/query activity
   - Each persona type gets distinct cluster templates and inter-cluster timing
   - Files: `activity.py` (persona-specific cluster definitions)
-- [ ] Test: Events cluster with sub-second intra-cluster timing
-- [ ] Test: Inter-cluster gaps follow non-uniform distribution
-- [ ] Test: Work hour profile shows gradual ramp (not step function)
-- [ ] Test: Per-user timing varies (different arrival times)
-- [ ] Test: Human burstiness CV > 1.0 (eval dimension)
+- [x] Test: Events cluster with sub-second intra-cluster timing
+- [x] Test: Inter-cluster gaps follow non-uniform distribution
+- [x] Test: Work hour profile shows gradual ramp (not step function)
+- [x] Test: Per-user timing varies (different arrival times)
+- [x] Test: Human burstiness CV > 1.0 (eval dimension)
 
 **Phase 5 Milestone:** Generated data passes qualitative review — no instant tells. Eval score ≥ 85, all hard acceptance criteria pass. Background noise has protocol diversity (TCP+UDP+ICMP), event type depth (≥ 6 Windows Event IDs, ≥ 5 eCAR objects), realistic timing patterns, and hundreds of unique destination IPs.
 

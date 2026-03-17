@@ -196,11 +196,11 @@ output:
         {%- endif %}
         {%- if registry_key %}
         {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 or sha256 %},{% endif %}
-        "registry_key": "{{ registry_key }}"
+        "registry_key": "{{ registry_key | replace('\\', '\\\\') | replace('"', '\\"') }}"
         {%- endif %}
         {%- if registry_value %}
         {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 or sha256 or registry_key %},{% endif %}
-        "registry_value": "{{ registry_value }}"
+        "registry_value": "{{ registry_value | replace('\\', '\\\\') | replace('"', '\\"') }}"
         {%- endif %}
       }
     }
