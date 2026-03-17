@@ -10,7 +10,7 @@ fields:
     required: true
     description: "Windows Event ID"
     constraints:
-      allowed_values: [4624, 4634, 4688]
+      allowed_values: [4624, 4625, 4634, 4672, 4688, 4689]
 
   - name: TimeCreated
     type: timestamp
@@ -311,6 +311,166 @@ variants:
         required: false
         description: "Mandatory integrity label"
 
+  # EventID 4625: An account failed to log on
+  - name: failed_logon
+    event_id: "4625"
+    description: "Failed logon event"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+        description: "SID of account reporting the failure"
+
+      - name: SubjectUserName
+        type: string
+        required: true
+        description: "Account name reporting the failure"
+
+      - name: SubjectDomainName
+        type: string
+        required: true
+        description: "Domain of account reporting the failure"
+
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the reporting account"
+
+      - name: TargetUserSid
+        type: sid
+        required: true
+        description: "SID of the account that failed to log on"
+
+      - name: TargetUserName
+        type: string
+        required: true
+        description: "Account name that failed to log on"
+
+      - name: TargetDomainName
+        type: string
+        required: true
+        description: "Domain of the account that failed to log on"
+
+      - name: Status
+        type: hex_string
+        required: true
+        description: "Failure status code (e.g., 0xC000006D)"
+
+      - name: SubStatus
+        type: hex_string
+        required: true
+        description: "Sub-status code for failure reason"
+
+      - name: FailureReason
+        type: string
+        required: true
+        description: "Human-readable failure reason"
+
+      - name: LogonType
+        type: integer
+        required: true
+        description: "Type of logon attempted"
+        constraints:
+          allowed_values: [2, 3, 4, 5, 7, 8, 9, 10, 11]
+
+      - name: LogonProcessName
+        type: string
+        required: false
+        description: "Logon process name"
+
+      - name: AuthenticationPackageName
+        type: string
+        required: false
+        description: "Authentication package used"
+
+      - name: WorkstationName
+        type: string
+        required: false
+        description: "Source workstation name"
+
+      - name: IpAddress
+        type: string
+        required: true
+        description: "Source IP address"
+
+      - name: IpPort
+        type: integer
+        required: false
+        description: "Source port number"
+        constraints:
+          min_value: 0
+          max_value: 65535
+
+  # EventID 4672: Special privileges assigned to new logon
+  - name: special_privileges
+    event_id: "4672"
+    description: "Special privileges assigned to new logon"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+        description: "SID of the privileged account"
+
+      - name: SubjectUserName
+        type: string
+        required: true
+        description: "Account name with special privileges"
+
+      - name: SubjectDomainName
+        type: string
+        required: true
+        description: "Domain of the privileged account"
+
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the privileged session"
+
+      - name: PrivilegeList
+        type: string
+        required: true
+        description: "List of assigned special privileges"
+
+  # EventID 4689: A process has exited
+  - name: process_termination
+    event_id: "4689"
+    description: "Process termination event"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+        description: "SID of account under which process ran"
+
+      - name: SubjectUserName
+        type: string
+        required: true
+        description: "Account name under which process ran"
+
+      - name: SubjectDomainName
+        type: string
+        required: true
+        description: "Domain of account under which process ran"
+
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the session"
+
+      - name: Status
+        type: hex_string
+        required: true
+        description: "Process exit status code"
+
+      - name: ProcessId
+        type: hex_string
+        required: true
+        description: "Process ID of the exited process"
+
+      - name: ProcessName
+        type: string
+        required: true
+        description: "Full path of the exited process"
+
 # Output template in Windows Event Log XML format
 output:
   format: xml
@@ -323,9 +483,9 @@ output:
       <System>
         <Provider Name="Microsoft-Windows-Security-Auditing" Guid="{54849625-5478-4994-a5ba-3e3b0328c30d}"/>
         <EventID>{{ EventID }}</EventID>
-        <Version>{{ 2 if EventID == 4688 else 1 if EventID == 4624 else 0 }}</Version>
+        <Version>{{ 2 if EventID in [4688, 4625] else 1 if EventID == 4624 else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ 12544 if EventID == 4624 else 12545 if EventID == 4634 else 13312 }}</Task>
+        <Task>{{ 12544 if EventID == 4624 else 12546 if EventID == 4625 else 12545 if EventID == 4634 else 12548 if EventID == 4672 else 13312 if EventID == 4688 else 13313 }}</Task>
         <Opcode>0</Opcode>
         <Keywords>0x8020000000000000</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
@@ -392,6 +552,42 @@ output:
         <Data Name="TargetLogonId">{{ TargetLogonId | default('0x0') }}</Data>
         <Data Name="ParentProcessName">{{ ParentProcessName | default('-') }}</Data>
         <Data Name="MandatoryLabel">{{ MandatoryLabel | default('S-1-16-8192') }}</Data>
+        {% elif EventID == 4625 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName | default('-') }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName | default('-') }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId | default('0x0') }}</Data>
+        <Data Name="TargetUserSid">{{ TargetUserSid }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="Status">{{ Status }}</Data>
+        <Data Name="FailureReason">{{ FailureReason }}</Data>
+        <Data Name="SubStatus">{{ SubStatus }}</Data>
+        <Data Name="LogonType">{{ LogonType }}</Data>
+        <Data Name="LogonProcessName">{{ LogonProcessName | default('NtLmSsp') }}</Data>
+        <Data Name="AuthenticationPackageName">{{ AuthenticationPackageName | default('NTLM') }}</Data>
+        <Data Name="WorkstationName">{{ WorkstationName | default('-') }}</Data>
+        <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
+        <Data Name="LmPackageName">{{ LmPackageName | default('-') }}</Data>
+        <Data Name="KeyLength">{{ KeyLength | default(0) }}</Data>
+        <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
+        <Data Name="ProcessName">{{ ProcessName | default('-') }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        {% elif EventID == 4672 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="PrivilegeList">{{ PrivilegeList }}</Data>
+        {% elif EventID == 4689 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="Status">{{ Status }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessName">{{ ProcessName }}</Data>
         {% endif %}
       </EventData>
     </Event>

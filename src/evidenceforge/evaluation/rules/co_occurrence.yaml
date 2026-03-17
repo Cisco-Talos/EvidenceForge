@@ -41,6 +41,31 @@ windows_event_security:
       - field: TargetUserSid
         not_equal: ""
 
+  - name: "Failed logon has status code"
+    condition:
+      EventID: 4625
+    checks:
+      - field: Status
+        present: true
+      - field: TargetUserName
+        min_length: 1
+
+  - name: "Special privileges has privilege list"
+    condition:
+      EventID: 4672
+    checks:
+      - field: PrivilegeList
+        min_length: 1
+
+  - name: "Process termination has process name"
+    condition:
+      EventID: 4689
+    checks:
+      - field: ProcessName
+        min_length: 1
+      - field: ProcessId
+        present: true
+
 zeek_conn:
   - name: "Completed connection (SF) has duration"
     condition:

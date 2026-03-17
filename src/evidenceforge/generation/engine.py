@@ -278,6 +278,9 @@ class GenerationEngine:
                     for event_time in event_times:
                         self._generate_user_activity(user, event_time)
 
+            # Phase 5.2: Terminate stale processes
+            self._terminate_stale_processes(current_hour)
+
             # Phase 5.1: Generate logoffs for sessions that should end this hour
             self._generate_logoffs_for_hour(enabled_users, current_hour)
 
@@ -289,6 +292,66 @@ class GenerationEngine:
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
+
+    def _terminate_stale_processes(self, current_hour: datetime) -> None:
+        """Terminate processes that have exceeded their expected lifetime.
+
+        Called per-hour. Process lifetime depends on type:
+        - System processes (svchost, lsass, csrss, services, explorer): never
+        - Browsers/editors (chrome, firefox, outlook, code): 1-4 hours
+        - Build tools (msbuild, gcc, npm): 5-30 minutes
+        - Other: 30min-2 hours
+
+        Args:
+            current_hour: Start of the current hour
+        """
+        # Patterns for processes that should never be terminated
+        system_patterns = ('svchost', 'lsass', 'csrss', 'services.exe', 'explorer.exe',
+                           'smss', 'wininit', 'winlogon', 'fontdrvhost', 'systemd',
+                           'cron', 'sshd', 'rsyslogd', 'NetworkManager', 'dbus-daemon')
+
+        # Patterns for short-lived processes (5-30 min)
+        short_lived = ('msbuild', 'gcc', 'npm', 'make', 'dotnet', 'cargo', 'node.exe')
+
+        for system in self.scenario.environment.systems:
+            processes = self.state_manager.get_processes_on_system(system.hostname)
+            for proc in list(processes):
+                proc_age_hours = (current_hour - proc.start_time).total_seconds() / 3600
+                image_lower = proc.image.lower()
+
+                # System processes: never terminate
+                if any(p in image_lower for p in system_patterns):
+                    continue
+
+                # Determine max lifetime
+                if any(p in image_lower for p in short_lived):
+                    max_hours = random.uniform(0.08, 0.5)  # 5-30 min
+                elif any(p in image_lower for p in ('chrome', 'firefox', 'edge', 'outlook', 'teams', 'code')):
+                    max_hours = random.uniform(1.0, 4.0)
+                else:
+                    max_hours = random.uniform(0.5, 2.0)
+
+                if proc_age_hours > max_hours and random.random() < 0.5:
+                    # Find user and generate termination
+                    actor = self._find_actor(proc.username)
+                    if not actor:
+                        continue
+
+                    # Get logon_id from active sessions
+                    sessions = self.state_manager.get_sessions_for_user(proc.username)
+                    logon_id = sessions[0].logon_id if sessions else '0x0'
+
+                    term_offset = random.uniform(0, 3599)
+                    term_time = current_hour + timedelta(seconds=term_offset)
+                    self.state_manager.set_current_time(term_time)
+                    self.activity_generator.generate_process_termination(
+                        user=actor,
+                        system=system,
+                        time=term_time,
+                        pid=proc.pid,
+                        process_name=proc.image,
+                        logon_id=logon_id,
+                    )
 
     def _generate_logoffs_for_hour(
         self,

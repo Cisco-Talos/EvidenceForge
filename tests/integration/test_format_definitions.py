@@ -24,14 +24,17 @@ class TestWindowsEventFormat:
         assert self.format.version == "1.0"
         assert self.format.category == "host"
 
-    def test_has_three_variants(self):
-        """Test that format has 3 EventID variants."""
+    def test_has_six_variants(self):
+        """Test that format has 6 EventID variants."""
         assert self.format.variants is not None
-        assert len(self.format.variants) == 3
+        assert len(self.format.variants) == 6
         variant_names = [v.name for v in self.format.variants]
         assert "logon" in variant_names
         assert "logoff" in variant_names
         assert "process_creation" in variant_names
+        assert "failed_logon" in variant_names
+        assert "special_privileges" in variant_names
+        assert "process_termination" in variant_names
 
     def test_base_fields(self):
         """Test that base fields are defined."""
@@ -369,7 +372,7 @@ class TestLoadAllFormats:
         windows_fmt = formats["windows_event_security"]
         assert windows_fmt.name == "windows_event_security"
         assert windows_fmt.category == "host"
-        assert len(windows_fmt.variants) == 3
+        assert len(windows_fmt.variants) == 6
 
         # Verify Zeek JSON format
         zeek_fmt = formats["zeek_conn"]

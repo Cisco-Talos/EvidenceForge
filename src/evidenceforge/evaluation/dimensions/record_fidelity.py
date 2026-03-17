@@ -29,8 +29,11 @@ logger = logging.getLogger(__name__)
 # EventID -> variant name mapping for Windows Event Security
 WINDOWS_VARIANT_MAP = {
     4624: "logon",
+    4625: "failed_logon",
     4634: "logoff",
+    4672: "special_privileges",
     4688: "process_creation",
+    4689: "process_termination",
 }
 
 

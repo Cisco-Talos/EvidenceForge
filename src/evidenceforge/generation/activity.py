@@ -400,8 +400,105 @@ class ActivityGenerator:
         # Emit eCAR if available (optional EDR/XDR layer)
         self._emit_ecar_logon(user, system, time, logon_id, logon_type, source_ip)
 
+        # Phase 5.2: Emit 4672 (special privileges) for ~15% of logons (admin accounts)
+        if os_category == 'windows' and _get_rng().random() < 0.15:
+            priv_event = {
+                'EventID': 4672,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': _get_rng().randint(100, 500),
+                'SubjectUserSid': self._get_sid(user.username),
+                'SubjectUserName': user.username,
+                'SubjectDomainName': 'CORP',
+                'SubjectLogonId': logon_id,
+                'PrivilegeList': 'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\tSeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\tSeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\tSeDelegateSessionUserImpersonatePrivilege',
+            }
+            self.emitters['windows_event_security'].emit_event(priv_event)
+
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
+
+    def generate_failed_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_type: int = 2,
+        source_ip: Optional[str] = None,
+    ) -> None:
+        """Generate a failed logon event (bad password).
+
+        Does NOT create a session in StateManager. Emits:
+        - Windows: Event 4625 (failed logon)
+        - Linux: syslog "Failed password"
+        - eCAR: USER_SESSION/LOGIN with failure_reason (if available)
+
+        Args:
+            user: User attempting to log on
+            system: Target system
+            time: Attempt timestamp
+            logon_type: Logon type attempted
+            source_ip: Source IP (defaults to system IP for interactive)
+        """
+        if source_ip is None:
+            source_ip = system.ip if logon_type != 3 else "127.0.0.1"
+
+        os_category = _get_os_category(system.os)
+
+        if os_category == 'windows':
+            event_data = {
+                'EventID': 4625,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': _get_rng().randint(100, 500),
+                'SubjectUserSid': self._get_sid('SYSTEM'),
+                'TargetUserSid': self._get_sid(user.username),
+                'TargetUserName': user.username,
+                'TargetDomainName': 'CORP',
+                'Status': '0xc000006d',
+                'FailureReason': '%%2313',  # Unknown user name or bad password
+                'SubStatus': '0xc0000064',  # User name does not exist / bad password
+                'LogonType': logon_type,
+                'IpAddress': source_ip,
+                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
+            }
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+        elif os_category == 'linux':
+            if 'syslog' in self.emitters:
+                event_data = {
+                    'timestamp': time,
+                    'hostname': system.hostname,
+                    'facility': 10,  # authpriv
+                    'severity': 4,   # warning
+                    'app_name': 'sshd' if logon_type == 3 else 'login',
+                    'pid': _get_rng().randint(1000, 9999),
+                    'message': f'Failed password for {user.username} from {source_ip} port {_get_rng().randint(49152, 65535)} ssh2',
+                }
+                self.emitters['syslog'].emit_event(event_data)
+
+        # Emit eCAR failed login if available
+        if 'ecar' in self.emitters:
+            event_data = {
+                'timestamp': time,
+                'hostname': system.hostname,
+                'object': 'USER_SESSION',
+                'action': 'LOGIN',
+                'principal': user.username,
+                'src_ip': source_ip,
+                'failure_reason': 'bad_password',
+            }
+            self.emitters['ecar'].emit_event(event_data)
+
+        logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
 
     def generate_logoff(
         self,
@@ -553,8 +650,86 @@ class ActivityGenerator:
         # Emit eCAR if available (optional EDR/XDR layer)
         self._emit_ecar_process(user, system, time, pid, parent_pid, process_name, command_line, logon_id)
 
+        # Phase 5.2: Probabilistic eCAR object diversity
+        rng = _get_rng()
+        os_category = _get_os_category(system.os)
+        if 'ecar' in self.emitters:
+            # 40% chance: file event after process creation
+            if rng.random() < 0.40:
+                action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
+                self._emit_ecar_file_event(system, time, pid, action, user.username)
+            # 30% chance: module load (Windows only)
+            if os_category == 'windows' and rng.random() < 0.30:
+                self._emit_ecar_module_event(system, time, pid, user.username)
+            # 20% chance: registry event (Windows system processes only)
+            if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
+                self._emit_ecar_registry_event(system, time, pid, user.username)
+
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
+
+    def generate_process_termination(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+    ) -> None:
+        """Generate process termination event and emit Windows 4689.
+
+        Ends process in StateManager and emits:
+        - Windows: Event 4689 (process exited)
+        - eCAR: PROCESS/TERMINATE (if available)
+
+        Args:
+            user: User who owned the process
+            system: System where process ran
+            time: Termination timestamp
+            pid: PID of the terminated process
+            process_name: Full path of the terminated process
+            logon_id: LogonID of the owning session
+        """
+        # End process in StateManager
+        self.state_manager.end_process(system.hostname, pid)
+
+        os_category = _get_os_category(system.os)
+
+        if os_category == 'windows':
+            event_data = {
+                'EventID': 4689,
+                'TimeCreated': time,
+                'Computer': system.hostname,
+                'Channel': 'Security',
+                'Level': 0,
+                'EventRecordID': self._get_next_event_record_id(),
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': _get_rng().randint(100, 500),
+                'SubjectUserSid': self._get_sid(user.username),
+                'SubjectUserName': user.username,
+                'SubjectDomainName': 'CORP',
+                'SubjectLogonId': logon_id,
+                'Status': '0x0',
+                'ProcessId': f'0x{pid:x}',
+                'ProcessName': process_name,
+            }
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+        # Emit eCAR PROCESS/TERMINATE if available
+        if 'ecar' in self.emitters:
+            event_data = {
+                'timestamp': time,
+                'hostname': system.hostname,
+                'object': 'PROCESS',
+                'action': 'TERMINATE',
+                'pid': pid,
+                'principal': user.username,
+                'image_path': process_name,
+            }
+            self.emitters['ecar'].emit_event(event_data)
+
+        logger.debug(f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}")
 
     def generate_connection(
         self,
@@ -684,6 +859,10 @@ class ActivityGenerator:
                 self.emitters[format_name].emit_event(event_data)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid}, formats: {visible_formats})")
 
+        # Phase 5.2: Emit eCAR FLOW/CONNECT for eCAR-equipped hosts
+        # Use src_ip to find the hostname for this connection
+        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip)
+
         return uid
 
     def generate_bash_command(
@@ -802,8 +981,11 @@ class ActivityGenerator:
             time: Activity timestamp
             activity_type: Type of activity to execute
         """
-        # Logon activity
+        # Logon activity (10% chance of failure — bad password)
         if activity_type == 'logon':
+            if _get_rng().random() < 0.10:
+                self.generate_failed_logon(user, system, time)
+                return
             self.generate_logon(user, system, time)
 
         # Process activities
@@ -995,3 +1177,116 @@ class ActivityGenerator:
 
         self.emitters['ecar'].emit_event(event_data)
         logger.debug(f"Generated eCAR process: {process_name} (PID: {pid}) on {system.hostname}")
+
+    # Phase 5.2: eCAR object type diversity data pools
+    _ECAR_FILE_PATHS_WIN = [
+        'C:\\Users\\{user}\\Documents\\report.docx',
+        'C:\\Users\\{user}\\Documents\\spreadsheet.xlsx',
+        'C:\\Users\\{user}\\Documents\\presentation.pptx',
+        'C:\\Users\\{user}\\Downloads\\file.pdf',
+        'C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp',
+        'C:\\Users\\{user}\\Desktop\\notes.txt',
+        'C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\Report.wer',
+    ]
+    _ECAR_FILE_PATHS_LINUX = [
+        '/home/{user}/documents/report.odt',
+        '/home/{user}/downloads/file.pdf',
+        '/tmp/tmp{rand}',
+        '/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}',
+        '/var/log/syslog',
+    ]
+    _ECAR_REGISTRY_KEYS = [
+        ('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU', 'a'),
+        ('HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run', 'SecurityHealth'),
+        ('HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General', 'ShownFirstRunOptin'),
+        ('HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon', 'Shell'),
+        ('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', 'ProxyEnable'),
+    ]
+    _ECAR_DLL_POOL = [
+        'C:\\Windows\\System32\\ntdll.dll',
+        'C:\\Windows\\System32\\kernel32.dll',
+        'C:\\Windows\\System32\\user32.dll',
+        'C:\\Windows\\System32\\advapi32.dll',
+        'C:\\Windows\\System32\\msvcrt.dll',
+        'C:\\Windows\\System32\\rpcrt4.dll',
+        'C:\\Windows\\System32\\ole32.dll',
+        'C:\\Windows\\System32\\combase.dll',
+        'C:\\Windows\\System32\\sechost.dll',
+        'C:\\Windows\\System32\\gdi32.dll',
+    ]
+
+    def _emit_ecar_file_event(
+        self, system: System, time: datetime, pid: int,
+        action: str, username: str,
+    ) -> None:
+        """Emit eCAR FILE event (CREATE, MODIFY, or DELETE)."""
+        if 'ecar' not in self.emitters:
+            return
+        rng = _get_rng()
+        os_cat = _get_os_category(system.os)
+        pool = self._ECAR_FILE_PATHS_WIN if os_cat == 'windows' else self._ECAR_FILE_PATHS_LINUX
+        path = rng.choice(pool).replace('{user}', username).replace('{rand}', f'{rng.randint(10000, 99999)}')
+        self.emitters['ecar'].emit_event({
+            'timestamp': time,
+            'hostname': system.hostname,
+            'object': 'FILE',
+            'action': action,
+            'pid': pid,
+            'principal': username,
+            'file_path': path,
+        })
+
+    def _emit_ecar_registry_event(
+        self, system: System, time: datetime, pid: int, username: str,
+    ) -> None:
+        """Emit eCAR REGISTRY/MODIFY event (Windows only)."""
+        if 'ecar' not in self.emitters:
+            return
+        key, value = _get_rng().choice(self._ECAR_REGISTRY_KEYS)
+        self.emitters['ecar'].emit_event({
+            'timestamp': time,
+            'hostname': system.hostname,
+            'object': 'REGISTRY',
+            'action': 'MODIFY',
+            'pid': pid,
+            'principal': username,
+            'registry_key': key,
+            'registry_value': value,
+        })
+
+    def _emit_ecar_flow_event(
+        self, src_ip: str, dst_ip: str, dst_port: int,
+        time: datetime, hostname: str, pid: int = -1,
+    ) -> None:
+        """Emit eCAR FLOW/CONNECT event."""
+        if 'ecar' not in self.emitters:
+            return
+        self.emitters['ecar'].emit_event({
+            'timestamp': time,
+            'hostname': hostname,
+            'object': 'FLOW',
+            'action': 'CONNECT',
+            'pid': pid,
+            'src_ip': src_ip,
+            'src_port': _get_rng().randint(49152, 65535),
+            'dst_ip': dst_ip,
+            'dst_port': dst_port,
+            'protocol': 'tcp',
+        })
+
+    def _emit_ecar_module_event(
+        self, system: System, time: datetime, pid: int, username: str,
+    ) -> None:
+        """Emit eCAR MODULE/LOAD event (DLL load, Windows only)."""
+        if 'ecar' not in self.emitters:
+            return
+        dll_path = _get_rng().choice(self._ECAR_DLL_POOL)
+        self.emitters['ecar'].emit_event({
+            'timestamp': time,
+            'hostname': system.hostname,
+            'object': 'MODULE',
+            'action': 'LOAD',
+            'pid': pid,
+            'principal': username,
+            'file_path': dll_path,
+        })

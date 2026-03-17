@@ -5,10 +5,13 @@
 windows_event_security:
   - field: EventID
     reference:
-      4624: 0.35
-      4634: 0.30
-      4688: 0.35
-    tolerance: 0.20
+      4624: 0.25
+      4625: 0.05
+      4634: 0.20
+      4672: 0.10
+      4688: 0.25
+      4689: 0.15
+    tolerance: 0.25
 
 zeek_conn:
   - field: proto
