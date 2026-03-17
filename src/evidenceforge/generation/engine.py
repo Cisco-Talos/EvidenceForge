@@ -6,6 +6,7 @@ consistent synthetic security logs across multiple formats.
 """
 
 import logging
+import math
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -210,6 +211,20 @@ class GenerationEngine:
         # Phase 5.1: Generate domain SID and per-user SID registry
         sid_registry = self._build_sid_registry()
 
+        # Phase 5.5: Generate per-user timing and behavioral offsets
+        rng = random.Random(hash(self.scenario.name + "_offsets"))
+        self._user_time_offsets: dict[str, dict[str, float]] = {}
+        for user in self.scenario.environment.users:
+            self._user_time_offsets[user.username] = {
+                'start_offset': rng.gauss(0, 0.25),        # ~±15min work start
+                'end_offset': rng.gauss(0, 0.25),          # ~±15min work end
+                'lunch_start_offset': rng.gauss(0, 0.17),  # ~±10min lunch start
+                'lunch_duration_offset': rng.gauss(0, 0.12),  # ~±7min lunch length
+                'intensity_bias': rng.uniform(0.8, 1.2),    # ±20% event intensity
+                'cluster_size_bias': rng.gauss(0, 0.2),     # ±20% cluster size
+                'inter_gap_bias': rng.gauss(0, 0.15),       # ±15% gap timing
+            }
+
         # Initialize activity generator
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
@@ -264,15 +279,22 @@ class GenerationEngine:
             for user in enabled_users:
                 # Resolve persona for work hours and risk modulation
                 persona = self._get_user_persona(user)
+                user_offsets = self._user_time_offsets.get(user.username)
 
                 # Calculate events for this user this hour
                 num_events = self._calculate_events_for_hour(
-                    user, current_hour=current_hour.hour, persona=persona
+                    user, current_hour=current_hour.hour, persona=persona,
+                    user_offsets=user_offsets,
                 )
 
                 if num_events > 0:
-                    # Distribute events across the hour
-                    event_times = self._distribute_events_in_hour(current_hour, num_events)
+                    # Distribute events across the hour (clustered)
+                    persona_name = user.persona if user.persona else None
+                    event_times = self._distribute_events_in_hour(
+                        current_hour, num_events,
+                        persona_name=persona_name,
+                        username=user.username,
+                    )
 
                     # Generate user activity at each time
                     for event_time in event_times:
@@ -434,23 +456,100 @@ class GenerationEngine:
                 return persona
         return None
 
+    @staticmethod
+    def _sigmoid(x: float) -> float:
+        """Sigmoid function for smooth temporal transitions."""
+        return 1.0 / (1.0 + math.exp(-6.0 * x))
+
+    def _work_hour_multiplier(
+        self,
+        hour: int,
+        whp: dict,
+        user_offsets: Optional[dict] = None,
+    ) -> float:
+        """Calculate activity multiplier based on work hours with smooth transitions.
+
+        Returns 0.0–1.5 multiplier. Uses sigmoid ramps for gradual transitions
+        at work start/end and lunch, instead of binary on/off.
+
+        Args:
+            hour: Integer hour of day (0-23)
+            whp: work_hours_parsed dict with start, end, lunch, peak_hours
+            user_offsets: Optional per-user timing offsets
+
+        Returns:
+            Activity multiplier (0.02–1.5)
+        """
+        start = whp['start']
+        end = whp['end']
+        lunch = whp.get('lunch')  # (start_hour, end_hour) or None
+        peak_hours = whp.get('peak_hours') or []
+
+        # Apply per-user offsets if provided
+        if user_offsets:
+            start += user_offsets.get('start_offset', 0)
+            end += user_offsets.get('end_offset', 0)
+            if lunch:
+                lunch_start = lunch[0] + user_offsets.get('lunch_start_offset', 0)
+                lunch_dur_offset = user_offsets.get('lunch_duration_offset', 0)
+                lunch_end = lunch[1] + user_offsets.get('lunch_start_offset', 0) + lunch_dur_offset
+                lunch = (lunch_start, lunch_end)
+
+        h = float(hour) + 0.5  # Use mid-hour for smoother curve
+
+        # Morning ramp-up: sigmoid from start-1.5 to start
+        if h < start - 1.5:
+            return 0.02  # Near-zero early morning
+        if h < start + 0.5:
+            t = (h - (start - 1.0)) / 1.5  # 0 to 1 over transition
+            return 0.02 + 0.98 * self._sigmoid(t * 2 - 1)
+
+        # Evening ramp-down: sigmoid from end to end+1.5
+        if h > end + 1.5:
+            return 0.02  # Near-zero late evening
+        if h > end - 0.5:
+            t = (h - (end - 0.5)) / 1.5  # 0 to 1 over transition
+            return 0.02 + 0.98 * (1.0 - self._sigmoid(t * 2 - 1))
+
+        # Lunch dip (soft, 50% not 0%)
+        if lunch:
+            lunch_start, lunch_end = lunch
+            lunch_mid = (lunch_start + lunch_end) / 2.0
+            lunch_half = (lunch_end - lunch_start) / 2.0
+            if lunch_start - 0.5 < h < lunch_end + 0.5:
+                # Smooth dip centered on lunch mid-point
+                dist_from_mid = abs(h - lunch_mid)
+                if dist_from_mid < lunch_half:
+                    return 0.5  # Core lunch: 50%
+                else:
+                    # Transition zone (0.5h on each side)
+                    t = (dist_from_mid - lunch_half) / 0.5
+                    return 0.5 + 0.5 * min(1.0, t)  # Ramp 0.5 → 1.0
+
+        # Peak hours: 1.5x
+        if hour in peak_hours:
+            return 1.5
+
+        # Normal work hours
+        return 1.0
+
     def _calculate_events_for_hour(
         self,
         user: User,
         current_hour: Optional[int] = None,
         persona: Optional[Persona] = None,
+        user_offsets: Optional[dict] = None,
     ) -> int:
         """Calculate number of events for user this hour.
 
-        Applies intensity + variation + persona risk profile + work hours
+        Applies intensity + variation + persona risk profile + sigmoid work hours
         to determine how many events to generate for this user during this hour.
-
-        Phase 2.6: Uses persona data for time-of-day modulation and risk scaling.
 
         Args:
             user: User to calculate events for
             current_hour: Hour of day (0-23) for work hours modulation
             persona: Resolved Persona object for risk/work-hours modulation
+            user_offsets: Optional per-user timing offsets
 
         Returns:
             Number of events to generate (>= 0)
@@ -459,18 +558,21 @@ class GenerationEngine:
         intensity_map = {'low': 5, 'medium': 15, 'high': 40}
         base_events = intensity_map[self.scenario.baseline_activity.intensity]
 
-        # Phase 2.6: Risk profile multiplier
+        # Risk profile multiplier
         if persona and persona.risk_profile:
             risk_mult = {'low': 0.7, 'medium': 1.0, 'high': 1.3}
             base_events = int(base_events * risk_mult.get(persona.risk_profile, 1.0))
 
-        # Phase 2.6: Work hours modulation
+        # Phase 5.5: Sigmoid work hours modulation (replaces binary on/off)
         if persona and persona.work_hours_parsed and current_hour is not None:
-            whp = persona.work_hours_parsed
-            if current_hour not in whp['hours']:
-                return 0  # Outside work hours — no activity
-            elif current_hour in (whp.get('peak_hours') or []):
-                base_events = int(base_events * 1.5)  # Peak hours: 150%
+            multiplier = self._work_hour_multiplier(
+                current_hour, persona.work_hours_parsed, user_offsets
+            )
+            base_events = int(base_events * multiplier)
+
+        # Phase 5.5: Per-user intensity bias (so two same-persona users differ)
+        if user_offsets and 'intensity_bias' in user_offsets:
+            base_events = int(base_events * user_offsets['intensity_bias'])
 
         # Apply variation (random jitter)
         variation_map = {'low': 0.10, 'medium': 0.25, 'high': 0.50}
@@ -479,8 +581,17 @@ class GenerationEngine:
 
         return num_events
 
-    def _distribute_events_in_hour(self, hour_start: datetime, num_events: int) -> list[datetime]:
-        """Distribute events across hour with uniform distribution + jitter.
+    # Phase 5.5: Per-persona cluster configuration
+    PERSONA_CLUSTER_CONFIG = {
+        'developer': {'cluster_size': (5, 15), 'inter_gap_mean': 600},
+        'executive': {'cluster_size': (2, 6), 'inter_gap_mean': 300},
+        'analyst': {'cluster_size': (4, 10), 'inter_gap_mean': 480},
+        'sysadmin': {'cluster_size': (3, 8), 'inter_gap_mean': 360},
+        'default': {'cluster_size': (3, 10), 'inter_gap_mean': 420},
+    }
+
+    def _distribute_events_in_hour_uniform(self, hour_start: datetime, num_events: int) -> list[datetime]:
+        """Distribute events uniformly (legacy fallback).
 
         Args:
             hour_start: Start of the hour
@@ -492,15 +603,68 @@ class GenerationEngine:
         if num_events == 0:
             return []
 
-        # Uniform spacing with jitter (±25% of interval)
-        interval = 3600 / num_events  # seconds per event
+        interval = 3600 / num_events
         times = []
-
         for i in range(num_events):
-            # Base time with jitter
             offset = interval * i + random.uniform(-interval * 0.25, interval * 0.25)
-            offset = max(0, min(3600, offset))  # Clamp to hour [0, 3600]
+            offset = max(0, min(3599, offset))
             times.append(hour_start + timedelta(seconds=offset))
+        return sorted(times)
+
+    def _distribute_events_in_hour(
+        self,
+        hour_start: datetime,
+        num_events: int,
+        persona_name: Optional[str] = None,
+        username: Optional[str] = None,
+    ) -> list[datetime]:
+        """Distribute events in activity clusters within an hour.
+
+        Phase 5.5: Replaces uniform spacing with realistic bursty clusters.
+        Events within a cluster are spaced 0.5-3 seconds apart.
+        Inter-cluster gaps follow exponential distribution.
+
+        Args:
+            hour_start: Start of the hour
+            num_events: Number of events to distribute
+            persona_name: Optional persona for cluster config
+            username: Optional username for per-user variation
+
+        Returns:
+            List of event times sorted chronologically
+        """
+        if num_events == 0:
+            return []
+
+        # Get persona-specific cluster config
+        config = self.PERSONA_CLUSTER_CONFIG.get(
+            (persona_name or '').lower(),
+            self.PERSONA_CLUSTER_CONFIG['default']
+        )
+        cluster_min, cluster_max = config['cluster_size']
+        inter_gap_mean = config['inter_gap_mean']
+
+        # Apply per-user variation
+        if username and hasattr(self, '_user_time_offsets'):
+            offsets = self._user_time_offsets.get(username, {})
+            size_bias = 1.0 + offsets.get('cluster_size_bias', 0)
+            cluster_min = max(2, int(cluster_min * size_bias))
+            cluster_max = max(cluster_min + 1, int(cluster_max * size_bias))
+            gap_bias = 1.0 + offsets.get('inter_gap_bias', 0)
+            inter_gap_mean = max(60, inter_gap_mean * gap_bias)
+
+        times = []
+        remaining = num_events
+        t = random.expovariate(1.0 / 60)  # First cluster offset (mean ~1min)
+
+        while remaining > 0:
+            cluster_size = min(remaining, random.randint(cluster_min, cluster_max))
+            for i in range(cluster_size):
+                event_t = t + random.uniform(0.5, 3.0) * i
+                times.append(hour_start + timedelta(seconds=min(event_t, 3599)))
+            remaining -= cluster_size
+            # Inter-cluster gap: exponential distribution
+            t += cluster_size * 2.0 + random.expovariate(1.0 / inter_gap_mean)
 
         return sorted(times)
 
