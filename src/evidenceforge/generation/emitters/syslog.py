@@ -18,6 +18,12 @@ class SyslogEmitter(LogEmitter):
             rendered = self._render_event(event_data)
             self._buffer_event(rendered)
 
+    def flush(self) -> None:
+        """Flush with chronological sorting (syslog is append-only/ordered)."""
+        with self._file_lock:
+            self.buffer.sort()  # ISO timestamp prefix → lexicographic sort works
+            self._flush_unlocked()
+
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render syslog event to text format.
 

@@ -1139,7 +1139,7 @@ class ActivityGenerator:
 
         # Phase 5.2: Emit eCAR FLOW/CONNECT for eCAR-equipped hosts
         # Use src_ip to find the hostname for this connection
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip)
+        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port)
 
         return uid
 
@@ -1686,8 +1686,8 @@ class ActivityGenerator:
                     service = db['service']
                     dst_port = db['port']
                 else:
-                    service = 'mysql'
-                    dst_port = 3306
+                    # No DB servers detected from scenario; skip DB connection
+                    return
             else:
                 service = None
                 dst_port = 443
@@ -2204,10 +2204,13 @@ class ActivityGenerator:
     def _emit_ecar_flow_event(
         self, src_ip: str, dst_ip: str, dst_port: int,
         time: datetime, hostname: str, pid: int = -1,
+        src_port: int = 0,
     ) -> None:
         """Emit eCAR FLOW/CONNECT event."""
         if 'ecar' not in self.emitters:
             return
+        if src_port == 0:
+            src_port = _get_rng().randint(49152, 65535)
         self.emitters['ecar'].emit_event({
             'timestamp': time,
             'hostname': hostname,
@@ -2215,7 +2218,7 @@ class ActivityGenerator:
             'action': 'CONNECT',
             'pid': pid,
             'src_ip': src_ip,
-            'src_port': _get_rng().randint(49152, 65535),
+            'src_port': src_port,
             'dst_ip': dst_ip,
             'dst_port': dst_port,
             'protocol': 'tcp',

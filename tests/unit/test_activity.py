@@ -437,16 +437,18 @@ class TestActivityGenerator:
         assert event_data['id.resp_h'] in EXTERNAL_IPS['connection_git']
 
     def test_execute_baseline_activity_connection_db(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
-        """execute_baseline_activity should handle database connection."""
+        """execute_baseline_activity should handle database connection with detected servers."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         state_manager.set_current_time(timestamp)
 
+        # Set up scenario-detected DB servers (required for DB connections)
+        activity_gen._db_servers = [{'ip': '10.10.100.20', 'port': 1433, 'service': 'mssql'}]
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'connection_db')
 
         event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['service'] == 'mysql'
-        assert event_data['id.resp_p'] == 3306
-        assert event_data['id.resp_h'] in EXTERNAL_IPS['connection_db']
+        assert event_data['service'] == 'mssql'
+        assert event_data['id.resp_p'] == 1433
+        assert event_data['id.resp_h'] == '10.10.100.20'
 
     def test_execute_baseline_activity_connection_excludes_src_ip(self, activity_gen, test_user, state_manager, mock_emitters):
         """execute_baseline_activity should not connect system to itself."""

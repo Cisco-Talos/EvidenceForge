@@ -767,58 +767,40 @@
 
 ### 6.3 P2: Moderate (Polish & Realism)
 
-- [ ] **Add jitter to storyline timestamps** (Assessment #17)
-  - Attack timestamps are exact multiples of 900s/3600s with .000 microseconds
-  - Background events have realistic jitter; the contrast is obvious
-  - Files: `engine.py` (`_execute_storyline_event`)
-- [ ] **Realistic LogonIDs** (Assessment #18)
-  - TargetLogonId values 0x3e7, 0x3e8, 0x3e9... incrementing by 1
-  - Real LSASS generates high-entropy 64-bit values like 0x1A2B3C4D
-  - 0x3e7 is SYSTEM's well-known LogonID but assigned to regular users
-  - Files: `state_manager.py` (logon ID generation)
-- [ ] **Populate real base64 in encoded commands** (Assessment #19)
-  - Literal `<base64_encoded_command>` placeholder never replaced with actual base64
-  - Files: `engine.py` (storyline execution)
-- [ ] **Use realistic public IPs for exfiltration** (Assessment #20)
-  - RFC 5737 documentation IPs (203.0.113.x, 198.51.100.x) are not internet-routable
-  - Files: scenario YAML, `engine.py`
-- [ ] **Add Kerberos auth package + LogonGuids** (Assessment #21)
-  - LogonGuid always null; Kerberos-enabled domains populate this for cross-machine correlation
-  - AuthenticationPackageName never "Kerberos" — should dominate in AD
-  - Files: `activity.py` (`generate_logon`)
-- [ ] **Fix internal DNS IPs and DB ports** (Assessment #22)
-  - db-primary.corp.local resolves to 10.0.100.x but docs say 10.10.100.x; MySQL 3306 instead of SQL 1433
-  - Files: `activity.py` (REVERSE_DNS, EXTERNAL_IPS), `engine.py`
-- [ ] **Fix Zeek `ts` type consistency** (Assessment #23)
-  - String in zeek_conn.json, bare number in zeek_dns.json; should be consistent
-  - Files: `emitters/zeek.py`, `emitters/zeek_dns.py`
-- [ ] **Interleave scenario events chronologically** (Assessment #24)
-  - Attack events appended as separate block at end of ecar.json/zeek_conn.json
-  - Files: `emitters/base.py` or `engine.py` (output ordering)
-- [ ] **Add FQDN to Computer names** (Assessment #25)
-  - Short names like EXEC-WS-04 instead of EXEC-WS-04.corp.meridiancapital.com
-  - Files: `activity.py` (Computer field in Windows events)
-- [ ] **Add RID gaps and computer account SIDs** (Assessment #26)
-  - RIDs 1001-1105 with zero gaps; no computer account RIDs or deleted-object gaps
-  - Files: `engine.py` (SID registry)
-- [ ] **Use SSH source IPs from documented subnets** (Assessment #27, N4)
-  - SSH from 10.0.x.x instead of documented 10.10.x.x topology
-  - Files: `engine.py` (syslog generation), `activity.py`
-- [ ] **Sort syslog chronologically** (Assessment #28)
-  - Within each hour, timestamps jump randomly; real syslog is append-only/ordered
-  - Files: `engine.py` (`_generate_system_traffic` syslog section), `emitters/syslog.py`
-- [ ] **Limit systemd-timesyncd message** (Assessment #29, N5)
-  - "Synchronized for the first time" repeats dozens of times; should appear once per boot
-  - Files: `engine.py` (syslog templates)
-- [ ] **Diversify Zeek history strings** (Assessment #30)
-  - Only ~9 patterns; real Zeek has dozens including retransmission markers (T/t), varied FIN ordering
-  - Files: `activity.py` (TCP_CONN_STATE_DISTRIBUTION)
-- [ ] **Correlate eCAR/Zeek source ports** (Assessment #31)
-  - eCAR FLOW and Zeek conn at same timestamp show different source ports
-  - Files: `activity.py` (`generate_connection`, `_emit_ecar_flow_event`)
-- [ ] **Add SERVFAIL responses** (Assessment #32)
-  - Zero SERVFAIL in 39K DNS records; real environments have ~0.1-0.5%
-  - Files: `activity.py` (`_emit_dns_lookup`)
+- [x] **Add jitter to storyline timestamps** (Assessment #17)
+  - ±30s random jitter + random microseconds; causal ordering enforced
+- [x] **Realistic LogonIDs** (Assessment #18)
+  - Random 32-bit hex values (0x10000-0xFFFFFFFF), well-known values excluded
+- [x] **Populate real base64 in encoded commands** (Assessment #19)
+  - 10 realistic decoded PowerShell commands, proper UTF-16LE base64 encoding
+- [x] **Use realistic public IPs for exfiltration** (Assessment #20)
+  - Real cloud/hosting IPs (DigitalOcean, Linode, Vultr ranges) replace RFC 5737
+- [x] **Add Kerberos auth package + LogonGuids** (Assessment #21)
+  - Type 3: 70% Kerberos/20% NTLM/10% Negotiate; non-null GUID when Kerberos
+- [x] **Fix internal DNS IPs and DB ports** (Assessment #22)
+  - DB connections require scenario-detected servers; no fallback to hardcoded 10.0.100.x
+- [x] **Fix Zeek `ts` type consistency** (Assessment #23)
+  - Both emitters output float (bare number in JSON), not string
+- [x] **Interleave scenario events chronologically** (Assessment #24)
+  - Storyline events injected into baseline hour loop; remaining executed after
+  - Pre-parsed event times by hour; `_execute_single_storyline_event()` for interleaving
+- [x] **Add FQDN to Computer names** (Assessment #25)
+  - Optional `Environment.domain` field; auto-inferred from user emails
+  - All Windows event Computer fields: `hostname.domain`; dynamic NetBIOS domain
+- [x] **Add RID gaps and computer account SIDs** (Assessment #26)
+  - Random 1-5 gaps between user RIDs; well-known RIDs (500-502); computer SIDs
+- [x] **Use SSH source IPs from documented subnets** (Assessment #27)
+  - SSH sources from scenario system IPs, not hardcoded 10.0.x.x
+- [x] **Sort syslog chronologically** (Assessment #28)
+  - SyslogEmitter sorts buffer by timestamp prefix before flush
+- [x] **Limit systemd-timesyncd message** (Assessment #29)
+  - "for the first time" only once per system; subsequent messages varied
+- [x] **Diversify Zeek history strings** (Assessment #30)
+  - 21 TCP + 8 UDP patterns (was 7+4); retransmission markers, varied FIN ordering
+- [x] **Correlate eCAR/Zeek source ports** (Assessment #31)
+  - src_port passed from generate_connection() to _emit_ecar_flow_event()
+- [x] **Add SERVFAIL responses** (Assessment #32)
+  - 0.2% SERVFAIL; multi-answer DNS (2-5 IPs) for external A records
 
 ### 6.4 P3: Minor (Nice-to-Have Improvements)
 

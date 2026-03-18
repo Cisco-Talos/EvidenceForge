@@ -121,15 +121,21 @@ class GenerationEngine:
             self._generate_baseline()
             self._report_progress("phase_end", {"phase": "baseline"})
 
-            # Phase 3: Execute storyline events (if present)
+            # Phase 6.3: Execute remaining storyline events not covered by baseline hours
             if self.scenario.storyline:
-                logger.info(f"Executing {len(self.scenario.storyline)} storyline events")
-                self._report_progress("phase_start", {
-                    "phase": "storyline",
-                    "description": f"Executing {len(self.scenario.storyline)} storyline events"
-                })
-                self._execute_storyline()
-                self._report_progress("phase_end", {"phase": "storyline"})
+                remaining = [i for i in range(len(self.scenario.storyline))
+                             if i not in self._storyline_executed]
+                if remaining:
+                    logger.info(f"Executing {len(remaining)} remaining storyline events (outside baseline window)")
+                    self._report_progress("phase_start", {
+                        "phase": "storyline",
+                        "description": f"Executing {len(remaining)} remaining storyline events"
+                    })
+                    for idx in remaining:
+                        self._execute_single_storyline_event(idx)
+                        self._storyline_executed.add(idx)
+                    self._barrier_flush_all_emitters()
+                    self._report_progress("phase_end", {"phase": "storyline"})
         finally:
             # Phase 4: Finalize and close emitters (always, even on error)
             self._report_progress("phase_start", {"phase": "finalize", "description": "Finalizing generation"})
@@ -255,6 +261,20 @@ class GenerationEngine:
         self._system_pids: dict[str, dict[str, int]] = {}  # hostname -> {role: pid}
         self._seed_system_process_trees()
 
+        # Phase 6.3: Pre-parse storyline event times for interleaved generation
+        self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
+        if self.scenario.storyline:
+            for idx, event in enumerate(self.scenario.storyline):
+                event_time = self._parse_storyline_time(event.time)
+                hour_key = int(event_time.replace(minute=0, second=0, microsecond=0).timestamp())
+                self._storyline_by_hour.setdefault(hour_key, []).append((event_time, idx))
+            # Sort each hour's events by time
+            for key in self._storyline_by_hour:
+                self._storyline_by_hour[key].sort()
+            logger.info(f"Pre-parsed {len(self.scenario.storyline)} storyline events across {len(self._storyline_by_hour)} hours")
+
+        self._storyline_executed: set[int] = set()
+
         logger.info("Initialization complete")
 
     def _generate_baseline(self) -> None:
@@ -325,6 +345,13 @@ class GenerationEngine:
 
             # Phase 5.4: Generate system traffic (DNS, NTP, scheduled tasks)
             self._generate_system_traffic(current_hour)
+
+            # Phase 6.3: Interleave storyline events into this hour
+            hour_key = int(current_hour.timestamp())
+            for event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
+                if event_idx not in self._storyline_executed:
+                    self._execute_single_storyline_event(event_idx)
+                    self._storyline_executed.add(event_idx)
 
             # Phase 5.2: Terminate stale processes
             self._terminate_stale_processes(current_hour)
@@ -853,6 +880,39 @@ class GenerationEngine:
 
             # Barrier flush after each storyline event (ensures event written before proceeding)
             self._barrier_flush_all_emitters()
+
+    def _execute_single_storyline_event(self, event_idx: int) -> None:
+        """Execute a single storyline event by index (used for interleaved generation)."""
+        storyline_event = self.scenario.storyline[event_idx]
+        event_num = event_idx + 1
+
+        # Parse event time with jitter
+        event_time = self._parse_storyline_time(storyline_event.time)
+        jitter_rng = random.Random(hash(f"jitter_{event_num}_{self.scenario.name}"))
+        jitter = timedelta(
+            seconds=jitter_rng.uniform(-30, 30),
+            microseconds=jitter_rng.randint(0, 999999),
+        )
+        event_time = event_time + jitter
+
+        actor = self._find_actor(storyline_event.actor)
+        system = self._find_system(storyline_event.system)
+        if not actor or not system:
+            return
+
+        logger.info(f"Executing interleaved storyline event: {storyline_event.actor} on {storyline_event.system} at {event_time}")
+
+        event_types = self._match_activity_to_events(storyline_event.activity)
+        self.state_manager.set_current_time(event_time)
+
+        for event_type in event_types:
+            malicious_event = self._execute_storyline_event(
+                actor=actor, system=system, time=event_time,
+                event_type=event_type, activity=storyline_event.activity,
+                details=storyline_event.details,
+            )
+            if malicious_event:
+                self.malicious_events.append(malicious_event)
 
     def _parse_storyline_time(self, time_str: str) -> datetime:
         """Parse storyline event time to absolute datetime.
@@ -1773,8 +1833,9 @@ class GenerationEngine:
                         'message': action,
                     })
                 elif source_roll < 0.80:
-                    # sshd — disconnect/keepalive messages
-                    ip = f'10.0.{rng.randint(0,10)}.{rng.randint(1,254)}'
+                    # sshd — disconnect/keepalive messages (use scenario system IPs)
+                    other_ips = [s.ip for s in self.scenario.environment.systems if s.ip != system.ip]
+                    ip = rng.choice(other_ips) if other_ips else system.ip
                     port = rng.randint(49152, 65535)
                     msgs = [
                         f'Received disconnect from {ip} port {port}:11: disconnected by user',
