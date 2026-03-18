@@ -353,21 +353,21 @@ REVERSE_DNS: dict[str, str] = {
     '142.250.185.206': 'drive.google.com', '142.250.191.46': 'calendar.google.com',
     # Cloudflare
     '104.16.132.229': 'www.cloudflare.com', '104.18.32.7': 'dash.cloudflare.com',
-    '104.18.25.35': 'api.cloudflare.com', '104.21.67.152': 'blog.example.com',
+    '104.18.25.35': 'api.cloudflare.com', '104.21.67.152': 'blog.cloudflare.com',
     # Fastly
     '151.101.1.140': 'www.reddit.com', '151.101.65.140': 'i.redd.it',
     '151.101.129.140': 'old.reddit.com', '151.101.193.140': 'v.redd.it',
     # Akamai
-    '23.45.67.89': 'cdn.example.com', '23.72.134.56': 'static.akamai.net',
+    '23.45.67.89': 'e13678.dscb.akamaiedge.net', '23.72.134.56': 'static.akamai.net',
     '23.196.25.38': 'download.windowsupdate.com', '23.205.100.42': 'media.akamai.net',
     # AWS
-    '52.84.123.45': 'd1234.cloudfront.net', '54.230.67.89': 'd5678.cloudfront.net',
-    '54.230.129.180': 'cdn.jsdelivr.net', '13.35.42.100': 'api.example.com',
+    '52.84.123.45': 'd3c33hcgiwev3.cloudfront.net', '54.230.67.89': 'dph5t2lbz8eri.cloudfront.net',
+    '54.230.129.180': 'cdn.jsdelivr.net', '13.35.42.100': 'd1w8cc2yygc27j.cloudfront.net',
     # Microsoft
     '13.107.42.14': 'www.office.com', '13.107.213.70': 'outlook.office365.com',
     '204.79.197.200': 'www.bing.com', '13.107.246.40': 'teams.microsoft.com',
     # Other
-    '93.184.216.34': 'www.example.com', '31.13.65.36': 'www.facebook.com',
+    '93.184.216.34': 'www.reuters.com', '31.13.65.36': 'www.facebook.com',
     '44.238.149.75': 'stackoverflow.com', '199.232.64.133': 'registry.npmjs.org',
     '185.199.108.153': 'pages.github.io', '52.85.83.55': 'aws.amazon.com',
     # Email
@@ -446,9 +446,28 @@ _SRV_PORT_MAP = {
 
 
 def _ipv4_to_fake_ipv6(ipv4: str) -> str:
-    """Generate a deterministic plausible IPv6 address from an IPv4 address."""
+    """Generate a deterministic plausible IPv6 address from an IPv4 address.
+
+    Uses diverse prefixes from real providers based on the first octet.
+    """
     octets = ipv4.split('.')
-    return f"2607:f8b0:{int(octets[0]):02x}{int(octets[1]):02x}:{int(octets[2]):02x}{int(octets[3]):02x}::1"
+    o0, o1, o2, o3 = int(octets[0]), int(octets[1]), int(octets[2]), int(octets[3])
+    # Select prefix based on first octet range to simulate different providers
+    prefixes = {
+        (13, 13): '2620:1ec',    # Microsoft Azure
+        (23, 23): '2a02:26f0',   # Akamai
+        (52, 54): '2600:1f18',   # AWS
+        (104, 104): '2606:4700', # Cloudflare
+        (142, 142): '2607:f8b0', # Google
+        (151, 151): '2a04:4e42', # Fastly
+        (172, 172): '2607:f8b0', # Google
+    }
+    prefix = '2001:db8'  # default
+    for (lo, hi), pfx in prefixes.items():
+        if lo <= o0 <= hi:
+            prefix = pfx
+            break
+    return f"{prefix}:{o1:02x}{o2:02x}:{o3:04x}::1"
 
 
 def _generate_random_external_ip(rng) -> str:
@@ -457,14 +476,35 @@ def _generate_random_external_ip(rng) -> str:
     return f"{prefix[0]}.{prefix[1]}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
 
 
+def _generate_internal_hostname(rng, ip: str) -> str:
+    """Generate a plausible internal hostname for RFC 1918 IPs."""
+    prefixes = ['srv', 'app', 'db', 'web', 'print', 'nas', 'mgmt', 'mon', 'backup']
+    suffixes = ['01', '02', '03', '04', '05']
+    return f"{rng.choice(prefixes)}-{rng.choice(suffixes)}.corp.local"
+
+
 def _generate_random_hostname(rng, ip: str) -> str:
-    """Generate a plausible hostname for a random CDN/cloud IP."""
+    """Generate a plausible hostname for a random CDN/cloud IP.
+
+    Uses realistic hostname formats that match actual CDN/cloud naming conventions.
+    """
+    # Generate realistic CloudFront distribution IDs (alphanumeric hashes)
+    cf_chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    cf_id = ''.join(rng.choices(cf_chars, k=13))
+
+    # Realistic EC2 reverse DNS format: ec2-{octets}.{region}.compute.amazonaws.com
+    octets = ip.split('.')
+    regions = ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-1']
+
+    # Realistic googleusercontent rDNS: 4 hyphenated octets
+    gc_octets = f"{rng.randint(1,255)}-{rng.randint(1,255)}-{rng.randint(1,255)}-{rng.randint(1,255)}"
+
     templates = [
-        f"cdn-{rng.randint(1000, 9999)}.cloudfront.net",
-        f"edge-{rng.randint(100, 999)}.akamai.net",
-        f"server-{rng.randint(10, 99)}-{rng.randint(100, 999)}.compute.amazonaws.com",
-        f"lb-{rng.randint(1, 50)}.{rng.choice(['us-east-1', 'eu-west-1', 'ap-south-1'])}.elb.amazonaws.com",
-        f"{rng.randint(1, 255)}-{rng.randint(1, 255)}-{rng.randint(1, 255)}.bc.googleusercontent.com",
+        f"d{cf_id}.cloudfront.net",
+        f"e{rng.randint(10000, 99999)}.dscb.akamaiedge.net",
+        f"ec2-{'-'.join(octets)}.{rng.choice(regions)}.compute.amazonaws.com",
+        f"{rng.choice(regions)}-elb-{rng.randint(1,50)}.{rng.choice(regions)}.elb.amazonaws.com",
+        f"{gc_octets}.bc.googleusercontent.com",
         f"a{rng.randint(100, 999)}.dscg.akamaiedge.net",
     ]
     return rng.choice(templates)
@@ -1322,7 +1362,11 @@ class ActivityGenerator:
         # Look up hostname for this IP, or generate one
         hostname = REVERSE_DNS.get(dst_ip)
         if not hostname:
-            hostname = _generate_random_hostname(rng, dst_ip)
+            if _is_private_ip(dst_ip):
+                # Internal IPs get internal hostnames (not CDN names)
+                hostname = _generate_internal_hostname(rng, dst_ip)
+            else:
+                hostname = _generate_random_hostname(rng, dst_ip)
 
         # Determine DNS server IP from network visibility or use default
         dns_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
