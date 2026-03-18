@@ -41,11 +41,28 @@ class VisibilityModel:
         self._systems = {s.hostname: s for s in scenario.environment.systems}
         self._os_map: dict[str, str] = {}
         self._host_formats: dict[str, set[str]] = {}
+        # Map FQDN variants back to bare hostname for lookups
+        self._fqdn_to_bare: dict[str, str] = {}
+
+        # Detect domain from scenario (same logic as generator)
+        domain = getattr(scenario.environment, "domain", None)
+        if not domain and scenario.environment.users:
+            email = scenario.environment.users[0].email
+            if email and "@" in email:
+                domain = email.split("@", 1)[1]
 
         # Build per-host format expectations
         for system in scenario.environment.systems:
             os_cat = _get_os_category(system.os)
             self._os_map[system.hostname] = os_cat
+
+            # Also register FQDN variant
+            if domain:
+                fqdn = f"{system.hostname}.{domain}"
+                self._os_map[fqdn] = os_cat
+                self._fqdn_to_bare[fqdn] = system.hostname
+                self._fqdn_to_bare[fqdn.lower()] = system.hostname
+                self._systems[fqdn] = system
 
             formats: set[str] = set()
             if os_cat == "windows":
@@ -63,7 +80,10 @@ class VisibilityModel:
                 formats.add("web_access")
 
             # Only include formats that are actually enabled in the scenario
-            self._host_formats[system.hostname] = formats & enabled_formats
+            resolved_formats = formats & enabled_formats
+            self._host_formats[system.hostname] = resolved_formats
+            if domain:
+                self._host_formats[f"{system.hostname}.{domain}"] = resolved_formats
 
         # Network visibility engine
         self._network_engine = NetworkVisibilityEngine(
@@ -81,8 +101,12 @@ class VisibilityModel:
         return formats & self._enabled
 
     def get_os_category(self, hostname: str) -> str:
-        """Get OS category for a hostname."""
-        return self._os_map.get(hostname, "unknown")
+        """Get OS category for a hostname (supports bare and FQDN)."""
+        result = self._os_map.get(hostname)
+        if result:
+            return result
+        # Try case-insensitive
+        return self._os_map.get(hostname.lower(), "unknown")
 
     def get_system(self, hostname: str) -> System | None:
         """Get System object by hostname."""

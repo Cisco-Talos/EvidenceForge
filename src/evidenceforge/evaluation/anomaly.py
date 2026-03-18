@@ -6,7 +6,9 @@ Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 
 import random
 from collections import Counter, defaultdict
+from datetime import timezone as _tz
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from evidenceforge.evaluation.dimensions.temporal import _extract_username
 from evidenceforge.evaluation.parsers import ParsedRecord
@@ -25,7 +27,8 @@ _FAILED_SYSLOG_PATTERNS = [
 
 # Common application ports that are expected even if not in scenario services
 _COMMON_APP_PORTS = {
-    21, 22, 25, 53, 80, 123, 443, 445, 587, 993, 995,  # Standard services
+    21, 22, 25, 53, 80, 88, 123, 135, 143, 443, 445,    # Standard services + Kerberos
+    389, 464, 587, 636, 993, 995,                         # LDAP, kpasswd, LDAPS, mail
     1433, 3306, 3389, 5432, 5353,                         # Database/RDP/mDNS
     8080, 8443, 3128, 8888, 9090,                         # Proxy/dev ports
 }
@@ -67,6 +70,15 @@ def detect_anomalies(
     process_freq = _build_process_frequency(records)
     failed_logon_bursts = _build_failed_logon_bursts(records)
 
+    # Resolve scenario timezone for off-hours comparison
+    tz_name = "UTC"
+    if scenario.environment.timezone and scenario.environment.timezone.default:
+        tz_name = scenario.environment.timezone.default
+    try:
+        scenario_tz = ZoneInfo(tz_name)
+    except (KeyError, ValueError):
+        scenario_tz = _tz.utc
+
     # Collect all valid records, then sample for efficiency
     all_valid: list[tuple[str, ParsedRecord]] = []
     for format_name, record_list in records.items():
@@ -86,7 +98,7 @@ def detect_anomalies(
 
     for format_name, record in sample:
         is_anomalous = (
-            _is_off_hours(record, persona_hours)
+            _is_off_hours(record, persona_hours, scenario_tz)
             or _is_failed_operation(record, format_name, failed_logon_bursts)
             or _is_rare_process(record, format_name, process_freq)
             or _is_unexpected_port(record, format_name, service_ports)
@@ -154,8 +166,15 @@ def _extract_process_key(record: ParsedRecord, fmt: str) -> str | None:
     return None
 
 
-def _is_off_hours(record: ParsedRecord, persona_hours: dict[str, list[int]]) -> bool:
-    """Check if event is outside user's persona work hours."""
+def _is_off_hours(record: ParsedRecord, persona_hours: dict[str, list[int]], scenario_tz=None) -> bool:
+    """Check if event is in deep off-hours for the user.
+
+    Only flags events during truly unusual hours (midnight-5am local) for users
+    whose persona doesn't include those hours. Events just outside normal work
+    hours (e.g., 6-8am, 6-10pm) are common in real environments and not anomalous.
+
+    Converts timestamp to scenario timezone since persona work hours are in local time.
+    """
     if not record.timestamp:
         return False
     user = _extract_username(record)
@@ -164,7 +183,13 @@ def _is_off_hours(record: ParsedRecord, persona_hours: dict[str, list[int]]) -> 
     hours = persona_hours[user]
     if not hours:
         return False
-    return record.timestamp.hour not in hours
+    ts = record.timestamp
+    if scenario_tz is not None:
+        ts = ts.astimezone(scenario_tz)
+    local_hour = ts.hour
+    # Only flag deep off-hours (midnight-5am) not covered by work hours
+    deep_off_hours = {0, 1, 2, 3, 4, 5}
+    return local_hour in deep_off_hours and local_hour not in hours
 
 
 def _is_failed_operation(

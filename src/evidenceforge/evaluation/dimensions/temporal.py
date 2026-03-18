@@ -14,6 +14,7 @@ import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
@@ -73,12 +74,16 @@ def _extract_username(record: ParsedRecord) -> str | None:
 
 
 def _extract_hostname(record: ParsedRecord) -> str | None:
-    """Extract hostname from a parsed record."""
+    """Extract hostname from a parsed record, normalizing FQDN to bare hostname."""
     field_name = _HOST_FIELD_MAP.get(record.source_format)
     if field_name:
         val = record.fields.get(field_name)
         if val and isinstance(val, str):
-            return val.lower()
+            # Strip domain suffix for FQDN normalization
+            hostname = val.lower()
+            if not hostname[0].isdigit() and "." in hostname:
+                hostname = hostname.split(".")[0]
+            return hostname
     return None
 
 
@@ -179,6 +184,15 @@ class TemporalRealismScorer(DimensionScorer):
                 score=100.0, details="No persona work hours defined — skipped",
             )
 
+        # Resolve scenario timezone (work hours are in local time)
+        tz_name = "UTC"
+        if scenario.environment.timezone and scenario.environment.timezone.default:
+            tz_name = scenario.environment.timezone.default
+        try:
+            scenario_tz = ZoneInfo(tz_name)
+        except (KeyError, ValueError):
+            scenario_tz = timezone.utc
+
         # Check work hour adherence using pre-computed user events
         user_scores: list[float] = []
         for username, work_hours in user_to_hours.items():
@@ -188,7 +202,7 @@ class TemporalRealismScorer(DimensionScorer):
             if len(events) < 5:
                 continue
 
-            in_hours = sum(1 for ts in events if ts.hour in work_hours)
+            in_hours = sum(1 for ts in events if ts.astimezone(scenario_tz).hour in work_hours)
             ratio = in_hours / len(events)
 
             # Score: 80-95% in work hours = 100, below/above penalized

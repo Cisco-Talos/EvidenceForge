@@ -97,13 +97,23 @@ def _extract_event_type(record: ParsedRecord) -> str:
 
 
 def _extract_hostname(record: ParsedRecord) -> str | None:
-    """Extract hostname from a record."""
+    """Extract hostname from a record, normalizing FQDN to bare hostname."""
     field_name = _HOST_FIELD_MAP.get(record.source_format)
     if field_name:
         val = record.fields.get(field_name)
         if val and isinstance(val, str):
-            return val
+            return _normalize_hostname(val)
     return None
+
+
+def _normalize_hostname(hostname: str) -> str:
+    """Normalize hostname by stripping domain suffix."""
+    if hostname[0].isdigit():
+        return hostname
+    parts = hostname.split(".")
+    if len(parts) > 1:
+        return parts[0]
+    return hostname
 
 
 class NoiseRealismScorer(DimensionScorer):

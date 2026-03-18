@@ -43,13 +43,33 @@ _TIMESTAMP_TOLERANCE = timedelta(seconds=30)
 
 
 def _extract_hostname(record: ParsedRecord) -> str | None:
-    """Extract hostname from a parsed record."""
+    """Extract hostname from a parsed record, normalizing FQDN to bare hostname."""
     field_name = _HOST_FIELD_MAP.get(record.source_format)
     if field_name:
         val = record.fields.get(field_name)
         if val and isinstance(val, str):
-            return val
+            return _normalize_hostname(val)
     return None
+
+
+def _normalize_hostname(hostname: str) -> str:
+    """Normalize hostname by stripping domain suffix.
+
+    The generator appends FQDN domain (e.g., 'EXEC-WS-01.meridiancapital.com')
+    to Windows Computer fields, but eCAR/syslog use bare hostnames. Normalize
+    to bare hostname for consistent cross-source matching.
+    """
+    # IP addresses pass through unchanged
+    if hostname[0].isdigit():
+        return hostname
+    # Strip domain suffix: take only the first component
+    # But preserve hostnames that don't have dots (already bare)
+    parts = hostname.split(".")
+    if len(parts) > 1:
+        # Heuristic: if first part looks like a hostname (has letters and
+        # optionally dashes/digits), strip the domain
+        return parts[0]
+    return hostname
 
 
 def _normalize_ts(ts: datetime) -> datetime:
