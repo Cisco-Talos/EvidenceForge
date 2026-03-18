@@ -45,6 +45,7 @@ class StateManager:
         self.state = GeneratorState()
         self._logon_id_counter = 0x3E7  # Start at 999 (standard Windows system LogonID)
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
+        self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._connection_id_counter = 0
         self._lock = RLock()  # Reentrant lock for thread safety
 
@@ -204,16 +205,37 @@ class StateManager:
                         f"does not exist on {system}"
                     )
 
-            # Allocate PID for this system
+            # Allocate PID for this system — OS-aware allocation (Phase 6.0)
             if system not in self._pid_counters:
-                self._pid_counters[system] = 1  # PIDs start at 1
+                import random as _rng
+                # Detect OS from image path: backslash = Windows, forward slash = Linux
+                is_windows = '\\' in image
+                if is_windows:
+                    # Windows: PIDs are multiples of 4, start in realistic range
+                    start = _rng.randint(2000, 6000)
+                    start = start - (start % 4)  # Align to multiple of 4
+                    self._pid_counters[system] = start
+                    self._pid_os[system] = 'windows'
+                else:
+                    # Linux: PIDs increment by 1, start after boot processes
+                    self._pid_counters[system] = _rng.randint(500, 2000)
+                    self._pid_os[system] = 'linux'
 
             pid = self._pid_counters[system]
-            self._pid_counters[system] += 1
 
-            # Check for PID exhaustion (typical max is 32768 or 4194304)
-            if pid > 4194304:
-                raise StateError(f"PID counter exhausted on {system} (reached {pid})")
+            # Increment with OS-aware gaps
+            import random as _rng
+            if self._pid_os.get(system) == 'windows':
+                # Windows: multiples of 4 with irregular gaps
+                self._pid_counters[system] += 4 * _rng.choice([1, 1, 1, 1, 2, 3, 5, 8])
+            else:
+                # Linux: sequential with occasional small gaps
+                self._pid_counters[system] += _rng.choice([1, 1, 1, 1, 2, 3])
+
+            # Check for PID exhaustion
+            if pid > 65536:
+                # Wrap around to simulate PID reuse
+                self._pid_counters[system] = pid % 30000 + 4000
 
             # Create process
             process = RunningProcess(

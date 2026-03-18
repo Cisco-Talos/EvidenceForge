@@ -142,7 +142,9 @@ class TestProcessManagement:
             integrity_level="Medium",
         )
 
-        assert pid == 1  # First PID on system
+        # Phase 6.0: PIDs are now OS-aware (multiples of 4 for Windows, starting in realistic range)
+        assert pid >= 2000  # Windows PIDs start in realistic range
+        assert pid % 4 == 0  # Windows PIDs are multiples of 4
         process = sm.get_process("WS-01", pid)
         assert process is not None
         assert process.system == "WS-01"
@@ -150,17 +152,20 @@ class TestProcessManagement:
         assert process.username == "jdoe"
 
     def test_create_process_increments_per_system(self):
-        """Test that PIDs increment per system."""
+        """Test that PIDs increment per system with OS-aware allocation."""
         sm = StateManager()
         sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
 
-        pid1 = sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
-        pid2 = sm.create_process("WS-01", 0, "cmd.exe", "cmd.exe", "jdoe", "Medium")
-        pid3 = sm.create_process("WS-02", 0, "bash", "bash", "asmith", "Medium")
+        # Windows path → multiples of 4
+        pid1 = sm.create_process("WS-01", 0, r"C:\Windows\explorer.exe", "explorer.exe", "jdoe", "Medium")
+        pid2 = sm.create_process("WS-01", 0, r"C:\Windows\cmd.exe", "cmd.exe", "jdoe", "Medium")
+        # Linux path → sequential
+        pid3 = sm.create_process("WS-02", 0, "/usr/bin/bash", "bash", "asmith", "Medium")
 
-        assert pid1 == 1
-        assert pid2 == 2
-        assert pid3 == 1  # WS-02 starts at 1
+        assert pid1 % 4 == 0  # Windows: multiple of 4
+        assert pid2 % 4 == 0  # Windows: multiple of 4
+        assert pid2 > pid1    # Incrementing
+        assert pid3 >= 500    # Linux: starts in realistic range
 
     def test_create_process_requires_current_time(self):
         """Test that creating process fails if current_time not set."""
@@ -185,7 +190,7 @@ class TestProcessManagement:
         sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
 
         pid = sm.create_process("WS-01", 0, "System", "System", "SYSTEM", "System")
-        assert pid == 1
+        assert pid > 0  # PID allocated successfully
 
     def test_create_process_with_valid_parent(self):
         """Test creating child process with valid parent."""

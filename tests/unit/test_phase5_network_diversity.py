@@ -109,9 +109,10 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        # Should emit to zeek_dns
+        # Should emit to zeek_dns (first call is the actual NOERROR lookup;
+        # additional NXDOMAIN background queries may follow)
         assert mock_emitters['zeek_dns'].emit_event.called
-        dns_event = mock_emitters['zeek_dns'].emit_event.call_args[0][0]
+        dns_event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
         assert dns_event['query'] == 'www.google.com'
         assert dns_event['answers'] == '172.217.14.206'
         assert dns_event['id.orig_h'] == '10.0.10.1'

@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 4 - Data Quality Evaluation ✅ SCORING COMPLETE (5/5 dimensions). LLM spot-check deferred.
+**Status:** Phase 6 - Expert-Identified Realism Fixes (44 findings from blind expert panel, 6 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-16 (Phase 4 eval framework complete: 5 dimensions, 23 sub-scores, 653+ tests)
+**Last Updated:** 2026-03-18 (Phase 6 added: 44 expert findings tracked as P0/P1/P2/P3)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -682,6 +682,192 @@
 - [x] Test: Human burstiness CV > 1.0 (eval dimension)
 
 **Phase 5 Milestone:** Generated data passes qualitative review — no instant tells. Eval score ≥ 85, all hard acceptance criteria pass. Background noise has protocol diversity (TCP+UDP+ICMP), event type depth (≥ 6 Windows Event IDs, ≥ 5 eCAR objects), realistic timing patterns, and hundreds of unique destination IPs.
+
+---
+
+## Phase 6: Expert-Identified Realism Fixes
+
+**Goal:** Address all findings from blind expert panel review (REALISM_ASSESSMENT-2.md). Four domain experts (threat hunter, detection engineer, Windows sysadmin, Linux/network admin) identified the data as synthetic within seconds. This phase fixes the specific tells, organized by severity. Cross-references are to finding numbers in the assessment.
+
+**Source:** `../DataGenTest/scenarios/insider-exfiltration/REALISM_ASSESSMENT-2.md`
+**Baseline:** Run 8 (overall eval score 82, 6 of 44 original findings resolved)
+
+### 6.0 Fixes Already Implemented (Run 8)
+
+- [x] **LogonType diversity** — Types 2,3,4,5,7,8,9,10,11 with weighted distribution by system type (#1 original, N1 new)
+- [x] **PID multiples of 4** — OS-aware allocation: Windows multiples of 4 from realistic range, Linux sequential (#2 partial)
+- [x] **UDP/TCP history separation** — UDP uses Dd/D/DdDd, ICMP uses OTH, protocol-aware conn_state (#3)
+- [x] **NXDOMAIN responses** — ~20% of DNS lookups emit NXDOMAIN for suffix search failures, WPAD probes (#4)
+- [x] **Syslog volume and diversity** — 12-80 events/hr per Linux server, 10 programs, kernel format, systemd PID 1 (#5)
+- [x] **SYSTEM domain** — NT AUTHORITY for SYSTEM account (#14 original)
+- [x] **explorer.exe in process tree** — winlogon → userinit → explorer.exe chain seeded (#2 partial)
+- [x] **Dynamic ParentProcessName** — looked up from StateManager instead of hardcoded (#2 partial)
+
+### 6.1 P0: Critical (Instant Giveaways)
+
+- [ ] **Fix DNS query type semantics** (Assessment #1)
+  - AAAA queries must return IPv6 addresses (e.g., `2607:f8b0:4004:800::201b`), not IPv4
+  - PTR queries must use `in-addr.arpa` format (e.g., `40.246.107.13.in-addr.arpa` → hostname)
+  - Remove CNAME as explicit qtype (CNAMEs are returned in answer chains, not queried directly)
+  - Add SRV queries (qtype 33) for AD: `_ldap._tcp.dc._msdcs.corp.local`, `_kerberos._tcp.corp.local`
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **Fix parent PID still always 0x4** (Assessment #2)
+  - ParentProcessName says explorer.exe but numeric ProcessId (parent) says 0x4 — contradictory
+  - Baseline activity must pass `parent_pid=system_pids['explorer']` to `generate_process()`
+  - eCAR ppid field also always 4 — must use actual parent PID
+  - Files: `activity.py` (`execute_baseline_activity`, `generate_process`), `engine.py`
+- [ ] **Fix duplicate fields in 4624 XML template** (Assessment #3)
+  - TargetUserName, TargetDomainName, TargetLogonId, LogonType, LogonGuid appear twice in EventData
+  - Template concatenation bug in `windows_event_security.yaml`
+  - Files: `formats/definitions/windows_event_security.yaml`
+- [ ] **Add Kerberos/LDAP/SQL traffic to Zeek** (Assessment #4)
+  - Zero connections to port 88 (Kerberos), 389 (LDAP), 1433 (SQL Server)
+  - Database traffic incorrectly goes to MySQL port 3306 instead of scenario-documented SQL Servers
+  - Generate Kerberos/LDAP as system traffic from domain-joined machines to DCs
+  - Files: `engine.py` (`_generate_system_traffic`), `activity.py`
+- [ ] **Correlate Zeek DNS and conn UIDs** (Assessment #5)
+  - DNS conn.log UID does not appear in dns.log and vice versa
+  - `_emit_dns_lookup` must share the same UID between conn.log and dns.log emissions
+  - Files: `activity.py` (`_emit_dns_lookup`, `generate_connection`)
+
+### 6.2 P1: Major (Would Fool Casual Observers, Not Experts)
+
+- [ ] **Add missing Windows Event IDs** (Assessment #6, #8)
+  - 4768/4769 (Kerberos TGT/service tickets), 4776 (NTLM validation)
+  - 5156 (WFP connection allowed), 4648 (explicit creds)
+  - 5140/5145 (share access), 4720-4740 (account management)
+  - 4103/4104 (PowerShell logging)
+  - DCs should have massive Kerberos event volume
+  - Files: `windows_event_security.yaml`, `activity.py`, `engine.py`
+- [ ] **Add machine account ($) activity** (Assessment #7)
+  - Zero COMPUTERNAME$ events; real AD has constant machine account auth (GPO, Kerberos, LDAP)
+  - 118 domain-joined systems should generate significant machine account volume
+  - Files: `engine.py` (`_generate_system_traffic`), `activity.py`
+- [ ] **Set `local_resp: true` for internal servers** (Assessment #9)
+  - All 122K Zeek records show `local_resp: false`, even for connections to internal 10.10.100.x servers
+  - Should be `true` when responder IP is in `Site::local_nets`
+  - Files: `activity.py` (`generate_connection`)
+- [ ] **Fix Zeek packet/byte IP+TCP overhead** (Assessment #10)
+  - Consistent 40-byte overhead per packet; real TCP needs 52-72 bytes (IP + TCP + options)
+  - Files: `activity.py` (packet count calculation)
+- [ ] **Per-computer EventRecordIDs** (Assessment #11)
+  - Global counter 10001→185448 across all computers; real Windows logs have per-machine sequences
+  - Files: `activity.py` (`_get_next_event_record_id`), `engine.py`
+- [ ] **Fix LogonType distribution** (Assessment #12, N1)
+  - Type 7 (unlock) too high at 43K; Type 3 (network) should dominate (60-80%)
+  - Type 5 (service) incorrectly assigned to regular user accounts — restrict to service accounts
+  - Recalibrate weights: servers need Type 3 at 60-80%, workstations need Type 3 higher than current
+  - Files: `activity.py` (`execute_baseline_activity`)
+- [ ] **Massively increase DC event volume** (Assessment #13, N2)
+  - Only 147 events from both DCs over 72 hours; real DCs generate tens of thousands per hour
+  - DCs contribute <0.1% of total events — should be among noisiest machines
+  - Files: `engine.py` (`_generate_system_traffic` or new DC-specific generator)
+- [ ] **Break mechanical traffic pattern** (Assessment #14, N3)
+  - Every workstation generates rigid DNS→web→DNS→SMTP 4-tuple pattern
+  - Real traffic is bursty with persistent connections, keep-alives, concurrent connections
+  - Files: `activity.py` (`execute_baseline_activity`), `engine.py`
+- [ ] **Route SMTP through internal Exchange** (Assessment #15)
+  - Workstations connect directly to Gmail/O365 on port 587; should route through SRV-EXCH-01
+  - Files: `activity.py` (connection templates), `engine.py`
+- [ ] **Route DNS through documented DCs** (Assessment #16)
+  - DNS queries go to 10.0.0.1 (undocumented); should use DC-01/DC-02 from scenario
+  - Files: `engine.py` (`_detect_infrastructure_ips`), `activity.py` (`_dns_server_ip`)
+
+### 6.3 P2: Moderate (Polish & Realism)
+
+- [ ] **Add jitter to storyline timestamps** (Assessment #17)
+  - Attack timestamps are exact multiples of 900s/3600s with .000 microseconds
+  - Background events have realistic jitter; the contrast is obvious
+  - Files: `engine.py` (`_execute_storyline_event`)
+- [ ] **Realistic LogonIDs** (Assessment #18)
+  - TargetLogonId values 0x3e7, 0x3e8, 0x3e9... incrementing by 1
+  - Real LSASS generates high-entropy 64-bit values like 0x1A2B3C4D
+  - 0x3e7 is SYSTEM's well-known LogonID but assigned to regular users
+  - Files: `state_manager.py` (logon ID generation)
+- [ ] **Populate real base64 in encoded commands** (Assessment #19)
+  - Literal `<base64_encoded_command>` placeholder never replaced with actual base64
+  - Files: `engine.py` (storyline execution)
+- [ ] **Use realistic public IPs for exfiltration** (Assessment #20)
+  - RFC 5737 documentation IPs (203.0.113.x, 198.51.100.x) are not internet-routable
+  - Files: scenario YAML, `engine.py`
+- [ ] **Add Kerberos auth package + LogonGuids** (Assessment #21)
+  - LogonGuid always null; Kerberos-enabled domains populate this for cross-machine correlation
+  - AuthenticationPackageName never "Kerberos" — should dominate in AD
+  - Files: `activity.py` (`generate_logon`)
+- [ ] **Fix internal DNS IPs and DB ports** (Assessment #22)
+  - db-primary.corp.local resolves to 10.0.100.x but docs say 10.10.100.x; MySQL 3306 instead of SQL 1433
+  - Files: `activity.py` (REVERSE_DNS, EXTERNAL_IPS), `engine.py`
+- [ ] **Fix Zeek `ts` type consistency** (Assessment #23)
+  - String in zeek_conn.json, bare number in zeek_dns.json; should be consistent
+  - Files: `emitters/zeek.py`, `emitters/zeek_dns.py`
+- [ ] **Interleave scenario events chronologically** (Assessment #24)
+  - Attack events appended as separate block at end of ecar.json/zeek_conn.json
+  - Files: `emitters/base.py` or `engine.py` (output ordering)
+- [ ] **Add FQDN to Computer names** (Assessment #25)
+  - Short names like EXEC-WS-04 instead of EXEC-WS-04.corp.meridiancapital.com
+  - Files: `activity.py` (Computer field in Windows events)
+- [ ] **Add RID gaps and computer account SIDs** (Assessment #26)
+  - RIDs 1001-1105 with zero gaps; no computer account RIDs or deleted-object gaps
+  - Files: `engine.py` (SID registry)
+- [ ] **Use SSH source IPs from documented subnets** (Assessment #27, N4)
+  - SSH from 10.0.x.x instead of documented 10.10.x.x topology
+  - Files: `engine.py` (syslog generation), `activity.py`
+- [ ] **Sort syslog chronologically** (Assessment #28)
+  - Within each hour, timestamps jump randomly; real syslog is append-only/ordered
+  - Files: `engine.py` (`_generate_system_traffic` syslog section), `emitters/syslog.py`
+- [ ] **Limit systemd-timesyncd message** (Assessment #29, N5)
+  - "Synchronized for the first time" repeats dozens of times; should appear once per boot
+  - Files: `engine.py` (syslog templates)
+- [ ] **Diversify Zeek history strings** (Assessment #30)
+  - Only ~9 patterns; real Zeek has dozens including retransmission markers (T/t), varied FIN ordering
+  - Files: `activity.py` (TCP_CONN_STATE_DISTRIBUTION)
+- [ ] **Correlate eCAR/Zeek source ports** (Assessment #31)
+  - eCAR FLOW and Zeek conn at same timestamp show different source ports
+  - Files: `activity.py` (`generate_connection`, `_emit_ecar_flow_event`)
+- [ ] **Add SERVFAIL responses** (Assessment #32)
+  - Zero SERVFAIL in 39K DNS records; real environments have ~0.1-0.5%
+  - Files: `activity.py` (`_emit_dns_lookup`)
+
+### 6.4 P3: Minor (Nice-to-Have Improvements)
+
+- [ ] **Fix eCAR DNS FLOW protocol to UDP** (Assessment #33)
+  - eCAR shows `protocol: "tcp"` for DNS while Zeek correctly shows UDP
+  - Files: `activity.py` (`_emit_ecar_flow_event`)
+- [ ] **Add process attribution to eCAR FLOWs** (Assessment #34)
+  - `pid: -1` on all FLOW events; real EDR tracks socket-to-process mapping
+  - Files: `activity.py` (`_emit_ecar_flow_event`)
+- [ ] **Reduce eCAR LOGIN frequency** (Assessment #35)
+  - LOGIN events paired with every activity burst; users generate new LOGIN every 1-2 seconds
+  - Files: `activity.py` (`execute_baseline_activity`)
+- [ ] **Vary filenames in eCAR file operations** (Assessment #36)
+  - Cycles through 5 generic filenames: spreadsheet.xlsx, presentation.pptx, notes.txt, etc.
+  - Files: `activity.py` (_ECAR_FILE_PATHS_WIN, _ECAR_FILE_PATHS_LINUX)
+- [ ] **Decrement DNS TTLs for cached responses** (Assessment #37)
+  - Always round values; cached responses should show decremented TTLs
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **Fix 4625 event Version to 0** (Assessment #38)
+  - Uses Version 2 instead of standard Version 0 for 4625
+  - Files: `formats/definitions/windows_event_security.yaml`
+- [ ] **Vary command-line arguments** (Assessment #39)
+  - Same exact PowerShell/sqlcmd commands repeated dozens of times
+  - Files: `activity.py` (PROCESS_TEMPLATES)
+- [ ] **Add PID interleaving for CRON** (Assessment #40, N6)
+  - CRON PIDs too sequential (1660, 1661, 1662...); needs interleaving from other processes
+  - Files: `engine.py` (syslog CRON generation)
+- [ ] **Include resp_ip_bytes: 0 on zero-packet records** (Assessment #41)
+  - Some records missing resp_ip_bytes instead of having it set to 0
+  - Files: `activity.py` (`generate_connection`)
+- [ ] **Multiple answers for popular DNS domains** (Assessment #42)
+  - Every query returns single answer; CDN domains return multiple A records
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **Add `<Events>` root XML wrapper** (Assessment #43)
+  - Standalone `<Event>` elements without containing root element
+  - Files: `emitters/windows.py`
+- [ ] **Set AA flag for internal DNS** (Assessment #44)
+  - Internal zone queries (corp.local) show AA: false; should be authoritative
+  - Files: `activity.py` (`_emit_dns_lookup`)
+
+**Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
 
 ---
 

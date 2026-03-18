@@ -218,9 +218,9 @@ PERSONA_APP_INDICES_LINUX = {
     'default': [0, 2, 5, 6],            # firefox, git, ssh, curl
 }
 
-# Zeek connection state distribution with matching history strings (Phase 5.1)
+# Zeek TCP connection state distribution with matching history strings (Phase 5.1)
 # Format: (conn_state, weight, history_string)
-CONN_STATE_DISTRIBUTION = [
+TCP_CONN_STATE_DISTRIBUTION = [
     ('SF', 85, 'ShADadfF'),      # Normal completion (SYN, SYN-ACK, data, FIN)
     ('S0', 5, 'S'),              # Connection attempt, no reply
     ('S1', 3, 'ShR'),            # SYN-ACK seen, no final ACK from originator
@@ -230,10 +230,29 @@ CONN_STATE_DISTRIBUTION = [
     ('OTH', 1, 'Cc'),            # Midstream traffic (no SYN/SYN-ACK seen)
 ]
 
-# Pre-extract for random.choices
-_CONN_STATES = [s[0] for s in CONN_STATE_DISTRIBUTION]
-_CONN_WEIGHTS = [s[1] for s in CONN_STATE_DISTRIBUTION]
-_CONN_HISTORY = {s[0]: s[2] for s in CONN_STATE_DISTRIBUTION}
+# Zeek UDP connection state distribution (Phase 6.0)
+# UDP has no TCP handshake — only D/d datagram flags
+UDP_CONN_STATE_DISTRIBUTION = [
+    ('SF', 80, 'Dd'),            # Normal bidirectional exchange (query + response)
+    ('SF', 5, 'DdDd'),           # Multi-packet (retransmit or large response)
+    ('S0', 12, 'D'),             # Originator only, no response (timeout)
+    ('OTH', 3, 'DdA'),           # Additional data packet
+]
+
+# Pre-extract for random.choices — TCP
+_TCP_CONN_STATES = [s[0] for s in TCP_CONN_STATE_DISTRIBUTION]
+_TCP_CONN_WEIGHTS = [s[1] for s in TCP_CONN_STATE_DISTRIBUTION]
+_TCP_CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
+
+# Pre-extract for random.choices — UDP (use index since conn_state can repeat)
+_UDP_CONN_ENTRIES = UDP_CONN_STATE_DISTRIBUTION
+_UDP_CONN_WEIGHTS = [s[1] for s in UDP_CONN_STATE_DISTRIBUTION]
+
+# Keep legacy aliases for backward compatibility with existing code references
+CONN_STATE_DISTRIBUTION = TCP_CONN_STATE_DISTRIBUTION
+_CONN_STATES = _TCP_CONN_STATES
+_CONN_WEIGHTS = _TCP_CONN_WEIGHTS
+_CONN_HISTORY = _TCP_CONN_HISTORY
 
 # External IPs for network connections (non-RFC1918)
 # Phase 5.3: Expanded from 9 to 50+ IPs for destination diversity
@@ -518,7 +537,7 @@ class ActivityGenerator:
                 'TargetLogonId': logon_id,
                 'LogonType': logon_type,
                 'WorkstationName': system.hostname,
-                'ProcessId': '0x2e0',  # lsass.exe PID
+                'ProcessId': f'0x{self._get_system_pid(system.hostname, "lsass", 0x2e0):x}',
                 'ProcessName': r'C:\Windows\System32\lsass.exe',
                 'IpAddress': source_ip,
                 'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
@@ -787,7 +806,7 @@ class ActivityGenerator:
                 'TargetUserName': user.username,
                 'TargetDomainName': 'CORP',
                 'TargetLogonId': logon_id,
-                'ParentProcessName': r'C:\Windows\explorer.exe',
+                'ParentProcessName': self._lookup_process_name(system.hostname, parent_pid),
                 'MandatoryLabel': 'S-1-16-8192',  # Medium integrity
             }
             self.emitters['windows_event_security'].emit_event(event_data)
@@ -946,34 +965,60 @@ class ActivityGenerator:
         if orig_bytes is not None and resp_bytes is not None:
             self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
-        # Phase 5.1: Probabilistic connection state selection
+        # Phase 6.0: Protocol-aware connection state selection
         rng = _get_rng()
-        if duration is not None:
-            # Caller specified duration → use weighted distribution (mostly SF)
-            conn_state = rng.choices(_CONN_STATES, weights=_CONN_WEIGHTS, k=1)[0]
+
+        if proto == 'icmp':
+            # ICMP: no connection state, OTH always, no history
+            conn_state = 'OTH'
+            history = '-'
+            # Zeek encodes ICMP type/code as ports
+            src_port = 8   # Echo request type
+            dst_port = 0   # Echo reply type
+        elif proto == 'udp':
+            # UDP: datagram-based history (D/d), limited conn_states
+            entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
+            conn_state, _, history = entry
+            if conn_state == 'S0':
+                duration = None
+                resp_bytes = 0
         else:
-            # No duration → connection attempt with no completion
-            conn_state = 'S0'
-
-        history = _CONN_HISTORY[conn_state]
-
-        # Adjust bytes/duration for consistency with connection state
-        if conn_state in ('S0', 'REJ'):
-            # Failed connections: no response data, no duration
-            duration = None
-            resp_bytes = 0
-            if conn_state == 'REJ':
-                orig_bytes = orig_bytes if orig_bytes else 0
-        elif conn_state in ('RSTO', 'RSTR'):
-            # Reset connections: may have partial data, shorter duration
+            # TCP: full handshake-based history and conn_states
             if duration is not None:
-                duration = duration * rng.uniform(0.1, 0.5)
-            if resp_bytes:
-                resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+                conn_state = rng.choices(_TCP_CONN_STATES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
+            else:
+                conn_state = 'S0'
+            history = _TCP_CONN_HISTORY[conn_state]
 
-        # Calculate packet counts (rough estimate: 1 packet per 1500 bytes)
-        orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else None
-        resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else None
+            # Adjust bytes/duration for consistency with TCP connection state
+            if conn_state in ('S0', 'REJ'):
+                duration = None
+                resp_bytes = 0
+                if conn_state == 'REJ':
+                    orig_bytes = orig_bytes if orig_bytes else 0
+            elif conn_state in ('RSTO', 'RSTR'):
+                if duration is not None:
+                    duration = duration * rng.uniform(0.1, 0.5)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+
+        # Calculate packet counts — enforce consistency with history
+        if proto == 'udp' and history:
+            # Count D/d characters for exact packet counts
+            orig_pkts = history.count('D')
+            resp_pkts = history.count('d')
+            # Adjust bytes to match packet counts
+            if orig_pkts > 0 and orig_bytes:
+                orig_bytes = max(orig_bytes, orig_pkts * 40)
+            if resp_pkts > 0 and resp_bytes:
+                resp_bytes = max(resp_bytes, resp_pkts * 40)
+            elif resp_pkts == 0:
+                resp_bytes = 0
+        else:
+            # TCP/ICMP: rough estimate (1 packet per 1500 bytes)
+            orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else None
+            resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else None
+
         orig_ip_bytes = (orig_bytes + orig_pkts * 40) if orig_bytes and orig_pkts else None
         resp_ip_bytes = (resp_bytes + resp_pkts * 40) if resp_bytes and resp_pkts else None
 
@@ -1131,13 +1176,17 @@ class ActivityGenerator:
 
         elif os_category == 'linux':
             if 'syslog' in self.emitters:
+                app_name = process_name.split('/')[-1]
+                # Use cron facility for cron-spawned processes, daemon for others
+                facility = 9 if 'cron' in command_line.lower() else 3
                 self.emitters['syslog'].emit_event({
                     'timestamp': time,
                     'hostname': system.hostname,
-                    'app_name': process_name.split('/')[-1],
-                    'facility': 1,
+                    'app_name': app_name,
+                    'pid': pid,
+                    'facility': facility,
                     'severity': 6,
-                    'message': f'{process_name.split("/")[-1]}[{pid}]: started: {command_line}',
+                    'message': f'{app_name}[{pid}]: started: {command_line}',
                 })
 
         # eCAR emission (direct, since _emit_ecar_process expects a User object)
@@ -1215,6 +1264,12 @@ class ActivityGenerator:
             else:
                 qtype, qtype_name = 12, 'PTR'
 
+            # Phase 6.0: varied TTLs (not just round numbers)
+            ttl = rng.choice([30, 60, 120, 247, 300, 598, 1800, 3600, 7200, 86400])
+            # AA=True for internal domains (AD DNS is authoritative)
+            is_internal = hostname.endswith('.corp.local') or hostname.endswith('.local')
+
+            # This lookup precedes an actual connection, so always NOERROR
             self.emitters['zeek_dns'].emit_event({
                 'ts': dns_time,
                 'uid': dns_uid,
@@ -1231,14 +1286,59 @@ class ActivityGenerator:
                 'qtype_name': qtype_name,
                 'rcode': 0,
                 'rcode_name': 'NOERROR',
-                'AA': False,
+                'AA': is_internal,
                 'TC': False,
                 'RD': True,
                 'RA': True,
                 'answers': dst_ip,
-                'TTLs': str(rng.choice([60, 300, 3600, 86400])),
+                'TTLs': str(ttl),
                 'rejected': False,
             })
+
+            # Phase 6.0: ~20% chance of emitting an additional NXDOMAIN query
+            # (suffix search failure, WPAD probe, etc.) alongside the real lookup
+            if rng.random() < 0.20:
+                nxdomain_queries = [
+                    f'{hostname}.corp.local',  # Suffix search failure
+                    'wpad.corp.local', 'wpad.local', 'wpad',
+                    'isatap.corp.local', 'isatap',
+                    '_ldap._tcp.NonExistentSite._sites.corp.local',
+                    'oldserver.corp.local', 'printer01.corp.local',
+                ]
+                nx_query = rng.choice(nxdomain_queries)
+                nx_uid = generate_zeek_uid()
+                nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+                self.emitters['zeek_dns'].emit_event({
+                    'ts': nx_time,
+                    'uid': nx_uid,
+                    'id.orig_h': src_ip,
+                    'id.orig_p': rng.randint(49152, 65535),
+                    'id.resp_h': dns_server_ip,
+                    'id.resp_p': 53,
+                    'proto': 'udp',
+                    'trans_id': rng.randint(1, 65535),
+                    'query': nx_query,
+                    'qclass': 1,
+                    'qclass_name': 'C_INTERNET',
+                    'qtype': 1,
+                    'qtype_name': 'A',
+                    'rcode': 3,
+                    'rcode_name': 'NXDOMAIN',
+                    'AA': True,  # AD DNS is authoritative for .corp.local
+                    'TC': False,
+                    'RD': True,
+                    'RA': True,
+                    'answers': '-',
+                    'TTLs': '-',
+                    'rejected': False,
+                })
+                # Emit matching conn.log entry for the NXDOMAIN query
+                self.generate_connection(
+                    src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
+                    dst_port=53, proto='udp', service='dns',
+                    duration=rng.uniform(0.001, 0.01),
+                    orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
+                )
 
     def get_baseline_pattern(
         self,
@@ -1315,7 +1415,38 @@ class ActivityGenerator:
             if _get_rng().random() < 0.10:
                 self.generate_failed_logon(user, system, time)
                 return
-            self.generate_logon(user, system, time)
+
+            # Phase 6.0: Realistic logon type distribution by system type
+            rng = _get_rng()
+            sys_type = (system.type or 'workstation').lower()
+            if sys_type in ('server', 'domain_controller'):
+                # Servers: dominated by network (3) and service (5) logons
+                logon_type = rng.choices(
+                    [3, 5, 10, 4, 2, 8, 9],
+                    weights=[55, 20, 12, 8, 2, 1, 2], k=1)[0]
+            else:
+                # Workstations: Type 7 (unlock) most common
+                logon_type = rng.choices(
+                    [7, 3, 2, 11, 10, 5],
+                    weights=[35, 25, 20, 10, 5, 5], k=1)[0]
+
+            # Type 3 (network) logons are standalone events, not interactive sessions
+            if logon_type in (3, 4, 5, 8, 9):
+                # Pick a source IP from another system for network logons
+                source_ip = None
+                if logon_type == 3 and hasattr(self, '_all_system_ips'):
+                    other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
+                    if other_ips:
+                        source_ip = rng.choice(other_ips)
+                self.generate_logon(user, system, time, logon_type=logon_type,
+                                    source_ip=source_ip if source_ip else system.ip)
+                # Don't create a session — these are background auth events
+                return
+
+            # Interactive logon types (2, 7, 10, 11) — create sessions
+            source_ip = '127.0.0.1' if logon_type == 7 else None
+            self.generate_logon(user, system, time, logon_type=logon_type,
+                                source_ip=source_ip)
 
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
@@ -1427,6 +1558,22 @@ class ActivityGenerator:
         'LOCAL SERVICE': 'S-1-5-19',
         'NETWORK SERVICE': 'S-1-5-20',
     }
+
+    def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
+        """Get a seeded system process PID by role name."""
+        pids = getattr(self, '_system_pids', {}).get(hostname, {})
+        return pids.get(role, fallback)
+
+    def _lookup_process_name(self, hostname: str, pid: int) -> str:
+        """Look up the image path of a running process by PID.
+
+        Falls back to explorer.exe for user processes if PID not tracked.
+        """
+        key = (hostname, pid)
+        proc = self.state_manager.state.running_processes.get(key)
+        if proc:
+            return proc.image
+        return r'C:\Windows\explorer.exe'
 
     def _get_sid(self, username: str) -> str:
         """Look up Windows SID for a username.

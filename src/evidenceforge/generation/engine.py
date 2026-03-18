@@ -1178,6 +1178,11 @@ class GenerationEngine:
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
 
+        # Phase 6.0: Share system PIDs with activity generator for dynamic ParentProcessName
+        self.activity_generator._system_pids = self._system_pids
+        # Share all system IPs for network logon source_ip selection
+        self.activity_generator._all_system_ips = [s.ip for s in self.scenario.environment.systems]
+
     def _seed_windows_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Windows system process tree in StateManager."""
         sm = self.state_manager
@@ -1216,8 +1221,11 @@ class GenerationEngine:
         pids['search_indexer'] = _c(pids['services'], r'C:\Windows\System32\SearchIndexer.exe', 'SearchIndexer.exe', 'SYSTEM')
         pids['taskhostw'] = _c(pids['services'], r'C:\Windows\System32\taskhostw.exe', 'taskhostw.exe', 'SYSTEM')
 
-        # Session 1 processes
+        # Session 1 processes (Phase 6.0: add winlogon → userinit → explorer chain)
         pids['csrss_s1'] = _c(pids['smss'], r'C:\Windows\System32\csrss.exe', 'csrss.exe', 'SYSTEM')
+        pids['winlogon'] = _c(pids['smss'], r'C:\Windows\System32\winlogon.exe', 'winlogon.exe', 'SYSTEM')
+        pids['userinit'] = _c(pids['winlogon'], r'C:\Windows\System32\userinit.exe', 'userinit.exe', 'SYSTEM')
+        pids['explorer'] = _c(pids['userinit'], r'C:\Windows\explorer.exe', 'explorer.exe', 'SYSTEM')
         pids['dwm'] = _c(pids['csrss_s0'], r'C:\Windows\System32\dwm.exe', 'dwm.exe', 'SYSTEM')
         pids['runtime_broker'] = _c(pids['svchost_local_system'], r'C:\Windows\System32\RuntimeBroker.exe', 'RuntimeBroker.exe', 'SYSTEM')
 
@@ -1379,6 +1387,129 @@ class GenerationEngine:
                         process_name=task_name, command_line=task_cmd,
                         parent_pid=parent_pid, username='root',
                     )
+
+        # Phase 6.0: Linux syslog diversity — generate daemon messages
+        for system in self.scenario.environment.systems:
+            os_cat = _get_os_category(system.os)
+            if os_cat != 'linux' or 'syslog' not in self.emitters:
+                continue
+
+            sys_pids = self._system_pids.get(system.hostname, {})
+            sys_type = (system.type or 'server').lower()
+            # Role-dependent volume: DMZ/web servers are noisier
+            is_dmz = 'dmz' in system.hostname.lower() or 'web' in system.hostname.lower()
+            num_events = rng.randint(30, 80) if is_dmz else rng.randint(12, 30)
+
+            # Track uptime counter for kernel messages (seconds since boot)
+            base_uptime = rng.randint(100000, 3000000)
+
+            for _ in range(num_events):
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                uptime = base_uptime + int(offset)
+
+                # Pick a random syslog source
+                source_roll = rng.random()
+                if source_roll < 0.20:
+                    # systemd — Starting/Finished pairs, always PID 1
+                    services = ['logrotate', 'phpsessionclean', 'apt-daily', 'man-db',
+                                'fstrim', 'motd-news', 'ua-timer', 'systemd-tmpfiles-clean']
+                    svc = rng.choice(services)
+                    action = rng.choice(['Starting', 'Finished'])
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'systemd', 'pid': sys_pids.get('systemd', 1),
+                        'facility': 3, 'severity': 6,
+                        'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.',
+                    })
+                elif source_roll < 0.35:
+                    # CRON — uppercase, (user) CMD (command)
+                    cron_cmds = [
+                        ('root', 'test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )'),
+                        ('root', 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'),
+                        ('root', '/usr/sbin/logrotate /etc/logrotate.conf'),
+                        ('www-data', '/usr/bin/php /var/www/html/cron.php'),
+                    ]
+                    user, cmd = rng.choice(cron_cmds)
+                    cron_pid = self.state_manager.create_process(
+                        system.hostname, sys_pids.get('cron', 0),
+                        '/usr/sbin/cron', f'CRON[{user}]', user, 'System')
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'CRON', 'pid': cron_pid,
+                        'facility': 9, 'severity': 6,
+                        'message': f'({user}) CMD ({cmd})',
+                    })
+                elif source_roll < 0.50:
+                    # kernel — no PID, includes uptime counter
+                    if is_dmz and rng.random() < 0.5:
+                        # UFW BLOCK messages on DMZ servers
+                        src_ip = f'{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}'
+                        dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
+                        msg = (f'[{uptime}.{rng.randint(100000,999999)}] [UFW BLOCK] '
+                               f'IN=ens160 OUT= SRC={src_ip} DST={system.ip} '
+                               f'LEN={rng.randint(40,60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40,255)} '
+                               f'ID={rng.randint(1,65535)} PROTO=TCP SPT={rng.randint(1024,65535)} DPT={dpt} '
+                               f'WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0')
+                    else:
+                        # AppArmor or audit messages
+                        msg = (f'[{uptime}.{rng.randint(100000,999999)}] audit: type=1400 '
+                               f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{rng.randint(1000,99999)}): '
+                               f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"')
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'kernel', 'pid': None,
+                        'facility': 0, 'severity': 5,
+                        'message': msg,
+                    })
+                elif source_roll < 0.65:
+                    # systemd-logind — session tracking
+                    sid = rng.randint(100, 9999)
+                    user = rng.choice(['root', 'admin', 'www-data', 'ubuntu'])
+                    action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'systemd-logind', 'pid': sys_pids.get('systemd_logind', rng.randint(400, 800)),
+                        'facility': 3, 'severity': 6,
+                        'message': action,
+                    })
+                elif source_roll < 0.80:
+                    # sshd — disconnect/keepalive messages
+                    ip = f'10.0.{rng.randint(0,10)}.{rng.randint(1,254)}'
+                    port = rng.randint(49152, 65535)
+                    msgs = [
+                        f'Received disconnect from {ip} port {port}:11: disconnected by user',
+                        f'Disconnected from user admin {ip} port {port}',
+                        f'pam_unix(sshd:session): session closed for user admin',
+                    ]
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'sshd', 'pid': rng.randint(5000, 60000),
+                        'facility': 10, 'severity': 6,
+                        'message': rng.choice(msgs),
+                    })
+                elif source_roll < 0.90:
+                    # snapd
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'snapd', 'pid': sys_pids.get('snapd', rng.randint(500, 2000)),
+                        'facility': 3, 'severity': 6,
+                        'message': rng.choice([
+                            'autorefresh.go:540: auto-refresh: all snaps are up-to-date',
+                            'daemon.go:460: gracefully waiting for running hooks',
+                            'stateengine.go:150: state ensure starting',
+                        ]),
+                    })
+                else:
+                    # systemd-timesyncd
+                    ntp_ip = rng.choice(['91.189.89.198', '91.189.89.199', '91.189.94.4'])
+                    self.emitters['syslog'].emit_event({
+                        'timestamp': ts, 'hostname': system.hostname,
+                        'app_name': 'systemd-timesyncd',
+                        'pid': sys_pids.get('timesyncd', rng.randint(400, 800)),
+                        'facility': 3, 'severity': 6,
+                        'message': f'Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com).',
+                    })
 
         # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour), evenly spaced
         systems = self.scenario.environment.systems

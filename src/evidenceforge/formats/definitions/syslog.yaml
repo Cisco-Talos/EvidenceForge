@@ -50,4 +50,4 @@ output:
   file_extension: ".log"
   encoding: utf-8
   template: |
-    {{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} {{ app_name }}[{{ pid if pid else '-' }}]: {{ message }}
+    {% if app_name == 'kernel' %}{{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} kernel: {{ message }}{% else %}{{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} {{ app_name }}[{{ pid }}]: {{ message }}{% endif %}
