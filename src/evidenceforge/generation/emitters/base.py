@@ -261,10 +261,24 @@ class LogEmitter(ABC):
         self.buffer.clear()
 
     def close(self) -> None:
-        """Close emitter and flush any remaining events."""
+        """Close emitter and flush any remaining events, then write footer."""
         if self.threaded:
             self.stop_thread()
         self.flush()
+        self._write_footer()
+
+    def _write_footer(self) -> None:
+        """Write footer to output file if format has one."""
+        footer_template = getattr(self.format_def.output, 'footer_template', None)
+        if footer_template and self._header_written:
+            from jinja2 import Template
+            tmpl = Template(footer_template)
+            footer = tmpl.render()
+            with self._file_lock:
+                with open(self.output_path, "a", encoding=self.format_def.output.encoding) as f:
+                    f.write(footer)
+                    if not footer.endswith("\n"):
+                        f.write("\n")
 
     def __enter__(self):
         """Context manager entry."""

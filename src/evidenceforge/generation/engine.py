@@ -1155,14 +1155,10 @@ class GenerationEngine:
         """
         logger.info("Finalizing generation")
 
-        # Stop emitter threads gracefully (they flush on stop)
+        # Close all emitters (stop threads + flush + write footer)
         for format_name, emitter in self.emitters.items():
-            if emitter.threaded:
-                logger.info(f"Stopping {format_name} emitter thread")
-                emitter.stop_thread()
-            else:
-                logger.info(f"Closing {format_name} emitter")
-                emitter.close()
+            logger.info(f"Stopping {format_name} emitter thread")
+            emitter.close()
 
         logger.info("All emitters closed")
 

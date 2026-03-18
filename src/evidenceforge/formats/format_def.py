@@ -110,6 +110,7 @@ class OutputTemplate(BaseModel):
         template: Jinja2 template string for rendering
         file_extension: File extension for output (e.g., ".xml", ".log")
         header_template: Optional header template (for TSV/CSV formats)
+        footer_template: Optional footer template (for XML root element closing)
         encoding: Output encoding (default: utf-8)
     """
 
@@ -118,6 +119,9 @@ class OutputTemplate(BaseModel):
     file_extension: str = Field(..., pattern=r"^\.[a-z0-9]+$")
     header_template: str | None = Field(
         None, description="Optional header template"
+    )
+    footer_template: str | None = Field(
+        None, description="Optional footer template"
     )
     encoding: str = Field(default="utf-8")
 

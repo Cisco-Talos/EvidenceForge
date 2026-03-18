@@ -676,6 +676,10 @@ output:
   format: xml
   file_extension: ".xml"
   encoding: "utf-8"
+  header_template: |
+    <?xml version="1.0" encoding="utf-8"?>
+    <Events>
+  footer_template: "</Events>"
   # Template formatting: Jinja2 conditionals ({% if %}, {% elif %}, {% endif %}) are on
   # separate lines for readability. This doesn't affect XML output whitespace.
   template: |

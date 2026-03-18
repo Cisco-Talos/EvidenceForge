@@ -989,7 +989,8 @@ class ActivityGenerator:
         service: Optional[str] = None,
         duration: Optional[float] = None,
         orig_bytes: Optional[int] = None,
-        resp_bytes: Optional[int] = None
+        resp_bytes: Optional[int] = None,
+        src_port: Optional[int] = None,
     ) -> str:
         """Generate network connection and emit Zeek conn.log event.
 
@@ -1026,7 +1027,8 @@ class ActivityGenerator:
             )
             return ""
 
-        src_port = _get_rng().randint(49152, 65535)  # Ephemeral port
+        if src_port is None:
+            src_port = _get_rng().randint(49152, 65535)  # Ephemeral port
 
         # Create connection in StateManager
         conn_id = self.state_manager.open_connection(
@@ -1095,10 +1097,20 @@ class ActivityGenerator:
                 resp_bytes = max(resp_bytes, resp_pkts * 28)
             elif resp_pkts == 0:
                 resp_bytes = 0
+        elif proto == 'tcp' and history and history != '-':
+            # TCP: derive minimum packet counts from history field
+            # Uppercase letters = originator packets, lowercase = responder
+            hist_orig = sum(1 for c in history if c.isupper())
+            hist_resp = sum(1 for c in history if c.islower())
+            # Also account for data volume (1 packet per ~1460 bytes payload)
+            byte_orig = max(1, (orig_bytes // 1460) + 1) if orig_bytes else 1
+            byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
+            orig_pkts = max(hist_orig, byte_orig)
+            resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
         else:
-            # TCP/ICMP: rough estimate (1 packet per 1500 bytes)
-            orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else None
-            resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else None
+            # ICMP or unknown: simple estimate
+            orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
+            resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
         # IP+protocol header overhead: TCP 52-72 bytes (IP+TCP+options), UDP 28 bytes
         overhead = 28 if proto == 'udp' else _get_rng().randint(52, 72)
@@ -1319,7 +1331,8 @@ class ActivityGenerator:
         src_port = rng.randint(49152, 65535)
 
         # Emit Zeek conn.log UDP/53 record — UID is generated in StateManager
-        # and shared with dns.log for cross-log correlation
+        # and shared with dns.log for cross-log correlation.
+        # Pass src_port so conn.log and dns.log share the same 5-tuple.
         dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
         dns_uid = self.generate_connection(
             src_ip=src_ip,
@@ -1331,6 +1344,7 @@ class ActivityGenerator:
             duration=rng.uniform(0.001, 0.03),
             orig_bytes=rng.randint(40, 100),
             resp_bytes=rng.randint(80, 400),
+            src_port=src_port,
         )
 
         # Emit Zeek dns.log record
@@ -1444,23 +1458,25 @@ class ActivityGenerator:
                     f'{hostname}.corp.local',  # Suffix search failure
                     'wpad.corp.local', 'wpad.local', 'wpad',
                     'isatap.corp.local', 'isatap',
-                    '_ldap._tcp.NonExistentSite._sites.corp.local',
+                    '_ldap._tcp.Default-First-Site-Name._sites.corp.local',
                     'oldserver.corp.local', 'printer01.corp.local',
                 ]
                 nx_query = rng.choice(nxdomain_queries)
                 nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+                nx_src_port = rng.randint(49152, 65535)
                 # Emit conn.log first to get the shared UID
                 nx_uid = self.generate_connection(
                     src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
                     dst_port=53, proto='udp', service='dns',
                     duration=rng.uniform(0.001, 0.01),
                     orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
+                    src_port=nx_src_port,
                 )
                 self.emitters['zeek_dns'].emit_event({
                     'ts': nx_time,
                     'uid': nx_uid,
                     'id.orig_h': src_ip,
-                    'id.orig_p': rng.randint(49152, 65535),
+                    'id.orig_p': nx_src_port,
                     'id.resp_h': dns_server_ip,
                     'id.resp_p': 53,
                     'proto': 'udp',
@@ -2204,13 +2220,16 @@ class ActivityGenerator:
     def _emit_ecar_flow_event(
         self, src_ip: str, dst_ip: str, dst_port: int,
         time: datetime, hostname: str, pid: int = -1,
-        src_port: int = 0,
+        src_port: int = 0, protocol: str = 'tcp',
     ) -> None:
         """Emit eCAR FLOW/CONNECT event."""
         if 'ecar' not in self.emitters:
             return
         if src_port == 0:
             src_port = _get_rng().randint(49152, 65535)
+        # DNS (port 53) and NTP (port 123) are UDP
+        if dst_port in (53, 123):
+            protocol = 'udp'
         self.emitters['ecar'].emit_event({
             'timestamp': time,
             'hostname': hostname,
@@ -2221,7 +2240,7 @@ class ActivityGenerator:
             'src_port': src_port,
             'dst_ip': dst_ip,
             'dst_port': dst_port,
-            'protocol': 'tcp',
+            'protocol': protocol,
         })
 
     def _emit_ecar_module_event(

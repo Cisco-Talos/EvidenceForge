@@ -567,9 +567,9 @@ class TestGenerationEngine:
         engine._initialize()
         engine._finalize()
 
-        # Emitters are created with threaded=True, so _finalize calls stop_thread()
-        assert mock_windows_instance.stop_thread.called
-        assert mock_zeek_instance.stop_thread.called
+        # Emitters are created with threaded=True, so _finalize calls close()
+        assert mock_windows_instance.close.called
+        assert mock_zeek_instance.close.called
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
     @patch('evidenceforge.generation.engine.ZeekDnsEmitter')

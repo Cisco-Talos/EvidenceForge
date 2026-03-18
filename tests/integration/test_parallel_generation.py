@@ -103,14 +103,16 @@ def parse_windows_log(file_path: Path) -> list[dict]:
     Returns:
         List of event dictionaries
     """
-    # Read the file and wrap events in a root element
+    # Read the file — now has proper XML declaration and <Events> root
     with open(file_path) as f:
         content = f.read()
 
-    # Wrap individual Event elements in a root Events element
-    wrapped_content = f"<Events>{content}</Events>"
-
-    root = ET.fromstring(wrapped_content)
+    # If file already has <Events> root, parse directly; otherwise wrap
+    if '<Events>' in content:
+        root = ET.fromstring(content)
+    else:
+        wrapped_content = f"<Events>{content}</Events>"
+        root = ET.fromstring(wrapped_content)
 
     # Define namespace
     ns = {'ns': 'http://schemas.microsoft.com/win/2004/08/events/event'}
