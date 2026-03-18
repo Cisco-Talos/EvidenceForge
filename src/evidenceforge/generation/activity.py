@@ -5,6 +5,7 @@ activity events (logon, logoff, process creation, network connections) and
 coordinates them across multiple log formats for consistency.
 """
 
+import ipaddress
 import logging
 import random
 from datetime import datetime, timedelta
@@ -14,7 +15,6 @@ from typing import Optional
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import User, System
-from evidenceforge.utils.ids import generate_zeek_uid
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,14 @@ def _get_os_category(os_string: str) -> str:
         return 'linux'
     else:
         return 'unknown'
+
+
+def _is_private_ip(ip: str) -> bool:
+    """Check if IP is RFC 1918 private address (for Zeek local_orig/local_resp)."""
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -374,6 +382,48 @@ _CDN_RANGES = [
     (151, 101), (199, 232),                                    # Fastly
 ]
 
+# IPv6 addresses for known services (used by AAAA queries)
+_IPV6_MAP: dict[str, str] = {
+    '172.217.14.206': '2607:f8b0:4004:800::200e',
+    '142.250.80.46': '2607:f8b0:4004:806::200e',
+    '142.250.185.206': '2607:f8b0:4004:803::200e',
+    '142.250.191.46': '2607:f8b0:4004:810::200e',
+    '13.107.42.14': '2620:1ec:c11::14',
+    '13.107.213.70': '2620:1ec:a92::70',
+    '204.79.197.200': '2620:1ec:c11::200',
+    '13.107.246.40': '2620:1ec:46::40',
+    '140.82.121.3': '2606:50c0:8000::153',
+    '140.82.121.4': '2606:50c0:8001::154',
+    '31.13.65.36': '2a03:2880:f12f:83:face:b00c:0:25de',
+    '104.16.132.229': '2606:4700::6810:84e5',
+    '151.101.1.140': '2a04:4e42::396',
+    '93.184.216.34': '2606:2800:220:1:248:1893:25c8:1946',
+}
+
+# AD SRV record templates for domain service discovery
+_AD_SRV_QUERIES = [
+    '_ldap._tcp.dc._msdcs.{domain}',
+    '_kerberos._tcp.{domain}',
+    '_kerberos._tcp.dc._msdcs.{domain}',
+    '_ldap._tcp.{domain}',
+    '_gc._tcp.{domain}',
+    '_kpasswd._tcp.{domain}',
+]
+
+# SRV query → port mapping
+_SRV_PORT_MAP = {
+    '_ldap': 389,
+    '_gc': 3268,
+    '_kerberos': 88,
+    '_kpasswd': 464,
+}
+
+
+def _ipv4_to_fake_ipv6(ipv4: str) -> str:
+    """Generate a deterministic plausible IPv6 address from an IPv4 address."""
+    octets = ipv4.split('.')
+    return f"2607:f8b0:{int(octets[0]):02x}{int(octets[1]):02x}:{int(octets[2]):02x}{int(octets[3]):02x}::1"
+
 
 def _generate_random_external_ip(rng) -> str:
     """Generate a random plausible external IP from common cloud/CDN ranges."""
@@ -467,9 +517,13 @@ class ActivityGenerator:
         """
         self.state_manager = state_manager
         self.emitters = emitters
-        self.event_record_counter = event_record_counter
+        self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
+
+        # Process tree tracking: recent user processes per (hostname, username)
+        # Used by _select_parent_pid() for realistic parent-child relationships
+        self._user_process_history: dict[tuple[str, str], list[tuple[int, str]]] = {}
 
         # Network visibility (Phase 2.5): default to all-visible if not provided
         if network_visibility is None:
@@ -523,7 +577,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,  # Information
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,    # System process
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 # Logon variant fields — Subject is SYSTEM (lsass reports logon events)
@@ -571,7 +625,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 'SubjectUserSid': self._get_sid(user.username),
@@ -619,7 +673,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 9999),
                 'SubjectUserSid': self._get_sid('SYSTEM'),
@@ -702,7 +756,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 # Logoff variant fields
@@ -789,7 +843,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 9999),
                 # Process variant fields
@@ -872,7 +926,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 'SubjectUserSid': self._get_sid(user.username),
@@ -958,8 +1012,9 @@ class ActivityGenerator:
             protocol=proto
         )
 
-        # Generate Zeek UID
-        uid = generate_zeek_uid('C')  # 'C' prefix for conn.log
+        # Get Zeek UID from StateManager (generated at open_connection time)
+        # All Zeek log types for this connection share this UID
+        uid = self.state_manager.get_zeek_uid(conn_id)
 
         # Update connection bytes if provided
         if orig_bytes is not None and resp_bytes is not None:
@@ -1007,11 +1062,11 @@ class ActivityGenerator:
             # Count D/d characters for exact packet counts
             orig_pkts = history.count('D')
             resp_pkts = history.count('d')
-            # Adjust bytes to match packet counts
+            # Adjust bytes to match packet counts (UDP: 28-byte IP+UDP header)
             if orig_pkts > 0 and orig_bytes:
-                orig_bytes = max(orig_bytes, orig_pkts * 40)
+                orig_bytes = max(orig_bytes, orig_pkts * 28)
             if resp_pkts > 0 and resp_bytes:
-                resp_bytes = max(resp_bytes, resp_pkts * 40)
+                resp_bytes = max(resp_bytes, resp_pkts * 28)
             elif resp_pkts == 0:
                 resp_bytes = 0
         else:
@@ -1019,8 +1074,10 @@ class ActivityGenerator:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else None
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else None
 
-        orig_ip_bytes = (orig_bytes + orig_pkts * 40) if orig_bytes and orig_pkts else None
-        resp_ip_bytes = (resp_bytes + resp_pkts * 40) if resp_bytes and resp_pkts else None
+        # IP+protocol header overhead: TCP 52-72 bytes (IP+TCP+options), UDP 28 bytes
+        overhead = 28 if proto == 'udp' else _get_rng().randint(52, 72)
+        orig_ip_bytes = (orig_bytes + orig_pkts * overhead) if orig_bytes and orig_pkts else None
+        resp_ip_bytes = (resp_bytes + resp_pkts * overhead) if resp_bytes and resp_pkts else None
 
         # Emit Zeek conn.log event
         event_data = {
@@ -1036,8 +1093,8 @@ class ActivityGenerator:
             'orig_bytes': orig_bytes,
             'resp_bytes': resp_bytes,
             'conn_state': conn_state,
-            'local_orig': True,  # Phase 1: Assume local originator
-            'local_resp': False,  # Phase 1: Assume remote responder
+            'local_orig': _is_private_ip(src_ip),
+            'local_resp': _is_private_ip(dst_ip),
             'missed_bytes': 0,
             'history': history,
             'orig_pkts': orig_pkts,
@@ -1152,7 +1209,7 @@ class ActivityGenerator:
                 'Computer': system.hostname,
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(),
+                'EventRecordID': self._get_next_event_record_id(system.hostname),
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 9999),
                 'SubjectUserSid': sid,
@@ -1222,8 +1279,6 @@ class ActivityGenerator:
             dst_ip: IP that will be resolved (the "answer")
             time: Timestamp of the DNS query (should precede TCP connection)
         """
-        from evidenceforge.utils.ids import generate_zeek_uid
-
         rng = _get_rng()
 
         # Look up hostname for this IP, or generate one
@@ -1232,15 +1287,15 @@ class ActivityGenerator:
             hostname = _generate_random_hostname(rng, dst_ip)
 
         # Determine DNS server IP from network visibility or use default
-        dns_server_ip = getattr(self, '_dns_server_ip', '10.0.0.1')
+        dns_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
+        dns_server_ip = _get_rng().choice(dns_ips)
 
-        # Shared UID for the DNS conn.log and dns.log records
-        dns_uid = generate_zeek_uid()
         src_port = rng.randint(49152, 65535)
 
-        # Emit Zeek conn.log UDP/53 record
+        # Emit Zeek conn.log UDP/53 record — UID is generated in StateManager
+        # and shared with dns.log for cross-log correlation
         dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
-        self.generate_connection(
+        dns_uid = self.generate_connection(
             src_ip=src_ip,
             dst_ip=dns_server_ip,
             time=dns_time,
@@ -1254,20 +1309,48 @@ class ActivityGenerator:
 
         # Emit Zeek dns.log record
         if 'zeek_dns' in self.emitters:
+            # Determine query type, query string, and answer
             qtype_roll = rng.random()
-            if qtype_roll < 0.60:
+            is_internal = hostname.endswith('.corp.local') or hostname.endswith('.local')
+
+            if qtype_roll < 0.65:
+                # A record: hostname → IPv4
                 qtype, qtype_name = 1, 'A'
+                query = hostname
+                answers = dst_ip
             elif qtype_roll < 0.85:
+                # AAAA record: hostname → IPv6
                 qtype, qtype_name = 28, 'AAAA'
-            elif qtype_roll < 0.95:
-                qtype, qtype_name = 5, 'CNAME'
-            else:
+                query = hostname
+                answers = _IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))
+            elif qtype_roll < 0.93:
+                # PTR record: reversed IP → hostname
                 qtype, qtype_name = 12, 'PTR'
+                octets = dst_ip.split('.')
+                query = '.'.join(reversed(octets)) + '.in-addr.arpa'
+                answers = hostname
+            elif qtype_roll < 0.98:
+                # SRV record: AD service discovery
+                qtype, qtype_name = 33, 'SRV'
+                domain = 'corp.local'
+                query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
+                dc_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
+                dc_ip = _get_rng().choice(dc_ips)
+                dc_hostname = REVERSE_DNS.get(dc_ip, f'dc-01.{domain}')
+                # Determine port from service prefix
+                svc_prefix = query.split('.')[0]  # e.g., '_ldap'
+                port = _SRV_PORT_MAP.get(svc_prefix, 389)
+                answers = f'0 100 {port} {dc_hostname}'
+                is_internal = True
+            else:
+                # MX record: domain → mail server
+                qtype, qtype_name = 15, 'MX'
+                parts = hostname.split('.', 1)
+                query = parts[1] if len(parts) > 1 else hostname
+                answers = f'10 mail.{query}'
 
             # Phase 6.0: varied TTLs (not just round numbers)
             ttl = rng.choice([30, 60, 120, 247, 300, 598, 1800, 3600, 7200, 86400])
-            # AA=True for internal domains (AD DNS is authoritative)
-            is_internal = hostname.endswith('.corp.local') or hostname.endswith('.local')
 
             # This lookup precedes an actual connection, so always NOERROR
             self.emitters['zeek_dns'].emit_event({
@@ -1279,7 +1362,7 @@ class ActivityGenerator:
                 'id.resp_p': 53,
                 'proto': 'udp',
                 'trans_id': rng.randint(1, 65535),
-                'query': hostname,
+                'query': query,
                 'qclass': 1,
                 'qclass_name': 'C_INTERNET',
                 'qtype': qtype,
@@ -1290,7 +1373,7 @@ class ActivityGenerator:
                 'TC': False,
                 'RD': True,
                 'RA': True,
-                'answers': dst_ip,
+                'answers': answers,
                 'TTLs': str(ttl),
                 'rejected': False,
             })
@@ -1306,8 +1389,14 @@ class ActivityGenerator:
                     'oldserver.corp.local', 'printer01.corp.local',
                 ]
                 nx_query = rng.choice(nxdomain_queries)
-                nx_uid = generate_zeek_uid()
                 nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+                # Emit conn.log first to get the shared UID
+                nx_uid = self.generate_connection(
+                    src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
+                    dst_port=53, proto='udp', service='dns',
+                    duration=rng.uniform(0.001, 0.01),
+                    orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
+                )
                 self.emitters['zeek_dns'].emit_event({
                     'ts': nx_time,
                     'uid': nx_uid,
@@ -1332,13 +1421,6 @@ class ActivityGenerator:
                     'TTLs': '-',
                     'rejected': False,
                 })
-                # Emit matching conn.log entry for the NXDOMAIN query
-                self.generate_connection(
-                    src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
-                    dst_port=53, proto='udp', service='dns',
-                    duration=rng.uniform(0.001, 0.01),
-                    orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
-                )
 
     def get_baseline_pattern(
         self,
@@ -1416,19 +1498,30 @@ class ActivityGenerator:
                 self.generate_failed_logon(user, system, time)
                 return
 
-            # Phase 6.0: Realistic logon type distribution by system type
+            # Phase 6.2: Realistic logon type distribution by system type
+            # Type 3 (network) should dominate in AD; Type 5 only for service accounts
             rng = _get_rng()
             sys_type = (system.type or 'workstation').lower()
+            is_service_account = (
+                user.username.endswith('$') or
+                user.username.lower().startswith('svc')
+            )
+
             if sys_type in ('server', 'domain_controller'):
-                # Servers: dominated by network (3) and service (5) logons
+                # Servers/DCs: Type 3 (network) dominates
                 logon_type = rng.choices(
                     [3, 5, 10, 4, 2, 8, 9],
-                    weights=[55, 20, 12, 8, 2, 1, 2], k=1)[0]
-            else:
-                # Workstations: Type 7 (unlock) most common
+                    weights=[70, 15, 8, 4, 1, 1, 1], k=1)[0]
+            elif is_service_account:
+                # Service accounts on workstations: network + service logons
                 logon_type = rng.choices(
-                    [7, 3, 2, 11, 10, 5],
-                    weights=[35, 25, 20, 10, 5, 5], k=1)[0]
+                    [3, 5, 10],
+                    weights=[70, 25, 5], k=1)[0]
+            else:
+                # Regular users on workstations: Type 3 dominant, no Type 5
+                logon_type = rng.choices(
+                    [3, 2, 7, 11, 10],
+                    weights=[55, 20, 10, 10, 5], k=1)[0]
 
             # Type 3 (network) logons are standalone events, not interactive sessions
             if logon_type in (3, 4, 5, 8, 9):
@@ -1471,7 +1564,9 @@ class ActivityGenerator:
                 # Phase 5.1: Substitute username placeholder in paths
                 process_name = process_name.replace('{username}', user.username)
                 command_line = command_line.replace('{username}', user.username)
-                self.generate_process(user, system, time, logon_id, process_name, command_line)
+                parent_pid = self._select_parent_pid(system, user, process_name)
+                pid = self.generate_process(user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid)
+                self._record_user_process(system, user, pid, process_name)
 
             elif os_category == 'linux' and activity_type in PROCESS_TEMPLATES_LINUX:
                 # Phase 5.6: Per-persona app pool for Linux user diversity
@@ -1481,7 +1576,9 @@ class ActivityGenerator:
                     indices = PERSONA_APP_INDICES_LINUX.get(persona_key, PERSONA_APP_INDICES_LINUX['default'])
                     pool = [pool[i] for i in indices if i < len(pool)]
                 process_name, command_line = _get_rng().choice(pool)
-                self.generate_process(user, system, time, logon_id, process_name, command_line)
+                parent_pid = self._select_parent_pid(system, user, process_name)
+                pid = self.generate_process(user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid)
+                self._record_user_process(system, user, pid, process_name)
 
                 # Also generate bash history for Linux
                 self.generate_bash_command(user, system, time, activity_type)
@@ -1512,13 +1609,26 @@ class ActivityGenerator:
                 dst_port = 443 if service == 'https' else 80
             elif activity_type == 'connection_email':
                 service = 'smtp'
-                dst_port = 587
+                # Route through internal Exchange if detected (P1-15)
+                exchange_ip = getattr(self, '_exchange_ip', None)
+                if exchange_ip:
+                    dst_ip = exchange_ip
+                    dst_port = 25  # Internal SMTP relay uses port 25
+                else:
+                    dst_port = 587
             elif activity_type == 'connection_git':
                 service = 'https'
                 dst_port = 443
             elif activity_type == 'connection_db':
-                service = 'mysql'
-                dst_port = 3306
+                db_servers = getattr(self, '_db_servers', [])
+                if db_servers:
+                    db = _get_rng().choice(db_servers)
+                    dst_ip = db['ip']
+                    service = db['service']
+                    dst_port = db['port']
+                else:
+                    service = 'mysql'
+                    dst_port = 3306
             else:
                 service = None
                 dst_port = 443
@@ -1542,15 +1652,182 @@ class ActivityGenerator:
                 resp_bytes=resp_bytes
             )
 
-    def _get_next_event_record_id(self) -> int:
-        """Get next EventRecordID for Windows events (thread-safe).
+    def generate_machine_account_logon(
+        self,
+        hostname: str,
+        machine_username: str,
+        dc_hostname: str,
+        source_ip: str,
+        dc_ip: str,
+        time: datetime,
+        domain: str = 'CORP',
+    ) -> None:
+        """Generate machine account logon event (4624 type 3) on the DC.
 
-        Returns:
-            Next sequential EventRecordID
+        Machine accounts (COMPUTERNAME$) authenticate to DCs constantly for
+        GPO updates, Kerberos renewal, LDAP queries, etc. The event is logged
+        on the DC, not on the source machine.
+        """
+        rng = _get_rng()
+
+        event_data = {
+            'EventID': 4624,
+            'TimeCreated': time,
+            'Computer': dc_hostname,
+            'Channel': 'Security',
+            'Level': 0,
+            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': self._get_sid('SYSTEM'),
+            'SubjectUserName': 'SYSTEM',
+            'SubjectDomainName': 'NT AUTHORITY',
+            'SubjectLogonId': '0x3e7',
+            'TargetUserSid': self._get_sid(machine_username),
+            'TargetUserName': machine_username,
+            'TargetDomainName': domain,
+            'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFF):x}',
+            'LogonType': 3,
+            'LogonProcessName': 'Kerberos',
+            'AuthenticationPackageName': 'Kerberos',
+            'WorkstationName': hostname,
+            'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+            'TransmittedServices': '-',
+            'LmPackageName': '-',
+            'KeyLength': 0,
+            'ProcessId': '0x0',
+            'ProcessName': '-',
+            'IpAddress': source_ip,
+            'IpPort': str(rng.randint(49152, 65535)),
+            'ImpersonationLevel': '%%1833',
+            'RestrictedAdminMode': '-',
+            'TargetOutboundUserName': '-',
+            'TargetOutboundDomainName': '-',
+            'VirtualAccount': '%%1843',
+            'TargetLinkedLogonId': '0x0',
+            'ElevatedToken': '%%1842',
+        }
+
+        if 'windows_event_security' in self.emitters:
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+        # Also generate the Kerberos network connection to DC
+        self.generate_connection(
+            src_ip=source_ip, dst_ip=dc_ip, time=time,
+            dst_port=88, proto='tcp', service='kerberos',
+            duration=rng.uniform(0.001, 0.03),
+            orig_bytes=rng.randint(200, 1000),
+            resp_bytes=rng.randint(200, 1500),
+        )
+
+    def generate_kerberos_tgt(
+        self,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        domain: str = 'CORP',
+    ) -> None:
+        """Generate Kerberos TGT request event (4768) on the DC."""
+        rng = _get_rng()
+        event_data = {
+            'EventID': 4768,
+            'TimeCreated': time,
+            'Computer': dc_hostname,
+            'Channel': 'Security',
+            'Level': 0,
+            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': username,
+            'TargetDomainName': domain,
+            'TargetSid': self._get_sid(username),
+            'ServiceName': 'krbtgt',
+            'ServiceSid': self._get_sid('krbtgt'),
+            'TicketOptions': '0x40810010',
+            'Status': '0x0',
+            'TicketEncryptionType': '0x12',  # AES-256
+            'PreAuthType': 15,
+            'IpAddress': f'::ffff:{source_ip}',
+            'IpPort': rng.randint(49152, 65535),
+        }
+        if 'windows_event_security' in self.emitters:
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+    def generate_kerberos_service_ticket(
+        self,
+        username: str,
+        service_name: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        domain: str = 'CORP',
+    ) -> None:
+        """Generate Kerberos service ticket request event (4769) on the DC."""
+        rng = _get_rng()
+        event_data = {
+            'EventID': 4769,
+            'TimeCreated': time,
+            'Computer': dc_hostname,
+            'Channel': 'Security',
+            'Level': 0,
+            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': f'{username}@{domain}',
+            'TargetDomainName': domain,
+            'ServiceName': service_name,
+            'ServiceSid': self._get_sid(service_name.split('/')[0] if '/' in service_name else service_name),
+            'TicketOptions': '0x40810000',
+            'TicketEncryptionType': '0x12',
+            'IpAddress': f'::ffff:{source_ip}',
+            'IpPort': rng.randint(49152, 65535),
+            'Status': '0x0',
+        }
+        if 'windows_event_security' in self.emitters:
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+    def generate_ntlm_validation(
+        self,
+        username: str,
+        workstation: str,
+        dc_hostname: str,
+        time: datetime,
+    ) -> None:
+        """Generate NTLM credential validation event (4776) on the DC."""
+        rng = _get_rng()
+        event_data = {
+            'EventID': 4776,
+            'TimeCreated': time,
+            'Computer': dc_hostname,
+            'Channel': 'Security',
+            'Level': 0,
+            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
+            'LogonAccount': username,
+            'SourceWorkstation': workstation,
+            'Status': '0x0',
+        }
+        if 'windows_event_security' in self.emitters:
+            self.emitters['windows_event_security'].emit_event(event_data)
+
+    def _get_next_event_record_id(self, hostname: str = '') -> int:
+        """Get next EventRecordID for a specific computer (thread-safe).
+
+        Real Windows event logs have per-computer sequential IDs. Each host
+        starts at a random offset (1000-50000) to simulate uptime history.
+
+        Args:
+            hostname: Computer hostname for per-machine counter
         """
         with self._counter_lock:
-            self.event_record_counter += 1
-            return self.event_record_counter
+            if hostname not in self._event_record_counters:
+                rng = random.Random(hash(f"erid_{hostname}"))
+                self._event_record_counters[hostname] = rng.randint(1000, 50000)
+            self._event_record_counters[hostname] += 1
+            return self._event_record_counters[hostname]
 
     # Well-known Windows SIDs (always available regardless of registry)
     _WELL_KNOWN_SIDS = {
@@ -1574,6 +1851,73 @@ class ActivityGenerator:
         if proc:
             return proc.image
         return r'C:\Windows\explorer.exe'
+
+    # Process names that can spawn child processes
+    _WINDOWS_SHELLS = {'cmd.exe', 'powershell.exe', 'pwsh.exe', 'WindowsTerminal.exe'}
+    _WINDOWS_SPAWNERS = {
+        'cmd.exe', 'powershell.exe', 'pwsh.exe', 'WindowsTerminal.exe',
+        'outlook.exe', 'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',
+    }
+    _LINUX_SHELLS = {'/bin/bash', '/bin/zsh', '/bin/sh', '/usr/bin/bash', '/usr/bin/zsh'}
+
+    def _is_pid_alive(self, system: System, pid: int) -> bool:
+        """Check if a PID is still running in state manager."""
+        return self.state_manager.get_process(system.hostname, pid) is not None
+
+    def _select_parent_pid(self, system: System, user: User, process_name: str) -> int:
+        """Select a realistic parent PID based on process type and history.
+
+        Builds process trees with depth by tracking recent user processes.
+        Windows user processes typically spawn from explorer.exe or shells.
+        Linux user processes typically spawn from login shells.
+
+        Only returns PIDs that are still alive in the state manager.
+        """
+        rng = _get_rng()
+        sys_pids = getattr(self, '_system_pids', {}).get(system.hostname, {})
+        os_cat = _get_os_category(system.os)
+        key = (system.hostname, user.username)
+        history = self._user_process_history.get(key, [])
+        # Filter history to only include still-running processes
+        alive_history = [(pid, name) for pid, name in history
+                         if self._is_pid_alive(system, pid)]
+
+        if os_cat == 'windows':
+            exe_name = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
+
+            # Shells and terminals spawn from explorer.exe
+            if exe_name in self._WINDOWS_SHELLS:
+                return sys_pids.get('explorer', 4)
+
+            # Check for a running shell in history that could be parent
+            shells = [(pid, name) for pid, name in alive_history
+                      if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SHELLS]
+            if shells and rng.random() < 0.6:
+                return shells[-1][0]
+
+            # Check for a browser/app that could spawn this process
+            spawners = [(pid, name) for pid, name in alive_history
+                        if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SPAWNERS]
+            if spawners and rng.random() < 0.3:
+                return spawners[-1][0]
+
+            # Default: explorer.exe
+            return sys_pids.get('explorer', 4)
+        else:
+            # Linux: most user commands spawn from a shell
+            shells = [(pid, name) for pid, name in alive_history
+                      if name in self._LINUX_SHELLS]
+            if shells:
+                return shells[-1][0]
+            return sys_pids.get('bash', sys_pids.get('sshd', 1))
+
+    def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
+        """Record a user process in history for future parent selection."""
+        key = (system.hostname, user.username)
+        self._user_process_history.setdefault(key, []).append((pid, process_name))
+        # Keep only last 10 processes per user/system
+        if len(self._user_process_history[key]) > 10:
+            self._user_process_history[key] = self._user_process_history[key][-10:]
 
     def _get_sid(self, username: str) -> str:
         """Look up Windows SID for a username.

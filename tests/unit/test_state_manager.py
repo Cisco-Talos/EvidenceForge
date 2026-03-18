@@ -200,7 +200,7 @@ class TestProcessManagement:
         parent_pid = sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
         child_pid = sm.create_process("WS-01", parent_pid, "cmd.exe", "cmd.exe", "jdoe", "Medium")
 
-        assert child_pid == parent_pid + 1
+        assert child_pid > parent_pid
         child = sm.get_process("WS-01", child_pid)
         assert child.parent_pid == parent_pid
 

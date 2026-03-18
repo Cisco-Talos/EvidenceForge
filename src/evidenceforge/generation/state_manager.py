@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from threading import RLock
 
 from evidenceforge.models.exceptions import StateError
+from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.models.state import (
     ActiveSession,
     GeneratorState,
@@ -358,9 +359,10 @@ class StateManager:
             conn_id = f"conn-{self._connection_id_counter}"
             self._connection_id_counter += 1
 
-            # Create connection
+            # Create connection with Zeek UID for cross-log correlation
             connection = OpenConnection(
                 conn_id=conn_id,
+                zeek_uid=generate_zeek_uid('C'),
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
@@ -377,6 +379,22 @@ class StateManager:
                 f"Opened connection {conn_id}: {src_ip}:{src_port} -> {dst_ip}:{dst_port} ({protocol})"
             )
             return conn_id
+
+    def get_zeek_uid(self, conn_id: str) -> str:
+        """Get the Zeek UID for a connection.
+
+        All Zeek log types sharing the same network session use this UID
+        for cross-log correlation (conn.log, dns.log, http.log, etc.).
+
+        Args:
+            conn_id: Connection ID
+
+        Returns:
+            Zeek UID string, or empty string if connection not found
+        """
+        with self._lock:
+            conn = self.state.open_connections.get(conn_id)
+            return conn.zeek_uid if conn else ""
 
     def get_connection(self, conn_id: str) -> OpenConnection | None:
         """Get an open connection.

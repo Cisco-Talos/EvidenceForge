@@ -526,7 +526,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_generate_skips_ground_truth_without_malicious_events(
-        self, mock_load_format, mock_windows, mock_zeek,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns,
         mock_activity_gen, mock_gt_gen, minimal_scenario, tmp_path
     ):
         """Should NOT generate ground truth for baseline-only scenarios."""

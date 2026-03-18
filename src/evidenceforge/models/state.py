@@ -73,6 +73,7 @@ class OpenConnection:
 
     Attributes:
         conn_id: Unique connection identifier
+        zeek_uid: Zeek UID for cross-log correlation (shared across conn/dns/http/etc.)
         src_ip: Source IP address
         src_port: Source port number
         dst_ip: Destination IP address
@@ -85,6 +86,7 @@ class OpenConnection:
     """
 
     conn_id: str
+    zeek_uid: str
     src_ip: str
     src_port: int
     dst_ip: str

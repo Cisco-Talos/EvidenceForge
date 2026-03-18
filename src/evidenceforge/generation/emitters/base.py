@@ -70,7 +70,7 @@ class LogEmitter(ABC):
             self._stop_event = Event()
             self._thread = Thread(
                 target=self._run,
-                daemon=False,
+                daemon=True,
                 name=f"Emitter-{format_def.name}"
             )
             self._thread.start()

@@ -114,25 +114,26 @@ class GenerationEngine:
         self._initialize()
         self._report_progress("phase_end", {"phase": "initialize"})
 
-        # Phase 2: Generate baseline activity
-        self._report_progress("phase_start", {"phase": "baseline", "description": "Generating baseline activity"})
-        self._generate_baseline()
-        self._report_progress("phase_end", {"phase": "baseline"})
+        try:
+            # Phase 2: Generate baseline activity
+            self._report_progress("phase_start", {"phase": "baseline", "description": "Generating baseline activity"})
+            self._generate_baseline()
+            self._report_progress("phase_end", {"phase": "baseline"})
 
-        # Phase 3: Execute storyline events (if present)
-        if self.scenario.storyline:
-            logger.info(f"Executing {len(self.scenario.storyline)} storyline events")
-            self._report_progress("phase_start", {
-                "phase": "storyline",
-                "description": f"Executing {len(self.scenario.storyline)} storyline events"
-            })
-            self._execute_storyline()
-            self._report_progress("phase_end", {"phase": "storyline"})
-
-        # Phase 4: Finalize and close emitters
-        self._report_progress("phase_start", {"phase": "finalize", "description": "Finalizing generation"})
-        self._finalize()
-        self._report_progress("phase_end", {"phase": "finalize"})
+            # Phase 3: Execute storyline events (if present)
+            if self.scenario.storyline:
+                logger.info(f"Executing {len(self.scenario.storyline)} storyline events")
+                self._report_progress("phase_start", {
+                    "phase": "storyline",
+                    "description": f"Executing {len(self.scenario.storyline)} storyline events"
+                })
+                self._execute_storyline()
+                self._report_progress("phase_end", {"phase": "storyline"})
+        finally:
+            # Phase 4: Finalize and close emitters (always, even on error)
+            self._report_progress("phase_start", {"phase": "finalize", "description": "Finalizing generation"})
+            self._finalize()
+            self._report_progress("phase_end", {"phase": "finalize"})
 
         # Phase 5: Generate ground truth (if malicious activity present)
         if self.malicious_events:
@@ -348,7 +349,8 @@ class GenerationEngine:
         # Patterns for processes that should never be terminated
         system_patterns = ('svchost', 'lsass', 'csrss', 'services.exe', 'explorer.exe',
                            'smss', 'wininit', 'winlogon', 'fontdrvhost', 'systemd',
-                           'cron', 'sshd', 'rsyslogd', 'NetworkManager', 'dbus-daemon')
+                           'cron', 'sshd', 'rsyslogd', 'NetworkManager', 'dbus-daemon',
+                           'bash', 'agetty')
 
         # Patterns for short-lived processes (5-30 min)
         short_lived = ('msbuild', 'gcc', 'npm', 'make', 'dotnet', 'cargo', 'node.exe')
@@ -733,16 +735,39 @@ class GenerationEngine:
         persona_name = user.persona if user.persona else None
         pattern = self.activity_generator.get_baseline_pattern(persona_name, persona=persona)
 
-        # Execute activities based on probabilities
+        # Phase 6.2: Break mechanical traffic patterns
+        # Use deterministic per-user-per-time RNG for reproducibility
+        rng = random.Random(hash(f"{user.username}_{event_time}"))
+
+        # Shuffle activity order to break rigid DNS→web→DNS→SMTP sequence
+        pattern = list(pattern)
+        rng.shuffle(pattern)
+
+        # 15% chance of idle period (user away from desk)
+        if rng.random() < 0.15:
+            return
+
+        # Build activity list with occasional bursts
+        activities = []
         for activity_type, probability in pattern:
-            if random.random() < probability:
-                self.state_manager.set_current_time(event_time)
-                self.activity_generator.execute_baseline_activity(
-                    user=user,
-                    system=system,
-                    time=event_time,
-                    activity_type=activity_type
-                )
+            if rng.random() < probability:
+                # 20% chance of burst: repeat same activity 2-4 times
+                if rng.random() < 0.20:
+                    activities.extend([activity_type] * rng.randint(2, 4))
+                else:
+                    activities.append(activity_type)
+
+        # Execute with per-activity jitter (0-55s offset within the timeslot)
+        for activity_type in activities:
+            jitter = timedelta(seconds=rng.randint(0, 55))
+            t = event_time + jitter
+            self.state_manager.set_current_time(t)
+            self.activity_generator.execute_baseline_activity(
+                user=user,
+                system=system,
+                time=t,
+                activity_type=activity_type
+            )
 
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
@@ -929,14 +954,17 @@ class GenerationEngine:
             process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
             command_line = details.get('command_line', 'powershell.exe -enc <base64_encoded_command>')
 
+            parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
             pid = self.activity_generator.generate_process(
                 user=actor,
                 system=system,
                 time=time,
                 logon_id=logon_id,
                 process_name=process_name,
-                command_line=command_line
+                command_line=command_line,
+                parent_pid=parent_pid,
             )
+            self.activity_generator._record_user_process(system, actor, pid, process_name)
 
             malicious_event['process_name'] = process_name
             malicious_event['command_line'] = command_line
@@ -1111,28 +1139,65 @@ class GenerationEngine:
 
     # --- Phase 5.4: System Process Trees & Background Traffic ---
 
-    def _detect_infrastructure_ips(self) -> dict[str, str | list[str]]:
+    # Service name → (port, zeek_service) mapping for database detection
+    _DB_SERVICE_MAP = {
+        'mssql': (1433, 'mssql'),
+        'sql server': (1433, 'mssql'),
+        'mysql': (3306, 'mysql'),
+        'mariadb': (3306, 'mysql'),
+        'postgres': (5432, 'postgresql'),
+        'postgresql': (5432, 'postgresql'),
+    }
+
+    def _detect_infrastructure_ips(self) -> dict[str, str | list]:
         """Detect infrastructure IPs from scenario systems.
 
-        Scans system hostnames/types for role hints (dc, dns, ntp) and
+        Scans system hostnames/types/services for role hints and
         maps them to IPs. Falls back to defaults for missing roles.
         """
-        infra: dict[str, str | list[str]] = {
-            'dns': '10.0.0.1',
+        infra: dict[str, str | list] = {
+            'dns': [],              # List of DNS server IPs (DCs run DNS)
             'ntp': ['129.6.15.28', '132.163.97.1'],
-            'dc': '10.0.0.1',
+            'dc': [],               # List of DC IPs
+            'dc_hostnames': [],     # Matching DC hostnames
+            'db_servers': [],
+            'exchange': None,       # Internal Exchange/mail server IP
         }
 
         for system in self.scenario.environment.systems:
             hn = system.hostname.lower()
             stype = system.type.lower() if system.type else ''
             if 'dc' in hn or stype == 'domain_controller':
-                infra['dc'] = system.ip
-                infra['dns'] = system.ip  # DCs usually run DNS
+                infra['dc'].append(system.ip)
+                infra['dc_hostnames'].append(system.hostname)
+                if system.ip not in infra['dns']:
+                    infra['dns'].append(system.ip)  # DCs usually run DNS
             elif 'dns' in hn:
-                infra['dns'] = system.ip
+                if system.ip not in infra['dns']:
+                    infra['dns'].append(system.ip)
             elif 'ntp' in hn:
                 infra['ntp'] = [system.ip]
+            elif 'exch' in hn or 'mail' in hn or stype == 'mail_server':
+                infra['exchange'] = system.ip
+
+            # Detect database servers from services list
+            for svc in system.services:
+                svc_lower = svc.lower()
+                for svc_key, (port, zeek_svc) in self._DB_SERVICE_MAP.items():
+                    if svc_key in svc_lower:
+                        infra['db_servers'].append({
+                            'ip': system.ip,
+                            'port': port,
+                            'service': zeek_svc,
+                        })
+                        break  # One match per service entry is enough
+
+        # Fallbacks when no DCs/DNS detected
+        if not infra['dns']:
+            infra['dns'] = ['10.0.0.1']
+        if not infra['dc']:
+            infra['dc'] = [infra['dns'][0]]
+            infra['dc_hostnames'] = ['DC-01']
 
         return infra
 
@@ -1147,7 +1212,7 @@ class GenerationEngine:
             else:
                 os_cat = _get_os_category(system.os)
                 if os_cat == 'windows':
-                    svcs = ['dns-client', 'ntp-client', 'smb-client']
+                    svcs = ['dns-client', 'ntp-client', 'smb-client', 'kerberos-client', 'ldap-client']
                     if system.type and system.type.lower() in ('server', 'domain_controller'):
                         svcs.append('smb-server')
                 else:
@@ -1182,6 +1247,12 @@ class GenerationEngine:
         self.activity_generator._system_pids = self._system_pids
         # Share all system IPs for network logon source_ip selection
         self.activity_generator._all_system_ips = [s.ip for s in self.scenario.environment.systems]
+        # Share detected DB servers for scenario-aware database connections
+        self.activity_generator._db_servers = self._infra_ips.get('db_servers', [])
+        # Phase 6.2: Share DNS server IPs (DCs run DNS in AD)
+        self.activity_generator._dns_server_ips = self._infra_ips.get('dns', ['10.0.0.1'])
+        # Phase 6.2: Share Exchange server IP for internal SMTP routing
+        self.activity_generator._exchange_ip = self._infra_ips.get('exchange')
 
     def _seed_windows_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Windows system process tree in StateManager."""
@@ -1267,6 +1338,9 @@ class GenerationEngine:
         pids['agetty1'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty1 linux', 'root')
         pids['agetty2'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty2 linux', 'root')
 
+        # User login shell (sshd forks per-session sshd, then bash)
+        pids['bash'] = _c(pids['sshd'], '/bin/bash', '-bash', 'root')
+
     def _generate_system_traffic(self, current_hour: datetime) -> None:
         """Generate system-initiated background traffic for all systems.
 
@@ -1279,7 +1353,9 @@ class GenerationEngine:
         from evidenceforge.generation.activity import _get_os_category
 
         rng = random.Random(hash(f"{self.scenario.name}_sys_{current_hour}"))
-        dns_ip = self._infra_ips.get('dns', '10.0.0.1')
+        dns_ips = self._infra_ips.get('dns', ['10.0.0.1'])
+        if isinstance(dns_ips, str):
+            dns_ips = [dns_ips]
         ntp_ips = self._infra_ips.get('ntp', ['129.6.15.28'])
         if isinstance(ntp_ips, str):
             ntp_ips = [ntp_ips]
@@ -1300,7 +1376,7 @@ class GenerationEngine:
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=dns_ip if isinstance(dns_ip, str) else dns_ip,
+                        dst_ip=rng.choice(dns_ips),
                         time=ts,
                         dst_port=53,
                         proto='udp',
@@ -1330,26 +1406,85 @@ class GenerationEngine:
                 )
 
             # SMB browsing: 1-3 per hour (Windows workstations only), evenly spaced
-            if 'smb-client' in services and os_cat == 'windows':
-                dc_ip = self._infra_ips.get('dc', '10.0.0.1')
-                if isinstance(dc_ip, str) and dc_ip != system.ip:
-                    num_smb = rng.randint(1, 3)
-                    base_interval = 3600 / (num_smb + 1)
-                    for i in range(num_smb):
+            dc_ips = self._infra_ips.get('dc', ['10.0.0.1'])
+            if isinstance(dc_ips, str):
+                dc_ips = [dc_ips]
+            # Exclude self from DC targets
+            dc_targets = [ip for ip in dc_ips if ip != system.ip]
+
+            if 'smb-client' in services and os_cat == 'windows' and dc_targets:
+                num_smb = rng.randint(1, 3)
+                base_interval = 3600 / (num_smb + 1)
+                for i in range(num_smb):
+                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                    offset = max(0, min(3599, offset))
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=rng.choice(dc_targets),
+                        time=ts,
+                        dst_port=445,
+                        proto='tcp',
+                        service='smb',
+                        duration=rng.uniform(0.1, 2.0),
+                        orig_bytes=rng.randint(200, 2000),
+                        resp_bytes=rng.randint(500, 5000),
+                    )
+
+            # Kerberos: domain-joined Windows machines → DC, 4-8 per hour
+            if 'kerberos-client' in services and os_cat == 'windows' and dc_targets:
+                num_krb = rng.randint(4, 8)
+                base_interval = 3600 / (num_krb + 1)
+                for i in range(num_krb):
+                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                    offset = max(0, min(3599, offset))
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip, dst_ip=rng.choice(dc_targets), time=ts,
+                        dst_port=88, proto='tcp', service='kerberos',
+                        duration=rng.uniform(0.001, 0.05),
+                        orig_bytes=rng.randint(200, 1500),
+                        resp_bytes=rng.randint(200, 2000),
+                    )
+
+            # LDAP: domain-joined Windows machines → DC, 2-5 per hour
+            if 'ldap-client' in services and os_cat == 'windows' and dc_targets:
+                num_ldap = rng.randint(2, 5)
+                base_interval = 3600 / (num_ldap + 1)
+                for i in range(num_ldap):
+                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                    offset = max(0, min(3599, offset))
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip, dst_ip=rng.choice(dc_targets), time=ts,
+                        dst_port=389, proto='tcp', service='ldap',
+                        duration=rng.uniform(0.01, 0.5),
+                        orig_bytes=rng.randint(100, 2000),
+                        resp_bytes=rng.randint(500, 10000),
+                    )
+
+            # Database: app servers + some workstations → DB servers from scenario
+            db_servers = self._infra_ips.get('db_servers', [])
+            if db_servers and system.ip not in [d['ip'] for d in db_servers]:
+                sys_type = (system.type or 'workstation').lower()
+                if sys_type in ('server', 'domain_controller') or (sys_type == 'workstation' and rng.random() < 0.2):
+                    db = rng.choice(db_servers)
+                    num_db = rng.randint(3, 10)
+                    base_interval = 3600 / (num_db + 1)
+                    for i in range(num_db):
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
                         offset = max(0, min(3599, offset))
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_connection(
-                            src_ip=system.ip,
-                            dst_ip=dc_ip,
-                            time=ts,
-                            dst_port=445,
-                            proto='tcp',
-                            service='smb',
-                            duration=rng.uniform(0.1, 2.0),
-                            orig_bytes=rng.randint(200, 2000),
-                            resp_bytes=rng.randint(500, 5000),
+                            src_ip=system.ip, dst_ip=db['ip'], time=ts,
+                            dst_port=db['port'], proto='tcp', service=db['service'],
+                            duration=rng.uniform(0.01, 2.0),
+                            orig_bytes=rng.randint(200, 5000),
+                            resp_bytes=rng.randint(500, 50000),
                         )
 
             # Scheduled tasks: 0-2 per hour, anchored to quarter-hour marks
@@ -1387,6 +1522,84 @@ class GenerationEngine:
                         process_name=task_name, command_line=task_cmd,
                         parent_pid=parent_pid, username='root',
                     )
+
+        # Phase 6.2: Machine account ($) authentication to DCs
+        # Every Windows domain-joined system authenticates as COMPUTERNAME$ to DCs
+        dc_ips = self._infra_ips.get('dc', [])
+        dc_hostnames = self._infra_ips.get('dc_hostnames', [])
+        if isinstance(dc_ips, str):
+            dc_ips = [dc_ips]
+        if dc_ips and dc_hostnames:
+            for system in self.scenario.environment.systems:
+                os_cat = _get_os_category(system.os)
+                if os_cat != 'windows' or system.ip in dc_ips:
+                    continue  # Skip non-Windows and DCs themselves
+
+                # 2-6 machine account auth cycles per hour
+                num_auth = rng.randint(2, 6)
+                base_interval = 3600 / (num_auth + 1)
+                for i in range(num_auth):
+                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                    offset = max(0, min(3599, offset))
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    # Pick a DC to authenticate to
+                    dc_idx = rng.randint(0, len(dc_ips) - 1)
+                    self.activity_generator.generate_machine_account_logon(
+                        hostname=system.hostname,
+                        machine_username=f"{system.hostname}$",
+                        dc_hostname=dc_hostnames[dc_idx],
+                        source_ip=system.ip,
+                        dc_ip=dc_ips[dc_idx],
+                        time=ts,
+                    )
+
+        # Phase 6.2: DC-side Kerberos event generation
+        # DCs log 4768 (TGT) and 4769 (service ticket) for every client authentication.
+        # This makes DCs the noisiest machines in the environment.
+        if dc_ips and dc_hostnames:
+            windows_clients = [
+                s for s in self.scenario.environment.systems
+                if _get_os_category(s.os) == 'windows' and s.ip not in dc_ips
+            ]
+            for dc_idx, dc_hostname in enumerate(dc_hostnames):
+                # Each client generates auth events visible on this DC
+                for client in windows_clients:
+                    # 3-8 Kerberos auth cycles per client per hour on each DC
+                    num_cycles = rng.randint(3, 8)
+                    base_interval = 3600 / (num_cycles + 1)
+                    for i in range(num_cycles):
+                        offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
+                        offset = max(0, min(3599, offset))
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+
+                        username = f"{client.hostname}$"
+                        # TGT request (4768)
+                        self.activity_generator.generate_kerberos_tgt(
+                            username=username,
+                            source_ip=client.ip,
+                            dc_hostname=dc_hostname,
+                            time=ts,
+                        )
+                        # Service ticket ~50-200ms after TGT (4769)
+                        ts2 = ts + timedelta(milliseconds=rng.randint(50, 200))
+                        svc = rng.choice(['cifs', 'ldap', 'http', 'host', 'krbtgt'])
+                        self.activity_generator.generate_kerberos_service_ticket(
+                            username=username,
+                            service_name=f"{svc}/{dc_hostname}",
+                            source_ip=client.ip,
+                            dc_hostname=dc_hostname,
+                            time=ts2,
+                        )
+                        # 10% chance of NTLM fallback (4776)
+                        if rng.random() < 0.10:
+                            self.activity_generator.generate_ntlm_validation(
+                                username=username,
+                                workstation=client.hostname,
+                                dc_hostname=dc_hostname,
+                                time=ts,
+                            )
 
         # Phase 6.0: Linux syslog diversity — generate daemon messages
         for system in self.scenario.environment.systems:

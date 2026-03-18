@@ -3,6 +3,8 @@
 Tests that format definitions load correctly and validate sample data.
 """
 
+import re
+from collections import Counter
 from datetime import datetime
 
 import pytest
@@ -24,15 +26,20 @@ class TestWindowsEventFormat:
         assert self.format.version == "1.0"
         assert self.format.category == "host"
 
-    def test_has_six_variants(self):
-        """Test that format has 6 EventID variants."""
+    def test_has_eleven_variants(self):
+        """Test that format has 11 EventID variants."""
         assert self.format.variants is not None
-        assert len(self.format.variants) == 6
+        assert len(self.format.variants) == 11
         variant_names = [v.name for v in self.format.variants]
         assert "logon" in variant_names
         assert "logoff" in variant_names
         assert "process_creation" in variant_names
         assert "failed_logon" in variant_names
+        assert "kerberos_tgt" in variant_names
+        assert "kerberos_service_ticket" in variant_names
+        assert "ntlm_validation" in variant_names
+        assert "wfp_connection" in variant_names
+        assert "explicit_credentials" in variant_names
         assert "special_privileges" in variant_names
         assert "process_termination" in variant_names
 
@@ -115,6 +122,42 @@ class TestWindowsEventFormat:
         if not result.valid:
             print(f"Validation errors: {result.errors}")
         assert result.valid is True
+
+    def test_4624_no_duplicate_data_fields(self):
+        """Test that rendered 4624 XML has no duplicate Data Name elements."""
+        from jinja2 import Template
+
+        template = Template(self.format.output.template)
+        rendered = template.render(
+            EventID=4624,
+            TimeCreated="2024-01-15T10:00:00.000Z",
+            Computer="WIN-TEST-01",
+            Channel="Security",
+            Level=0,
+            EventRecordID=1,
+            ExecutionProcessID=4,
+            ExecutionThreadID=100,
+            Version=2,
+            SubjectUserSid="S-1-5-18",
+            SubjectUserName="SYSTEM",
+            SubjectDomainName="NT AUTHORITY",
+            SubjectLogonId="0x3e7",
+            TargetUserSid="S-1-5-21-1234-5678-9012-1001",
+            TargetUserName="jdoe",
+            TargetDomainName="CORP",
+            TargetLogonId="0x3e8",
+            LogonType=2,
+            WorkstationName="WS-01",
+            ProcessId="0x4",
+            ProcessName=r"C:\Windows\System32\winlogon.exe",
+            IpAddress="-",
+            IpPort=0,
+        )
+        # Extract all Data Name="..." values
+        data_names = re.findall(r'<Data Name="([^"]+)">', rendered)
+        counts = Counter(data_names)
+        duplicates = {name: count for name, count in counts.items() if count > 1}
+        assert not duplicates, f"Duplicate Data Name fields in 4624: {duplicates}"
 
     def test_validate_logoff_event_4634(self):
         """Test validation of sample EventID 4634 logoff event."""
@@ -372,7 +415,7 @@ class TestLoadAllFormats:
         windows_fmt = formats["windows_event_security"]
         assert windows_fmt.name == "windows_event_security"
         assert windows_fmt.category == "host"
-        assert len(windows_fmt.variants) == 6
+        assert len(windows_fmt.variants) == 11
 
         # Verify Zeek JSON format
         zeek_fmt = formats["zeek_conn"]

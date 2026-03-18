@@ -450,6 +450,7 @@ class TestStateModels:
         """Test OpenConnection dataclass."""
         conn = OpenConnection(
             conn_id="conn-123",
+            zeek_uid="CwDxijH71E9DtkP5aB",
             src_ip="192.168.1.100",
             src_port=50000,
             dst_ip="8.8.8.8",

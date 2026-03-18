@@ -31,9 +31,14 @@ WINDOWS_VARIANT_MAP = {
     4624: "logon",
     4625: "failed_logon",
     4634: "logoff",
+    4648: "explicit_credentials",
     4672: "special_privileges",
     4688: "process_creation",
     4689: "process_termination",
+    4768: "kerberos_tgt",
+    4769: "kerberos_service_ticket",
+    4776: "ntlm_validation",
+    5156: "wfp_connection",
 }
 
 

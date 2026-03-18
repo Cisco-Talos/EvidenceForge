@@ -5,13 +5,18 @@
 windows_event_security:
   - field: EventID
     reference:
-      4624: 0.25
-      4625: 0.05
-      4634: 0.20
-      4672: 0.10
-      4688: 0.25
-      4689: 0.15
-    tolerance: 0.25
+      4624: 0.20
+      4625: 0.03
+      4634: 0.15
+      4648: 0.01
+      4672: 0.05
+      4688: 0.20
+      4689: 0.12
+      4768: 0.10
+      4769: 0.10
+      4776: 0.02
+      5156: 0.02
+    tolerance: 0.30
 
 zeek_conn:
   - field: proto
@@ -59,10 +64,11 @@ ecar:
 zeek_dns:
   - field: qtype_name
     reference:
-      A: 0.60
-      AAAA: 0.25
-      CNAME: 0.10
-      PTR: 0.05
+      A: 0.65
+      AAAA: 0.20
+      PTR: 0.08
+      SRV: 0.05
+      MX: 0.02
     tolerance: 0.30
 
   - field: rcode_name

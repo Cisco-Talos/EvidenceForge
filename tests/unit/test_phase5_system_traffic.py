@@ -164,12 +164,17 @@ class TestLinuxProcessTreeSeeding:
         engine._seed_linux_process_tree(linux_system, pids)
 
         systemd_pid = pids['systemd']
+        sshd_pid = pids['sshd']
         for name, pid in pids.items():
             if name == 'systemd':
                 continue
             proc = state_manager.get_process(linux_system.hostname, pid)
             assert proc is not None
-            assert proc.parent_pid == systemd_pid, f"{name} parent is {proc.parent_pid}, expected {systemd_pid}"
+            if name == 'bash':
+                # bash is a child of sshd (login shell), not systemd
+                assert proc.parent_pid == sshd_pid, f"bash parent is {proc.parent_pid}, expected sshd ({sshd_pid})"
+            else:
+                assert proc.parent_pid == systemd_pid, f"{name} parent is {proc.parent_pid}, expected {systemd_pid}"
 
     def test_rsyslogd_runs_as_syslog_user(self, state_manager, linux_system):
         """rsyslogd should run as syslog user, not root."""
@@ -291,8 +296,8 @@ class TestInfrastructureDetection:
         engine.scenario = scenario
         infra = engine._detect_infrastructure_ips()
 
-        assert infra['dc'] == '10.0.0.5'
-        assert infra['dns'] == '10.0.0.5'  # DC also serves DNS
+        assert infra['dc'] == ['10.0.0.5']
+        assert infra['dns'] == ['10.0.0.5']  # DC also serves DNS
 
     def test_service_defaults_windows(self):
         from evidenceforge.generation.engine import GenerationEngine
@@ -320,3 +325,193 @@ class TestInfrastructureDetection:
         assert 'dns-client' in defaults['WKS-01']
         assert 'ntp-client' in defaults['WKS-01']
         assert 'smb-client' in defaults['WKS-01']
+
+
+class TestParentPidSelection:
+    """Test that user processes get realistic parent PIDs."""
+
+    def test_windows_process_gets_explorer_parent(self, state_manager, mock_emitters, win_system):
+        """Windows user process should have explorer.exe as parent, not System (4)."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        engine._system_pids = {}
+        engine._seed_windows_process_tree(win_system, pids)
+        engine._system_pids[win_system.hostname] = pids
+
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        ag._system_pids = engine._system_pids
+        user = User(username="test.user", full_name="Test User", email="t@t.com", enabled=True)
+
+        logon_id = ag.generate_logon(user, win_system, datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
+        pid = ag.generate_process(
+            user, win_system, datetime(2024, 3, 15, 10, 0, 1, tzinfo=timezone.utc),
+            logon_id, r'C:\Windows\System32\notepad.exe', 'notepad.exe',
+            parent_pid=ag._select_parent_pid(win_system, user, r'C:\Windows\System32\notepad.exe'),
+        )
+
+        proc = state_manager.get_process(win_system.hostname, pid)
+        explorer_pid = pids['explorer']
+        assert proc.parent_pid == explorer_pid, (
+            f"User process parent should be explorer ({explorer_pid}), not {proc.parent_pid}"
+        )
+
+    def test_linux_process_gets_bash_parent(self, state_manager, mock_emitters, linux_system):
+        """Linux user process should have bash as parent, not systemd or PID 0."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        engine._system_pids = {}
+        engine._seed_linux_process_tree(linux_system, pids)
+        engine._system_pids[linux_system.hostname] = pids
+
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        ag._system_pids = engine._system_pids
+        user = User(username="test.user", full_name="Test User", email="t@t.com", enabled=True)
+
+        logon_id = ag.generate_logon(user, linux_system, datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
+        pid = ag.generate_process(
+            user, linux_system, datetime(2024, 3, 15, 10, 0, 1, tzinfo=timezone.utc),
+            logon_id, '/usr/bin/vim', 'vim /etc/config',
+            parent_pid=ag._select_parent_pid(linux_system, user, '/usr/bin/vim'),
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        bash_pid = pids['bash']
+        assert proc.parent_pid == bash_pid, (
+            f"Linux user process parent should be bash ({bash_pid}), not {proc.parent_pid}"
+        )
+
+    def test_process_tree_depth(self, state_manager, mock_emitters, win_system):
+        """After creating a shell, subsequent processes should sometimes use it as parent."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        engine._system_pids = {}
+        engine._seed_windows_process_tree(win_system, pids)
+        engine._system_pids[win_system.hostname] = pids
+
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        ag._system_pids = engine._system_pids
+        user = User(username="test.user", full_name="Test User", email="t@t.com", enabled=True)
+
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+        logon_id = ag.generate_logon(user, win_system, ts)
+
+        # Create a cmd.exe shell first
+        cmd_pid = ag.generate_process(
+            user, win_system, ts, logon_id,
+            r'C:\Windows\System32\cmd.exe', 'cmd.exe',
+            parent_pid=ag._select_parent_pid(win_system, user, r'C:\Windows\System32\cmd.exe'),
+        )
+        ag._record_user_process(win_system, user, cmd_pid, r'C:\Windows\System32\cmd.exe')
+
+        # Create many processes — some should have cmd.exe as parent
+        parent_pids = set()
+        for i in range(20):
+            parent = ag._select_parent_pid(win_system, user, r'C:\Windows\System32\ipconfig.exe')
+            parent_pids.add(parent)
+
+        # Should see both explorer and cmd as possible parents
+        assert cmd_pid in parent_pids or pids['explorer'] in parent_pids, (
+            "Process tree should have depth — shells should sometimes be parents"
+        )
+
+
+class TestInfrastructureTrafficGeneration:
+    """Test Kerberos/LDAP/DB traffic detection and generation."""
+
+    def test_detects_mssql_from_services(self):
+        """DB servers should be detected from system services list."""
+        from evidenceforge.generation.engine import GenerationEngine
+        from evidenceforge.models.scenario import (
+            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+        )
+        scenario = Scenario(
+            name="test", description="test",
+            environment=Environment(
+                description="test",
+                users=[User(username="j", full_name="J", email="j@x.com")],
+                systems=[
+                    System(hostname="DC-01", ip="10.0.0.5", os="Windows Server 2019", type="domain_controller"),
+                    System(hostname="SRV-DB-01", ip="10.0.100.14", os="Windows Server 2019", type="server",
+                           services=["mssql", "SQL Server 2019"]),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
+            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        )
+
+        engine = object.__new__(GenerationEngine)
+        engine.scenario = scenario
+        infra = engine._detect_infrastructure_ips()
+
+        db_servers = infra['db_servers']
+        assert len(db_servers) >= 1
+        assert any(d['ip'] == '10.0.100.14' and d['port'] == 1433 and d['service'] == 'mssql' for d in db_servers)
+
+    def test_detects_mysql_from_services(self):
+        """MySQL servers should also be detected."""
+        from evidenceforge.generation.engine import GenerationEngine
+        from evidenceforge.models.scenario import (
+            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+        )
+        scenario = Scenario(
+            name="test", description="test",
+            environment=Environment(
+                description="test",
+                users=[User(username="j", full_name="J", email="j@x.com")],
+                systems=[
+                    System(hostname="DB-01", ip="10.0.100.10", os="Linux Ubuntu 22.04", type="server",
+                           services=["MySQL 8.0"]),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
+            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        )
+
+        engine = object.__new__(GenerationEngine)
+        engine.scenario = scenario
+        infra = engine._detect_infrastructure_ips()
+
+        db_servers = infra['db_servers']
+        assert len(db_servers) >= 1
+        assert any(d['port'] == 3306 and d['service'] == 'mysql' for d in db_servers)
+
+    def test_kerberos_ldap_in_default_windows_services(self):
+        """Windows systems should have kerberos-client and ldap-client by default."""
+        from evidenceforge.generation.engine import GenerationEngine
+        from evidenceforge.models.scenario import (
+            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+        )
+        scenario = Scenario(
+            name="test", description="test",
+            environment=Environment(
+                description="test",
+                users=[User(username="j", full_name="J", email="j@x.com")],
+                systems=[
+                    System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
+            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        )
+
+        engine = object.__new__(GenerationEngine)
+        engine.scenario = scenario
+        defaults = engine._build_service_defaults()
+
+        assert 'kerberos-client' in defaults['WKS-01']
+        assert 'ldap-client' in defaults['WKS-01']

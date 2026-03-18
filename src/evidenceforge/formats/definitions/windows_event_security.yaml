@@ -10,7 +10,7 @@ fields:
     required: true
     description: "Windows Event ID"
     constraints:
-      allowed_values: [4624, 4625, 4634, 4672, 4688, 4689]
+      allowed_values: [4624, 4625, 4634, 4648, 4672, 4688, 4689, 4768, 4769, 4776, 5156]
 
   - name: TimeCreated
     type: timestamp
@@ -496,6 +496,181 @@ variants:
         required: true
         description: "Full path of the exited process"
 
+  # EventID 4648: A logon was attempted using explicit credentials
+  - name: explicit_credentials
+    event_id: "4648"
+    description: "Explicit credentials logon (RunAs, scheduled tasks)"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetServerName
+        type: string
+        required: true
+      - name: TargetInfo
+        type: string
+        required: false
+      - name: ProcessId
+        type: hex_string
+        required: true
+      - name: ProcessName
+        type: string
+        required: true
+      - name: NetworkAddress
+        type: string
+        required: false
+      - name: NetworkPort
+        type: integer
+        required: false
+
+  # EventID 4768: A Kerberos authentication ticket (TGT) was requested
+  - name: kerberos_tgt
+    event_id: "4768"
+    description: "Kerberos TGT request"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: ServiceName
+        type: string
+        required: true
+        description: "Always krbtgt for TGT requests"
+      - name: ServiceSid
+        type: sid
+        required: true
+      - name: TicketOptions
+        type: hex_string
+        required: true
+      - name: Status
+        type: hex_string
+        required: true
+      - name: TicketEncryptionType
+        type: hex_string
+        required: true
+      - name: PreAuthType
+        type: integer
+        required: false
+      - name: IpAddress
+        type: string
+        required: true
+      - name: IpPort
+        type: integer
+        required: false
+
+  # EventID 4769: A Kerberos service ticket was requested
+  - name: kerberos_service_ticket
+    event_id: "4769"
+    description: "Kerberos service ticket request"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: ServiceName
+        type: string
+        required: true
+      - name: ServiceSid
+        type: sid
+        required: true
+      - name: TicketOptions
+        type: hex_string
+        required: true
+      - name: TicketEncryptionType
+        type: hex_string
+        required: true
+      - name: IpAddress
+        type: string
+        required: true
+      - name: IpPort
+        type: integer
+        required: false
+      - name: Status
+        type: hex_string
+        required: true
+
+  # EventID 4776: The computer attempted to validate the credentials
+  - name: ntlm_validation
+    event_id: "4776"
+    description: "NTLM credential validation"
+    fields:
+      - name: PackageName
+        type: string
+        required: true
+        description: "Always MICROSOFT_AUTHENTICATION_PACKAGE_V1_0"
+      - name: LogonAccount
+        type: string
+        required: true
+      - name: SourceWorkstation
+        type: string
+        required: true
+      - name: Status
+        type: hex_string
+        required: true
+
+  # EventID 5156: Windows Filtering Platform has permitted a connection
+  - name: wfp_connection
+    event_id: "5156"
+    description: "WFP connection allowed"
+    fields:
+      - name: ProcessID
+        type: integer
+        required: true
+      - name: Application
+        type: string
+        required: true
+      - name: Direction
+        type: string
+        required: true
+        description: "%%14592=Inbound, %%14593=Outbound"
+      - name: SourceAddress
+        type: string
+        required: true
+      - name: SourcePort
+        type: integer
+        required: true
+      - name: DestAddress
+        type: string
+        required: true
+      - name: DestPort
+        type: integer
+        required: true
+      - name: Protocol
+        type: integer
+        required: true
+        description: "6=TCP, 17=UDP"
+      - name: FilterRTID
+        type: integer
+        required: false
+      - name: LayerName
+        type: string
+        required: false
+      - name: LayerRTID
+        type: integer
+        required: false
+
 # Output template in Windows Event Log XML format
 output:
   format: xml
@@ -510,7 +685,7 @@ output:
         <EventID>{{ EventID }}</EventID>
         <Version>{{ 2 if EventID in [4688, 4625] else 1 if EventID == 4624 else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ 12544 if EventID == 4624 else 12546 if EventID == 4625 else 12545 if EventID == 4634 else 12548 if EventID == 4672 else 13312 if EventID == 4688 else 13313 }}</Task>
+        <Task>{{ {4624: 12544, 4625: 12546, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4768: 14339, 4769: 14337, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
         <Opcode>0</Opcode>
         <Keywords>0x8020000000000000</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
@@ -533,14 +708,9 @@ output:
         <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
         <Data Name="LogonType">{{ LogonType }}</Data>
         <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
-        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
-        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
-        <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
-        <Data Name="LogonType">{{ LogonType }}</Data>
         <Data Name="LogonProcessName">{{ LogonProcessName | default('-') }}</Data>
         <Data Name="AuthenticationPackageName">{{ AuthenticationPackageName | default('-') }}</Data>
         <Data Name="WorkstationName">{{ WorkstationName }}</Data>
-        <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
         <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
         <Data Name="LmPackageName">{{ LmPackageName | default('-') }}</Data>
         <Data Name="KeyLength">{{ KeyLength | default(0) }}</Data>
@@ -613,6 +783,67 @@ output:
         <Data Name="Status">{{ Status | default('0x0') }}</Data>
         <Data Name="ProcessId">{{ ProcessId | default('0x0') }}</Data>
         <Data Name="ProcessName">{{ ProcessName }}</Data>
+        {% elif EventID == 4648 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetLogonGuid">{{ TargetLogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="TargetServerName">{{ TargetServerName }}</Data>
+        <Data Name="TargetInfo">{{ TargetInfo | default('-') }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="ProcessName">{{ ProcessName }}</Data>
+        <Data Name="NetworkAddress">{{ NetworkAddress | default('-') }}</Data>
+        <Data Name="NetworkPort">{{ NetworkPort | default(0) }}</Data>
+        {% elif EventID == 4768 %}
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetSid">{{ TargetSid }}</Data>
+        <Data Name="ServiceName">{{ ServiceName }}</Data>
+        <Data Name="ServiceSid">{{ ServiceSid }}</Data>
+        <Data Name="TicketOptions">{{ TicketOptions }}</Data>
+        <Data Name="Status">{{ Status }}</Data>
+        <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
+        <Data Name="PreAuthType">{{ PreAuthType | default(15) }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="CertIssuerName">{{ CertIssuerName | default('') }}</Data>
+        <Data Name="CertSerialNumber">{{ CertSerialNumber | default('') }}</Data>
+        <Data Name="CertThumbprint">{{ CertThumbprint | default('') }}</Data>
+        {% elif EventID == 4769 %}
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="ServiceName">{{ ServiceName }}</Data>
+        <Data Name="ServiceSid">{{ ServiceSid }}</Data>
+        <Data Name="TicketOptions">{{ TicketOptions }}</Data>
+        <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="Status">{{ Status }}</Data>
+        <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
+        {% elif EventID == 4776 %}
+        <Data Name="PackageName">{{ PackageName }}</Data>
+        <Data Name="LogonAccount">{{ LogonAccount }}</Data>
+        <Data Name="SourceWorkstation">{{ SourceWorkstation }}</Data>
+        <Data Name="Status">{{ Status }}</Data>
+        {% elif EventID == 5156 %}
+        <Data Name="ProcessID">{{ ProcessID }}</Data>
+        <Data Name="Application">{{ Application }}</Data>
+        <Data Name="Direction">{{ Direction }}</Data>
+        <Data Name="SourceAddress">{{ SourceAddress }}</Data>
+        <Data Name="SourcePort">{{ SourcePort }}</Data>
+        <Data Name="DestAddress">{{ DestAddress }}</Data>
+        <Data Name="DestPort">{{ DestPort }}</Data>
+        <Data Name="Protocol">{{ Protocol }}</Data>
+        <Data Name="FilterRTID">{{ FilterRTID | default(0) }}</Data>
+        <Data Name="LayerName">{{ LayerName | default('%%14611') }}</Data>
+        <Data Name="LayerRTID">{{ LayerRTID | default(48) }}</Data>
+        <Data Name="RemoteUserID">{{ RemoteUserID | default('S-1-0-0') }}</Data>
+        <Data Name="RemoteMachineID">{{ RemoteMachineID | default('S-1-0-0') }}</Data>
         {% endif %}
       </EventData>
     </Event>

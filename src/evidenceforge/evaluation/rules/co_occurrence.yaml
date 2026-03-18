@@ -66,6 +66,53 @@ windows_event_security:
       - field: ProcessId
         present: true
 
+  - name: "Kerberos TGT has krbtgt service"
+    condition:
+      EventID: 4768
+    checks:
+      - field: ServiceName
+        equals: "krbtgt"
+      - field: IpAddress
+        not_equal: "-"
+
+  - name: "Kerberos service ticket has service name"
+    condition:
+      EventID: 4769
+    checks:
+      - field: ServiceName
+        min_length: 1
+      - field: IpAddress
+        not_equal: "-"
+
+  - name: "NTLM validation has workstation"
+    condition:
+      EventID: 4776
+    checks:
+      - field: SourceWorkstation
+        min_length: 1
+      - field: LogonAccount
+        min_length: 1
+
+  - name: "WFP connection has direction"
+    condition:
+      EventID: 5156
+    checks:
+      - field: Direction
+        in: ["%%14592", "%%14593"]
+      - field: SourceAddress
+        present: true
+      - field: DestAddress
+        present: true
+
+  - name: "Explicit creds has target server"
+    condition:
+      EventID: 4648
+    checks:
+      - field: TargetServerName
+        min_length: 1
+      - field: TargetUserName
+        min_length: 1
+
 zeek_conn:
   - name: "Completed connection (SF) has duration"
     condition:
