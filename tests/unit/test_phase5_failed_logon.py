@@ -63,7 +63,9 @@ class TestFailedLogonWindows:
         assert event_data['EventID'] == 4625
         assert event_data['TargetUserName'] == 'alice.smith'
         assert event_data['Status'] == '0xc000006d'
-        assert event_data['SubStatus'] == '0xc0000064'
+        # SubStatus is now varied: 0xc000006a (wrong password), 0xc0000064 (unknown user),
+        # 0xc0000234 (locked out), 0xc0000072 (disabled)
+        assert event_data['SubStatus'] in ('0xc000006a', '0xc0000064', '0xc0000234', '0xc0000072')
 
     def test_no_session_created(self, activity_gen, test_user, win_system, timestamp, state_manager):
         state_manager.set_current_time(timestamp)

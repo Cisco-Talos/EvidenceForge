@@ -745,16 +745,44 @@ class ActivityGenerator:
                 'SubjectUserName': 'SYSTEM',
                 'SubjectDomainName': 'NT AUTHORITY',
                 'SubjectLogonId': '0x3e7',
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
+            }
+            # Varied failure substatus with correct SID handling
+            rng = _get_rng()
+            substatus_roll = rng.random()
+            if substatus_roll < 0.60:
+                # Wrong password (most common): user exists, so valid SID
+                event_data['SubStatus'] = '0xc000006a'
+                event_data['TargetUserSid'] = self._get_sid(user.username)
+                event_data['TargetUserName'] = user.username
+                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
+                event_data['FailureReason'] = '%%2313'
+            elif substatus_roll < 0.85:
+                # User not found: NULL SID required
+                event_data['SubStatus'] = '0xc0000064'
+                event_data['TargetUserSid'] = 'S-1-0-0'
+                event_data['TargetUserName'] = user.username
+                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
+                event_data['FailureReason'] = '%%2313'
+            elif substatus_roll < 0.95:
+                # Account locked out
+                event_data['SubStatus'] = '0xc0000234'
+                event_data['TargetUserSid'] = self._get_sid(user.username)
+                event_data['TargetUserName'] = user.username
+                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
+                event_data['FailureReason'] = '%%2304'
+            else:
+                # Account disabled
+                event_data['SubStatus'] = '0xc0000072'
+                event_data['TargetUserSid'] = self._get_sid(user.username)
+                event_data['TargetUserName'] = user.username
+                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
+                event_data['FailureReason'] = '%%2307'
+            event_data.update({
                 'Status': '0xc000006d',
-                'FailureReason': '%%2313',  # Unknown user name or bad password
-                'SubStatus': '0xc0000064',  # User name does not exist / bad password
                 'LogonType': logon_type,
                 'IpAddress': source_ip,
                 'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
-            }
+            })
             self.emitters['windows_event_security'].emit_event(event_data)
 
         elif os_category == 'linux':

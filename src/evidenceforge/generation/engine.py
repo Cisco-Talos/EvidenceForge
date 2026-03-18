@@ -1724,16 +1724,32 @@ class GenerationEngine:
                             dc_hostname=dc_hostname,
                             time=ts,
                         )
-                        # Service ticket ~50-200ms after TGT (4769)
-                        ts2 = ts + timedelta(milliseconds=rng.randint(50, 200))
-                        svc = rng.choice(['cifs', 'ldap', 'http', 'host', 'krbtgt'])
-                        self.activity_generator.generate_kerberos_service_ticket(
-                            username=username,
-                            service_name=f"{svc}/{dc_hostname}",
-                            source_ip=client.ip,
-                            dc_hostname=dc_hostname,
-                            time=ts2,
-                        )
+                        # 2-5 service tickets per TGT (real AD pattern)
+                        num_tgs = rng.randint(2, 5)
+                        # Build pool of target servers (DCs + member servers)
+                        member_servers = [
+                            s.hostname for s in self.scenario.environment.systems
+                            if _get_os_category(s.os) == 'windows'
+                            and s.ip not in dc_ips
+                            and any(svc in s.services for svc in
+                                    ['file-server', 'sql-server', 'web', 'iis',
+                                     'exchange', 'sharepoint', 'crm', 'print'])
+                        ] or [dc_hostname]
+                        for tgs_i in range(num_tgs):
+                            ts2 = ts + timedelta(milliseconds=rng.randint(50, 200) + tgs_i * rng.randint(100, 500))
+                            svc = rng.choice(['cifs', 'ldap', 'http', 'host'])
+                            # 60% target member servers, 40% target DCs
+                            if rng.random() < 0.60 and member_servers:
+                                target = rng.choice(member_servers)
+                            else:
+                                target = dc_hostname
+                            self.activity_generator.generate_kerberos_service_ticket(
+                                username=username,
+                                service_name=f"{svc}/{target}",
+                                source_ip=client.ip,
+                                dc_hostname=dc_hostname,
+                                time=ts2,
+                            )
                         # 10% chance of NTLM fallback (4776)
                         if rng.random() < 0.10:
                             self.activity_generator.generate_ntlm_validation(
