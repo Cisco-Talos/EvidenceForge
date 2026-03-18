@@ -46,11 +46,11 @@ class TestStateManagerThreadSafety:
         assert len(created_logon_ids) == 1000
         assert len(set(created_logon_ids)) == 1000, "Found duplicate LogonIDs!"
 
-        # Verify: LogonIDs are sequential (starting from 0x3e7)
+        # Verify: LogonIDs are high-entropy random values (not sequential)
         logon_id_values = [int(lid, 16) for lid in created_logon_ids]
-        logon_id_values.sort()
-        assert logon_id_values[0] == 0x3E7
-        assert logon_id_values[-1] == 0x3E7 + 999
+        assert all(v >= 0x10000 for v in logon_id_values), "LogonIDs should be high-entropy"
+        # Not in reserved range
+        assert all(v not in {0x3e4, 0x3e5, 0x3e6, 0x3e7} for v in logon_id_values)
 
     def test_concurrent_reads_during_writes(self):
         """Test readers see consistent state during concurrent writes."""

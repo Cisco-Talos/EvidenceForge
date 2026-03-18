@@ -8,6 +8,7 @@ coordinates them across multiple log formats for consistency.
 import ipaddress
 import logging
 import random
+import uuid
 from datetime import datetime, timedelta
 from threading import local, get_ident, Lock
 from typing import Optional
@@ -226,41 +227,66 @@ PERSONA_APP_INDICES_LINUX = {
     'default': [0, 2, 5, 6],            # firefox, git, ssh, curl
 }
 
-# Zeek TCP connection state distribution with matching history strings (Phase 5.1)
+# Zeek TCP connection state distribution with matching history strings
 # Format: (conn_state, weight, history_string)
+# Phase 6.3: Expanded from 7 to 20+ patterns for realism
 TCP_CONN_STATE_DISTRIBUTION = [
-    ('SF', 85, 'ShADadfF'),      # Normal completion (SYN, SYN-ACK, data, FIN)
-    ('S0', 5, 'S'),              # Connection attempt, no reply
-    ('S1', 3, 'ShR'),            # SYN-ACK seen, no final ACK from originator
-    ('REJ', 2, 'Sr'),            # Connection rejected (RST from responder)
-    ('RSTO', 3, 'ShADaR'),       # Connection reset by originator after data
-    ('RSTR', 1, 'ShADadR'),      # Connection reset by responder after data
+    # Normal completions (SF) — various data exchange patterns
+    ('SF', 54, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
+    ('SF', 10, 'ShADaDadfF'),    # Multiple data exchanges before FIN
+    ('SF', 5, 'ShADadTtFf'),     # Normal with retransmissions (T=orig retx, t=resp retx)
+    ('SF', 4, 'ShADadfFa'),      # FIN-ACK with trailing ACK
+    ('SF', 3, 'ShADaDaDadfF'),   # Bulk transfer (many data rounds)
+    ('SF', 2, 'ShADadFf'),       # Originator FIN first (client closes)
+    ('SF', 2, 'ShADadfF'),       # Responder FIN first (server closes)
+    ('SF', 1, 'ShADadTFf'),      # Retransmit then FIN
+    # Connection attempts (S0)
+    ('S0', 3, 'S'),              # Single SYN, no reply
+    ('S0', 2, 'SS'),             # SYN retransmit, no reply
+    # Partial handshakes (S1)
+    ('S1', 2, 'ShR'),            # SYN-ACK seen, RST
+    ('S1', 1, 'Sh'),             # SYN-ACK seen, no further data
+    # Rejected connections (REJ)
+    ('REJ', 2, 'Sr'),            # RST from responder immediately
+    ('REJ', 1, 'Srr'),           # Multiple RSTs from responder
+    # Reset by originator (RSTO)
+    ('RSTO', 2, 'ShADaR'),       # Data exchange then originator RST
+    ('RSTO', 1, 'ShADadTR'),     # Data + retransmit then RST
+    ('RSTO', 1, 'ShAR'),         # Quick RST after handshake
+    # Reset by responder (RSTR)
+    ('RSTR', 1, 'ShADadR'),      # Data exchange then responder RST
+    ('RSTR', 1, 'ShAdR'),        # Partial data then responder RST
+    # Midstream (OTH)
     ('OTH', 1, 'Cc'),            # Midstream traffic (no SYN/SYN-ACK seen)
+    ('OTH', 1, 'DdA'),           # Midstream data
 ]
 
-# Zeek UDP connection state distribution (Phase 6.0)
+# Zeek UDP connection state distribution
 # UDP has no TCP handshake — only D/d datagram flags
 UDP_CONN_STATE_DISTRIBUTION = [
-    ('SF', 80, 'Dd'),            # Normal bidirectional exchange (query + response)
-    ('SF', 5, 'DdDd'),           # Multi-packet (retransmit or large response)
-    ('S0', 12, 'D'),             # Originator only, no response (timeout)
-    ('OTH', 3, 'DdA'),           # Additional data packet
+    ('SF', 65, 'Dd'),            # Normal bidirectional exchange (query + response)
+    ('SF', 8, 'DdDd'),           # Multi-packet exchange
+    ('SF', 4, 'DdDdDd'),         # Extended multi-packet exchange
+    ('SF', 3, 'DdA'),            # Additional acknowledgment packet
+    ('S0', 10, 'D'),             # Originator only, no response (timeout)
+    ('S0', 3, 'DD'),             # Retransmitted datagram, no response
+    ('OTH', 4, 'Dd'),            # Midstream UDP exchange
+    ('OTH', 3, 'DdDdA'),         # Midstream multi-packet with ACK
 ]
 
-# Pre-extract for random.choices — TCP
-_TCP_CONN_STATES = [s[0] for s in TCP_CONN_STATE_DISTRIBUTION]
+# Pre-extract for random.choices — TCP (select full tuples, not just states)
+_TCP_CONN_ENTRIES = TCP_CONN_STATE_DISTRIBUTION
 _TCP_CONN_WEIGHTS = [s[1] for s in TCP_CONN_STATE_DISTRIBUTION]
-_TCP_CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
 
-# Pre-extract for random.choices — UDP (use index since conn_state can repeat)
+# Pre-extract for random.choices — UDP
 _UDP_CONN_ENTRIES = UDP_CONN_STATE_DISTRIBUTION
 _UDP_CONN_WEIGHTS = [s[1] for s in UDP_CONN_STATE_DISTRIBUTION]
 
-# Keep legacy aliases for backward compatibility with existing code references
+# Legacy aliases for backward compatibility
 CONN_STATE_DISTRIBUTION = TCP_CONN_STATE_DISTRIBUTION
-_CONN_STATES = _TCP_CONN_STATES
+_CONN_STATES = [s[0] for s in TCP_CONN_STATE_DISTRIBUTION]
 _CONN_WEIGHTS = _TCP_CONN_WEIGHTS
-_CONN_HISTORY = _TCP_CONN_HISTORY
+_CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
 
 # External IPs for network connections (non-RFC1918)
 # Phase 5.3: Expanded from 9 to 50+ IPs for destination diversity
@@ -574,7 +600,7 @@ class ActivityGenerator:
             event_data = {
                 'EventID': 4624,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,  # Information
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -587,7 +613,7 @@ class ActivityGenerator:
                 'SubjectLogonId': '0x3e7',
                 'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
-                'TargetDomainName': 'CORP',  # Phase 1: Fixed domain
+                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'TargetLogonId': logon_id,
                 'LogonType': logon_type,
                 'WorkstationName': system.hostname,
@@ -595,8 +621,7 @@ class ActivityGenerator:
                 'ProcessName': r'C:\Windows\System32\lsass.exe',
                 'IpAddress': source_ip,
                 'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
-                'LogonProcessName': 'User32' if logon_type == 2 else 'NtLmSsp',
-                'AuthenticationPackageName': 'Negotiate',
+                **self._select_auth_package(logon_type),
             }
             self.emitters['windows_event_security'].emit_event(event_data)
 
@@ -622,7 +647,7 @@ class ActivityGenerator:
             priv_event = {
                 'EventID': 4672,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -630,7 +655,7 @@ class ActivityGenerator:
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 'SubjectUserSid': self._get_sid(user.username),
                 'SubjectUserName': user.username,
-                'SubjectDomainName': 'CORP',
+                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'SubjectLogonId': logon_id,
                 'PrivilegeList': 'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\tSeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\tSeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\tSeDelegateSessionUserImpersonatePrivilege',
             }
@@ -670,7 +695,7 @@ class ActivityGenerator:
             event_data = {
                 'EventID': 4625,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -682,7 +707,7 @@ class ActivityGenerator:
                 'SubjectLogonId': '0x3e7',
                 'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
-                'TargetDomainName': 'CORP',
+                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'Status': '0xc000006d',
                 'FailureReason': '%%2313',  # Unknown user name or bad password
                 'SubStatus': '0xc0000064',  # User name does not exist / bad password
@@ -753,7 +778,7 @@ class ActivityGenerator:
             event_data = {
                 'EventID': 4634,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -762,7 +787,7 @@ class ActivityGenerator:
                 # Logoff variant fields
                 'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
-                'TargetDomainName': 'CORP',
+                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'TargetLogonId': logon_id,
                 'LogonType': logon_type,
             }
@@ -840,7 +865,7 @@ class ActivityGenerator:
             event_data = {
                 'EventID': 4688,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -849,7 +874,7 @@ class ActivityGenerator:
                 # Process variant fields
                 'SubjectUserSid': self._get_sid(user.username),
                 'SubjectUserName': user.username,
-                'SubjectDomainName': 'CORP',
+                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'SubjectLogonId': logon_id,
                 'NewProcessId': f'0x{pid:x}',
                 'NewProcessName': process_name,
@@ -858,7 +883,7 @@ class ActivityGenerator:
                 'CommandLine': command_line,
                 'TargetUserSid': self._get_sid(user.username),
                 'TargetUserName': user.username,
-                'TargetDomainName': 'CORP',
+                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'TargetLogonId': logon_id,
                 'ParentProcessName': self._lookup_process_name(system.hostname, parent_pid),
                 'MandatoryLabel': 'S-1-16-8192',  # Medium integrity
@@ -923,7 +948,7 @@ class ActivityGenerator:
             event_data = {
                 'EventID': 4689,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -931,7 +956,7 @@ class ActivityGenerator:
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 'SubjectUserSid': self._get_sid(user.username),
                 'SubjectUserName': user.username,
-                'SubjectDomainName': 'CORP',
+                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
                 'SubjectLogonId': logon_id,
                 'Status': '0x0',
                 'ProcessId': f'0x{pid:x}',
@@ -1040,10 +1065,11 @@ class ActivityGenerator:
         else:
             # TCP: full handshake-based history and conn_states
             if duration is not None:
-                conn_state = rng.choices(_TCP_CONN_STATES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
+                entry = rng.choices(_TCP_CONN_ENTRIES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
+                conn_state, _, history = entry
             else:
                 conn_state = 'S0'
-            history = _TCP_CONN_HISTORY[conn_state]
+                history = 'S'
 
             # Adjust bytes/duration for consistency with TCP connection state
             if conn_state in ('S0', 'REJ'):
@@ -1206,7 +1232,7 @@ class ActivityGenerator:
             event_data = {
                 'EventID': 4688,
                 'TimeCreated': time,
-                'Computer': system.hostname,
+                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
                 'EventRecordID': self._get_next_event_record_id(system.hostname),
@@ -1309,6 +1335,21 @@ class ActivityGenerator:
 
         # Emit Zeek dns.log record
         if 'zeek_dns' in self.emitters:
+            # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
+            if rng.random() < 0.002:
+                self.emitters['zeek_dns'].emit_event({
+                    'ts': dns_time, 'uid': dns_uid,
+                    'id.orig_h': src_ip, 'id.orig_p': src_port,
+                    'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                    'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                    'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                    'qtype': 1, 'qtype_name': 'A',
+                    'rcode': 2, 'rcode_name': 'SERVFAIL',
+                    'AA': False, 'TC': False, 'RD': True, 'RA': True,
+                    'answers': '-', 'TTLs': '-', 'rejected': False,
+                })
+                return
+
             # Determine query type, query string, and answer
             qtype_roll = rng.random()
             is_internal = hostname.endswith('.corp.local') or hostname.endswith('.local')
@@ -1317,7 +1358,21 @@ class ActivityGenerator:
                 # A record: hostname → IPv4
                 qtype, qtype_name = 1, 'A'
                 query = hostname
-                answers = dst_ip
+                # Multi-answer: CDNs/clouds return multiple A records (40% chance)
+                if not is_internal and rng.random() < 0.40:
+                    # Find sibling IPs from the same EXTERNAL_IPS pool
+                    sibling_ips = []
+                    for pool in EXTERNAL_IPS.values():
+                        if dst_ip in pool:
+                            sibling_ips = [ip for ip in pool if ip != dst_ip]
+                            break
+                    if sibling_ips:
+                        extra = rng.sample(sibling_ips, min(rng.randint(1, 3), len(sibling_ips)))
+                        answers = ', '.join([dst_ip] + extra)
+                    else:
+                        answers = dst_ip
+                else:
+                    answers = dst_ip
             elif qtype_roll < 0.85:
                 # AAAA record: hostname → IPv6
                 qtype, qtype_name = 28, 'AAAA'
@@ -1352,6 +1407,10 @@ class ActivityGenerator:
             # Phase 6.0: varied TTLs (not just round numbers)
             ttl = rng.choice([30, 60, 120, 247, 300, 598, 1800, 3600, 7200, 86400])
 
+            # Match TTLs count to answers count for multi-answer responses
+            num_answers = answers.count(', ') + 1 if isinstance(answers, str) and ', ' in answers else 1
+            ttls_str = ', '.join([str(ttl)] * num_answers)
+
             # This lookup precedes an actual connection, so always NOERROR
             self.emitters['zeek_dns'].emit_event({
                 'ts': dns_time,
@@ -1374,7 +1433,7 @@ class ActivityGenerator:
                 'RD': True,
                 'RA': True,
                 'answers': answers,
-                'TTLs': str(ttl),
+                'TTLs': ttls_str,
                 'rejected': False,
             })
 
@@ -1660,7 +1719,7 @@ class ActivityGenerator:
         source_ip: str,
         dc_ip: str,
         time: datetime,
-        domain: str = 'CORP',
+        domain: str = '',
     ) -> None:
         """Generate machine account logon event (4624 type 3) on the DC.
 
@@ -1668,12 +1727,13 @@ class ActivityGenerator:
         GPO updates, Kerberos renewal, LDAP queries, etc. The event is logged
         on the DC, not on the source machine.
         """
+        domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
 
         event_data = {
             'EventID': 4624,
             'TimeCreated': time,
-            'Computer': dc_hostname,
+            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
             'EventRecordID': self._get_next_event_record_id(dc_hostname),
@@ -1726,14 +1786,15 @@ class ActivityGenerator:
         source_ip: str,
         dc_hostname: str,
         time: datetime,
-        domain: str = 'CORP',
+        domain: str = '',
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
+        domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
         event_data = {
             'EventID': 4768,
             'TimeCreated': time,
-            'Computer': dc_hostname,
+            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
             'EventRecordID': self._get_next_event_record_id(dc_hostname),
@@ -1761,14 +1822,15 @@ class ActivityGenerator:
         source_ip: str,
         dc_hostname: str,
         time: datetime,
-        domain: str = 'CORP',
+        domain: str = '',
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
+        domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
         event_data = {
             'EventID': 4769,
             'TimeCreated': time,
-            'Computer': dc_hostname,
+            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
             'EventRecordID': self._get_next_event_record_id(dc_hostname),
@@ -1799,7 +1861,7 @@ class ActivityGenerator:
         event_data = {
             'EventID': 4776,
             'TimeCreated': time,
-            'Computer': dc_hostname,
+            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
             'EventRecordID': self._get_next_event_record_id(dc_hostname),
@@ -1835,6 +1897,56 @@ class ActivityGenerator:
         'LOCAL SERVICE': 'S-1-5-19',
         'NETWORK SERVICE': 'S-1-5-20',
     }
+
+    def _select_auth_package(self, logon_type: int) -> dict[str, str]:
+        """Select auth package, LogonProcessName, and LogonGuid based on logon type.
+
+        In real AD: Kerberos dominates for network logons, NTLM as fallback,
+        Negotiate for interactive logons.
+        """
+        rng = _get_rng()
+        if logon_type == 2:
+            # Interactive: Negotiate (local login)
+            return {
+                'LogonProcessName': 'User32',
+                'AuthenticationPackageName': 'Negotiate',
+                'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+            }
+        elif logon_type in (3, 4, 5, 8, 9):
+            # Network/batch/service: Kerberos dominates in AD
+            roll = rng.random()
+            if roll < 0.70:
+                return {
+                    'LogonProcessName': 'Kerberos',
+                    'AuthenticationPackageName': 'Kerberos',
+                    'LogonGuid': f'{{{uuid.uuid4()}}}',
+                }
+            elif roll < 0.90:
+                return {
+                    'LogonProcessName': 'NtLmSsp',
+                    'AuthenticationPackageName': 'NTLM',
+                    'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                }
+            else:
+                return {
+                    'LogonProcessName': 'NtLmSsp',
+                    'AuthenticationPackageName': 'Negotiate',
+                    'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                }
+        elif logon_type == 10:
+            # RDP: NtLmSsp/CredSSP
+            return {
+                'LogonProcessName': 'NtLmSsp',
+                'AuthenticationPackageName': rng.choice(['CredSSP', 'Negotiate']),
+                'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+            }
+        else:
+            # Type 7 (unlock), 11 (cached), etc.: Negotiate
+            return {
+                'LogonProcessName': 'Negotiate',
+                'AuthenticationPackageName': 'Negotiate',
+                'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+            }
 
     def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
         """Get a seeded system process PID by role name."""

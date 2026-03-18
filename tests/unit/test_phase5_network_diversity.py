@@ -117,7 +117,8 @@ class TestDnsLookupEmission:
         qtype_name = dns_event['qtype_name']
         if qtype_name == 'A':
             assert dns_event['query'] == 'www.google.com'
-            assert dns_event['answers'] == '172.217.14.206'
+            # Multi-answer DNS: may include sibling IPs from the same pool
+            assert '172.217.14.206' in dns_event['answers']
         elif qtype_name == 'AAAA':
             assert dns_event['query'] == 'www.google.com'
             assert ':' in dns_event['answers']  # IPv6

@@ -23,9 +23,9 @@ class TestStateManagerInit:
     def test_init_sets_counters(self):
         """Test that counters are initialized correctly."""
         sm = StateManager()
-        assert sm._logon_id_counter == 0x3E7  # 999 in hex
         assert sm._connection_id_counter == 0
         assert len(sm._pid_counters) == 0
+        assert len(sm._used_logon_ids) == 0
 
 
 class TestSessionManagement:
@@ -43,7 +43,8 @@ class TestSessionManagement:
             source_ip="192.168.1.50",
         )
 
-        assert logon_id == "0x3e7"
+        assert logon_id.startswith("0x")
+        assert int(logon_id, 16) >= 0x10000  # High-entropy value, not sequential
         session = sm.get_session(logon_id)
         assert session is not None
         assert session.username == "jdoe"
@@ -59,8 +60,9 @@ class TestSessionManagement:
         id1 = sm.create_session("user1", "WS-01", 2, "192.168.1.1")
         id2 = sm.create_session("user2", "WS-02", 3, "192.168.1.2")
 
-        assert id1 == "0x3e7"
-        assert id2 == "0x3e8"
+        assert id1 != id2  # Unique LogonIDs
+        assert id1.startswith("0x")
+        assert id2.startswith("0x")
 
     def test_create_session_requires_current_time(self):
         """Test that creating session fails if current_time not set."""

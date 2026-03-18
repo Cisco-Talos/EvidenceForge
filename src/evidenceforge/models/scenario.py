@@ -419,6 +419,12 @@ class Environment(BaseModel):
 
     description: str
     timezone: Timezone = Field(default_factory=lambda: Timezone(default="UTC"))
+    domain: str | None = Field(
+        None,
+        description="Active Directory domain FQDN (e.g., corp.meridiancapital.com). "
+        "Used for Computer FQDNs in Windows events and domain name fields. "
+        "Auto-inferred from user emails if not specified.",
+    )
     users: list[User]
     systems: list[System]
     service_accounts: list[str] = Field(

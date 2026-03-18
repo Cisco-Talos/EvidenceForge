@@ -29,10 +29,10 @@ class ZeekDnsEmitter(LogEmitter):
         if "ts" in event_data:
             ts = event_data["ts"]
             if isinstance(ts, datetime):
-                event_data["ts"] = f"{ts.timestamp():.6f}"
+                event_data["ts"] = round(ts.timestamp(), 6)
             elif isinstance(ts, str):
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                event_data["ts"] = f"{dt.timestamp():.6f}"
+                event_data["ts"] = round(dt.timestamp(), 6)
 
         # Handle dotted field names (id.orig_h → id_orig_h for template)
         template_context = {}

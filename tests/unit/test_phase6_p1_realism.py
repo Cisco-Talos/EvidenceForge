@@ -203,7 +203,7 @@ class TestMachineAccountLogon:
         )
         call_args = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert call_args['TargetUserName'] == 'WKS-01$'
-        assert call_args['Computer'] == 'DC-01'
+        assert call_args['Computer'].startswith('DC-01.')
         assert call_args['LogonType'] == 3
         assert call_args['AuthenticationPackageName'] == 'Kerberos'
 
@@ -219,7 +219,7 @@ class TestKerberosEvents:
         call_args = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
         assert call_args['EventID'] == 4768
         assert call_args['ServiceName'] == 'krbtgt'
-        assert call_args['Computer'] == 'DC-01'
+        assert call_args['Computer'].startswith('DC-01.')
 
     def test_service_ticket_emits_4769(self, activity_gen, mock_emitters):
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)

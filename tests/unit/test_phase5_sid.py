@@ -187,17 +187,22 @@ class TestEngineSIDRegistry:
         assert SID_PATTERN.match(registry['user.one'])
         assert SID_PATTERN.match(registry['user.two'])
 
-        # Unique RIDs
+        # User RIDs: start at 1001, with random gaps (non-sequential)
         rid_one = int(registry['user.one'].rsplit('-', 1)[1])
         rid_two = int(registry['user.two'].rsplit('-', 1)[1])
         assert rid_one != rid_two
-        assert rid_one == 1001
-        assert rid_two == 1002
+        assert rid_one == 1001  # First user always starts at 1001
+        assert rid_two > rid_one  # Second user has higher RID (with gap)
+
+        # Computer account SIDs
+        assert 'WKS-01$' in registry
+        comp_rid = int(registry['WKS-01$'].rsplit('-', 1)[1])
+        assert comp_rid >= 1100  # Computer RIDs start at 1100+
 
         # Service account SID
         assert SID_PATTERN.match(registry['svc_backup'])
         rid_svc = int(registry['svc_backup'].rsplit('-', 1)[1])
-        assert rid_svc == 2001
+        assert rid_svc > comp_rid  # Service accounts after computer accounts
 
     def test_build_sid_registry_deterministic(self):
         """Same scenario name produces same domain base SID."""

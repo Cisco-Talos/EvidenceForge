@@ -5,6 +5,7 @@ log generation, ensuring consistency across log formats.
 """
 
 import logging
+import random
 from datetime import datetime, timedelta
 from threading import RLock
 
@@ -44,7 +45,10 @@ class StateManager:
     def __init__(self) -> None:
         """Initialize StateManager with empty state."""
         self.state = GeneratorState()
-        self._logon_id_counter = 0x3E7  # Start at 999 (standard Windows system LogonID)
+        self._logon_id_rng = random.Random(42)  # Deterministic RNG for LogonID generation
+        self._used_logon_ids: set[int] = set()
+        # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
+        self._reserved_logon_ids = {0x3e4, 0x3e5, 0x3e6, 0x3e7}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._connection_id_counter = 0
@@ -79,13 +83,15 @@ class StateManager:
             if self.state.current_time is None:
                 raise StateError("Cannot create session: current_time not set")
 
-            # Check for counter exhaustion (4-byte hex = 0xFFFFFFFF max)
-            if self._logon_id_counter > 0xFFFFFFFF:
-                raise StateError("LogonID counter exhausted (reached 0xFFFFFFFF)")
-
-            # Generate LogonID
-            logon_id = f"0x{self._logon_id_counter:x}"
-            self._logon_id_counter += 1
+            # Generate high-entropy LogonID (real LSASS uses random 32-bit values)
+            for _ in range(100):
+                val = self._logon_id_rng.randint(0x10000, 0xFFFFFFFF)
+                if val not in self._used_logon_ids and val not in self._reserved_logon_ids:
+                    break
+            else:
+                raise StateError("LogonID generation exhausted (100 collisions)")
+            self._used_logon_ids.add(val)
+            logon_id = f"0x{val:x}"
 
             # Create session
             session = ActiveSession(

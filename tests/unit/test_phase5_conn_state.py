@@ -70,7 +70,13 @@ class TestConnStateDistribution:
         assert len(states) >= 2, f"Only saw states: {states}"
 
     def test_history_matches_conn_state(self, activity_gen, timestamp, state_manager, mock_emitters):
-        """History string should be consistent with conn_state."""
+        """History string should be a valid pattern for its conn_state."""
+        from evidenceforge.generation.activity import TCP_CONN_STATE_DISTRIBUTION
+        # Build set of valid histories per conn_state
+        valid_histories: dict[str, set[str]] = {}
+        for state, _, hist in TCP_CONN_STATE_DISTRIBUTION:
+            valid_histories.setdefault(state, set()).add(hist)
+
         state_manager.set_current_time(timestamp)
 
         for i in range(100):
@@ -88,8 +94,8 @@ class TestConnStateDistribution:
                 event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
                 state = event_data['conn_state']
                 history = event_data['history']
-                assert history == _CONN_HISTORY[state], \
-                    f"History '{history}' doesn't match expected '{_CONN_HISTORY[state]}' for state '{state}'"
+                assert history in valid_histories.get(state, set()), \
+                    f"History '{history}' not valid for state '{state}'"
 
 
 class TestConnStateByteConsistency:
