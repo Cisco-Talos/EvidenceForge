@@ -29,7 +29,7 @@ class WindowsEventEmitter(LogEmitter):
 
     _supported_types: set[str] = {
         "logon", "logoff", "failed_logon",
-        "process_create", "process_terminate",
+        "process_create", "process_terminate", "system_process_create",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -48,6 +48,7 @@ class WindowsEventEmitter(LogEmitter):
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
             "process_terminate": self._render_process_terminate,
+            "system_process_create": self._render_system_process_create,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -221,6 +222,39 @@ class WindowsEventEmitter(LogEmitter):
             'Status': '0x0',
             'ProcessId': f'0x{proc.pid:x}',
             'ProcessName': proc.image,
+        }
+        self.emit_event(event_data)
+
+    def _render_system_process_create(self, event: SecurityEvent) -> None:
+        """Render Windows 4688 for system-account process (SYSTEM, LOCAL SERVICE, etc.)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4688,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'NewProcessId': f'0x{proc.pid:x}',
+            'NewProcessName': proc.image,
+            'TokenElevationType': proc.token_elevation or '%%1936',
+            'ProcessId': f'0x{proc.parent_pid:x}',
+            'CommandLine': proc.command_line,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': auth.subject_domain,
+            'TargetLogonId': proc.logon_id,
+            'ParentProcessName': proc.parent_image,
+            'MandatoryLabel': proc.mandatory_label or 'S-1-16-16384',
         }
         self.emit_event(event_data)
 

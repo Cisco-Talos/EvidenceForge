@@ -16,7 +16,7 @@ class EcarEmitter(LogEmitter):
 
     _supported_types: set[str] = {
         "logon", "logoff", "failed_logon",
-        "process_create", "process_terminate",
+        "process_create", "process_terminate", "system_process_create",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -31,6 +31,7 @@ class EcarEmitter(LogEmitter):
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
             "process_terminate": self._render_process_terminate,
+            "system_process_create": self._render_process_create,  # Same rendering
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(

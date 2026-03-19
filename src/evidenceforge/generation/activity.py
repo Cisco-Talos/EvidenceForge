@@ -1207,6 +1207,8 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
+        from evidenceforge.events.contexts import ProcessContext
+
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
@@ -1216,68 +1218,39 @@ class ActivityGenerator:
             integrity_level='System',
         )
 
-        os_category = _get_os_category(system.os)
+        # Determine system-level SID and logon ID
+        sid = self.sid_registry.get(username, 'S-1-5-18') if self.sid_registry else 'S-1-5-18'
+        system_logon_ids = {'SYSTEM': '0x3e7', 'LOCAL SERVICE': '0x3e5', 'NETWORK SERVICE': '0x3e4'}
+        logon_id = system_logon_ids.get(username, '0x3e7')
 
-        if os_category == 'windows':
-            sid = self.sid_registry.get(username, 'S-1-5-18') if self.sid_registry else 'S-1-5-18'
-            system_logon_ids = {'SYSTEM': '0x3e7', 'LOCAL SERVICE': '0x3e5', 'NETWORK SERVICE': '0x3e4'}
-            logon_id = system_logon_ids.get(username, '0x3e7')
-            event_data = {
-                'EventID': 4688,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 9999),
-                'SubjectUserSid': sid,
-                'SubjectUserName': username,
-                'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': logon_id,
-                'NewProcessId': f'0x{pid:x}',
-                'NewProcessName': process_name,
-                'TokenElevationType': '%%1936',  # Default token (no UAC split for SYSTEM)
-                'ProcessId': f'0x{parent_pid:x}',
-                'CommandLine': command_line,
-                'TargetUserSid': sid,
-                'TargetUserName': username,
-                'TargetDomainName': 'NT AUTHORITY',
-                'TargetLogonId': logon_id,
-                'ParentProcessName': r'C:\Windows\System32\services.exe',
-                'MandatoryLabel': 'S-1-16-16384',  # System integrity
-            }
-            if 'windows_event_security' in self.emitters:
-                self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="system_process_create",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=username,
+                user_sid=sid,
+                logon_id=logon_id,
+                subject_sid=sid,
+                subject_username=username,
+                subject_domain='NT AUTHORITY',
+                subject_logon_id=logon_id,
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=username,
+                integrity_level='System',
+                logon_id=logon_id,
+                parent_image=r'C:\Windows\System32\services.exe',
+                token_elevation='%%1936',
+                mandatory_label='S-1-16-16384',
+            ),
+        )
 
-        elif os_category == 'linux':
-            if 'syslog' in self.emitters:
-                app_name = process_name.split('/')[-1]
-                # Use cron facility for cron-spawned processes, daemon for others
-                facility = 9 if 'cron' in command_line.lower() else 3
-                self.emitters['syslog'].emit_event({
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'app_name': app_name,
-                    'pid': pid,
-                    'facility': facility,
-                    'severity': 6,
-                    'message': f'{app_name}[{pid}]: started: {command_line}',
-                })
-
-        # eCAR emission (direct, since _emit_ecar_process expects a User object)
-        if 'ecar' in self.emitters:
-            self.emitters['ecar'].emit_event({
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'PROCESS',
-                'action': 'CREATE',
-                'pid': pid,
-                'ppid': parent_pid,
-                'principal': username,
-                'image_path': process_name,
-                'command_line': command_line,
-            })
+        self.dispatcher.dispatch(event)
 
         return pid
 

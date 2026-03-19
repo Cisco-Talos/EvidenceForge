@@ -12,7 +12,7 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class SyslogEmitter(LogEmitter):
     """Emitter for Linux syslog format."""
 
-    _supported_types: set[str] = {"logon", "logoff", "failed_logon"}
+    _supported_types: set[str] = {"logon", "logoff", "failed_logon", "system_process_create"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Syslog emitter handles events on Linux hosts."""
@@ -28,6 +28,7 @@ class SyslogEmitter(LogEmitter):
             "logon": self._render_logon,
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
+            "system_process_create": self._render_system_process,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -83,6 +84,22 @@ class SyslogEmitter(LogEmitter):
                 f'Failed password for {auth.username} from {auth.source_ip} '
                 f'port {rng.randint(49152, 65535)} ssh2'
             ),
+        }
+        self.emit_event(event_data)
+
+    def _render_system_process(self, event: SecurityEvent) -> None:
+        """Render syslog message for system/daemon process start."""
+        proc = event.process
+        app_name = proc.image.split('/')[-1]
+        facility = 9 if 'cron' in proc.command_line.lower() else 3  # cron or daemon
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname,
+            'app_name': app_name,
+            'pid': proc.pid,
+            'facility': facility,
+            'severity': 6,
+            'message': f'{app_name}[{proc.pid}]: started: {proc.command_line}',
         }
         self.emit_event(event_data)
 

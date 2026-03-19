@@ -235,10 +235,10 @@ class TestGenerateSystemProcess:
             command_line='svchost.exe -k netsvcs -p -s Schedule',
             parent_pid=parent_pid, username='SYSTEM',
         )
-        assert mock_emitters['windows_event_security'].emit_event.called
-        event = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event['EventID'] == 4688
-        assert event['SubjectUserName'] == 'SYSTEM'
+        assert mock_emitters['windows_event_security'].emit.called
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "system_process_create"
+        assert event.auth.username == 'SYSTEM'
 
     def test_emits_linux_syslog(self, activity_gen, linux_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -251,7 +251,7 @@ class TestGenerateSystemProcess:
             command_line='/usr/sbin/logrotate /etc/logrotate.conf',
             parent_pid=parent_pid, username='root',
         )
-        assert mock_emitters['syslog'].emit_event.called
+        assert mock_emitters['syslog'].emit.called
 
     def test_emits_ecar(self, activity_gen, win_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -264,8 +264,8 @@ class TestGenerateSystemProcess:
             command_line='taskhostw.exe /Run',
             parent_pid=parent_pid, username='SYSTEM',
         )
-        ecar_calls = [c for c in mock_emitters['ecar'].emit_event.call_args_list
-                      if c[0][0].get('object') == 'PROCESS']
+        ecar_calls = [c for c in mock_emitters['ecar'].emit.call_args_list
+                      if c[0][0].event_type == 'system_process_create']
         assert len(ecar_calls) >= 1
 
 
