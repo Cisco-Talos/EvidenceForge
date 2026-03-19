@@ -1,0 +1,1934 @@
+version: "1.0"
+name: insider-exfiltration
+description: |
+  Insider threat scenario at Meridian Capital Group, a mid-size investment management
+  firm in Chicago. A data analyst who was recently passed over for promotion begins
+  systematically accessing client data outside his normal scope, staging it locally,
+  and exfiltrating it to a personal cloud storage account over three business days.
+  The challenge: all tools used are legitimate — the only signal is behavioral anomaly
+  buried in 100+ users' worth of normal activity.
+
+environment:
+  description: >
+    Meridian Capital Group is a mid-size investment management and financial advisory
+    firm headquartered in Chicago, IL. The firm manages approximately $4.2 billion in
+    assets under management across institutional and high-net-worth individual clients.
+    The IT environment is Windows-dominant with centralized file servers, SQL Server
+    databases for client data, and an on-premises CRM system. The firm employs
+    approximately 105 staff across trading, analytics, finance, compliance, sales,
+    IT, and corporate support functions.
+
+  timezone:
+    default: "America/Chicago"
+
+  users:
+    # === Executive (5) ===
+    - username: robert.thornton
+      full_name: "Robert Thornton"
+      email: robert.thornton@meridiancapital.com
+      persona: executive
+      primary_system: EXEC-WS-01
+      groups: [executive, all_staff]
+
+    - username: catherine.walsh
+      full_name: "Catherine Walsh"
+      email: catherine.walsh@meridiancapital.com
+      persona: executive
+      primary_system: EXEC-WS-02
+      groups: [executive, all_staff]
+
+    - username: james.nakamura
+      full_name: "James Nakamura"
+      email: james.nakamura@meridiancapital.com
+      persona: executive
+      primary_system: EXEC-WS-03
+      groups: [executive, all_staff]
+
+    - username: sandra.liu
+      full_name: "Sandra Liu"
+      email: sandra.liu@meridiancapital.com
+      persona: executive
+      primary_system: EXEC-WS-04
+      groups: [executive, all_staff]
+
+    - username: michael.ostrowski
+      full_name: "Michael Ostrowski"
+      email: michael.ostrowski@meridiancapital.com
+      persona: executive
+      primary_system: EXEC-WS-05
+      groups: [executive, all_staff]
+
+    # === Trading & Investments (15) ===
+    - username: andrew.masterson
+      full_name: "Andrew Masterson"
+      email: andrew.masterson@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-01
+      groups: [trading, all_staff]
+
+    - username: lisa.chang
+      full_name: "Lisa Chang"
+      email: lisa.chang@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-02
+      groups: [trading, all_staff]
+
+    - username: ryan.fitzgerald
+      full_name: "Ryan Fitzgerald"
+      email: ryan.fitzgerald@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-03
+      groups: [trading, all_staff]
+
+    - username: priya.mehta
+      full_name: "Priya Mehta"
+      email: priya.mehta@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-04
+      groups: [trading, all_staff]
+
+    - username: thomas.bergstrom
+      full_name: "Thomas Bergstrom"
+      email: thomas.bergstrom@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-05
+      groups: [trading, all_staff]
+
+    - username: amanda.reeves
+      full_name: "Amanda Reeves"
+      email: amanda.reeves@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-06
+      groups: [trading, all_staff]
+
+    - username: kevin.okonkwo
+      full_name: "Kevin Okonkwo"
+      email: kevin.okonkwo@meridiancapital.com
+      persona: data_analyst
+      primary_system: TRADE-WS-07
+      groups: [trading, all_staff]
+
+    - username: rachel.hoffman
+      full_name: "Rachel Hoffman"
+      email: rachel.hoffman@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-08
+      groups: [trading, all_staff]
+
+    - username: samuel.navarro
+      full_name: "Samuel Navarro"
+      email: samuel.navarro@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-09
+      groups: [trading, all_staff]
+
+    - username: elena.volkov
+      full_name: "Elena Volkov"
+      email: elena.volkov@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-10
+      groups: [trading, all_staff]
+
+    - username: daniel.park
+      full_name: "Daniel Park"
+      email: daniel.park@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-11
+      groups: [trading, all_staff]
+
+    - username: jessica.moreau
+      full_name: "Jessica Moreau"
+      email: jessica.moreau@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-12
+      groups: [trading, all_staff]
+
+    - username: brian.callahan
+      full_name: "Brian Callahan"
+      email: brian.callahan@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-13
+      groups: [trading, all_staff]
+
+    - username: natasha.singh
+      full_name: "Natasha Singh"
+      email: natasha.singh@meridiancapital.com
+      persona: analyst
+      primary_system: TRADE-WS-14
+      groups: [trading, all_staff]
+
+    - username: marcus.chen
+      full_name: "Marcus Chen"
+      email: marcus.chen@meridiancapital.com
+      persona: data_analyst
+      primary_system: TRADE-WS-15
+      groups: [trading, all_staff]
+
+    # === Data Analytics / BI (8) ===
+    - username: sarah.oconnell
+      full_name: "Sarah O'Connell"
+      email: sarah.oconnell@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-01
+      groups: [analytics, all_staff]
+
+    - username: diego.ramirez
+      full_name: "Diego Ramirez"
+      email: diego.ramirez@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-02
+      groups: [analytics, all_staff]
+
+    - username: wei.zhang
+      full_name: "Wei Zhang"
+      email: wei.zhang@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-03
+      groups: [analytics, all_staff]
+
+    - username: aisha.johnson
+      full_name: "Aisha Johnson"
+      email: aisha.johnson@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-04
+      groups: [analytics, all_staff]
+
+    - username: peter.kowalski
+      full_name: "Peter Kowalski"
+      email: peter.kowalski@meridiancapital.com
+      persona: developer
+      primary_system: DATA-WS-05
+      groups: [analytics, all_staff]
+
+    - username: maya.krishnan
+      full_name: "Maya Krishnan"
+      email: maya.krishnan@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-06
+      groups: [analytics, all_staff]
+
+    - username: lucas.ferreira
+      full_name: "Lucas Ferreira"
+      email: lucas.ferreira@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-07
+      groups: [analytics, all_staff]
+
+    - username: hannah.sterling
+      full_name: "Hannah Sterling"
+      email: hannah.sterling@meridiancapital.com
+      persona: data_analyst
+      primary_system: DATA-WS-08
+      groups: [analytics, all_staff]
+
+    # === IT / Infrastructure (10) ===
+    - username: frank.deluca
+      full_name: "Frank DeLuca"
+      email: frank.deluca@meridiancapital.com
+      persona: sysadmin
+      primary_system: IT-WS-01
+      groups: [it, domain_admins, all_staff]
+
+    - username: yuki.tanaka
+      full_name: "Yuki Tanaka"
+      email: yuki.tanaka@meridiancapital.com
+      persona: sysadmin
+      primary_system: IT-WS-02
+      groups: [it, domain_admins, all_staff]
+
+    - username: omar.hassan
+      full_name: "Omar Hassan"
+      email: omar.hassan@meridiancapital.com
+      persona: sysadmin
+      primary_system: IT-WS-03
+      groups: [it, all_staff]
+
+    - username: emily.brooks
+      full_name: "Emily Brooks"
+      email: emily.brooks@meridiancapital.com
+      persona: security_analyst
+      primary_system: IT-WS-04
+      groups: [it, all_staff]
+
+    - username: carlos.mendez
+      full_name: "Carlos Mendez"
+      email: carlos.mendez@meridiancapital.com
+      persona: sysadmin
+      primary_system: IT-WS-05
+      groups: [it, all_staff]
+
+    - username: diane.prescott
+      full_name: "Diane Prescott"
+      email: diane.prescott@meridiancapital.com
+      persona: help_desk
+      primary_system: IT-WS-06
+      groups: [it, all_staff]
+
+    - username: jason.wright
+      full_name: "Jason Wright"
+      email: jason.wright@meridiancapital.com
+      persona: help_desk
+      primary_system: IT-WS-07
+      groups: [it, all_staff]
+
+    - username: nadia.popov
+      full_name: "Nadia Popov"
+      email: nadia.popov@meridiancapital.com
+      persona: sysadmin
+      primary_system: IT-WS-08
+      groups: [it, all_staff]
+
+    - username: alex.nguyen
+      full_name: "Alex Nguyen"
+      email: alex.nguyen@meridiancapital.com
+      persona: developer
+      primary_system: IT-WS-09
+      groups: [it, all_staff]
+
+    - username: tyler.jackson
+      full_name: "Tyler Jackson"
+      email: tyler.jackson@meridiancapital.com
+      persona: sysadmin
+      primary_system: IT-WS-10
+      groups: [it, all_staff]
+
+    # === Finance & Accounting (10) ===
+    - username: margaret.frost
+      full_name: "Margaret Frost"
+      email: margaret.frost@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-01
+      groups: [finance, all_staff]
+
+    - username: david.shimizu
+      full_name: "David Shimizu"
+      email: david.shimizu@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-02
+      groups: [finance, all_staff]
+
+    - username: laura.martinez
+      full_name: "Laura Martinez"
+      email: laura.martinez@meridiancapital.com
+      persona: analyst
+      primary_system: FIN-WS-03
+      groups: [finance, all_staff]
+
+    - username: richard.adeyemi
+      full_name: "Richard Adeyemi"
+      email: richard.adeyemi@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-04
+      groups: [finance, all_staff]
+
+    - username: susan.blackwell
+      full_name: "Susan Blackwell"
+      email: susan.blackwell@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-05
+      groups: [finance, all_staff]
+
+    - username: anthony.russo
+      full_name: "Anthony Russo"
+      email: anthony.russo@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-06
+      groups: [finance, all_staff]
+
+    - username: jennifer.grant
+      full_name: "Jennifer Grant"
+      email: jennifer.grant@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-07
+      groups: [finance, all_staff]
+
+    - username: steven.choi
+      full_name: "Steven Choi"
+      email: steven.choi@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-08
+      groups: [finance, all_staff]
+
+    - username: patricia.burke
+      full_name: "Patricia Burke"
+      email: patricia.burke@meridiancapital.com
+      persona: accountant
+      primary_system: FIN-WS-09
+      groups: [finance, all_staff]
+
+    - username: raymond.silva
+      full_name: "Raymond Silva"
+      email: raymond.silva@meridiancapital.com
+      persona: analyst
+      primary_system: FIN-WS-10
+      groups: [finance, all_staff]
+
+    # === Sales & Client Relations (15) ===
+    - username: victoria.kensington
+      full_name: "Victoria Kensington"
+      email: victoria.kensington@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-01
+      groups: [sales, all_staff]
+
+    - username: derek.washington
+      full_name: "Derek Washington"
+      email: derek.washington@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-02
+      groups: [sales, all_staff]
+
+    - username: melissa.lambert
+      full_name: "Melissa Lambert"
+      email: melissa.lambert@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-03
+      groups: [sales, all_staff]
+
+    - username: christopher.daly
+      full_name: "Christopher Daly"
+      email: christopher.daly@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-04
+      groups: [sales, all_staff]
+
+    - username: nina.petrova
+      full_name: "Nina Petrova"
+      email: nina.petrova@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-05
+      groups: [sales, all_staff]
+
+    - username: brandon.cole
+      full_name: "Brandon Cole"
+      email: brandon.cole@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-06
+      groups: [sales, all_staff]
+
+    - username: angela.moretti
+      full_name: "Angela Moretti"
+      email: angela.moretti@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-07
+      groups: [sales, all_staff]
+
+    - username: trevor.hayes
+      full_name: "Trevor Hayes"
+      email: trevor.hayes@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-08
+      groups: [sales, all_staff]
+
+    - username: sophia.andersen
+      full_name: "Sophia Andersen"
+      email: sophia.andersen@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-09
+      groups: [sales, all_staff]
+
+    - username: william.okafor
+      full_name: "William Okafor"
+      email: william.okafor@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-10
+      groups: [sales, all_staff]
+
+    - username: kristen.mcdonald
+      full_name: "Kristen McDonald"
+      email: kristen.mcdonald@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-11
+      groups: [sales, all_staff]
+
+    - username: jose.gutierrez
+      full_name: "Jose Gutierrez"
+      email: jose.gutierrez@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-12
+      groups: [sales, all_staff]
+
+    - username: heather.flynn
+      full_name: "Heather Flynn"
+      email: heather.flynn@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-13
+      groups: [sales, all_staff]
+
+    - username: adam.steinberg
+      full_name: "Adam Steinberg"
+      email: adam.steinberg@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-14
+      groups: [sales, all_staff]
+
+    - username: grace.campbell
+      full_name: "Grace Campbell"
+      email: grace.campbell@meridiancapital.com
+      persona: sales
+      primary_system: SALES-WS-15
+      groups: [sales, all_staff]
+
+    # === Compliance & Risk (8) ===
+    - username: helen.marchetti
+      full_name: "Helen Marchetti"
+      email: helen.marchetti@meridiancapital.com
+      persona: legal_counsel
+      primary_system: COMP-WS-01
+      groups: [compliance, all_staff]
+
+    - username: daniel.yoon
+      full_name: "Daniel Yoon"
+      email: daniel.yoon@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-02
+      groups: [compliance, all_staff]
+
+    - username: rebecca.stone
+      full_name: "Rebecca Stone"
+      email: rebecca.stone@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-03
+      groups: [compliance, all_staff]
+
+    - username: philip.nwosu
+      full_name: "Philip Nwosu"
+      email: philip.nwosu@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-04
+      groups: [compliance, all_staff]
+
+    - username: christine.moller
+      full_name: "Christine Moller"
+      email: christine.moller@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-05
+      groups: [compliance, all_staff]
+
+    - username: keith.donovan
+      full_name: "Keith Donovan"
+      email: keith.donovan@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-06
+      groups: [compliance, all_staff]
+
+    - username: samantha.reid
+      full_name: "Samantha Reid"
+      email: samantha.reid@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-07
+      groups: [compliance, all_staff]
+
+    - username: ivan.petrov
+      full_name: "Ivan Petrov"
+      email: ivan.petrov@meridiancapital.com
+      persona: analyst
+      primary_system: COMP-WS-08
+      groups: [compliance, all_staff]
+
+    # === Legal (5) ===
+    - username: gerald.whitmore
+      full_name: "Gerald Whitmore"
+      email: gerald.whitmore@meridiancapital.com
+      persona: legal_counsel
+      primary_system: LEGAL-WS-01
+      groups: [legal, all_staff]
+
+    - username: alicia.fernandez
+      full_name: "Alicia Fernandez"
+      email: alicia.fernandez@meridiancapital.com
+      persona: legal_counsel
+      primary_system: LEGAL-WS-02
+      groups: [legal, all_staff]
+
+    - username: jonathan.pratt
+      full_name: "Jonathan Pratt"
+      email: jonathan.pratt@meridiancapital.com
+      persona: legal_counsel
+      primary_system: LEGAL-WS-03
+      groups: [legal, all_staff]
+
+    - username: michelle.devereaux
+      full_name: "Michelle Devereaux"
+      email: michelle.devereaux@meridiancapital.com
+      persona: legal_counsel
+      primary_system: LEGAL-WS-04
+      groups: [legal, all_staff]
+
+    - username: robert.huang
+      full_name: "Robert Huang"
+      email: robert.huang@meridiancapital.com
+      persona: legal_counsel
+      primary_system: LEGAL-WS-05
+      groups: [legal, all_staff]
+
+    # === Human Resources (5) ===
+    - username: linda.osborne
+      full_name: "Linda Osborne"
+      email: linda.osborne@meridiancapital.com
+      persona: hr
+      primary_system: HR-WS-01
+      groups: [hr, all_staff]
+
+    - username: denise.nakamura
+      full_name: "Denise Nakamura"
+      email: denise.nakamura@meridiancapital.com
+      persona: hr
+      primary_system: HR-WS-02
+      groups: [hr, all_staff]
+
+    - username: kevin.walsh
+      full_name: "Kevin Walsh"
+      email: kevin.walsh@meridiancapital.com
+      persona: hr
+      primary_system: HR-WS-03
+      groups: [hr, all_staff]
+
+    - username: tamara.woods
+      full_name: "Tamara Woods"
+      email: tamara.woods@meridiancapital.com
+      persona: hr
+      primary_system: HR-WS-04
+      groups: [hr, all_staff]
+
+    - username: sergio.romero
+      full_name: "Sergio Romero"
+      email: sergio.romero@meridiancapital.com
+      persona: hr
+      primary_system: HR-WS-05
+      groups: [hr, all_staff]
+
+    # === Marketing (5) ===
+    - username: claire.beaumont
+      full_name: "Claire Beaumont"
+      email: claire.beaumont@meridiancapital.com
+      persona: marketing
+      primary_system: MKT-WS-01
+      groups: [marketing, all_staff]
+
+    - username: noah.griffin
+      full_name: "Noah Griffin"
+      email: noah.griffin@meridiancapital.com
+      persona: marketing
+      primary_system: MKT-WS-02
+      groups: [marketing, all_staff]
+
+    - username: rachel.santos
+      full_name: "Rachel Santos"
+      email: rachel.santos@meridiancapital.com
+      persona: marketing
+      primary_system: MKT-WS-03
+      groups: [marketing, all_staff]
+
+    - username: ethan.cooper
+      full_name: "Ethan Cooper"
+      email: ethan.cooper@meridiancapital.com
+      persona: marketing
+      primary_system: MKT-WS-04
+      groups: [marketing, all_staff]
+
+    - username: julia.svensson
+      full_name: "Julia Svensson"
+      email: julia.svensson@meridiancapital.com
+      persona: marketing
+      primary_system: MKT-WS-05
+      groups: [marketing, all_staff]
+
+    # === Operations (8) ===
+    - username: paula.robertson
+      full_name: "Paula Robertson"
+      email: paula.robertson@meridiancapital.com
+      persona: project_manager
+      primary_system: OPS-WS-01
+      groups: [operations, all_staff]
+
+    - username: douglas.kim
+      full_name: "Douglas Kim"
+      email: douglas.kim@meridiancapital.com
+      persona: project_manager
+      primary_system: OPS-WS-02
+      groups: [operations, all_staff]
+
+    - username: stacy.allen
+      full_name: "Stacy Allen"
+      email: stacy.allen@meridiancapital.com
+      persona: analyst
+      primary_system: OPS-WS-03
+      groups: [operations, all_staff]
+
+    - username: roger.kapoor
+      full_name: "Roger Kapoor"
+      email: roger.kapoor@meridiancapital.com
+      persona: project_manager
+      primary_system: OPS-WS-04
+      groups: [operations, all_staff]
+
+    - username: monique.leblanc
+      full_name: "Monique Leblanc"
+      email: monique.leblanc@meridiancapital.com
+      persona: analyst
+      primary_system: OPS-WS-05
+      groups: [operations, all_staff]
+
+    - username: gary.thompson
+      full_name: "Gary Thompson"
+      email: gary.thompson@meridiancapital.com
+      persona: project_manager
+      primary_system: OPS-WS-06
+      groups: [operations, all_staff]
+
+    - username: andrea.chavez
+      full_name: "Andrea Chavez"
+      email: andrea.chavez@meridiancapital.com
+      persona: project_manager
+      primary_system: OPS-WS-07
+      groups: [operations, all_staff]
+
+    - username: neil.fitzgerald
+      full_name: "Neil Fitzgerald"
+      email: neil.fitzgerald@meridiancapital.com
+      persona: project_manager
+      primary_system: OPS-WS-08
+      groups: [operations, all_staff]
+
+    # === Administrative (6) ===
+    - username: carol.jenkins
+      full_name: "Carol Jenkins"
+      email: carol.jenkins@meridiancapital.com
+      persona: receptionist
+      primary_system: ADMIN-WS-01
+      groups: [admin_support, all_staff]
+
+    - username: maria.volante
+      full_name: "Maria Volante"
+      email: maria.volante@meridiancapital.com
+      persona: receptionist
+      primary_system: ADMIN-WS-02
+      groups: [admin_support, all_staff]
+
+    - username: paul.duffy
+      full_name: "Paul Duffy"
+      email: paul.duffy@meridiancapital.com
+      persona: receptionist
+      primary_system: ADMIN-WS-03
+      groups: [admin_support, all_staff]
+
+    - username: isabelle.martin
+      full_name: "Isabelle Martin"
+      email: isabelle.martin@meridiancapital.com
+      persona: receptionist
+      primary_system: ADMIN-WS-04
+      groups: [admin_support, all_staff]
+
+    - username: benjamin.watts
+      full_name: "Benjamin Watts"
+      email: benjamin.watts@meridiancapital.com
+      persona: intern
+      primary_system: ADMIN-WS-05
+      groups: [admin_support, all_staff]
+
+    - username: rosa.delgado
+      full_name: "Rosa Delgado"
+      email: rosa.delgado@meridiancapital.com
+      persona: receptionist
+      primary_system: ADMIN-WS-06
+      groups: [admin_support, all_staff]
+
+    # === Interns (5) ===
+    - username: jordan.blake
+      full_name: "Jordan Blake"
+      email: jordan.blake@meridiancapital.com
+      persona: intern
+      primary_system: INTERN-WS-01
+      groups: [interns, all_staff]
+
+    - username: emma.chen
+      full_name: "Emma Chen"
+      email: emma.chen@meridiancapital.com
+      persona: intern
+      primary_system: INTERN-WS-02
+      groups: [interns, analytics, all_staff]
+
+    - username: malik.jefferson
+      full_name: "Malik Jefferson"
+      email: malik.jefferson@meridiancapital.com
+      persona: intern
+      primary_system: INTERN-WS-03
+      groups: [interns, finance, all_staff]
+
+    - username: olivia.patel
+      full_name: "Olivia Patel"
+      email: olivia.patel@meridiancapital.com
+      persona: intern
+      primary_system: INTERN-WS-04
+      groups: [interns, compliance, all_staff]
+
+    - username: connor.murphy
+      full_name: "Connor Murphy"
+      email: connor.murphy@meridiancapital.com
+      persona: intern
+      primary_system: INTERN-WS-05
+      groups: [interns, sales, all_staff]
+
+  systems:
+    # === Executive Workstations (exec_net) ===
+    - hostname: EXEC-WS-01
+      ip: "10.10.1.10"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: robert.thornton
+    - hostname: EXEC-WS-02
+      ip: "10.10.1.11"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: catherine.walsh
+    - hostname: EXEC-WS-03
+      ip: "10.10.1.12"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: james.nakamura
+    - hostname: EXEC-WS-04
+      ip: "10.10.1.13"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: sandra.liu
+    - hostname: EXEC-WS-05
+      ip: "10.10.1.14"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: michael.ostrowski
+
+    # === Trading Workstations (trading_net) ===
+    - hostname: TRADE-WS-01
+      ip: "10.10.2.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: andrew.masterson
+    - hostname: TRADE-WS-02
+      ip: "10.10.2.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: lisa.chang
+    - hostname: TRADE-WS-03
+      ip: "10.10.2.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: ryan.fitzgerald
+    - hostname: TRADE-WS-04
+      ip: "10.10.2.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: priya.mehta
+    - hostname: TRADE-WS-05
+      ip: "10.10.2.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: thomas.bergstrom
+    - hostname: TRADE-WS-06
+      ip: "10.10.2.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: amanda.reeves
+    - hostname: TRADE-WS-07
+      ip: "10.10.2.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: kevin.okonkwo
+    - hostname: TRADE-WS-08
+      ip: "10.10.2.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: rachel.hoffman
+    - hostname: TRADE-WS-09
+      ip: "10.10.2.18"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: samuel.navarro
+    - hostname: TRADE-WS-10
+      ip: "10.10.2.19"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: elena.volkov
+    - hostname: TRADE-WS-11
+      ip: "10.10.2.20"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: daniel.park
+    - hostname: TRADE-WS-12
+      ip: "10.10.2.21"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jessica.moreau
+    - hostname: TRADE-WS-13
+      ip: "10.10.2.22"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: brian.callahan
+    - hostname: TRADE-WS-14
+      ip: "10.10.2.23"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: natasha.singh
+    - hostname: TRADE-WS-15
+      ip: "10.10.2.24"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: marcus.chen
+
+    # === Data Analytics Workstations (analytics_net) ===
+    - hostname: DATA-WS-01
+      ip: "10.10.3.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: sarah.oconnell
+    - hostname: DATA-WS-02
+      ip: "10.10.3.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: diego.ramirez
+    - hostname: DATA-WS-03
+      ip: "10.10.3.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: wei.zhang
+    - hostname: DATA-WS-04
+      ip: "10.10.3.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: aisha.johnson
+    - hostname: DATA-WS-05
+      ip: "10.10.3.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: peter.kowalski
+    - hostname: DATA-WS-06
+      ip: "10.10.3.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: maya.krishnan
+    - hostname: DATA-WS-07
+      ip: "10.10.3.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: lucas.ferreira
+    - hostname: DATA-WS-08
+      ip: "10.10.3.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: hannah.sterling
+
+    # === IT Workstations (it_net) ===
+    - hostname: IT-WS-01
+      ip: "10.10.4.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: frank.deluca
+    - hostname: IT-WS-02
+      ip: "10.10.4.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: yuki.tanaka
+    - hostname: IT-WS-03
+      ip: "10.10.4.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: omar.hassan
+    - hostname: IT-WS-04
+      ip: "10.10.4.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: emily.brooks
+    - hostname: IT-WS-05
+      ip: "10.10.4.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: carlos.mendez
+    - hostname: IT-WS-06
+      ip: "10.10.4.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: diane.prescott
+    - hostname: IT-WS-07
+      ip: "10.10.4.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jason.wright
+    - hostname: IT-WS-08
+      ip: "10.10.4.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: nadia.popov
+    - hostname: IT-WS-09
+      ip: "10.10.4.18"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: alex.nguyen
+    - hostname: IT-WS-10
+      ip: "10.10.4.19"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: tyler.jackson
+
+    # === Finance Workstations (finance_net) ===
+    - hostname: FIN-WS-01
+      ip: "10.10.5.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: margaret.frost
+    - hostname: FIN-WS-02
+      ip: "10.10.5.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: david.shimizu
+    - hostname: FIN-WS-03
+      ip: "10.10.5.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: laura.martinez
+    - hostname: FIN-WS-04
+      ip: "10.10.5.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: richard.adeyemi
+    - hostname: FIN-WS-05
+      ip: "10.10.5.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: susan.blackwell
+    - hostname: FIN-WS-06
+      ip: "10.10.5.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: anthony.russo
+    - hostname: FIN-WS-07
+      ip: "10.10.5.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jennifer.grant
+    - hostname: FIN-WS-08
+      ip: "10.10.5.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: steven.choi
+    - hostname: FIN-WS-09
+      ip: "10.10.5.18"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: patricia.burke
+    - hostname: FIN-WS-10
+      ip: "10.10.5.19"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: raymond.silva
+
+    # === Sales Workstations (sales_net) ===
+    - hostname: SALES-WS-01
+      ip: "10.10.6.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: victoria.kensington
+    - hostname: SALES-WS-02
+      ip: "10.10.6.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: derek.washington
+    - hostname: SALES-WS-03
+      ip: "10.10.6.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: melissa.lambert
+    - hostname: SALES-WS-04
+      ip: "10.10.6.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: christopher.daly
+    - hostname: SALES-WS-05
+      ip: "10.10.6.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: nina.petrova
+    - hostname: SALES-WS-06
+      ip: "10.10.6.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: brandon.cole
+    - hostname: SALES-WS-07
+      ip: "10.10.6.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: angela.moretti
+    - hostname: SALES-WS-08
+      ip: "10.10.6.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: trevor.hayes
+    - hostname: SALES-WS-09
+      ip: "10.10.6.18"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: sophia.andersen
+    - hostname: SALES-WS-10
+      ip: "10.10.6.19"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: william.okafor
+    - hostname: SALES-WS-11
+      ip: "10.10.6.20"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: kristen.mcdonald
+    - hostname: SALES-WS-12
+      ip: "10.10.6.21"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jose.gutierrez
+    - hostname: SALES-WS-13
+      ip: "10.10.6.22"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: heather.flynn
+    - hostname: SALES-WS-14
+      ip: "10.10.6.23"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: adam.steinberg
+    - hostname: SALES-WS-15
+      ip: "10.10.6.24"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: grace.campbell
+
+    # === Compliance & Risk Workstations (compliance_net) ===
+    - hostname: COMP-WS-01
+      ip: "10.10.7.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: helen.marchetti
+    - hostname: COMP-WS-02
+      ip: "10.10.7.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: daniel.yoon
+    - hostname: COMP-WS-03
+      ip: "10.10.7.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: rebecca.stone
+    - hostname: COMP-WS-04
+      ip: "10.10.7.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: philip.nwosu
+    - hostname: COMP-WS-05
+      ip: "10.10.7.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: christine.moller
+    - hostname: COMP-WS-06
+      ip: "10.10.7.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: keith.donovan
+    - hostname: COMP-WS-07
+      ip: "10.10.7.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: samantha.reid
+    - hostname: COMP-WS-08
+      ip: "10.10.7.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: ivan.petrov
+
+    # === Legal Workstations (compliance_net) ===
+    - hostname: LEGAL-WS-01
+      ip: "10.10.7.20"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: gerald.whitmore
+    - hostname: LEGAL-WS-02
+      ip: "10.10.7.21"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: alicia.fernandez
+    - hostname: LEGAL-WS-03
+      ip: "10.10.7.22"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jonathan.pratt
+    - hostname: LEGAL-WS-04
+      ip: "10.10.7.23"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: michelle.devereaux
+    - hostname: LEGAL-WS-05
+      ip: "10.10.7.24"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: robert.huang
+
+    # === HR Workstations (general_net) ===
+    - hostname: HR-WS-01
+      ip: "10.10.8.10"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: linda.osborne
+    - hostname: HR-WS-02
+      ip: "10.10.8.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: denise.nakamura
+    - hostname: HR-WS-03
+      ip: "10.10.8.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: kevin.walsh
+    - hostname: HR-WS-04
+      ip: "10.10.8.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: tamara.woods
+    - hostname: HR-WS-05
+      ip: "10.10.8.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: sergio.romero
+
+    # === Marketing Workstations (general_net) ===
+    - hostname: MKT-WS-01
+      ip: "10.10.8.20"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: claire.beaumont
+    - hostname: MKT-WS-02
+      ip: "10.10.8.21"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: noah.griffin
+    - hostname: MKT-WS-03
+      ip: "10.10.8.22"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: rachel.santos
+    - hostname: MKT-WS-04
+      ip: "10.10.8.23"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: ethan.cooper
+    - hostname: MKT-WS-05
+      ip: "10.10.8.24"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: julia.svensson
+
+    # === Operations Workstations (general_net) ===
+    - hostname: OPS-WS-01
+      ip: "10.10.8.30"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: paula.robertson
+    - hostname: OPS-WS-02
+      ip: "10.10.8.31"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: douglas.kim
+    - hostname: OPS-WS-03
+      ip: "10.10.8.32"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: stacy.allen
+    - hostname: OPS-WS-04
+      ip: "10.10.8.33"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: roger.kapoor
+    - hostname: OPS-WS-05
+      ip: "10.10.8.34"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: monique.leblanc
+    - hostname: OPS-WS-06
+      ip: "10.10.8.35"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: gary.thompson
+    - hostname: OPS-WS-07
+      ip: "10.10.8.36"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: andrea.chavez
+    - hostname: OPS-WS-08
+      ip: "10.10.8.37"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: neil.fitzgerald
+
+    # === Administrative Workstations (general_net) ===
+    - hostname: ADMIN-WS-01
+      ip: "10.10.8.40"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: carol.jenkins
+    - hostname: ADMIN-WS-02
+      ip: "10.10.8.41"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: maria.volante
+    - hostname: ADMIN-WS-03
+      ip: "10.10.8.42"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: paul.duffy
+    - hostname: ADMIN-WS-04
+      ip: "10.10.8.43"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: isabelle.martin
+    - hostname: ADMIN-WS-05
+      ip: "10.10.8.44"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: benjamin.watts
+    - hostname: ADMIN-WS-06
+      ip: "10.10.8.45"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: rosa.delgado
+
+    # === Intern Workstations (general_net) ===
+    - hostname: INTERN-WS-01
+      ip: "10.10.8.50"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: jordan.blake
+    - hostname: INTERN-WS-02
+      ip: "10.10.8.51"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: emma.chen
+    - hostname: INTERN-WS-03
+      ip: "10.10.8.52"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: malik.jefferson
+    - hostname: INTERN-WS-04
+      ip: "10.10.8.53"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: olivia.patel
+    - hostname: INTERN-WS-05
+      ip: "10.10.8.54"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: connor.murphy
+
+    # === Servers (server_net) ===
+    - hostname: DC-01
+      ip: "10.10.100.10"
+      os: "Windows Server 2019"
+      type: domain_controller
+      services: [dns, ldap, kerberos, "Active Directory"]
+    - hostname: DC-02
+      ip: "10.10.100.11"
+      os: "Windows Server 2019"
+      type: domain_controller
+      services: [dns, ldap, kerberos, "Active Directory"]
+    - hostname: SRV-FILE-01
+      ip: "10.10.100.12"
+      os: "Windows Server 2019"
+      type: server
+      services: [smb, "File Sharing"]
+    - hostname: SRV-FILE-02
+      ip: "10.10.100.13"
+      os: "Windows Server 2019"
+      type: server
+      services: [smb, "File Sharing"]
+    - hostname: SRV-DB-01
+      ip: "10.10.100.14"
+      os: "Windows Server 2019"
+      type: server
+      services: [mssql, "SQL Server 2019"]
+    - hostname: SRV-DB-02
+      ip: "10.10.100.15"
+      os: "Windows Server 2019"
+      type: server
+      services: [mssql, "SQL Server 2019 Reporting"]
+    - hostname: SRV-EXCH-01
+      ip: "10.10.100.16"
+      os: "Windows Server 2019"
+      type: server
+      services: [smtp, https, "Exchange 2019"]
+    - hostname: SRV-WEB-01
+      ip: "10.10.100.17"
+      os: "Windows Server 2019"
+      type: server
+      services: [https, "CRM Application"]
+    - hostname: SRV-BACKUP-01
+      ip: "10.10.100.18"
+      os: "Windows Server 2019"
+      type: server
+      services: ["Veeam Backup"]
+    - hostname: SRV-PRINT-01
+      ip: "10.10.100.19"
+      os: "Windows Server 2019"
+      type: server
+      services: [spooler, "Print Services"]
+    - hostname: SRV-SCCM-01
+      ip: "10.10.100.20"
+      os: "Windows Server 2019"
+      type: server
+      services: ["SCCM", "Windows Defender ATP"]
+    - hostname: SRV-LOG-01
+      ip: "10.10.100.21"
+      os: "Ubuntu 22.04"
+      type: server
+      services: [syslog, https, "Splunk Enterprise"]
+
+    # === DMZ ===
+    - hostname: DMZ-WEB-01
+      ip: "10.10.200.10"
+      os: "Ubuntu 22.04"
+      type: server
+      services: [https, nginx, "Corporate Website"]
+
+  service_accounts:
+    - svc_sqlserver
+    - svc_backup
+    - svc_exchange
+    - svc_sccm
+
+  groups:
+    - name: executive
+      members: [robert.thornton, catherine.walsh, james.nakamura, sandra.liu, michael.ostrowski]
+    - name: trading
+      members: [andrew.masterson, lisa.chang, ryan.fitzgerald, priya.mehta, thomas.bergstrom, amanda.reeves, kevin.okonkwo, rachel.hoffman, samuel.navarro, elena.volkov, daniel.park, jessica.moreau, brian.callahan, natasha.singh, marcus.chen]
+    - name: analytics
+      members: [sarah.oconnell, diego.ramirez, wei.zhang, aisha.johnson, peter.kowalski, maya.krishnan, lucas.ferreira, hannah.sterling, emma.chen]
+    - name: it
+      members: [frank.deluca, yuki.tanaka, omar.hassan, emily.brooks, carlos.mendez, diane.prescott, jason.wright, nadia.popov, alex.nguyen, tyler.jackson, jordan.blake]
+    - name: domain_admins
+      members: [frank.deluca, yuki.tanaka]
+    - name: finance
+      members: [margaret.frost, david.shimizu, laura.martinez, richard.adeyemi, susan.blackwell, anthony.russo, jennifer.grant, steven.choi, patricia.burke, raymond.silva, malik.jefferson]
+    - name: sales
+      members: [victoria.kensington, derek.washington, melissa.lambert, christopher.daly, nina.petrova, brandon.cole, angela.moretti, trevor.hayes, sophia.andersen, william.okafor, kristen.mcdonald, jose.gutierrez, heather.flynn, adam.steinberg, grace.campbell, connor.murphy]
+    - name: compliance
+      members: [helen.marchetti, daniel.yoon, rebecca.stone, philip.nwosu, christine.moller, keith.donovan, samantha.reid, ivan.petrov, olivia.patel]
+    - name: legal
+      members: [gerald.whitmore, alicia.fernandez, jonathan.pratt, michelle.devereaux, robert.huang]
+    - name: hr
+      members: [linda.osborne, denise.nakamura, kevin.walsh, tamara.woods, sergio.romero]
+    - name: marketing
+      members: [claire.beaumont, noah.griffin, rachel.santos, ethan.cooper, julia.svensson]
+    - name: operations
+      members: [paula.robertson, douglas.kim, stacy.allen, roger.kapoor, monique.leblanc, gary.thompson, andrea.chavez, neil.fitzgerald]
+    - name: admin_support
+      members: [carol.jenkins, maria.volante, paul.duffy, isabelle.martin, benjamin.watts, rosa.delgado]
+    - name: interns
+      members: [jordan.blake, emma.chen, malik.jefferson, olivia.patel, connor.murphy]
+    - name: all_staff
+      members: [robert.thornton, catherine.walsh, james.nakamura, sandra.liu, michael.ostrowski, andrew.masterson, lisa.chang, ryan.fitzgerald, priya.mehta, thomas.bergstrom, amanda.reeves, kevin.okonkwo, rachel.hoffman, samuel.navarro, elena.volkov, daniel.park, jessica.moreau, brian.callahan, natasha.singh, marcus.chen, sarah.oconnell, diego.ramirez, wei.zhang, aisha.johnson, peter.kowalski, maya.krishnan, lucas.ferreira, hannah.sterling, frank.deluca, yuki.tanaka, omar.hassan, emily.brooks, carlos.mendez, diane.prescott, jason.wright, nadia.popov, alex.nguyen, tyler.jackson, margaret.frost, david.shimizu, laura.martinez, richard.adeyemi, susan.blackwell, anthony.russo, jennifer.grant, steven.choi, patricia.burke, raymond.silva, victoria.kensington, derek.washington, melissa.lambert, christopher.daly, nina.petrova, brandon.cole, angela.moretti, trevor.hayes, sophia.andersen, william.okafor, kristen.mcdonald, jose.gutierrez, heather.flynn, adam.steinberg, grace.campbell, helen.marchetti, daniel.yoon, rebecca.stone, philip.nwosu, christine.moller, keith.donovan, samantha.reid, ivan.petrov, gerald.whitmore, alicia.fernandez, jonathan.pratt, michelle.devereaux, robert.huang, linda.osborne, denise.nakamura, kevin.walsh, tamara.woods, sergio.romero, claire.beaumont, noah.griffin, rachel.santos, ethan.cooper, julia.svensson, paula.robertson, douglas.kim, stacy.allen, roger.kapoor, monique.leblanc, gary.thompson, andrea.chavez, neil.fitzgerald, carol.jenkins, maria.volante, paul.duffy, isabelle.martin, benjamin.watts, rosa.delgado, jordan.blake, emma.chen, malik.jefferson, olivia.patel, connor.murphy]
+
+  network:
+    segments:
+      - name: exec_net
+        cidr: "10.10.1.0/24"
+        description: "Executive floor workstations"
+        systems: [EXEC-WS-01, EXEC-WS-02, EXEC-WS-03, EXEC-WS-04, EXEC-WS-05]
+      - name: trading_net
+        cidr: "10.10.2.0/24"
+        description: "Trading floor workstations"
+        systems: [TRADE-WS-01, TRADE-WS-02, TRADE-WS-03, TRADE-WS-04, TRADE-WS-05, TRADE-WS-06, TRADE-WS-07, TRADE-WS-08, TRADE-WS-09, TRADE-WS-10, TRADE-WS-11, TRADE-WS-12, TRADE-WS-13, TRADE-WS-14, TRADE-WS-15]
+      - name: analytics_net
+        cidr: "10.10.3.0/24"
+        description: "Data analytics and BI team workstations"
+        systems: [DATA-WS-01, DATA-WS-02, DATA-WS-03, DATA-WS-04, DATA-WS-05, DATA-WS-06, DATA-WS-07, DATA-WS-08]
+      - name: it_net
+        cidr: "10.10.4.0/24"
+        description: "IT department workstations"
+        systems: [IT-WS-01, IT-WS-02, IT-WS-03, IT-WS-04, IT-WS-05, IT-WS-06, IT-WS-07, IT-WS-08, IT-WS-09, IT-WS-10]
+      - name: finance_net
+        cidr: "10.10.5.0/24"
+        description: "Finance and accounting workstations"
+        systems: [FIN-WS-01, FIN-WS-02, FIN-WS-03, FIN-WS-04, FIN-WS-05, FIN-WS-06, FIN-WS-07, FIN-WS-08, FIN-WS-09, FIN-WS-10]
+      - name: sales_net
+        cidr: "10.10.6.0/24"
+        description: "Sales and client relations workstations"
+        systems: [SALES-WS-01, SALES-WS-02, SALES-WS-03, SALES-WS-04, SALES-WS-05, SALES-WS-06, SALES-WS-07, SALES-WS-08, SALES-WS-09, SALES-WS-10, SALES-WS-11, SALES-WS-12, SALES-WS-13, SALES-WS-14, SALES-WS-15]
+      - name: compliance_net
+        cidr: "10.10.7.0/24"
+        description: "Compliance, risk, and legal workstations"
+        systems: [COMP-WS-01, COMP-WS-02, COMP-WS-03, COMP-WS-04, COMP-WS-05, COMP-WS-06, COMP-WS-07, COMP-WS-08, LEGAL-WS-01, LEGAL-WS-02, LEGAL-WS-03, LEGAL-WS-04, LEGAL-WS-05]
+      - name: general_net
+        cidr: "10.10.8.0/24"
+        description: "HR, marketing, operations, administrative, and intern workstations"
+        systems: [HR-WS-01, HR-WS-02, HR-WS-03, HR-WS-04, HR-WS-05, MKT-WS-01, MKT-WS-02, MKT-WS-03, MKT-WS-04, MKT-WS-05, OPS-WS-01, OPS-WS-02, OPS-WS-03, OPS-WS-04, OPS-WS-05, OPS-WS-06, OPS-WS-07, OPS-WS-08, ADMIN-WS-01, ADMIN-WS-02, ADMIN-WS-03, ADMIN-WS-04, ADMIN-WS-05, ADMIN-WS-06, INTERN-WS-01, INTERN-WS-02, INTERN-WS-03, INTERN-WS-04, INTERN-WS-05]
+      - name: server_net
+        cidr: "10.10.100.0/24"
+        description: "Server VLAN — domain controllers, file servers, databases, application servers"
+        systems: [DC-01, DC-02, SRV-FILE-01, SRV-FILE-02, SRV-DB-01, SRV-DB-02, SRV-EXCH-01, SRV-WEB-01, SRV-BACKUP-01, SRV-PRINT-01, SRV-SCCM-01, SRV-LOG-01]
+      - name: dmz
+        cidr: "10.10.200.0/24"
+        description: "DMZ — internet-facing services"
+        systems: [DMZ-WEB-01]
+
+    sensors:
+      - type: network
+        name: core-tap
+        monitoring_segments: [exec_net, trading_net, analytics_net, it_net, finance_net, sales_net, compliance_net, general_net, server_net]
+        direction: bidirectional
+        placement: tap
+        log_formats: [zeek_conn]
+      - type: firewall
+        name: perimeter-fw
+        monitoring_segments: [exec_net, trading_net, analytics_net, it_net, finance_net, sales_net, compliance_net, general_net, server_net, dmz]
+        direction: bidirectional
+        placement: tap
+        log_formats: [zeek_conn, snort_alert]
+
+personas:
+  - name: executive
+    description: "C-suite executive or director"
+    typical_activities:
+      - "Review financial reports and dashboards"
+      - "Email correspondence with clients and board members"
+      - "Calendar management and meeting scheduling"
+      - "Review and approve documents"
+    work_hours: "8am-7pm (lunch 12pm-1pm)"
+    application_usage: ["Outlook", "Excel", "PowerPoint", "Chrome", "Teams"]
+    risk_profile: medium
+  - name: analyst
+    description: "Business, investment, or compliance analyst"
+    typical_activities:
+      - "Analyze financial data and market trends"
+      - "Build and update spreadsheet models"
+      - "Access Bloomberg or market data terminals"
+      - "Write reports and presentations"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Excel", "Bloomberg Terminal", "Outlook", "PowerPoint", "Chrome"]
+    risk_profile: medium
+  - name: data_analyst
+    description: "Data analyst or BI developer"
+    typical_activities:
+      - "Query databases using SQL Server Management Studio"
+      - "Build reports in Power BI or Tableau"
+      - "Write and run Python or R scripts for analysis"
+      - "Access reporting databases and data warehouses"
+      - "Share reports via email and file shares"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["SSMS", "Power BI", "Excel", "Python", "Outlook", "Chrome"]
+    risk_profile: medium
+  - name: developer
+    description: "Software or data engineer"
+    typical_activities:
+      - "Write and test code"
+      - "Access source control repositories"
+      - "Run builds and deployments"
+      - "Query databases for development and testing"
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["VS Code", "Terminal", "Chrome", "SSMS", "Git"]
+    risk_profile: high
+  - name: sysadmin
+    description: "System or network administrator"
+    typical_activities:
+      - "Monitor server health and performance"
+      - "Apply patches and updates"
+      - "Manage Active Directory users and groups"
+      - "Troubleshoot infrastructure issues"
+      - "Remote desktop to servers"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["RDP", "PowerShell", "Active Directory", "SCCM Console", "Outlook"]
+    risk_profile: high
+  - name: security_analyst
+    description: "SOC analyst or security engineer"
+    typical_activities:
+      - "Monitor SIEM dashboards"
+      - "Investigate security alerts"
+      - "Run vulnerability scans"
+      - "Review access logs"
+    work_hours: "9am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Splunk", "Chrome", "PowerShell", "Outlook"]
+    risk_profile: high
+  - name: accountant
+    description: "Accounting or finance professional"
+    typical_activities:
+      - "Process accounts payable and receivable"
+      - "Reconcile financial statements"
+      - "Access accounting software"
+      - "Generate payroll reports"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["QuickBooks", "Excel", "Outlook", "Chrome"]
+    risk_profile: medium
+  - name: sales
+    description: "Sales representative or account manager"
+    typical_activities:
+      - "Access CRM to update client records"
+      - "Email and call clients"
+      - "Prepare proposals and presentations"
+      - "Review client portfolio summaries"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["CRM", "Outlook", "Excel", "PowerPoint", "Chrome", "Teams"]
+    risk_profile: medium
+  - name: marketing
+    description: "Marketing specialist or content creator"
+    typical_activities:
+      - "Create marketing materials and content"
+      - "Manage social media and web presence"
+      - "Analyze campaign metrics"
+      - "Coordinate events"
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Chrome", "Adobe Creative Suite", "Outlook", "Excel"]
+    risk_profile: medium
+  - name: hr
+    description: "Human resources professional"
+    typical_activities:
+      - "Process employee records and benefits"
+      - "Manage recruiting pipeline"
+      - "Coordinate onboarding and offboarding"
+      - "Access HRIS system"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["HRIS", "Outlook", "Excel", "Chrome"]
+    risk_profile: medium
+  - name: help_desk
+    description: "IT help desk technician"
+    typical_activities:
+      - "Process support tickets"
+      - "Remote assist users"
+      - "Reset passwords and unlock accounts"
+      - "Image and deploy workstations"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["ServiceNow", "Remote Desktop", "Active Directory", "Outlook"]
+    risk_profile: medium
+  - name: legal_counsel
+    description: "Attorney, paralegal, or compliance officer"
+    typical_activities:
+      - "Review contracts and regulatory filings"
+      - "Access legal document management system"
+      - "Research regulatory requirements"
+      - "Draft compliance policies"
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Westlaw", "Word", "Outlook", "Chrome", "Adobe Acrobat"]
+    risk_profile: low
+  - name: project_manager
+    description: "Project manager or operations coordinator"
+    typical_activities:
+      - "Update project plans and timelines"
+      - "Coordinate cross-team meetings"
+      - "Track deliverables and milestones"
+      - "Generate status reports"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["MS Project", "Excel", "Outlook", "Teams", "Chrome"]
+    risk_profile: medium
+  - name: receptionist
+    description: "Receptionist or administrative assistant"
+    typical_activities:
+      - "Manage calendars and meeting rooms"
+      - "Process mail and deliveries"
+      - "Answer phones and direct visitors"
+      - "Order supplies"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Outlook", "Chrome", "Word", "Excel"]
+    risk_profile: low
+  - name: intern
+    description: "Intern or trainee"
+    typical_activities:
+      - "Shadow team members"
+      - "Complete assigned tasks and projects"
+      - "Attend training sessions"
+      - "Take notes and draft documents"
+    work_hours: "9am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Chrome", "Outlook", "Excel", "Word"]
+    risk_profile: low
+
+time_window:
+  start: "2024-03-13T11:00:00Z"
+  duration: "72h"
+
+baseline_activity:
+  description: >
+    Normal business operations at a financial services firm during a typical
+    mid-week period (Wednesday through Friday). Trading desk is active during
+    market hours, analysts run database queries, sales team accesses CRM,
+    IT performs routine administration. High intensity reflects the large
+    user population generating constant background activity.
+  intensity: high
+  variation: medium
+
+storyline:
+  # ========================================================================
+  # DAY 1 — WEDNESDAY: Reconnaissance and initial data collection
+  # Diego begins accessing file shares and databases outside his normal scope.
+  # His normal work involves querying SRV-DB-02 (reporting database) and
+  # accessing \\SRV-FILE-02\AnalyticsReports. Today he starts exploring
+  # client data on servers he doesn't normally touch.
+  # ========================================================================
+
+  - time: "+7h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Browses investment research file share normally accessed only by the trading team"
+    details:
+      process_name: "C:\\Windows\\explorer.exe"
+      dst_ip: "10.10.100.12"
+      dst_port: 445
+      service: "smb"
+      network_path: "\\\\SRV-FILE-01\\InvestmentResearch"
+      technique: "T1083 - File and Directory Discovery"
+
+  - time: "+7h25m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Navigates to restricted client portfolios share on the primary file server"
+    details:
+      process_name: "C:\\Windows\\explorer.exe"
+      dst_ip: "10.10.100.12"
+      dst_port: 445
+      service: "smb"
+      network_path: "\\\\SRV-FILE-01\\ClientPortfolios"
+      technique: "T1039 - Data from Network Shared Drive"
+
+  - time: "+8h15m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Opens SQL Server Management Studio and queries client account tables on the production database server — normally uses only SRV-DB-02 for reporting"
+    details:
+      process_name: "C:\\Program Files (x86)\\Microsoft SQL Server Management Studio 18\\Common7\\IDE\\Ssms.exe"
+      command_line: "Ssms.exe"
+      dst_ip: "10.10.100.14"
+      dst_port: 1433
+      service: "mssql"
+      sql_query: "SELECT TOP 1000 AccountID, ClientName, AccountType, PortfolioValue, AdvisorName FROM ClientDB.dbo.ClientAccounts ORDER BY PortfolioValue DESC"
+      technique: "T1213 - Data from Information Repositories"
+
+  - time: "+9h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Copies client portfolio documents from file share to local staging directory"
+    details:
+      process_name: "C:\\Windows\\System32\\robocopy.exe"
+      command_line: "robocopy.exe \\\\SRV-FILE-01\\ClientPortfolios\\HighNetWorth C:\\Users\\diego.ramirez\\Documents\\ProjectData\\portfolios /E /R:1 /W:1"
+      dst_ip: "10.10.100.12"
+      dst_port: 445
+      service: "smb"
+      technique: "T1039 - Data from Network Shared Drive"
+
+  - time: "+10h30m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "After most staff have left for the day, accesses trading records share on the departmental file server"
+    details:
+      process_name: "C:\\Windows\\explorer.exe"
+      dst_ip: "10.10.100.13"
+      dst_port: 445
+      service: "smb"
+      network_path: "\\\\SRV-FILE-02\\TradingRecords"
+      technique: "T1039 - Data from Network Shared Drive"
+
+  - time: "+11h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Copies trading strategy documents to local staging directory"
+    details:
+      process_name: "C:\\Windows\\System32\\robocopy.exe"
+      command_line: "robocopy.exe \\\\SRV-FILE-02\\TradingRecords\\Strategies C:\\Users\\diego.ramirez\\Documents\\ProjectData\\trading /E /R:1 /W:1"
+      dst_ip: "10.10.100.13"
+      dst_port: 445
+      service: "smb"
+      technique: "T1074.001 - Data Staged: Local Data Staging"
+
+  # ========================================================================
+  # DAY 2 — THURSDAY: Bulk data collection and staging
+  # Diego escalates — accessing compliance reports with client PII, running
+  # bulk database exports, and accessing the CRM. He stages and compresses
+  # everything on his local workstation.
+  # ========================================================================
+
+  - time: "+28h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Accesses compliance reports share containing client due diligence files with PII"
+    details:
+      process_name: "C:\\Windows\\explorer.exe"
+      dst_ip: "10.10.100.13"
+      dst_port: 445
+      service: "smb"
+      network_path: "\\\\SRV-FILE-02\\ComplianceReports\\ClientDueDiligence"
+      technique: "T1039 - Data from Network Shared Drive"
+
+  - time: "+28h30m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Copies compliance due diligence files to local staging directory"
+    details:
+      process_name: "C:\\Windows\\System32\\robocopy.exe"
+      command_line: "robocopy.exe \\\\SRV-FILE-02\\ComplianceReports\\ClientDueDiligence C:\\Users\\diego.ramirez\\Documents\\ProjectData\\compliance /E /R:1 /W:1"
+      dst_ip: "10.10.100.13"
+      dst_port: 445
+      service: "smb"
+      technique: "T1074.001 - Data Staged: Local Data Staging"
+
+  - time: "+30h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Runs bulk database export using BCP utility to extract full client account records to CSV"
+    details:
+      process_name: "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\bcp.exe"
+      command_line: "bcp.exe \"SELECT AccountID, ClientName, SSN, DateOfBirth, Address, Phone, Email, AccountType, PortfolioValue, AdvisorName, OpenDate FROM ClientDB.dbo.ClientAccounts\" queryout \"C:\\Users\\diego.ramirez\\Documents\\ProjectData\\client_accounts_full.csv\" -S SRV-DB-01 -T -c -t\",\""
+      dst_ip: "10.10.100.14"
+      dst_port: 1433
+      service: "mssql"
+      technique: "T1213 - Data from Information Repositories"
+
+  - time: "+30h45m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Exports portfolio holdings data from production database"
+    details:
+      process_name: "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\bcp.exe"
+      command_line: "bcp.exe \"SELECT h.HoldingID, a.ClientName, h.SecurityName, h.Ticker, h.Shares, h.MarketValue, h.CostBasis, h.PurchaseDate FROM ClientDB.dbo.PortfolioHoldings h JOIN ClientDB.dbo.ClientAccounts a ON h.AccountID = a.AccountID\" queryout \"C:\\Users\\diego.ramirez\\Documents\\ProjectData\\portfolio_holdings.csv\" -S SRV-DB-01 -T -c -t\",\""
+      dst_ip: "10.10.100.14"
+      dst_port: 1433
+      service: "mssql"
+      technique: "T1213 - Data from Information Repositories"
+
+  - time: "+31h15m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Accesses CRM web application and exports client contact list"
+    details:
+      process_name: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      dst_ip: "10.10.100.17"
+      dst_port: 443
+      service: "https"
+      url_path: "/crm/export/contacts?format=csv&filter=all"
+      technique: "T1213.002 - Data from Information Repositories: Sharepoint"
+
+  - time: "+33h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Compresses collected portfolio and trading data into a password-protected ZIP archive"
+    details:
+      process_name: "C:\\Program Files\\7-Zip\\7z.exe"
+      command_line: "7z.exe a -tzip -pQ1FiscalReview2024 C:\\Users\\diego.ramirez\\Documents\\ProjectData\\fiscal_review_q1.zip C:\\Users\\diego.ramirez\\Documents\\ProjectData\\portfolios\\* C:\\Users\\diego.ramirez\\Documents\\ProjectData\\trading\\*"
+      technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+
+  - time: "+34h30m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Creates second encrypted archive containing client PII exports and compliance documents"
+    details:
+      process_name: "C:\\Program Files\\7-Zip\\7z.exe"
+      command_line: "7z.exe a -tzip -pQ1FiscalReview2024 C:\\Users\\diego.ramirez\\Documents\\ProjectData\\client_data_q1.zip C:\\Users\\diego.ramirez\\Documents\\ProjectData\\client_accounts_full.csv C:\\Users\\diego.ramirez\\Documents\\ProjectData\\portfolio_holdings.csv C:\\Users\\diego.ramirez\\Documents\\ProjectData\\compliance\\*"
+      technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+
+  # ========================================================================
+  # DAY 3 — FRIDAY: Exfiltration and cleanup
+  # Diego grabs final files, uploads everything to a personal pCloud account,
+  # then cleans up traces on his workstation before logging off for the
+  # weekend (and likely his last week at the company).
+  # ========================================================================
+
+  - time: "+50h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Final collection — accesses remaining client portfolio documents from file share"
+    details:
+      process_name: "C:\\Windows\\System32\\robocopy.exe"
+      command_line: "robocopy.exe \\\\SRV-FILE-01\\ClientPortfolios\\Institutional C:\\Users\\diego.ramirez\\Documents\\ProjectData\\institutional /E /R:1 /W:1"
+      dst_ip: "10.10.100.12"
+      dst_port: 445
+      service: "smb"
+      technique: "T1039 - Data from Network Shared Drive"
+
+  - time: "+50h30m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Compresses final batch of institutional client data"
+    details:
+      process_name: "C:\\Program Files\\7-Zip\\7z.exe"
+      command_line: "7z.exe a -tzip -pQ1FiscalReview2024 C:\\Users\\diego.ramirez\\Documents\\ProjectData\\institutional_q1.zip C:\\Users\\diego.ramirez\\Documents\\ProjectData\\institutional\\*"
+      technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+
+  - time: "+52h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Begins uploading first archive to personal pCloud account via web browser"
+    details:
+      process_name: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      dst_ip: "185.26.156.40"
+      dst_port: 443
+      service: "https"
+      domain: "api.pcloud.com"
+      bytes_out: 157286400
+      technique: "T1567.002 - Exfiltration Over Web Service: Exfiltration to Cloud Storage"
+
+  - time: "+53h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Uploads second archive containing client PII data to pCloud"
+    details:
+      process_name: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      dst_ip: "185.26.156.40"
+      dst_port: 443
+      service: "https"
+      domain: "api.pcloud.com"
+      bytes_out: 234881024
+      technique: "T1567.002 - Exfiltration Over Web Service: Exfiltration to Cloud Storage"
+
+  - time: "+54h30m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Final upload — institutional client data archive to pCloud"
+    details:
+      process_name: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      dst_ip: "185.26.156.40"
+      dst_port: 443
+      service: "https"
+      domain: "api.pcloud.com"
+      bytes_out: 104857600
+      technique: "T1567.002 - Exfiltration Over Web Service: Exfiltration to Cloud Storage"
+
+  - time: "+55h30m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Deletes local staging directory and all collected data"
+    details:
+      process_name: "C:\\Windows\\System32\\cmd.exe"
+      command_line: "cmd.exe /c rmdir /s /q C:\\Users\\diego.ramirez\\Documents\\ProjectData"
+      technique: "T1070.004 - Indicator Removal: File Deletion"
+
+  - time: "+55h45m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Clears recent documents list and temporary files"
+    details:
+      process_name: "C:\\Windows\\System32\\cmd.exe"
+      command_line: "cmd.exe /c del /q /f %APPDATA%\\Microsoft\\Windows\\Recent\\* & del /q /f %LOCALAPPDATA%\\Temp\\fiscal_review* & del /q /f %LOCALAPPDATA%\\Temp\\client_data* & del /q /f %LOCALAPPDATA%\\Temp\\institutional*"
+      technique: "T1070.004 - Indicator Removal: File Deletion"
+
+  - time: "+56h"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Clears Chrome browsing history and download records to remove pCloud upload traces"
+    details:
+      process_name: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      command_line: "chrome.exe --delete-profile-data --remove-download-history"
+      technique: "T1070.003 - Indicator Removal: Clear Command History"
+
+  - time: "+56h15m"
+    actor: diego.ramirez
+    system: DATA-WS-02
+    activity: "Empties the Recycle Bin to permanently remove any deleted staging artifacts"
+    details:
+      process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      command_line: "powershell.exe -Command \"Clear-RecycleBin -Force -ErrorAction SilentlyContinue\""
+      technique: "T1070.004 - Indicator Removal: File Deletion"
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+    - format: ecar
+    - format: snort_alert
+  destination: "./output"
+  compression: false

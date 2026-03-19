@@ -408,6 +408,8 @@ REVERSE_DNS: dict[str, str] = {
     '3.21.137.128': 'zoom.us', '3.235.69.6': 'us02web.zoom.us',
     '18.205.93.88': 'us06web.zoom.us',
     '13.108.0.20': 'login.salesforce.com', '13.110.54.8': 'na139.salesforce.com',
+    # Cloud storage (exfiltration targets use real routable IPs)
+    '185.26.156.40': 'api.pcloud.com',
     # Internal
     '10.0.100.10': 'db-primary.corp.local', '10.0.100.11': 'db-replica.corp.local',
     '10.0.100.12': 'db-analytics.corp.local',
@@ -670,7 +672,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,  # Information
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,    # System process
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 # Logon variant fields — Subject is SYSTEM (lsass reports logon events)
@@ -717,7 +719,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 'SubjectUserSid': self._get_sid(user.username),
@@ -765,7 +767,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 9999),
                 'SubjectUserSid': self._get_sid('SYSTEM'),
@@ -876,7 +878,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 # Logoff variant fields
@@ -963,7 +965,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 9999),
                 # Process variant fields
@@ -1046,7 +1048,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 500),
                 'SubjectUserSid': self._get_sid(user.username),
@@ -1342,7 +1344,7 @@ class ActivityGenerator:
                 'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
                 'Channel': 'Security',
                 'Level': 0,
-                'EventRecordID': self._get_next_event_record_id(system.hostname),
+                # EventRecordID assigned by WindowsEventEmitter at flush time
                 'ExecutionProcessID': 4,
                 'ExecutionThreadID': _get_rng().randint(100, 9999),
                 'SubjectUserSid': sid,
@@ -1863,7 +1865,7 @@ class ActivityGenerator:
             'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
-            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            # EventRecordID assigned by WindowsEventEmitter at flush time
             'ExecutionProcessID': 4,
             'ExecutionThreadID': rng.randint(100, 500),
             'SubjectUserSid': self._get_sid('SYSTEM'),
@@ -1924,7 +1926,7 @@ class ActivityGenerator:
             'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
-            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            # EventRecordID assigned by WindowsEventEmitter at flush time
             'ExecutionProcessID': 4,
             'ExecutionThreadID': rng.randint(100, 500),
             'TargetUserName': username,
@@ -1960,7 +1962,7 @@ class ActivityGenerator:
             'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
-            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            # EventRecordID assigned by WindowsEventEmitter at flush time
             'ExecutionProcessID': 4,
             'ExecutionThreadID': rng.randint(100, 500),
             'TargetUserName': f'{username}@{domain}',
@@ -1992,7 +1994,7 @@ class ActivityGenerator:
             'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
             'Channel': 'Security',
             'Level': 0,
-            'EventRecordID': self._get_next_event_record_id(dc_hostname),
+            # EventRecordID assigned by WindowsEventEmitter at flush time
             'ExecutionProcessID': 4,
             'ExecutionThreadID': rng.randint(100, 500),
             'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',

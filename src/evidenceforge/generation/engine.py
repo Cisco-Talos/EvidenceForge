@@ -1748,7 +1748,7 @@ class GenerationEngine:
                     'Computer': computer_fqdn,
                     'Channel': 'Security',
                     'Level': 0,
-                    'EventRecordID': self.activity_generator._get_next_event_record_id(system.hostname),
+                    # EventRecordID assigned by WindowsEventEmitter at flush time
                     'ExecutionProcessID': 4,
                     'ExecutionThreadID': rng.randint(100, 500),
                     'SubjectUserSid': 'S-1-5-18',
@@ -1783,7 +1783,7 @@ class GenerationEngine:
                         'Computer': computer_fqdn,
                         'Channel': 'Security',
                         'Level': 0,
-                        'EventRecordID': self.activity_generator._get_next_event_record_id(system.hostname),
+                        # EventRecordID assigned by WindowsEventEmitter at flush time
                         'ExecutionProcessID': 4,
                         'ExecutionThreadID': rng.randint(100, 500),
                         'SubjectUserSid': 'S-1-0-0',

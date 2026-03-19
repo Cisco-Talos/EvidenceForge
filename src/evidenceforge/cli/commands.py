@@ -182,8 +182,8 @@ def generate(
 
     # Determine output directory
     if output:
-        # Explicit --output flag: use as data directory directly
-        data_dir = output
+        # Explicit --output flag: logs in data/ subdirectory, ground truth at root
+        data_dir = output / "data"
         ground_truth_dir = output
     else:
         # Default: derive from scenario file location
