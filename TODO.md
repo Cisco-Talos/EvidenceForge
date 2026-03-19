@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model (planned); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 next); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7 PRD approved: docs/event-model-prd.md)
+**Last Updated:** 2026-03-19 (Phase 7.1 Foundation complete: events package, dispatcher, 793 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -986,22 +986,21 @@
 
 **Architecture:** Two-phase build + dispatcher. ActivityGenerator allocates IDs from StateManager first, builds complete SecurityEvent second, dispatches to EventDispatcher which routes to StateManager.apply() + matching emitters.
 
-### 7.1 Foundation (events package + dispatcher + base emitter changes)
+### 7.1 Foundation (events package + dispatcher + base emitter changes) ✅ COMPLETE
 
-- [ ] Create `src/evidenceforge/events/__init__.py` — re-exports SecurityEvent, RawLogEntry, all context types
-- [ ] Create `src/evidenceforge/events/contexts.py` — all context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`)
-- [ ] Create `src/evidenceforge/events/base.py` — `SecurityEvent` and `RawLogEntry` dataclasses
-- [ ] Create `src/evidenceforge/events/dispatcher.py` — `EventDispatcher` with `NetworkVisibilityEngine` integration via existing `get_log_formats_for_connection()` API
-- [ ] Add `apply(event)` to `state_manager.py` — records state from fully-constructed SecurityEvent (teardown/updates only, no ID allocation)
-- [ ] Add `can_handle()`, `emit()`, `emit_raw()` to `emitters/base.py`
-- [ ] Implement `_supported_types` on all 8 emitter subclasses (windows, zeek, zeek_dns, ecar, syslog, bash_history, snort, web)
-- [ ] Update `engine.py` — create `EventDispatcher`, pass to `ActivityGenerator`
-- [ ] Update `ActivityGenerator.__init__()` — accept `dispatcher: EventDispatcher`, set convenience refs to `state_manager` and `emitters`
-- [ ] Add `_build_host_context(system)` helper to ActivityGenerator
-- [ ] Write `tests/unit/test_events.py` — event/context construction, slots enforcement
-- [ ] Write `tests/unit/test_dispatcher.py` — routing, visibility filtering, state_manager.apply(), raw escape hatch
-- [ ] Write `test_emitter_can_handle_*` — each emitter correctly accepts/rejects event types
-- [ ] Run all existing tests — zero regressions
+- [x] Create `src/evidenceforge/events/__init__.py` — re-exports SecurityEvent, RawLogEntry, all context types
+- [x] Create `src/evidenceforge/events/contexts.py` — all context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`)
+- [x] Create `src/evidenceforge/events/base.py` — `SecurityEvent` and `RawLogEntry` dataclasses
+- [x] Create `src/evidenceforge/events/dispatcher.py` — `EventDispatcher` with `NetworkVisibilityEngine` integration via existing `get_log_formats_for_connection()` API
+- [x] Add `apply(event)` to `state_manager.py` — records state from fully-constructed SecurityEvent (teardown/updates only, no ID allocation)
+- [x] Add `can_handle()`, `emit()`, `emit_raw()` to `emitters/base.py` (non-abstract defaults for backward compat)
+- [x] Implement `_supported_types` on all 8 emitter subclasses (windows, zeek, zeek_dns, ecar, syslog, bash_history, snort, web)
+- [x] Update `engine.py` — create `EventDispatcher`, pass to `ActivityGenerator`
+- [x] Update `ActivityGenerator.__init__()` — accept `dispatcher: EventDispatcher` (optional for backward compat with tests)
+- [x] Add `_build_host_context(system)` helper to ActivityGenerator
+- [x] Write `tests/unit/test_events.py` — 11 tests: event/context construction, defaults, slots enforcement
+- [x] Write `tests/unit/test_dispatcher.py` — 18 tests: routing, visibility filtering, state_manager.apply(), raw escape hatch, emit/emit_raw defaults, _build_host_context
+- [x] Run all existing tests — 793 passed, zero regressions
 
 ### 7.2 Migrate Activity Types (one at a time, one commit each)
 

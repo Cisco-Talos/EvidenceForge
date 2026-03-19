@@ -21,7 +21,11 @@ class WindowsEventEmitter(LogEmitter):
     EventRecordIDs to be assigned after chronological sorting, ensuring
     higher RecordID always corresponds to same-or-later timestamp (matching
     real Windows Event Log behavior).
+
+    _supported_types will be populated during Phase 7.2 migration.
     """
+
+    _supported_types: set[str] = set()
 
     def __init__(
         self,

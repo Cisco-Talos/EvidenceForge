@@ -16,6 +16,8 @@ class ZeekDnsEmitter(LogEmitter):
     transaction with query name, type, response code, and answers.
     """
 
+    _supported_types: set[str] = set()
+
     def emit_event(self, event_data: dict[str, Any]) -> None:
         if self.threaded:
             self._emit_threaded(event_data)

@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from threading import local, get_ident, Lock
 from typing import Optional
 
+from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import User, System
@@ -600,6 +602,7 @@ class ActivityGenerator:
         event_record_counter: int = 10000,
         network_visibility=None,
         sid_registry: Optional[dict[str, str]] = None,
+        dispatcher: Optional[EventDispatcher] = None,
     ):
         """Initialize activity generator.
 
@@ -609,9 +612,11 @@ class ActivityGenerator:
             event_record_counter: Starting EventRecordID
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
+            dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
         """
         self.state_manager = state_manager
         self.emitters = emitters
+        self.dispatcher = dispatcher
         self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
@@ -625,6 +630,17 @@ class ActivityGenerator:
             from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
             network_visibility = NetworkVisibilityEngine(None, [])
         self.network_visibility = network_visibility
+
+    def _build_host_context(self, system: System) -> HostContext:
+        """Build a HostContext from a System model object."""
+        return HostContext(
+            hostname=system.hostname,
+            ip=system.ip,
+            os=system.os,
+            os_category=_get_os_category(system.os),
+            system_type=system.type,
+            domain=getattr(system, '_domain', ''),
+        )
 
     def generate_logon(
         self,

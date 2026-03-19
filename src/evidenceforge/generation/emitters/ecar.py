@@ -13,6 +13,8 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class EcarEmitter(LogEmitter):
     """Emitter for eCAR (extended Cyber Analytics Repository) format."""
 
+    _supported_types: set[str] = set()
+
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Route to threaded or non-threaded path."""
         if self.threaded:

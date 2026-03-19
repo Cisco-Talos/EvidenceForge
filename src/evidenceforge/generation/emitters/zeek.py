@@ -16,6 +16,8 @@ class ZeekEmitter(LogEmitter):
     Each connection includes source/dest IPs, ports, protocol, and connection state.
     """
 
+    _supported_types: set[str] = set()
+
     def __init__(
         self,
         format_def: FormatDefinition,

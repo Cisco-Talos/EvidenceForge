@@ -9,6 +9,7 @@ import random
 from datetime import datetime, timedelta
 from threading import RLock
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.models.state import (
@@ -572,3 +573,26 @@ class StateManager:
                 "dns_cache_entries": len(self.state.dns_cache),
                 "current_time": str(self.state.current_time) if self.state.current_time else None,
             }
+
+    def apply(self, event: SecurityEvent) -> None:
+        """Record state changes from a fully-constructed SecurityEvent.
+
+        IDs (logon_id, pid, conn_id, zeek_uid) are already allocated by the
+        caller via create_session(), create_process(), open_connection() before
+        building the SecurityEvent. This method handles only teardown (logoff,
+        process termination) and updates (connection bytes).
+        """
+        with self._lock:
+            if event.event_type == "logoff" and event.auth:
+                self.end_session(event.auth.logon_id)
+            elif event.event_type == "process_terminate" and event.process and event.host:
+                self.end_process(event.host.hostname, event.process.pid)
+            elif event.event_type == "connection" and event.network:
+                if event.network.conn_id and (
+                    event.network.orig_bytes or event.network.resp_bytes
+                ):
+                    self.update_connection_bytes(
+                        event.network.conn_id,
+                        event.network.orig_bytes,
+                        event.network.resp_bytes,
+                    )

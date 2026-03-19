@@ -58,6 +58,8 @@ class BashHistoryEmitter(LogEmitter):
     The parent thread consumes from the queue; dispatch happens in _run().
     """
 
+    _supported_types: set[str] = set()
+
     def __init__(
         self,
         format_def: FormatDefinition,

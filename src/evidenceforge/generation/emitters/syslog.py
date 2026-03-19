@@ -10,6 +10,8 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class SyslogEmitter(LogEmitter):
     """Emitter for Linux syslog format."""
 
+    _supported_types: set[str] = set()
+
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Route to threaded or non-threaded path."""
         if self.threaded:

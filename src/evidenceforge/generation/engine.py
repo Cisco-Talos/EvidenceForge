@@ -25,6 +25,7 @@ from evidenceforge.generation.emitters import (
     SnortEmitter,
     WebEmitter,
 )
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import Persona, Scenario, User, System
@@ -236,13 +237,19 @@ class GenerationEngine:
                 'inter_gap_bias': rng.gauss(0, 0.15),       # ±15% gap timing
             }
 
-        # Initialize activity generator
+        # Initialize event dispatcher and activity generator
+        self.dispatcher = EventDispatcher(
+            state_manager=self.state_manager,
+            emitters=self.emitters,
+            visibility_engine=visibility_engine,
+        )
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
             emitters=self.emitters,
             event_record_counter=self.event_record_counter,
             network_visibility=visibility_engine,
             sid_registry=sid_registry,
+            dispatcher=self.dispatcher,
         )
         logger.info("Initialized activity generator")
 
