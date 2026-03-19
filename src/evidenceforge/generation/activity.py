@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from threading import local, get_ident, Lock
 from typing import Optional
 
-from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -616,7 +616,7 @@ class ActivityGenerator:
             dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
         """
         self.state_manager = state_manager
-        self.emitters = emitters
+        self.emitters = emitters  # TODO(7.4): remove after DNS lookup migration
         if dispatcher is None and emitters:
             # Auto-create dispatcher for backward compat with tests
             dispatcher = EventDispatcher(
@@ -632,11 +632,8 @@ class ActivityGenerator:
         # Used by _select_parent_pid() for realistic parent-child relationships
         self._user_process_history: dict[tuple[str, str], list[tuple[int, str]]] = {}
 
-        # Network visibility (Phase 2.5): default to all-visible if not provided
-        if network_visibility is None:
-            from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
-            network_visibility = NetworkVisibilityEngine(None, [])
-        self.network_visibility = network_visibility
+        # Network visibility stored on dispatcher; keep local ref for fast-path check
+        self._network_visibility = network_visibility
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build a HostContext from a System model object.
@@ -916,10 +913,10 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Phase 5.2: Probabilistic eCAR object diversity (still via emit_event)
+        # Phase 5.2: Probabilistic eCAR object diversity (via dispatch_raw)
         rng = _get_rng()
         os_category = _get_os_category(system.os)
-        if 'ecar' in self.emitters:
+        if 'ecar' in self.dispatcher.emitters:
             if rng.random() < 0.40:
                 action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
                 self._emit_ecar_file_event(system, time, pid, action, user.username)
@@ -1024,7 +1021,8 @@ class ActivityGenerator:
             return ""
 
         # Phase 2.5: Check network topology visibility
-        if not self.network_visibility.is_connection_visible(src_ip, dst_ip):
+        visibility = self._network_visibility or (self.dispatcher.visibility_engine if self.dispatcher else None)
+        if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
             logger.debug(
                 f"Skipping connection {src_ip} -> {dst_ip}: "
                 f"not observable by any configured sensor"
@@ -2002,85 +2000,6 @@ class ActivityGenerator:
             return self._WELL_KNOWN_SIDS[username]
         return 'S-1-5-21-0-0-0-0'
 
-    def _emit_ecar_logon(
-        self,
-        user: User,
-        system: System,
-        time: datetime,
-        logon_id: str,
-        logon_type: int,
-        source_ip: str
-    ) -> None:
-        """Emit eCAR USER_SESSION/LOGIN event.
-
-        Phase 2.10: eCAR provides unified EDR/XDR visibility across all OSes.
-
-        Args:
-            user: User logging on
-            system: Target system
-            time: Login timestamp
-            logon_id: Session logon ID
-            logon_type: Logon type (2=interactive, 3=network)
-            source_ip: Source IP address
-        """
-        if 'ecar' not in self.emitters:
-            return  # eCAR not enabled
-
-        event_data = {
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'USER_SESSION',
-            'action': 'LOGIN',
-            'principal': user.username,
-            'src_ip': source_ip,
-        }
-
-        self.emitters['ecar'].emit_event(event_data)
-        logger.debug(f"Generated eCAR logon: {user.username} on {system.hostname}")
-
-    def _emit_ecar_process(
-        self,
-        user: User,
-        system: System,
-        time: datetime,
-        pid: int,
-        parent_pid: int,
-        process_name: str,
-        command_line: str,
-        logon_id: str
-    ) -> None:
-        """Emit eCAR PROCESS/CREATE event.
-
-        Phase 2.10: eCAR provides unified EDR/XDR visibility across all OSes.
-
-        Args:
-            user: User creating the process
-            system: System where process created
-            time: Process creation timestamp
-            pid: Process ID
-            parent_pid: Parent process ID
-            process_name: Executable path
-            command_line: Command line
-            logon_id: Session logon ID
-        """
-        if 'ecar' not in self.emitters:
-            return  # eCAR not enabled
-
-        event_data = {
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'PROCESS',
-            'action': 'CREATE',
-            'pid': pid,
-            'ppid': parent_pid,
-            'principal': user.username,
-            'image_path': process_name,
-            'command_line': command_line,
-        }
-
-        self.emitters['ecar'].emit_event(event_data)
-        logger.debug(f"Generated eCAR process: {process_name} (PID: {pid}) on {system.hostname}")
-
     # Phase 5.2: eCAR object type diversity data pools
     _ECAR_FILE_PATHS_WIN = [
         'C:\\Users\\{user}\\Documents\\report.docx',
@@ -2122,80 +2041,62 @@ class ActivityGenerator:
         self, system: System, time: datetime, pid: int,
         action: str, username: str,
     ) -> None:
-        """Emit eCAR FILE event (CREATE, MODIFY, or DELETE)."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR FILE event via dispatch_raw (CREATE, MODIFY, or DELETE)."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         rng = _get_rng()
         os_cat = _get_os_category(system.os)
         pool = self._ECAR_FILE_PATHS_WIN if os_cat == 'windows' else self._ECAR_FILE_PATHS_LINUX
         path = rng.choice(pool).replace('{user}', username).replace('{rand}', f'{rng.randint(10000, 99999)}')
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'FILE',
-            'action': action,
-            'pid': pid,
-            'principal': username,
-            'file_path': path,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': system.hostname, 'object': 'FILE',
+                  'action': action, 'pid': pid, 'principal': username, 'file_path': path},
+        ))
 
     def _emit_ecar_registry_event(
         self, system: System, time: datetime, pid: int, username: str,
     ) -> None:
-        """Emit eCAR REGISTRY/MODIFY event (Windows only)."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR REGISTRY/MODIFY event via dispatch_raw (Windows only)."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         key, value = _get_rng().choice(self._ECAR_REGISTRY_KEYS)
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'REGISTRY',
-            'action': 'MODIFY',
-            'pid': pid,
-            'principal': username,
-            'registry_key': key,
-            'registry_value': value,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': system.hostname, 'object': 'REGISTRY',
+                  'action': 'MODIFY', 'pid': pid, 'principal': username,
+                  'registry_key': key, 'registry_value': value},
+        ))
 
     def _emit_ecar_flow_event(
         self, src_ip: str, dst_ip: str, dst_port: int,
         time: datetime, hostname: str, pid: int = -1,
         src_port: int = 0, protocol: str = 'tcp',
     ) -> None:
-        """Emit eCAR FLOW/CONNECT event."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR FLOW/CONNECT event via dispatch_raw."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         if src_port == 0:
             src_port = _get_rng().randint(49152, 65535)
-        # DNS (port 53) and NTP (port 123) are UDP
         if dst_port in (53, 123):
             protocol = 'udp'
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': hostname,
-            'object': 'FLOW',
-            'action': 'CONNECT',
-            'pid': pid,
-            'src_ip': src_ip,
-            'src_port': src_port,
-            'dst_ip': dst_ip,
-            'dst_port': dst_port,
-            'protocol': protocol,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': hostname, 'object': 'FLOW',
+                  'action': 'CONNECT', 'pid': pid, 'src_ip': src_ip,
+                  'src_port': src_port, 'dst_ip': dst_ip, 'dst_port': dst_port,
+                  'protocol': protocol},
+        ))
 
     def _emit_ecar_module_event(
         self, system: System, time: datetime, pid: int, username: str,
     ) -> None:
-        """Emit eCAR MODULE/LOAD event (DLL load, Windows only)."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR MODULE/LOAD event via dispatch_raw (DLL load, Windows only)."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         dll_path = _get_rng().choice(self._ECAR_DLL_POOL)
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'MODULE',
-            'action': 'LOAD',
-            'pid': pid,
-            'principal': username,
-            'file_path': dll_path,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': system.hostname, 'object': 'MODULE',
+                  'action': 'LOAD', 'pid': pid, 'principal': username, 'file_path': dll_path},
+        ))

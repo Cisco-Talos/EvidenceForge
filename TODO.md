@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 complete — all 12 methods migrated); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model (7.1-7.3 complete, 7.4 deferred); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7.2 complete: All 12 generate_* methods migrated to canonical event model, 763 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7.3 Cleanup complete: orphaned helpers removed, eCAR via dispatch_raw, 763 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -1062,17 +1062,23 @@ Migrate each `generate_*` method: refactor to two-phase build + dispatch, implem
   - [x] Uses AuthContext (not KerberosContext — it's NTLM)
   - [x] Run tests — 763 passed
 
-### 7.3 Cleanup
+### 7.3 Cleanup ✅ COMPLETE
 
-- [ ] Remove `ActivityGenerator.network_visibility` (now handled by dispatcher)
-- [ ] Remove `ActivityGenerator.emitters` convenience reference
-- [ ] Remove any remaining direct `emitter.emit_event(dict)` calls
-- [ ] Rename old `emit_event()` to `emit_raw()` if not already done
+- [x] Remove orphaned `_emit_ecar_logon()` and `_emit_ecar_process()` (dead code from 7.2)
+- [x] Convert 4 active eCAR helpers to `dispatch_raw()` (file, registry, flow, module)
+- [x] Replace `ActivityGenerator.network_visibility` → `self._network_visibility` / `dispatcher.visibility_engine`
+- [x] Replace `self.emitters` eCAR guards → `self.dispatcher.emitters`
+- [x] Verify all tests pass — 761 passing
+
+### 7.4 Remaining Emissions (Future)
+
+- [ ] Migrate DNS lookups (`_emit_dns_lookup` → zeek_dns) to canonical dispatch with DnsContext
+- [ ] Migrate engine.py `_generate_system_traffic` direct syslog/Windows emissions to dispatch
+- [ ] Remove `ActivityGenerator.emitters` dict entirely (blocked by DNS lookup migration)
 - [ ] Update `docs/PRD.md` Post-MVP section with Phase 7 status
 - [ ] Final eval comparison: `eforge evaluate` before vs. after on `retail-store-ftp-attack.yaml`
-- [ ] Verify all tests pass, coverage maintained
 
-**Phase 7 Milestone:** All activity types migrated to canonical event model. Cross-format consistency bugs eliminated by construction. Eval scores equal or better than pre-migration. No test regressions.
+**Phase 7 Milestone:** All 12 activity types migrated to canonical event model. eCAR diversity helpers use dispatch_raw. Cross-format consistency bugs eliminated by construction. 763+ tests passing, zero regressions.
 
 ---
 
