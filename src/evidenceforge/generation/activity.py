@@ -1391,10 +1391,22 @@ class ActivityGenerator:
         hostname = REVERSE_DNS.get(dst_ip)
         if not hostname:
             if _is_private_ip(dst_ip):
-                # Internal IPs get internal hostnames (not CDN names)
                 hostname = _generate_internal_hostname(rng, dst_ip)
             else:
                 hostname = _generate_random_hostname(rng, dst_ip)
+
+        # DNS caching: skip re-emission if this (src, hostname) was queried recently.
+        # Real clients cache DNS responses (TTL typically 60-3600s), so not every
+        # connection is preceded by a DNS query.
+        if not hasattr(self, '_dns_cache'):
+            self._dns_cache: dict[tuple[str, str], float] = {}
+        cache_key = (src_ip, hostname)
+        ts_epoch = time.timestamp()
+        last_query = self._dns_cache.get(cache_key, 0)
+        cache_ttl = rng.choice([60, 120, 300, 600])  # Varied TTLs
+        if ts_epoch - last_query < cache_ttl:
+            return  # Cache hit — skip DNS emission
+        self._dns_cache[cache_key] = ts_epoch
 
         # Determine DNS server IP from network visibility or use default
         dns_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
