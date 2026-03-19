@@ -242,7 +242,7 @@ TCP_CONN_STATE_DISTRIBUTION = [
     ('SF', 1, 'ShADadTFf'),      # Retransmit then FIN
     # Connection attempts (S0)
     ('S0', 3, 'S'),              # Single SYN, no reply
-    ('S0', 2, 'SS'),             # SYN retransmit, no reply
+    ('S0', 2, 'S'),              # SYN retransmit (Zeek deduplicates to single 'S')
     # Partial handshakes (S1)
     ('S1', 2, 'ShR'),            # SYN-ACK seen, RST
     ('S1', 1, 'Sh'),             # SYN-ACK seen, no further data

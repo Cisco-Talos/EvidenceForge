@@ -294,6 +294,10 @@ class TemporalRealismScorer(DimensionScorer):
                     if not hostname:
                         continue
                     service = _extract_system_service(record)
+                    # Only measure periodicity for identifiable system services,
+                    # not generic "other" events (logons, Kerberos) which are non-periodic
+                    if service == "other":
+                        continue
                     ts = record.timestamp
                     if ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
@@ -307,8 +311,12 @@ class TemporalRealismScorer(DimensionScorer):
                 details=f"Only {total_system_events} system events — insufficient for analysis",
             )
 
-        # Compute per-(host, service) autocorrelation, then average
-        autocorrs: list[float] = []
+        # Compute per-(host, service) regularity using coefficient of variation (CV)
+        # of inter-event intervals. CV < 0.1 = highly periodic, CV > 1.0 = random.
+        # CV is more appropriate than lag-1 autocorrelation for periodic+jitter signals
+        # because independent jitter on a fixed period gives near-zero autocorrelation
+        # but very low CV.
+        cv_scores: list[float] = []
         for key, timestamps in service_timestamps.items():
             sorted_ts = sorted(timestamps)
             intervals = [
@@ -317,29 +325,31 @@ class TemporalRealismScorer(DimensionScorer):
             ]
             intervals = [iv for iv in intervals if iv > 0]
             if len(intervals) >= 10:
-                autocorrs.append(self._lag1_autocorrelation(intervals))
+                mean_iv = statistics.mean(intervals)
+                if mean_iv > 0:
+                    cv = statistics.stdev(intervals) / mean_iv
+                    cv_scores.append(cv)
 
-        if not autocorrs:
+        if not cv_scores:
             return SubScore(
                 name="System Process Regularity", key="system_regularity", weight=0.20,
                 score=100.0, details="Insufficient per-service interval data",
             )
 
-        autocorr = statistics.mean(autocorrs)
+        avg_cv = statistics.mean(cv_scores)
 
-        # Score: autocorr > 0.5 → 100, < 0.1 → 0, linear between
-        # (relaxed from 0.7/0.2 — real system traffic has inherent jitter)
-        if autocorr >= 0.5:
+        # Score: CV < 0.1 → 100 (very periodic), CV > 0.5 → 0 (random)
+        if avg_cv <= 0.1:
             score = 100.0
-        elif autocorr <= 0.1:
+        elif avg_cv >= 0.5:
             score = 0.0
         else:
-            score = 100.0 * (autocorr - 0.1) / 0.4
+            score = 100.0 * (0.5 - avg_cv) / 0.4
 
         return SubScore(
             name="System Process Regularity", key="system_regularity", weight=0.20,
             score=score,
-            details=f"Lag-1 autocorrelation: {autocorr:.2f} (avg of {len(autocorrs)} hosts, {total_system_events} events)",
+            details=f"Interval CV: {avg_cv:.3f} (avg of {len(cv_scores)} service groups, {total_system_events} events)",
         )
 
     # --- Sub-score 4: Causal Ordering ---

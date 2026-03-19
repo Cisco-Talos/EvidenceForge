@@ -261,6 +261,13 @@ class GenerationEngine:
         self._system_pids: dict[str, dict[str, int]] = {}  # hostname -> {role: pid}
         self._seed_system_process_trees()
 
+        # Per-host kernel boot uptime: deterministic offset (seconds since boot at scenario start)
+        # Each host "booted" 3-30 days before the scenario starts
+        self._kernel_boot_uptimes: dict[str, float] = {}
+        for system in self.scenario.environment.systems:
+            boot_days = (hash(system.hostname) % 28) + 3  # 3-30 days
+            self._kernel_boot_uptimes[system.hostname] = boot_days * 86400.0
+
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
         if self.scenario.storyline:
@@ -1634,6 +1641,23 @@ class GenerationEngine:
             # Windows Task Scheduler at fixed offsets) with minor timing jitter.
             # Use deterministic per-host offset so same system fires at same times.
             host_seed = hash(system.hostname) % 900  # 0-899s offset within 15-min
+            # Deterministic task per host — same process runs every cycle
+            # for consistent periodic intervals (autocorrelation > 0)
+            if os_cat == 'windows':
+                win_tasks = [
+                    (r'C:\Windows\System32\svchost.exe', 'svchost.exe -k netsvcs -p -s Schedule'),
+                    (r'C:\Windows\System32\taskhostw.exe', 'taskhostw.exe /Run'),
+                    (r'C:\Windows\System32\usoclient.exe', 'usoclient.exe StartScan'),
+                ]
+                task_name, task_cmd = win_tasks[hash(system.hostname) % len(win_tasks)]
+            else:
+                linux_tasks = [
+                    ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
+                    ('/usr/bin/apt-get', '/usr/bin/apt-get -qq update'),
+                    ('/usr/lib/update-notifier/apt-check', '/usr/lib/update-notifier/apt-check --human-readable'),
+                ]
+                task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
+
             for slot_base in [0, 900, 1800, 2700]:  # Every 15 minutes
                 # Small jitter (±5s) around fixed schedule
                 offset = slot_base + host_seed + rng.gauss(0, 5)
@@ -1643,12 +1667,6 @@ class GenerationEngine:
 
                 if os_cat == 'windows':
                     parent_pid = sys_pids.get('svchost_local_system', sys_pids.get('services', 4))
-                    tasks = [
-                        (r'C:\Windows\System32\svchost.exe', 'svchost.exe -k netsvcs -p -s Schedule'),
-                        (r'C:\Windows\System32\taskhostw.exe', 'taskhostw.exe /Run'),
-                        (r'C:\Windows\System32\usoclient.exe', 'usoclient.exe StartScan'),
-                    ]
-                    task_name, task_cmd = rng.choice(tasks)
                     self.activity_generator.generate_system_process(
                         system=system, time=ts,
                         process_name=task_name, command_line=task_cmd,
@@ -1656,12 +1674,6 @@ class GenerationEngine:
                     )
                 else:
                     parent_pid = sys_pids.get('cron', 0)
-                    tasks = [
-                        ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
-                        ('/usr/bin/apt-get', '/usr/bin/apt-get -qq update'),
-                        ('/usr/lib/update-notifier/apt-check', '/usr/lib/update-notifier/apt-check --human-readable'),
-                    ]
-                    task_name, task_cmd = rng.choice(tasks)
                     self.activity_generator.generate_system_process(
                         system=system, time=ts,
                         process_name=task_name, command_line=task_cmd,
@@ -1686,6 +1698,26 @@ class GenerationEngine:
                         duration=rng.uniform(0.0001, 0.005),
                         orig_bytes=64, resp_bytes=64,
                     )
+
+            # SSH: connections to Linux servers, 1-3 per hour from other systems
+            if os_cat == 'linux' and sys_type == 'server':
+                # Other systems SSH into this Linux server
+                ssh_sources = [s.ip for s in self.scenario.environment.systems
+                               if s.ip != system.ip][:10]
+                if ssh_sources:
+                    num_ssh = rng.randint(1, 3)
+                    for _ in range(num_ssh):
+                        src_ip = rng.choice(ssh_sources)
+                        offset = rng.randint(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip, dst_ip=system.ip, time=ts,
+                            dst_port=22, proto='tcp', service='ssh',
+                            duration=rng.uniform(30.0, 3600.0),
+                            orig_bytes=rng.randint(2000, 50000),
+                            resp_bytes=rng.randint(5000, 200000),
+                        )
 
         # Phase 6.2: Machine account ($) authentication to DCs
         # Every Windows domain-joined system authenticates as COMPUTERNAME$ to DCs
@@ -1793,13 +1825,16 @@ class GenerationEngine:
             is_dmz = 'dmz' in system.hostname.lower() or 'web' in system.hostname.lower()
             num_events = rng.randint(30, 80) if is_dmz else rng.randint(12, 30)
 
-            # Track uptime counter for kernel messages (seconds since boot)
-            base_uptime = rng.randint(100000, 3000000)
+            # Kernel uptime: monotonically increasing (seconds since boot)
+            # Computed from deterministic boot offset + elapsed scenario time
+            scenario_start = self.scenario.time_window.start
+            boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
+            hours_elapsed = (current_hour - scenario_start).total_seconds()
 
             for _ in range(num_events):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                uptime = base_uptime + int(offset)
+                uptime = int(boot_uptime + hours_elapsed + offset)
 
                 # Pick a random syslog source
                 source_roll = rng.random()
