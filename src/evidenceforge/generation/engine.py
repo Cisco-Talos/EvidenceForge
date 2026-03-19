@@ -264,9 +264,11 @@ class GenerationEngine:
         # Per-host kernel boot uptime: deterministic offset (seconds since boot at scenario start)
         # Each host "booted" 3-30 days before the scenario starts
         self._kernel_boot_uptimes: dict[str, float] = {}
+        self._audit_serials: dict[str, int] = {}  # per-host monotonic audit serial
         for system in self.scenario.environment.systems:
             boot_days = (hash(system.hostname) % 28) + 3  # 3-30 days
             self._kernel_boot_uptimes[system.hostname] = boot_days * 86400.0
+            self._audit_serials[system.hostname] = (hash(system.hostname) % 5000) + 1000
 
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
@@ -1965,9 +1967,11 @@ class GenerationEngine:
                                f'ID={rng.randint(1,65535)} PROTO=TCP SPT={rng.randint(1024,65535)} DPT={dpt} '
                                f'WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0')
                     else:
-                        # AppArmor or audit messages
+                        # AppArmor or audit messages — monotonic serial per host
+                        self._audit_serials[system.hostname] = self._audit_serials.get(system.hostname, 1000) + rng.randint(1, 5)
+                        audit_serial = self._audit_serials[system.hostname]
                         msg = (f'[{uptime}.{rng.randint(100000,999999)}] audit: type=1400 '
-                               f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{rng.randint(1000,99999)}): '
+                               f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{audit_serial}): '
                                f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"')
                     self.emitters['syslog'].emit_event({
                         'timestamp': ts, 'hostname': system.hostname,
