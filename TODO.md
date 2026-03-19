@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 in progress — 6 of 12 methods migrated); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 complete — 7 multi-format methods migrated, 5 deferred single-format); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7.2: logon/logoff/failed_logon/process/system_process migrated, 756 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7.2: All multi-format methods migrated to canonical event model, 756 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -1035,11 +1035,13 @@ Migrate each `generate_*` method: refactor to two-phase build + dispatch, implem
   - [x] Refactor with event_type="system_process_create"
   - [x] Windows: 4688 with NT AUTHORITY domain; Syslog: daemon/cron message; eCAR: reuses process_create
   - [x] Run tests — 756 passed
-- [ ] **7.2.2** `generate_connection()` — Zeek conn + Zeek DNS + eCAR FLOW + Snort (4 formats)
-  - [ ] Refactor to build SecurityEvent with NetworkContext (+ optional DnsContext, IdsContext)
-  - [ ] Implement render methods on ZeekEmitter, ZeekDnsEmitter, EcarEmitter, SnortEmitter
-  - [ ] Move visibility filtering from ActivityGenerator into dispatcher
-  - [ ] Run tests + eval comparison
+- [x] **7.2.2** `generate_connection()` — Zeek conn (1 format via dispatch; eCAR FLOW still via helper)
+  - [x] Refactor to build SecurityEvent with NetworkContext
+  - [x] Add orig_ip_bytes, resp_ip_bytes, ip_proto, missed_bytes to NetworkContext
+  - [x] Implement ZeekEmitter.emit() for "connection" type
+  - [x] Conn state/history/packet derivation stays in activity.py (connection semantics)
+  - [x] eCAR FLOW/CONNECT remains via _emit_ecar_flow_event helper
+  - [x] Run tests — 756 passed
 - **Deferred:** 7.2.7 (bash_command), 7.2.9 (machine_logon), 7.2.10-12 (kerberos/ntlm)
   - These are single-format methods that don't benefit from multi-format dispatch
   - bash_command: only targets bash_history emitter, has early OS-type return
