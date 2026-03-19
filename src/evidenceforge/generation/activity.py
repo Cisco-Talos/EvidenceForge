@@ -346,6 +346,21 @@ EXTERNAL_IPS = {
     ],
 }
 
+# Per-provider IP groups for DNS multi-answer responses
+# Each group contains IPs from the SAME provider so multi-answer
+# responses don't mix IPs from different organizations
+_PROVIDER_IP_GROUPS = [
+    ['172.217.14.206', '142.250.80.46', '142.250.185.206', '142.250.191.46'],  # Google
+    ['104.16.132.229', '104.18.32.7', '104.18.25.35', '104.21.67.152'],        # Cloudflare
+    ['151.101.1.140', '151.101.65.140', '151.101.129.140', '151.101.193.140'],  # Fastly
+    ['23.45.67.89', '23.72.134.56', '23.196.25.38', '23.205.100.42'],          # Akamai
+    ['52.84.123.45', '54.230.67.89', '54.230.129.180', '13.35.42.100'],        # AWS CloudFront
+    ['13.107.42.14', '13.107.213.70', '204.79.197.200', '13.107.246.40'],      # Microsoft
+    ['140.82.121.3', '140.82.121.4', '140.82.112.22', '140.82.114.3'],         # GitHub
+    ['52.97.145.162', '52.97.151.18', '52.97.200.30', '52.97.166.42'],         # Office 365
+    ['209.85.233.27', '209.85.128.25', '74.125.68.27', '74.125.200.27'],       # Gmail
+]
+
 # Reverse DNS mapping: IP → hostname (for DNS query generation)
 REVERSE_DNS: dict[str, str] = {
     # Google
@@ -462,7 +477,11 @@ def _ipv4_to_fake_ipv6(ipv4: str) -> str:
         (151, 151): '2a04:4e42', # Fastly
         (172, 172): '2607:f8b0', # Google
     }
-    prefix = '2001:db8'  # default
+    # Private IPs get ULA prefix (fd00::/8), not documentation 2001:db8::/32
+    if o0 == 10 or (o0 == 172 and 16 <= o1 <= 31) or (o0 == 192 and o1 == 168):
+        return f"fd00:{o1:02x}{o2:02x}:{o3:04x}::1"
+
+    prefix = '2a00:1450'  # default (generic, not documentation)
     for (lo, hi), pfx in prefixes.items():
         if lo <= o0 <= hi:
             prefix = pfx
@@ -477,10 +496,18 @@ def _generate_random_external_ip(rng) -> str:
 
 
 def _generate_internal_hostname(rng, ip: str) -> str:
-    """Generate a plausible internal hostname for RFC 1918 IPs."""
+    """Generate a plausible internal hostname for RFC 1918 IPs.
+
+    Deterministic based on IP so the same IP always gets the same hostname
+    (avoids multiple different hostnames resolving to the same IP).
+    """
     prefixes = ['srv', 'app', 'db', 'web', 'print', 'nas', 'mgmt', 'mon', 'backup']
     suffixes = ['01', '02', '03', '04', '05']
-    return f"{rng.choice(prefixes)}-{rng.choice(suffixes)}.corp.local"
+    # Deterministic selection based on IP hash
+    ip_hash = hash(ip)
+    prefix = prefixes[ip_hash % len(prefixes)]
+    suffix = suffixes[(ip_hash >> 8) % len(suffixes)]
+    return f"{prefix}-{suffix}.corp.local"
 
 
 def _generate_random_hostname(rng, ip: str) -> str:
@@ -1458,14 +1485,14 @@ class ActivityGenerator:
                 query = hostname
                 # Multi-answer: CDNs/clouds return multiple A records (40% chance)
                 if not is_internal and rng.random() < 0.40:
-                    # Find sibling IPs from the same EXTERNAL_IPS pool
+                    # Find sibling IPs from the SAME PROVIDER (not cross-provider)
                     sibling_ips = []
-                    for pool in EXTERNAL_IPS.values():
-                        if dst_ip in pool:
-                            sibling_ips = [ip for ip in pool if ip != dst_ip]
+                    for provider_ips in _PROVIDER_IP_GROUPS:
+                        if dst_ip in provider_ips:
+                            sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
                             break
                     if sibling_ips:
-                        extra = rng.sample(sibling_ips, min(rng.randint(1, 3), len(sibling_ips)))
+                        extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
                         answers = ', '.join([dst_ip] + extra)
                     else:
                         answers = dst_ip
@@ -1939,7 +1966,8 @@ class ActivityGenerator:
             'TargetUserName': f'{username}@{domain}',
             'TargetDomainName': domain,
             'ServiceName': service_name,
-            'ServiceSid': self._get_sid(service_name.split('/')[0] if '/' in service_name else service_name),
+            # ServiceSid is the computer account SID of the target server
+            'ServiceSid': self._get_sid(f"{service_name.split('/')[1]}$" if '/' in service_name else service_name),
             'TicketOptions': '0x40810000',
             'TicketEncryptionType': '0x12',
             'IpAddress': f'::ffff:{source_ip}',
