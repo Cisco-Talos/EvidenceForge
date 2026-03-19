@@ -53,3 +53,7 @@ checkpoints/
 
 # Claude Code sessions
 .claude/
+
+# Ignore any scenarios we might produce
+scenarios/
+
