@@ -656,6 +656,24 @@ class ActivityGenerator:
             netbios_domain=ad_domain.split('.')[0].upper() if ad_domain else 'CORP',
         )
 
+    def _build_dc_host_context(self, dc_hostname: str) -> HostContext:
+        """Build a HostContext for a domain controller from raw hostname string.
+
+        DC methods receive raw strings (not System objects). Constructs a
+        HostContext suitable for Windows event rendering (Computer field).
+        """
+        ad_domain = getattr(self, '_ad_domain', 'corp.local')
+        return HostContext(
+            hostname=dc_hostname,
+            ip='',
+            os='Windows Server 2019',
+            os_category='windows',
+            system_type='domain_controller',
+            domain=ad_domain,
+            fqdn=f"{dc_hostname}.{ad_domain}" if ad_domain else dc_hostname,
+            netbios_domain=ad_domain.split('.')[0].upper() if ad_domain else 'CORP',
+        )
+
     def generate_logon(
         self,
         user: User,
@@ -1120,9 +1138,10 @@ class ActivityGenerator:
         time: datetime,
         activity_type: str = 'default'
     ) -> None:
-        """Generate bash command history entry (Linux only).
+        """Generate bash command history entry via dispatch.
 
-        Phase 2.10: Linux command-line visibility.
+        Builds a SecurityEvent with ShellContext and dispatches.
+        BashHistoryEmitter.can_handle() filters for Linux-only.
 
         Args:
             user: User executing command
@@ -1130,12 +1149,7 @@ class ActivityGenerator:
             time: Command execution time
             activity_type: Type of activity (process_code, process_build, etc.)
         """
-        os_category = _get_os_category(system.os)
-        if os_category != 'linux':
-            return  # Bash history only for Linux
-
-        if 'bash_history' not in self.emitters:
-            return  # bash_history not enabled
+        from evidenceforge.events.contexts import ShellContext
 
         # Select command based on activity type
         commands = {
@@ -1148,15 +1162,15 @@ class ActivityGenerator:
         command_list = commands.get(activity_type, commands['default'])
         command = _get_rng().choice(command_list)
 
-        event_data = {
-            'timestamp': time,
-            'username': user.username,
-            'hostname': system.hostname,
-            'command': command,
-            'exit_code': 0  # Success
-        }
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="bash_command",
+            host=self._build_host_context(system),
+            auth=AuthContext(username=user.username),
+            shell=ShellContext(command=command),
+        )
 
-        self.emitters['bash_history'].emit_event(event_data)
+        self.dispatcher.dispatch(event)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
 
     def generate_system_process(
@@ -1693,46 +1707,27 @@ class ActivityGenerator:
         domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
 
-        event_data = {
-            'EventID': 4624,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'SubjectUserSid': self._get_sid('SYSTEM'),
-            'SubjectUserName': 'SYSTEM',
-            'SubjectDomainName': 'NT AUTHORITY',
-            'SubjectLogonId': '0x3e7',
-            'TargetUserSid': self._get_sid(machine_username),
-            'TargetUserName': machine_username,
-            'TargetDomainName': domain,
-            'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFF):x}',
-            'LogonType': 3,
-            'LogonProcessName': 'Kerberos',
-            'AuthenticationPackageName': 'Kerberos',
-            'WorkstationName': hostname,
-            'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-            'TransmittedServices': '-',
-            'LmPackageName': '-',
-            'KeyLength': 0,
-            'ProcessId': '0x0',
-            'ProcessName': '-',
-            'IpAddress': source_ip,
-            'IpPort': str(rng.randint(49152, 65535)),
-            'ImpersonationLevel': '%%1833',
-            'RestrictedAdminMode': '-',
-            'TargetOutboundUserName': '-',
-            'TargetOutboundDomainName': '-',
-            'VirtualAccount': '%%1843',
-            'TargetLinkedLogonId': '0x0',
-            'ElevatedToken': '%%1842',
-        }
-
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="machine_logon",
+            host=self._build_dc_host_context(dc_hostname),
+            auth=AuthContext(
+                username=machine_username,
+                user_sid=self._get_sid(machine_username),
+                logon_id=f'0x{rng.randint(0x10000, 0xFFFFF):x}',
+                logon_type=3,
+                auth_package='Kerberos',
+                source_ip=source_ip,
+                logon_process='Kerberos',
+                lm_package='-',
+                logon_guid='{00000000-0000-0000-0000-000000000000}',
+                subject_sid=self._get_sid('SYSTEM'),
+                subject_username='SYSTEM',
+                subject_domain='NT AUTHORITY',
+                subject_logon_id='0x3e7',
+            ),
+        )
+        self.dispatcher.dispatch(event)
 
         # Also generate the Kerberos network connection to DC
         self.generate_connection(
@@ -1752,31 +1747,30 @@ class ActivityGenerator:
         domain: str = '',
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
+        from evidenceforge.events.contexts import KerberosContext
+
         domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
-        event_data = {
-            'EventID': 4768,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': username,
-            'TargetDomainName': domain,
-            'TargetSid': self._get_sid(username),
-            'ServiceName': 'krbtgt',
-            'ServiceSid': self._get_sid('krbtgt'),
-            'TicketOptions': '0x40810010',
-            'Status': '0x0',
-            'TicketEncryptionType': '0x12',  # AES-256
-            'PreAuthType': 15,
-            'IpAddress': f'::ffff:{source_ip}',
-            'IpPort': rng.randint(49152, 65535),
-        }
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="kerberos_tgt",
+            host=self._build_dc_host_context(dc_hostname),
+            kerberos=KerberosContext(
+                target_username=username,
+                target_domain=domain,
+                target_sid=self._get_sid(username),
+                service_name='krbtgt',
+                service_sid=self._get_sid('krbtgt'),
+                ticket_options='0x40810010',
+                encryption_type='0x12',
+                pre_auth_type=15,
+                source_ip=f'::ffff:{source_ip}',
+                source_port=rng.randint(49152, 65535),
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
 
     def generate_kerberos_service_ticket(
         self,
@@ -1788,30 +1782,28 @@ class ActivityGenerator:
         domain: str = '',
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
+        from evidenceforge.events.contexts import KerberosContext
+
         domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
-        event_data = {
-            'EventID': 4769,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': f'{username}@{domain}',
-            'TargetDomainName': domain,
-            'ServiceName': service_name,
-            # ServiceSid is the computer account SID of the target server
-            'ServiceSid': self._get_sid(f"{service_name.split('/')[1]}$" if '/' in service_name else service_name),
-            'TicketOptions': '0x40810000',
-            'TicketEncryptionType': '0x12',
-            'IpAddress': f'::ffff:{source_ip}',
-            'IpPort': rng.randint(49152, 65535),
-            'Status': '0x0',
-        }
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="kerberos_service",
+            host=self._build_dc_host_context(dc_hostname),
+            kerberos=KerberosContext(
+                target_username=f'{username}@{domain}',
+                target_domain=domain,
+                service_name=service_name,
+                service_sid=self._get_sid(f"{service_name.split('/')[1]}$" if '/' in service_name else service_name),
+                ticket_options='0x40810000',
+                encryption_type='0x12',
+                source_ip=f'::ffff:{source_ip}',
+                source_port=rng.randint(49152, 65535),
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
 
     def generate_ntlm_validation(
         self,
@@ -1821,23 +1813,17 @@ class ActivityGenerator:
         time: datetime,
     ) -> None:
         """Generate NTLM credential validation event (4776) on the DC."""
-        rng = _get_rng()
-        event_data = {
-            'EventID': 4776,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
-            'LogonAccount': username,
-            'SourceWorkstation': workstation,
-            'Status': '0x0',
-        }
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="ntlm_validation",
+            host=self._build_dc_host_context(dc_hostname),
+            auth=AuthContext(
+                username=username,
+                source_ip=workstation,  # SourceWorkstation stored in source_ip
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
 
     def _get_next_event_record_id(self, hostname: str = '') -> int:
         """Get next EventRecordID for a specific computer (thread-safe).

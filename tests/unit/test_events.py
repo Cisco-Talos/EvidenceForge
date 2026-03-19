@@ -207,3 +207,66 @@ class TestRawLogEntry:
         )
         with pytest.raises(AttributeError):
             entry.bogus = "fail"
+
+
+class TestKerberosContext:
+    """Tests for KerberosContext dataclass."""
+
+    def test_defaults(self):
+        from evidenceforge.events.contexts import KerberosContext
+        ctx = KerberosContext(target_username="alice", target_domain="CORP")
+        assert ctx.target_sid == ""
+        assert ctx.service_name == ""
+        assert ctx.ticket_status == "0x0"
+        assert ctx.pre_auth_type == 0
+        assert ctx.source_port == 0
+
+    def test_tgt_fields(self):
+        from evidenceforge.events.contexts import KerberosContext
+        ctx = KerberosContext(
+            target_username="alice", target_domain="CORP",
+            target_sid="S-1-5-21-123-456-789-1001",
+            service_name="krbtgt", service_sid="S-1-5-21-123-456-789-502",
+            ticket_options="0x40810010", encryption_type="0x12",
+            pre_auth_type=15, source_ip="::ffff:10.0.1.50",
+        )
+        assert ctx.service_name == "krbtgt"
+        assert ctx.pre_auth_type == 15
+
+
+class TestShellContext:
+    """Tests for ShellContext dataclass."""
+
+    def test_defaults(self):
+        from evidenceforge.events.contexts import ShellContext
+        ctx = ShellContext(command="ls -la")
+        assert ctx.exit_code == 0
+
+    def test_with_exit_code(self):
+        from evidenceforge.events.contexts import ShellContext
+        ctx = ShellContext(command="false", exit_code=1)
+        assert ctx.exit_code == 1
+
+
+class TestSecurityEventNewContexts:
+    """Tests for SecurityEvent with kerberos and shell contexts."""
+
+    def test_kerberos_slot(self):
+        from evidenceforge.events.contexts import KerberosContext
+        evt = SecurityEvent(
+            timestamp=datetime.now(timezone.utc),
+            event_type="kerberos_tgt",
+            kerberos=KerberosContext(target_username="alice", target_domain="CORP"),
+        )
+        assert evt.kerberos is not None
+        assert evt.shell is None
+
+    def test_shell_slot(self):
+        from evidenceforge.events.contexts import ShellContext
+        evt = SecurityEvent(
+            timestamp=datetime.now(timezone.utc),
+            event_type="bash_command",
+            shell=ShellContext(command="ls"),
+        )
+        assert evt.shell is not None
+        assert evt.kerberos is None

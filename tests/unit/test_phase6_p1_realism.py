@@ -197,11 +197,13 @@ class TestMachineAccountLogon:
             hostname='WKS-01', machine_username='WKS-01$',
             dc_hostname='DC-01', source_ip='10.10.10.50', dc_ip='10.10.100.10', time=ts,
         )
-        call_args = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert call_args['TargetUserName'] == 'WKS-01$'
-        assert call_args['Computer'].startswith('DC-01.')
-        assert call_args['LogonType'] == 3
-        assert call_args['AuthenticationPackageName'] == 'Kerberos'
+        # machine_logon dispatched via SecurityEvent
+        event = mock_emitters['windows_event_security'].emit.call_args_list[0][0][0]
+        assert event.event_type == "machine_logon"
+        assert event.auth.username == 'WKS-01$'
+        assert event.host.fqdn.startswith('DC-01.')
+        assert event.auth.logon_type == 3
+        assert event.auth.auth_package == 'Kerberos'
 
 
 class TestKerberosEvents:
@@ -212,10 +214,10 @@ class TestKerberosEvents:
         activity_gen.generate_kerberos_tgt(
             username='WKS-01$', source_ip='10.10.10.50', dc_hostname='DC-01', time=ts,
         )
-        call_args = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert call_args['EventID'] == 4768
-        assert call_args['ServiceName'] == 'krbtgt'
-        assert call_args['Computer'].startswith('DC-01.')
+        event = mock_emitters['windows_event_security'].emit.call_args_list[0][0][0]
+        assert event.event_type == "kerberos_tgt"
+        assert event.kerberos.service_name == 'krbtgt'
+        assert event.host.fqdn.startswith('DC-01.')
 
     def test_service_ticket_emits_4769(self, activity_gen, mock_emitters):
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
@@ -223,19 +225,19 @@ class TestKerberosEvents:
             username='WKS-01$', service_name='cifs/SRV-FILE-01',
             source_ip='10.10.10.50', dc_hostname='DC-01', time=ts,
         )
-        call_args = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert call_args['EventID'] == 4769
-        assert call_args['ServiceName'] == 'cifs/SRV-FILE-01'
+        event = mock_emitters['windows_event_security'].emit.call_args_list[0][0][0]
+        assert event.event_type == "kerberos_service"
+        assert event.kerberos.service_name == 'cifs/SRV-FILE-01'
 
     def test_ntlm_emits_4776(self, activity_gen, mock_emitters):
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
         activity_gen.generate_ntlm_validation(
             username='WKS-01$', workstation='WKS-01', dc_hostname='DC-01', time=ts,
         )
-        call_args = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert call_args['EventID'] == 4776
-        assert call_args['PackageName'] == 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0'
-        assert call_args['SourceWorkstation'] == 'WKS-01'
+        event = mock_emitters['windows_event_security'].emit.call_args_list[0][0][0]
+        assert event.event_type == "ntlm_validation"
+        assert event.auth.username == 'WKS-01$'
+        assert event.auth.source_ip == 'WKS-01'  # workstation stored in source_ip
 
 
 class TestInfrastructureDetection:

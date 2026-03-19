@@ -30,6 +30,7 @@ class WindowsEventEmitter(LogEmitter):
     _supported_types: set[str] = {
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
+        "machine_logon", "kerberos_tgt", "kerberos_service", "ntlm_validation",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -49,6 +50,10 @@ class WindowsEventEmitter(LogEmitter):
             "process_create": self._render_process_create,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_system_process_create,
+            "machine_logon": self._render_machine_logon,
+            "kerberos_tgt": self._render_kerberos_tgt,
+            "kerberos_service": self._render_kerberos_service,
+            "ntlm_validation": self._render_ntlm_validation,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -255,6 +260,127 @@ class WindowsEventEmitter(LogEmitter):
             'TargetLogonId': proc.logon_id,
             'ParentProcessName': proc.parent_image,
             'MandatoryLabel': proc.mandatory_label or 'S-1-16-16384',
+        }
+        self.emit_event(event_data)
+
+    def _render_machine_logon(self, event: SecurityEvent) -> None:
+        """Render Windows 4624 for machine account logon (type 3 on DC)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
+        workstation = auth.username.rstrip('$') if auth.username.endswith('$') else auth.username
+
+        event_data = {
+            'EventID': 4624,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': auth.logon_id,
+            'LogonType': 3,
+            'LogonProcessName': auth.logon_process,
+            'AuthenticationPackageName': auth.auth_package,
+            'WorkstationName': workstation,
+            'LogonGuid': auth.logon_guid,
+            'TransmittedServices': '-',
+            'LmPackageName': auth.lm_package,
+            'KeyLength': 0,
+            'ProcessId': '0x0',
+            'ProcessName': '-',
+            'IpAddress': auth.source_ip,
+            'IpPort': str(rng.randint(49152, 65535)),
+            'ImpersonationLevel': '%%1833',
+            'RestrictedAdminMode': '-',
+            'TargetOutboundUserName': '-',
+            'TargetOutboundDomainName': '-',
+            'VirtualAccount': '%%1843',
+            'TargetLinkedLogonId': '0x0',
+            'ElevatedToken': '%%1842',
+        }
+        self.emit_event(event_data)
+
+    def _render_kerberos_tgt(self, event: SecurityEvent) -> None:
+        """Render Windows 4768 (Kerberos TGT request)."""
+        rng = random.Random()
+        krb = event.kerberos
+        host = event.host
+
+        event_data = {
+            'EventID': 4768,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': krb.target_username,
+            'TargetDomainName': krb.target_domain,
+            'TargetSid': krb.target_sid,
+            'ServiceName': krb.service_name,
+            'ServiceSid': krb.service_sid,
+            'TicketOptions': krb.ticket_options,
+            'Status': krb.ticket_status,
+            'TicketEncryptionType': krb.encryption_type,
+            'PreAuthType': krb.pre_auth_type,
+            'IpAddress': krb.source_ip,
+            'IpPort': krb.source_port,
+        }
+        self.emit_event(event_data)
+
+    def _render_kerberos_service(self, event: SecurityEvent) -> None:
+        """Render Windows 4769 (Kerberos service ticket request)."""
+        rng = random.Random()
+        krb = event.kerberos
+        host = event.host
+
+        event_data = {
+            'EventID': 4769,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': krb.target_username,
+            'TargetDomainName': krb.target_domain,
+            'ServiceName': krb.service_name,
+            'ServiceSid': krb.service_sid,
+            'TicketOptions': krb.ticket_options,
+            'TicketEncryptionType': krb.encryption_type,
+            'IpAddress': krb.source_ip,
+            'IpPort': krb.source_port,
+            'Status': krb.ticket_status,
+        }
+        self.emit_event(event_data)
+
+    def _render_ntlm_validation(self, event: SecurityEvent) -> None:
+        """Render Windows 4776 (NTLM credential validation)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4776,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
+            'LogonAccount': auth.username,
+            'SourceWorkstation': auth.source_ip,  # workstation stored in source_ip
+            'Status': '0x0',
         }
         self.emit_event(event_data)
 

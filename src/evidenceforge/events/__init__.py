@@ -11,9 +11,11 @@ from evidenceforge.events.contexts import (
     FileContext,
     HostContext,
     IdsContext,
+    KerberosContext,
     NetworkContext,
     ProcessContext,
     RegistryContext,
+    ShellContext,
 )
 
 __all__ = [
@@ -27,4 +29,6 @@ __all__ = [
     "FileContext",
     "RegistryContext",
     "IdsContext",
+    "KerberosContext",
+    "ShellContext",
 ]

@@ -16,9 +16,11 @@ from evidenceforge.events.contexts import (
     FileContext,
     HostContext,
     IdsContext,
+    KerberosContext,
     NetworkContext,
     ProcessContext,
     RegistryContext,
+    ShellContext,
 )
 
 
@@ -41,6 +43,8 @@ class SecurityEvent:
     file: FileContext | None = None
     registry: RegistryContext | None = None
     ids: IdsContext | None = None
+    kerberos: KerberosContext | None = None
+    shell: ShellContext | None = None
 
 
 @dataclass(slots=True)

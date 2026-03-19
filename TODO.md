@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 complete — 7 multi-format methods migrated, 5 deferred single-format); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 complete — all 12 methods migrated); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7.2: All multi-format methods migrated to canonical event model, 756 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7.2 complete: All 12 generate_* methods migrated to canonical event model, 763 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -1042,11 +1042,25 @@ Migrate each `generate_*` method: refactor to two-phase build + dispatch, implem
   - [x] Conn state/history/packet derivation stays in activity.py (connection semantics)
   - [x] eCAR FLOW/CONNECT remains via _emit_ecar_flow_event helper
   - [x] Run tests — 756 passed
-- **Deferred:** 7.2.7 (bash_command), 7.2.9 (machine_logon), 7.2.10-12 (kerberos/ntlm)
-  - These are single-format methods that don't benefit from multi-format dispatch
-  - bash_command: only targets bash_history emitter, has early OS-type return
-  - DC methods: Windows-only, called from engine._generate_system_traffic, emit raw event dicts
-  - Will migrate in 7.3 cleanup or as-needed when adding new format targets
+- [x] **7.2.7** `generate_bash_command()` — bash_history (1 format)
+  - [x] Add ShellContext (command, exit_code) to contexts.py
+  - [x] Add can_handle/emit to BashHistoryEmitter (Linux-only filter)
+  - [x] Run tests — 763 passed
+- [x] **7.2.9** `generate_machine_account_logon()` — Windows (1 format)
+  - [x] Add _build_dc_host_context helper for raw DC hostname strings
+  - [x] Implement _render_machine_logon on WindowsEmitter (4624 type 3)
+  - [x] Run tests — 763 passed
+- [x] **7.2.10** `generate_kerberos_tgt()` — Windows (1 format)
+  - [x] Add KerberosContext dataclass for 4768/4769 fields
+  - [x] Implement _render_kerberos_tgt on WindowsEmitter (4768)
+  - [x] Run tests — 763 passed
+- [x] **7.2.11** `generate_kerberos_service_ticket()` — Windows (1 format)
+  - [x] Implement _render_kerberos_service on WindowsEmitter (4769)
+  - [x] Run tests — 763 passed
+- [x] **7.2.12** `generate_ntlm_validation()` — Windows (1 format)
+  - [x] Implement _render_ntlm_validation on WindowsEmitter (4776)
+  - [x] Uses AuthContext (not KerberosContext — it's NTLM)
+  - [x] Run tests — 763 passed
 
 ### 7.3 Cleanup
 

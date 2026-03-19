@@ -424,3 +424,21 @@ class TestBuildHostContext:
 
         assert ctx.os_category == "linux"
         assert ctx.system_type == "server"
+
+    def test_build_dc_host_context(self):
+        """_build_dc_host_context() builds HostContext for DC from raw hostname."""
+        from evidenceforge.generation.activity import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+
+        sm = StateManager()
+        gen = ActivityGenerator(state_manager=sm, emitters={})
+        gen._ad_domain = "corp.local"
+
+        ctx = gen._build_dc_host_context("DC-01")
+
+        assert ctx.hostname == "DC-01"
+        assert ctx.fqdn == "DC-01.corp.local"
+        assert ctx.netbios_domain == "CORP"
+        assert ctx.os_category == "windows"
+        assert ctx.system_type == "domain_controller"
+        assert ctx.ip == ""  # DC IP not needed for event rendering

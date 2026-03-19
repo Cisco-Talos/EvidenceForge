@@ -131,3 +131,28 @@ class IdsContext:
     message: str
     classification: str
     priority: int = 2
+
+
+@dataclass(slots=True)
+class KerberosContext:
+    """Kerberos protocol details for DC events (4768 TGT, 4769 service ticket)."""
+
+    target_username: str
+    target_domain: str
+    target_sid: str = ""
+    service_name: str = ""  # "krbtgt" for TGT, SPN for service ticket
+    service_sid: str = ""
+    ticket_options: str = ""
+    ticket_status: str = "0x0"
+    encryption_type: str = ""  # e.g., "0x12" (AES-256)
+    pre_auth_type: int = 0  # 4768 only
+    source_ip: str = ""  # IPv6-mapped: "::ffff:x.x.x.x"
+    source_port: int = 0
+
+
+@dataclass(slots=True)
+class ShellContext:
+    """Shell command execution details (bash_history)."""
+
+    command: str
+    exit_code: int = 0
