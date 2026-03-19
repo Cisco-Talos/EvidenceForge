@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from threading import local, get_ident, Lock
 from typing import Optional
 
+from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.contexts import AuthContext, HostContext
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import User, System
@@ -600,6 +603,7 @@ class ActivityGenerator:
         event_record_counter: int = 10000,
         network_visibility=None,
         sid_registry: Optional[dict[str, str]] = None,
+        dispatcher: Optional[EventDispatcher] = None,
     ):
         """Initialize activity generator.
 
@@ -609,9 +613,16 @@ class ActivityGenerator:
             event_record_counter: Starting EventRecordID
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
+            dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
         """
         self.state_manager = state_manager
-        self.emitters = emitters
+        if dispatcher is None and emitters:
+            # Auto-create dispatcher for backward compat with tests
+            dispatcher = EventDispatcher(
+                state_manager=state_manager,
+                emitters=emitters,
+            )
+        self.dispatcher = dispatcher
         self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
@@ -620,11 +631,44 @@ class ActivityGenerator:
         # Used by _select_parent_pid() for realistic parent-child relationships
         self._user_process_history: dict[tuple[str, str], list[tuple[int, str]]] = {}
 
-        # Network visibility (Phase 2.5): default to all-visible if not provided
-        if network_visibility is None:
-            from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
-            network_visibility = NetworkVisibilityEngine(None, [])
-        self.network_visibility = network_visibility
+        # Network visibility stored on dispatcher; keep local ref for fast-path check
+        self._network_visibility = network_visibility
+
+    def _build_host_context(self, system: System) -> HostContext:
+        """Build a HostContext from a System model object.
+
+        Precomputes FQDN and NetBIOS domain so render methods don't have to.
+        """
+        ad_domain = getattr(self, '_ad_domain', '')
+        hostname = system.hostname
+        return HostContext(
+            hostname=hostname,
+            ip=system.ip,
+            os=system.os,
+            os_category=_get_os_category(system.os),
+            system_type=system.type,
+            domain=ad_domain,
+            fqdn=f"{hostname}.{ad_domain}" if ad_domain else hostname,
+            netbios_domain=ad_domain.split('.')[0].upper() if ad_domain else 'CORP',
+        )
+
+    def _build_dc_host_context(self, dc_hostname: str) -> HostContext:
+        """Build a HostContext for a domain controller from raw hostname string.
+
+        DC methods receive raw strings (not System objects). Constructs a
+        HostContext suitable for Windows event rendering (Computer field).
+        """
+        ad_domain = getattr(self, '_ad_domain', 'corp.local')
+        return HostContext(
+            hostname=dc_hostname,
+            ip='',
+            os='Windows Server 2019',
+            os_category='windows',
+            system_type='domain_controller',
+            domain=ad_domain,
+            fqdn=f"{dc_hostname}.{ad_domain}" if ad_domain else dc_hostname,
+            netbios_domain=ad_domain.split('.')[0].upper() if ad_domain else 'CORP',
+        )
 
     def generate_logon(
         self,
@@ -634,9 +678,10 @@ class ActivityGenerator:
         logon_type: int = 2,
         source_ip: Optional[str] = None
     ) -> str:
-        """Generate logon event and emit Windows 4624.
+        """Generate logon event across all applicable log formats.
 
-        Creates session in StateManager and emits Windows Event 4624 (successful logon).
+        Creates session in StateManager, builds a SecurityEvent, and dispatches
+        to matching emitters (Windows 4624 + optional 4672, syslog auth, eCAR).
 
         Args:
             user: User logging on
@@ -652,7 +697,7 @@ class ActivityGenerator:
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
 
-        # Create session in StateManager
+        # Phase 1: Allocate IDs from StateManager
         logon_id = self.state_manager.create_session(
             username=user.username,
             system=system.hostname,
@@ -660,75 +705,35 @@ class ActivityGenerator:
             source_ip=source_ip
         )
 
-        # Phase 2.10: OS-aware multi-format emission
-        os_category = _get_os_category(system.os)
+        # Select auth package (semantic data, not format-specific)
+        auth_pkg = self._select_auth_package(logon_type)
 
-        # Emit to native OS log format
-        if os_category == 'windows':
-            # Emit Windows Event 4624 (An account was successfully logged on)
-            event_data = {
-                'EventID': 4624,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,  # Information
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,    # System process
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                # Logon variant fields — Subject is SYSTEM (lsass reports logon events)
-                'SubjectUserSid': self._get_sid('SYSTEM'),
-                'SubjectUserName': 'SYSTEM',
-                'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': '0x3e7',
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'TargetLogonId': logon_id,
-                'LogonType': logon_type,
-                'WorkstationName': system.hostname,
-                'ProcessId': f'0x{self._get_system_pid(system.hostname, "lsass", 0x2e0):x}',
-                'ProcessName': r'C:\Windows\System32\lsass.exe',
-                'IpAddress': source_ip,
-                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
-                **self._select_auth_package(logon_type),
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
+        # Phase 2: Build SecurityEvent with all contexts
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logon",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                logon_type=logon_type,
+                auth_package=auth_pkg.get('AuthenticationPackageName', 'Negotiate'),
+                source_ip=source_ip,
+                elevated=_get_rng().random() < 0.15,
+                logon_process=auth_pkg.get('LogonProcessName', ''),
+                lm_package=auth_pkg.get('LmPackageName', '-'),
+                logon_guid=auth_pkg.get('LogonGuid', '{00000000-0000-0000-0000-000000000000}'),
+                subject_sid=self._get_sid('SYSTEM'),
+                subject_username='SYSTEM',
+                subject_domain='NT AUTHORITY',
+                subject_logon_id='0x3e7',
+                reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2e0),
+            ),
+        )
 
-        elif os_category == 'linux':
-            # Emit syslog authentication message
-            if 'syslog' in self.emitters:
-                event_data = {
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'facility': 10,  # authpriv
-                    'severity': 6,   # info
-                    'app_name': 'sshd' if logon_type == 3 else 'login',
-                    'pid': _get_rng().randint(1000, 9999),
-                    'message': f'Accepted password for {user.username} from {source_ip} port {_get_rng().randint(49152, 65535)}'
-                }
-                self.emitters['syslog'].emit_event(event_data)
-
-        # Emit eCAR if available (optional EDR/XDR layer)
-        self._emit_ecar_logon(user, system, time, logon_id, logon_type, source_ip)
-
-        # Phase 5.2: Emit 4672 (special privileges) for ~15% of logons (admin accounts)
-        if os_category == 'windows' and _get_rng().random() < 0.15:
-            priv_event = {
-                'EventID': 4672,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                'SubjectUserSid': self._get_sid(user.username),
-                'SubjectUserName': user.username,
-                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'SubjectLogonId': logon_id,
-                'PrivilegeList': 'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\tSeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\tSeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\tSeDelegateSessionUserImpersonatePrivilege',
-            }
-            self.emitters['windows_event_security'].emit_event(priv_event)
+        # Phase 3: Dispatch to matching emitters
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
@@ -741,12 +746,11 @@ class ActivityGenerator:
         logon_type: int = 2,
         source_ip: Optional[str] = None,
     ) -> None:
-        """Generate a failed logon event (bad password).
+        """Generate a failed logon event.
 
-        Does NOT create a session in StateManager. Emits:
-        - Windows: Event 4625 (failed logon)
-        - Linux: syslog "Failed password"
-        - eCAR: USER_SESSION/LOGIN with failure_reason (if available)
+        Does NOT create a session in StateManager. Builds a SecurityEvent with
+        result="failure" and dispatches to matching emitters (Windows 4625,
+        syslog "Failed password", eCAR LOGIN with failure_reason).
 
         Args:
             user: User attempting to log on
@@ -758,87 +762,48 @@ class ActivityGenerator:
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
 
-        os_category = _get_os_category(system.os)
+        # Determine failure substatus with correct SID handling
+        rng = _get_rng()
+        substatus_roll = rng.random()
+        if substatus_roll < 0.60:
+            substatus = '0xc000006a'  # Wrong password
+            user_sid = self._get_sid(user.username)
+            failure_reason = '%%2313'
+        elif substatus_roll < 0.85:
+            substatus = '0xc0000064'  # User not found: NULL SID
+            user_sid = 'S-1-0-0'
+            failure_reason = '%%2313'
+        elif substatus_roll < 0.95:
+            substatus = '0xc0000234'  # Account locked out
+            user_sid = self._get_sid(user.username)
+            failure_reason = '%%2304'
+        else:
+            substatus = '0xc0000072'  # Account disabled
+            user_sid = self._get_sid(user.username)
+            failure_reason = '%%2307'
 
-        if os_category == 'windows':
-            event_data = {
-                'EventID': 4625,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 9999),
-                'SubjectUserSid': self._get_sid('SYSTEM'),
-                'SubjectUserName': 'SYSTEM',
-                'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': '0x3e7',
-            }
-            # Varied failure substatus with correct SID handling
-            rng = _get_rng()
-            substatus_roll = rng.random()
-            if substatus_roll < 0.60:
-                # Wrong password (most common): user exists, so valid SID
-                event_data['SubStatus'] = '0xc000006a'
-                event_data['TargetUserSid'] = self._get_sid(user.username)
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2313'
-            elif substatus_roll < 0.85:
-                # User not found: NULL SID required
-                event_data['SubStatus'] = '0xc0000064'
-                event_data['TargetUserSid'] = 'S-1-0-0'
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2313'
-            elif substatus_roll < 0.95:
-                # Account locked out
-                event_data['SubStatus'] = '0xc0000234'
-                event_data['TargetUserSid'] = self._get_sid(user.username)
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2304'
-            else:
-                # Account disabled
-                event_data['SubStatus'] = '0xc0000072'
-                event_data['TargetUserSid'] = self._get_sid(user.username)
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2307'
-            event_data.update({
-                'Status': '0xc000006d',
-                'LogonType': logon_type,
-                'IpAddress': source_ip,
-                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
-            })
-            self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="failed_logon",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=user_sid,
+                logon_type=logon_type,
+                auth_package='Negotiate',
+                result='failure',
+                failure_reason=failure_reason,
+                failure_status='0xc000006d',
+                failure_substatus=substatus,
+                source_ip=source_ip,
+                subject_sid=self._get_sid('SYSTEM'),
+                subject_username='SYSTEM',
+                subject_domain='NT AUTHORITY',
+                subject_logon_id='0x3e7',
+            ),
+        )
 
-        elif os_category == 'linux':
-            if 'syslog' in self.emitters:
-                event_data = {
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'facility': 10,  # authpriv
-                    'severity': 4,   # warning
-                    'app_name': 'sshd' if logon_type == 3 else 'login',
-                    'pid': _get_rng().randint(1000, 9999),
-                    'message': f'Failed password for {user.username} from {source_ip} port {_get_rng().randint(49152, 65535)} ssh2',
-                }
-                self.emitters['syslog'].emit_event(event_data)
-
-        # Emit eCAR failed login if available
-        if 'ecar' in self.emitters:
-            event_data = {
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'USER_SESSION',
-                'action': 'LOGIN',
-                'principal': user.username,
-                'src_ip': source_ip,
-                'failure_reason': 'bad_password',
-            }
-            self.emitters['ecar'].emit_event(event_data)
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
 
@@ -850,12 +815,10 @@ class ActivityGenerator:
         logon_id: str,
         logon_type: int = 2,
     ) -> None:
-        """Generate logoff event across OS-appropriate formats.
+        """Generate logoff event across all applicable log formats.
 
-        Ends session in StateManager and emits:
-        - Windows: Event 4634 (logoff)
-        - Linux: syslog "session closed"
-        - eCAR: USER_SESSION/LOGOUT (if available)
+        Ends session in StateManager, builds a SecurityEvent, and dispatches
+        to matching emitters (Windows 4634, syslog session closed, eCAR LOGOUT).
 
         Args:
             user: User logging off
@@ -864,56 +827,21 @@ class ActivityGenerator:
             logon_id: LogonID from the logon event
             logon_type: Logon type for the session being ended
         """
-        # End session in StateManager
-        self.state_manager.end_session(logon_id)
+        # Build SecurityEvent (StateManager.apply() handles end_session)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logoff",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                logon_type=logon_type,
+            ),
+        )
 
-        # Phase 5.1: OS-aware multi-format emission
-        os_category = _get_os_category(system.os)
-
-        if os_category == 'windows':
-            # Emit Windows Event 4634 (An account was logged off)
-            event_data = {
-                'EventID': 4634,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                # Logoff variant fields
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'TargetLogonId': logon_id,
-                'LogonType': logon_type,
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
-
-        elif os_category == 'linux':
-            # Emit syslog session closed message
-            if 'syslog' in self.emitters:
-                event_data = {
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'facility': 10,  # authpriv
-                    'severity': 6,   # info
-                    'app_name': 'sshd' if logon_type == 3 else 'login',
-                    'pid': _get_rng().randint(1000, 9999),
-                    'message': f'session closed for user {user.username}',
-                }
-                self.emitters['syslog'].emit_event(event_data)
-
-        # Emit eCAR USER_SESSION/LOGOUT if available
-        if 'ecar' in self.emitters:
-            event_data = {
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'USER_SESSION',
-                'action': 'LOGOUT',
-                'principal': user.username,
-            }
-            self.emitters['ecar'].emit_event(event_data)
+        # Phase 3: Dispatch to matching emitters
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})")
 
@@ -927,9 +855,11 @@ class ActivityGenerator:
         command_line: str,
         parent_pid: int = 4
     ) -> int:
-        """Generate process creation event and emit Windows 4688.
+        """Generate process creation event across all applicable log formats.
 
-        Creates process in StateManager and emits Windows Event 4688.
+        Creates process in StateManager, builds a SecurityEvent, and dispatches
+        to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
+        probabilistic eCAR file/module/registry events.
 
         Args:
             user: User creating the process
@@ -943,70 +873,54 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
-        # Create process in StateManager
+        from evidenceforge.events.contexts import ProcessContext
+
+        # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
             image=process_name,
             command_line=command_line,
             username=user.username,
-            integrity_level='Medium'  # Phase 1: Fixed integrity level
+            integrity_level='Medium'
         )
 
-        # Phase 2.10: OS-aware multi-format emission
-        os_category = _get_os_category(system.os)
+        # Phase 2: Build SecurityEvent
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_create",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=user.username,
+                integrity_level='Medium',
+                logon_id=logon_id,
+                parent_image=self._lookup_process_name(system.hostname, parent_pid),
+                token_elevation='%%1938',
+                mandatory_label='S-1-16-8192',
+            ),
+        )
 
-        # Emit to native OS log format
-        if os_category == 'windows':
-            # Emit Windows Event 4688 (A new process has been created)
-            event_data = {
-                'EventID': 4688,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 9999),
-                # Process variant fields
-                'SubjectUserSid': self._get_sid(user.username),
-                'SubjectUserName': user.username,
-                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'SubjectLogonId': logon_id,
-                'NewProcessId': f'0x{pid:x}',
-                'NewProcessName': process_name,
-                'TokenElevationType': '%%1938',  # Limited token (UAC filtered)
-                'ProcessId': f'0x{parent_pid:x}',
-                'CommandLine': command_line,
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'TargetLogonId': logon_id,
-                'ParentProcessName': self._lookup_process_name(system.hostname, parent_pid),
-                'MandatoryLabel': 'S-1-16-8192',  # Medium integrity
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
+        # Phase 3: Dispatch to matching emitters
+        self.dispatcher.dispatch(event)
 
-        elif os_category == 'linux':
-            # Linux process creation may not generate syslog (depends on auditd config)
-            # For now, skip native log (eCAR would provide visibility if enabled)
-            pass
-
-        # Emit eCAR if available (optional EDR/XDR layer)
-        self._emit_ecar_process(user, system, time, pid, parent_pid, process_name, command_line, logon_id)
-
-        # Phase 5.2: Probabilistic eCAR object diversity
+        # Phase 5.2: Probabilistic eCAR object diversity (via dispatch_raw)
         rng = _get_rng()
         os_category = _get_os_category(system.os)
-        if 'ecar' in self.emitters:
-            # 40% chance: file event after process creation
+        if 'ecar' in self.dispatcher.emitters:
             if rng.random() < 0.40:
                 action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
                 self._emit_ecar_file_event(system, time, pid, action, user.username)
-            # 30% chance: module load (Windows only)
             if os_category == 'windows' and rng.random() < 0.30:
                 self._emit_ecar_module_event(system, time, pid, user.username)
-            # 20% chance: registry event (Windows system processes only)
             if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
                 self._emit_ecar_registry_event(system, time, pid, user.username)
 
@@ -1022,11 +936,10 @@ class ActivityGenerator:
         process_name: str,
         logon_id: str,
     ) -> None:
-        """Generate process termination event and emit Windows 4689.
+        """Generate process termination event across all applicable log formats.
 
-        Ends process in StateManager and emits:
-        - Windows: Event 4689 (process exited)
-        - eCAR: PROCESS/TERMINATE (if available)
+        Builds a SecurityEvent and dispatches to matching emitters (Windows 4689,
+        eCAR PROCESS/TERMINATE). StateManager.apply() handles end_process.
 
         Args:
             user: User who owned the process
@@ -1036,43 +949,28 @@ class ActivityGenerator:
             process_name: Full path of the terminated process
             logon_id: LogonID of the owning session
         """
-        # End process in StateManager
-        self.state_manager.end_process(system.hostname, pid)
+        from evidenceforge.events.contexts import ProcessContext
 
-        os_category = _get_os_category(system.os)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_terminate",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=process_name,
+                command_line='',
+                username=user.username,
+                logon_id=logon_id,
+            ),
+        )
 
-        if os_category == 'windows':
-            event_data = {
-                'EventID': 4689,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                'SubjectUserSid': self._get_sid(user.username),
-                'SubjectUserName': user.username,
-                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'SubjectLogonId': logon_id,
-                'Status': '0x0',
-                'ProcessId': f'0x{pid:x}',
-                'ProcessName': process_name,
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
-
-        # Emit eCAR PROCESS/TERMINATE if available
-        if 'ecar' in self.emitters:
-            event_data = {
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'PROCESS',
-                'action': 'TERMINATE',
-                'pid': pid,
-                'principal': user.username,
-                'image_path': process_name,
-            }
-            self.emitters['ecar'].emit_event(event_data)
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}")
 
@@ -1089,9 +987,11 @@ class ActivityGenerator:
         resp_bytes: Optional[int] = None,
         src_port: Optional[int] = None,
     ) -> str:
-        """Generate network connection and emit Zeek conn.log event.
+        """Generate network connection across all applicable log formats.
 
-        Opens connection in StateManager and emits Zeek connection record.
+        Opens connection in StateManager, builds a SecurityEvent with
+        NetworkContext, and dispatches to matching emitters (Zeek conn,
+        Snort, eCAR FLOW). Dispatcher handles network visibility filtering.
 
         Args:
             src_ip: Source IP address
@@ -1103,10 +1003,13 @@ class ActivityGenerator:
             duration: Connection duration in seconds
             orig_bytes: Bytes sent by originator
             resp_bytes: Bytes sent by responder
+            src_port: Source port (auto-assigned ephemeral if None)
 
         Returns:
             Zeek UID (18-character string)
         """
+        from evidenceforge.events.contexts import NetworkContext
+
         # Validate connection would be observable by network sensors
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
@@ -1114,10 +1017,11 @@ class ActivityGenerator:
                 f"Skipping invalid network connection: {src_ip} -> {dst_ip}. "
                 f"Reason: {reason}. Network sensors would not observe this traffic."
             )
-            return ""  # Return empty UID to indicate skipped connection
+            return ""
 
         # Phase 2.5: Check network topology visibility
-        if not self.network_visibility.is_connection_visible(src_ip, dst_ip):
+        visibility = self._network_visibility or (self.dispatcher.visibility_engine if self.dispatcher else None)
+        if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
             logger.debug(
                 f"Skipping connection {src_ip} -> {dst_ip}: "
                 f"not observable by any configured sensor"
@@ -1125,52 +1029,38 @@ class ActivityGenerator:
             return ""
 
         if src_port is None:
-            src_port = _get_rng().randint(49152, 65535)  # Ephemeral port
+            src_port = _get_rng().randint(49152, 65535)
 
-        # Create connection in StateManager
+        # Phase 1: Allocate IDs from StateManager
         conn_id = self.state_manager.open_connection(
-            src_ip=src_ip,
-            src_port=src_port,
-            dst_ip=dst_ip,
-            dst_port=dst_port,
-            protocol=proto
+            src_ip=src_ip, src_port=src_port,
+            dst_ip=dst_ip, dst_port=dst_port, protocol=proto
         )
-
-        # Get Zeek UID from StateManager (generated at open_connection time)
-        # All Zeek log types for this connection share this UID
         uid = self.state_manager.get_zeek_uid(conn_id)
-
-        # Update connection bytes if provided
         if orig_bytes is not None and resp_bytes is not None:
             self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
-        # Phase 6.0: Protocol-aware connection state selection
+        # Protocol-aware connection state selection
         rng = _get_rng()
 
         if proto == 'icmp':
-            # ICMP: no connection state, OTH always, no history
             conn_state = 'OTH'
             history = '-'
-            # Zeek encodes ICMP type/code as ports
             src_port = 8   # Echo request type
             dst_port = 0   # Echo reply type
         elif proto == 'udp':
-            # UDP: datagram-based history (D/d), limited conn_states
             entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
             conn_state, _, history = entry
             if conn_state == 'S0':
                 duration = None
                 resp_bytes = 0
         else:
-            # TCP: full handshake-based history and conn_states
             if duration is not None:
                 entry = rng.choices(_TCP_CONN_ENTRIES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
                 conn_state, _, history = entry
             else:
                 conn_state = 'S0'
                 history = 'S'
-
-            # Adjust bytes/duration for consistency with TCP connection state
             if conn_state in ('S0', 'REJ'):
                 duration = None
                 resp_bytes = 0
@@ -1184,10 +1074,8 @@ class ActivityGenerator:
 
         # Calculate packet counts — enforce consistency with history
         if proto == 'udp' and history:
-            # Count D/d characters for exact packet counts
             orig_pkts = history.count('D')
             resp_pkts = history.count('d')
-            # Adjust bytes to match packet counts (UDP: 28-byte IP+UDP header)
             if orig_pkts > 0 and orig_bytes:
                 orig_bytes = max(orig_bytes, orig_pkts * 28)
             if resp_pkts > 0 and resp_bytes:
@@ -1195,59 +1083,47 @@ class ActivityGenerator:
             elif resp_pkts == 0:
                 resp_bytes = 0
         elif proto == 'tcp' and history and history != '-':
-            # TCP: derive minimum packet counts from history field
-            # Uppercase letters = originator packets, lowercase = responder
             hist_orig = sum(1 for c in history if c.isupper())
             hist_resp = sum(1 for c in history if c.islower())
-            # Also account for data volume (1 packet per ~1460 bytes payload)
             byte_orig = max(1, (orig_bytes // 1460) + 1) if orig_bytes else 1
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
         else:
-            # ICMP or unknown: simple estimate
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
-        # IP+protocol header overhead: TCP 52-72 bytes (IP+TCP+options), UDP 28 bytes
         overhead = 28 if proto == 'udp' else _get_rng().randint(52, 72)
         orig_ip_bytes = (orig_bytes + orig_pkts * overhead) if orig_bytes and orig_pkts else None
         resp_ip_bytes = (resp_bytes + resp_pkts * overhead) if resp_bytes and resp_pkts else None
 
-        # Emit Zeek conn.log event
-        event_data = {
-            'ts': time,
-            'uid': uid,
-            'id.orig_h': src_ip,
-            'id.orig_p': src_port,
-            'id.resp_h': dst_ip,
-            'id.resp_p': dst_port,
-            'proto': proto,
-            'service': service,
-            'duration': duration,
-            'orig_bytes': orig_bytes,
-            'resp_bytes': resp_bytes,
-            'conn_state': conn_state,
-            'local_orig': _is_private_ip(src_ip),
-            'local_resp': _is_private_ip(dst_ip),
-            'missed_bytes': 0,
-            'history': history,
-            'orig_pkts': orig_pkts,
-            'orig_ip_bytes': orig_ip_bytes,
-            'resp_pkts': resp_pkts,
-            'resp_ip_bytes': resp_ip_bytes,
-            'ip_proto': 6 if proto == 'tcp' else 17 if proto == 'udp' else 1,  # TCP=6, UDP=17, ICMP=1
-        }
+        ip_proto = 6 if proto == 'tcp' else 17 if proto == 'udp' else 1
 
-        # Phase 2.5: Emit to sensor-appropriate formats
-        visible_formats = self.network_visibility.get_log_formats_for_connection(src_ip, dst_ip)
-        for format_name in visible_formats:
-            if format_name in self.emitters:
-                self.emitters[format_name].emit_event(event_data)
-        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid}, formats: {visible_formats})")
+        # Phase 2: Build SecurityEvent with NetworkContext
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip=src_ip, src_port=src_port,
+                dst_ip=dst_ip, dst_port=dst_port,
+                protocol=proto, service=service or '',
+                zeek_uid=uid, conn_id=conn_id,
+                duration=duration,
+                orig_bytes=orig_bytes, resp_bytes=resp_bytes,
+                orig_pkts=orig_pkts, resp_pkts=resp_pkts,
+                orig_ip_bytes=orig_ip_bytes, resp_ip_bytes=resp_ip_bytes,
+                conn_state=conn_state, history=history,
+                local_orig=_is_private_ip(src_ip),
+                local_resp=_is_private_ip(dst_ip),
+                ip_proto=ip_proto,
+            ),
+        )
 
-        # Phase 5.2: Emit eCAR FLOW/CONNECT for eCAR-equipped hosts
-        # Use src_ip to find the hostname for this connection
+        # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
+        self.dispatcher.dispatch(event)
+        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
+
+        # eCAR FLOW still via helper (not format-filtered by visibility)
         self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port)
 
         return uid
@@ -1259,9 +1135,10 @@ class ActivityGenerator:
         time: datetime,
         activity_type: str = 'default'
     ) -> None:
-        """Generate bash command history entry (Linux only).
+        """Generate bash command history entry via dispatch.
 
-        Phase 2.10: Linux command-line visibility.
+        Builds a SecurityEvent with ShellContext and dispatches.
+        BashHistoryEmitter.can_handle() filters for Linux-only.
 
         Args:
             user: User executing command
@@ -1269,12 +1146,7 @@ class ActivityGenerator:
             time: Command execution time
             activity_type: Type of activity (process_code, process_build, etc.)
         """
-        os_category = _get_os_category(system.os)
-        if os_category != 'linux':
-            return  # Bash history only for Linux
-
-        if 'bash_history' not in self.emitters:
-            return  # bash_history not enabled
+        from evidenceforge.events.contexts import ShellContext
 
         # Select command based on activity type
         commands = {
@@ -1287,15 +1159,15 @@ class ActivityGenerator:
         command_list = commands.get(activity_type, commands['default'])
         command = _get_rng().choice(command_list)
 
-        event_data = {
-            'timestamp': time,
-            'username': user.username,
-            'hostname': system.hostname,
-            'command': command,
-            'exit_code': 0  # Success
-        }
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="bash_command",
+            host=self._build_host_context(system),
+            auth=AuthContext(username=user.username),
+            shell=ShellContext(command=command),
+        )
 
-        self.emitters['bash_history'].emit_event(event_data)
+        self.dispatcher.dispatch(event)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
 
     def generate_system_process(
@@ -1323,6 +1195,8 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
+        from evidenceforge.events.contexts import ProcessContext
+
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
@@ -1332,68 +1206,39 @@ class ActivityGenerator:
             integrity_level='System',
         )
 
-        os_category = _get_os_category(system.os)
+        # Determine system-level SID and logon ID
+        sid = self.sid_registry.get(username, 'S-1-5-18') if self.sid_registry else 'S-1-5-18'
+        system_logon_ids = {'SYSTEM': '0x3e7', 'LOCAL SERVICE': '0x3e5', 'NETWORK SERVICE': '0x3e4'}
+        logon_id = system_logon_ids.get(username, '0x3e7')
 
-        if os_category == 'windows':
-            sid = self.sid_registry.get(username, 'S-1-5-18') if self.sid_registry else 'S-1-5-18'
-            system_logon_ids = {'SYSTEM': '0x3e7', 'LOCAL SERVICE': '0x3e5', 'NETWORK SERVICE': '0x3e4'}
-            logon_id = system_logon_ids.get(username, '0x3e7')
-            event_data = {
-                'EventID': 4688,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 9999),
-                'SubjectUserSid': sid,
-                'SubjectUserName': username,
-                'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': logon_id,
-                'NewProcessId': f'0x{pid:x}',
-                'NewProcessName': process_name,
-                'TokenElevationType': '%%1936',  # Default token (no UAC split for SYSTEM)
-                'ProcessId': f'0x{parent_pid:x}',
-                'CommandLine': command_line,
-                'TargetUserSid': sid,
-                'TargetUserName': username,
-                'TargetDomainName': 'NT AUTHORITY',
-                'TargetLogonId': logon_id,
-                'ParentProcessName': r'C:\Windows\System32\services.exe',
-                'MandatoryLabel': 'S-1-16-16384',  # System integrity
-            }
-            if 'windows_event_security' in self.emitters:
-                self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="system_process_create",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=username,
+                user_sid=sid,
+                logon_id=logon_id,
+                subject_sid=sid,
+                subject_username=username,
+                subject_domain='NT AUTHORITY',
+                subject_logon_id=logon_id,
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=username,
+                integrity_level='System',
+                logon_id=logon_id,
+                parent_image=r'C:\Windows\System32\services.exe',
+                token_elevation='%%1936',
+                mandatory_label='S-1-16-16384',
+            ),
+        )
 
-        elif os_category == 'linux':
-            if 'syslog' in self.emitters:
-                app_name = process_name.split('/')[-1]
-                # Use cron facility for cron-spawned processes, daemon for others
-                facility = 9 if 'cron' in command_line.lower() else 3
-                self.emitters['syslog'].emit_event({
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'app_name': app_name,
-                    'pid': pid,
-                    'facility': facility,
-                    'severity': 6,
-                    'message': f'{app_name}[{pid}]: started: {command_line}',
-                })
-
-        # eCAR emission (direct, since _emit_ecar_process expects a User object)
-        if 'ecar' in self.emitters:
-            self.emitters['ecar'].emit_event({
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'PROCESS',
-                'action': 'CREATE',
-                'pid': pid,
-                'ppid': parent_pid,
-                'principal': username,
-                'image_path': process_name,
-                'command_line': command_line,
-            })
+        self.dispatcher.dispatch(event)
 
         return pid
 
@@ -1461,20 +1306,21 @@ class ActivityGenerator:
         )
 
         # Emit Zeek dns.log record
-        if 'zeek_dns' in self.emitters:
+        if 'zeek_dns' in self.dispatcher.emitters:
             # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
             if rng.random() < 0.002:
-                self.emitters['zeek_dns'].emit_event({
-                    'ts': dns_time, 'uid': dns_uid,
-                    'id.orig_h': src_ip, 'id.orig_p': src_port,
-                    'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                    'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                    'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                    'qtype': 1, 'qtype_name': 'A',
-                    'rcode': 2, 'rcode_name': 'SERVFAIL',
-                    'AA': False, 'TC': False, 'RD': True, 'RA': True,
-                    'answers': '-', 'TTLs': '-', 'rejected': False,
-                })
+                self.dispatcher.dispatch_raw(RawLogEntry(
+                    timestamp=dns_time, target_emitter='zeek_dns',
+                    data={'ts': dns_time, 'uid': dns_uid,
+                          'id.orig_h': src_ip, 'id.orig_p': src_port,
+                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                          'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                          'qtype': 1, 'qtype_name': 'A',
+                          'rcode': 2, 'rcode_name': 'SERVFAIL',
+                          'AA': False, 'TC': False, 'RD': True, 'RA': True,
+                          'answers': '-', 'TTLs': '-', 'rejected': False},
+                ))
                 return
 
             # Determine query type, query string, and answer
@@ -1539,30 +1385,18 @@ class ActivityGenerator:
             ttls_str = ', '.join([str(ttl)] * num_answers)
 
             # This lookup precedes an actual connection, so always NOERROR
-            self.emitters['zeek_dns'].emit_event({
-                'ts': dns_time,
-                'uid': dns_uid,
-                'id.orig_h': src_ip,
-                'id.orig_p': src_port,
-                'id.resp_h': dns_server_ip,
-                'id.resp_p': 53,
-                'proto': 'udp',
-                'trans_id': rng.randint(1, 65535),
-                'query': query,
-                'qclass': 1,
-                'qclass_name': 'C_INTERNET',
-                'qtype': qtype,
-                'qtype_name': qtype_name,
-                'rcode': 0,
-                'rcode_name': 'NOERROR',
-                'AA': is_internal,
-                'TC': False,
-                'RD': True,
-                'RA': True,
-                'answers': answers,
-                'TTLs': ttls_str,
-                'rejected': False,
-            })
+            self.dispatcher.dispatch_raw(RawLogEntry(
+                timestamp=dns_time, target_emitter='zeek_dns',
+                data={'ts': dns_time, 'uid': dns_uid,
+                      'id.orig_h': src_ip, 'id.orig_p': src_port,
+                      'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                      'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                      'query': query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                      'qtype': qtype, 'qtype_name': qtype_name,
+                      'rcode': 0, 'rcode_name': 'NOERROR',
+                      'AA': is_internal, 'TC': False, 'RD': True, 'RA': True,
+                      'answers': answers, 'TTLs': ttls_str, 'rejected': False},
+            ))
 
             # Phase 6.0: ~20% chance of emitting an additional NXDOMAIN query
             # (suffix search failure, WPAD probe, etc.) alongside the real lookup
@@ -1585,30 +1419,18 @@ class ActivityGenerator:
                     orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
                     src_port=nx_src_port,
                 )
-                self.emitters['zeek_dns'].emit_event({
-                    'ts': nx_time,
-                    'uid': nx_uid,
-                    'id.orig_h': src_ip,
-                    'id.orig_p': nx_src_port,
-                    'id.resp_h': dns_server_ip,
-                    'id.resp_p': 53,
-                    'proto': 'udp',
-                    'trans_id': rng.randint(1, 65535),
-                    'query': nx_query,
-                    'qclass': 1,
-                    'qclass_name': 'C_INTERNET',
-                    'qtype': 1,
-                    'qtype_name': 'A',
-                    'rcode': 3,
-                    'rcode_name': 'NXDOMAIN',
-                    'AA': True,  # AD DNS is authoritative for .corp.local
-                    'TC': False,
-                    'RD': True,
-                    'RA': True,
-                    'answers': '-',
-                    'TTLs': '-',
-                    'rejected': False,
-                })
+                self.dispatcher.dispatch_raw(RawLogEntry(
+                    timestamp=nx_time, target_emitter='zeek_dns',
+                    data={'ts': nx_time, 'uid': nx_uid,
+                          'id.orig_h': src_ip, 'id.orig_p': nx_src_port,
+                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                          'query': nx_query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                          'qtype': 1, 'qtype_name': 'A',
+                          'rcode': 3, 'rcode_name': 'NXDOMAIN',
+                          'AA': True, 'TC': False, 'RD': True, 'RA': True,
+                          'answers': '-', 'TTLs': '-', 'rejected': False},
+                ))
 
     def get_baseline_pattern(
         self,
@@ -1859,46 +1681,27 @@ class ActivityGenerator:
         domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
 
-        event_data = {
-            'EventID': 4624,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'SubjectUserSid': self._get_sid('SYSTEM'),
-            'SubjectUserName': 'SYSTEM',
-            'SubjectDomainName': 'NT AUTHORITY',
-            'SubjectLogonId': '0x3e7',
-            'TargetUserSid': self._get_sid(machine_username),
-            'TargetUserName': machine_username,
-            'TargetDomainName': domain,
-            'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFF):x}',
-            'LogonType': 3,
-            'LogonProcessName': 'Kerberos',
-            'AuthenticationPackageName': 'Kerberos',
-            'WorkstationName': hostname,
-            'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-            'TransmittedServices': '-',
-            'LmPackageName': '-',
-            'KeyLength': 0,
-            'ProcessId': '0x0',
-            'ProcessName': '-',
-            'IpAddress': source_ip,
-            'IpPort': str(rng.randint(49152, 65535)),
-            'ImpersonationLevel': '%%1833',
-            'RestrictedAdminMode': '-',
-            'TargetOutboundUserName': '-',
-            'TargetOutboundDomainName': '-',
-            'VirtualAccount': '%%1843',
-            'TargetLinkedLogonId': '0x0',
-            'ElevatedToken': '%%1842',
-        }
-
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="machine_logon",
+            host=self._build_dc_host_context(dc_hostname),
+            auth=AuthContext(
+                username=machine_username,
+                user_sid=self._get_sid(machine_username),
+                logon_id=f'0x{rng.randint(0x10000, 0xFFFFF):x}',
+                logon_type=3,
+                auth_package='Kerberos',
+                source_ip=source_ip,
+                logon_process='Kerberos',
+                lm_package='-',
+                logon_guid='{00000000-0000-0000-0000-000000000000}',
+                subject_sid=self._get_sid('SYSTEM'),
+                subject_username='SYSTEM',
+                subject_domain='NT AUTHORITY',
+                subject_logon_id='0x3e7',
+            ),
+        )
+        self.dispatcher.dispatch(event)
 
         # Also generate the Kerberos network connection to DC
         self.generate_connection(
@@ -1918,31 +1721,30 @@ class ActivityGenerator:
         domain: str = '',
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
+        from evidenceforge.events.contexts import KerberosContext
+
         domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
-        event_data = {
-            'EventID': 4768,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': username,
-            'TargetDomainName': domain,
-            'TargetSid': self._get_sid(username),
-            'ServiceName': 'krbtgt',
-            'ServiceSid': self._get_sid('krbtgt'),
-            'TicketOptions': '0x40810010',
-            'Status': '0x0',
-            'TicketEncryptionType': '0x12',  # AES-256
-            'PreAuthType': 15,
-            'IpAddress': f'::ffff:{source_ip}',
-            'IpPort': rng.randint(49152, 65535),
-        }
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="kerberos_tgt",
+            host=self._build_dc_host_context(dc_hostname),
+            kerberos=KerberosContext(
+                target_username=username,
+                target_domain=domain,
+                target_sid=self._get_sid(username),
+                service_name='krbtgt',
+                service_sid=self._get_sid('krbtgt'),
+                ticket_options='0x40810010',
+                encryption_type='0x12',
+                pre_auth_type=15,
+                source_ip=f'::ffff:{source_ip}',
+                source_port=rng.randint(49152, 65535),
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
 
     def generate_kerberos_service_ticket(
         self,
@@ -1954,30 +1756,28 @@ class ActivityGenerator:
         domain: str = '',
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
+        from evidenceforge.events.contexts import KerberosContext
+
         domain = domain or getattr(self, '_netbios_domain', 'CORP')
         rng = _get_rng()
-        event_data = {
-            'EventID': 4769,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': f'{username}@{domain}',
-            'TargetDomainName': domain,
-            'ServiceName': service_name,
-            # ServiceSid is the computer account SID of the target server
-            'ServiceSid': self._get_sid(f"{service_name.split('/')[1]}$" if '/' in service_name else service_name),
-            'TicketOptions': '0x40810000',
-            'TicketEncryptionType': '0x12',
-            'IpAddress': f'::ffff:{source_ip}',
-            'IpPort': rng.randint(49152, 65535),
-            'Status': '0x0',
-        }
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="kerberos_service",
+            host=self._build_dc_host_context(dc_hostname),
+            kerberos=KerberosContext(
+                target_username=f'{username}@{domain}',
+                target_domain=domain,
+                service_name=service_name,
+                service_sid=self._get_sid(f"{service_name.split('/')[1]}$" if '/' in service_name else service_name),
+                ticket_options='0x40810000',
+                encryption_type='0x12',
+                source_ip=f'::ffff:{source_ip}',
+                source_port=rng.randint(49152, 65535),
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
 
     def generate_ntlm_validation(
         self,
@@ -1987,23 +1787,17 @@ class ActivityGenerator:
         time: datetime,
     ) -> None:
         """Generate NTLM credential validation event (4776) on the DC."""
-        rng = _get_rng()
-        event_data = {
-            'EventID': 4776,
-            'TimeCreated': time,
-            'Computer': f"{dc_hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-            'Channel': 'Security',
-            'Level': 0,
-            # EventRecordID assigned by WindowsEventEmitter at flush time
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
-            'LogonAccount': username,
-            'SourceWorkstation': workstation,
-            'Status': '0x0',
-        }
-        if 'windows_event_security' in self.emitters:
-            self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="ntlm_validation",
+            host=self._build_dc_host_context(dc_hostname),
+            auth=AuthContext(
+                username=username,
+                source_ip=workstation,  # SourceWorkstation stored in source_ip
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
 
     def _get_next_event_record_id(self, hostname: str = '') -> int:
         """Get next EventRecordID for a specific computer (thread-safe).
@@ -2182,85 +1976,6 @@ class ActivityGenerator:
             return self._WELL_KNOWN_SIDS[username]
         return 'S-1-5-21-0-0-0-0'
 
-    def _emit_ecar_logon(
-        self,
-        user: User,
-        system: System,
-        time: datetime,
-        logon_id: str,
-        logon_type: int,
-        source_ip: str
-    ) -> None:
-        """Emit eCAR USER_SESSION/LOGIN event.
-
-        Phase 2.10: eCAR provides unified EDR/XDR visibility across all OSes.
-
-        Args:
-            user: User logging on
-            system: Target system
-            time: Login timestamp
-            logon_id: Session logon ID
-            logon_type: Logon type (2=interactive, 3=network)
-            source_ip: Source IP address
-        """
-        if 'ecar' not in self.emitters:
-            return  # eCAR not enabled
-
-        event_data = {
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'USER_SESSION',
-            'action': 'LOGIN',
-            'principal': user.username,
-            'src_ip': source_ip,
-        }
-
-        self.emitters['ecar'].emit_event(event_data)
-        logger.debug(f"Generated eCAR logon: {user.username} on {system.hostname}")
-
-    def _emit_ecar_process(
-        self,
-        user: User,
-        system: System,
-        time: datetime,
-        pid: int,
-        parent_pid: int,
-        process_name: str,
-        command_line: str,
-        logon_id: str
-    ) -> None:
-        """Emit eCAR PROCESS/CREATE event.
-
-        Phase 2.10: eCAR provides unified EDR/XDR visibility across all OSes.
-
-        Args:
-            user: User creating the process
-            system: System where process created
-            time: Process creation timestamp
-            pid: Process ID
-            parent_pid: Parent process ID
-            process_name: Executable path
-            command_line: Command line
-            logon_id: Session logon ID
-        """
-        if 'ecar' not in self.emitters:
-            return  # eCAR not enabled
-
-        event_data = {
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'PROCESS',
-            'action': 'CREATE',
-            'pid': pid,
-            'ppid': parent_pid,
-            'principal': user.username,
-            'image_path': process_name,
-            'command_line': command_line,
-        }
-
-        self.emitters['ecar'].emit_event(event_data)
-        logger.debug(f"Generated eCAR process: {process_name} (PID: {pid}) on {system.hostname}")
-
     # Phase 5.2: eCAR object type diversity data pools
     _ECAR_FILE_PATHS_WIN = [
         'C:\\Users\\{user}\\Documents\\report.docx',
@@ -2302,80 +2017,62 @@ class ActivityGenerator:
         self, system: System, time: datetime, pid: int,
         action: str, username: str,
     ) -> None:
-        """Emit eCAR FILE event (CREATE, MODIFY, or DELETE)."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR FILE event via dispatch_raw (CREATE, MODIFY, or DELETE)."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         rng = _get_rng()
         os_cat = _get_os_category(system.os)
         pool = self._ECAR_FILE_PATHS_WIN if os_cat == 'windows' else self._ECAR_FILE_PATHS_LINUX
         path = rng.choice(pool).replace('{user}', username).replace('{rand}', f'{rng.randint(10000, 99999)}')
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'FILE',
-            'action': action,
-            'pid': pid,
-            'principal': username,
-            'file_path': path,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': system.hostname, 'object': 'FILE',
+                  'action': action, 'pid': pid, 'principal': username, 'file_path': path},
+        ))
 
     def _emit_ecar_registry_event(
         self, system: System, time: datetime, pid: int, username: str,
     ) -> None:
-        """Emit eCAR REGISTRY/MODIFY event (Windows only)."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR REGISTRY/MODIFY event via dispatch_raw (Windows only)."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         key, value = _get_rng().choice(self._ECAR_REGISTRY_KEYS)
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'REGISTRY',
-            'action': 'MODIFY',
-            'pid': pid,
-            'principal': username,
-            'registry_key': key,
-            'registry_value': value,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': system.hostname, 'object': 'REGISTRY',
+                  'action': 'MODIFY', 'pid': pid, 'principal': username,
+                  'registry_key': key, 'registry_value': value},
+        ))
 
     def _emit_ecar_flow_event(
         self, src_ip: str, dst_ip: str, dst_port: int,
         time: datetime, hostname: str, pid: int = -1,
         src_port: int = 0, protocol: str = 'tcp',
     ) -> None:
-        """Emit eCAR FLOW/CONNECT event."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR FLOW/CONNECT event via dispatch_raw."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         if src_port == 0:
             src_port = _get_rng().randint(49152, 65535)
-        # DNS (port 53) and NTP (port 123) are UDP
         if dst_port in (53, 123):
             protocol = 'udp'
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': hostname,
-            'object': 'FLOW',
-            'action': 'CONNECT',
-            'pid': pid,
-            'src_ip': src_ip,
-            'src_port': src_port,
-            'dst_ip': dst_ip,
-            'dst_port': dst_port,
-            'protocol': protocol,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': hostname, 'object': 'FLOW',
+                  'action': 'CONNECT', 'pid': pid, 'src_ip': src_ip,
+                  'src_port': src_port, 'dst_ip': dst_ip, 'dst_port': dst_port,
+                  'protocol': protocol},
+        ))
 
     def _emit_ecar_module_event(
         self, system: System, time: datetime, pid: int, username: str,
     ) -> None:
-        """Emit eCAR MODULE/LOAD event (DLL load, Windows only)."""
-        if 'ecar' not in self.emitters:
+        """Emit eCAR MODULE/LOAD event via dispatch_raw (DLL load, Windows only)."""
+        if 'ecar' not in self.dispatcher.emitters:
             return
         dll_path = _get_rng().choice(self._ECAR_DLL_POOL)
-        self.emitters['ecar'].emit_event({
-            'timestamp': time,
-            'hostname': system.hostname,
-            'object': 'MODULE',
-            'action': 'LOAD',
-            'pid': pid,
-            'principal': username,
-            'file_path': dll_path,
-        })
+        self.dispatcher.dispatch_raw(RawLogEntry(
+            timestamp=time, target_emitter='ecar',
+            data={'timestamp': time, 'hostname': system.hostname, 'object': 'MODULE',
+                  'action': 'LOAD', 'pid': pid, 'principal': username, 'file_path': dll_path},
+        ))

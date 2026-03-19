@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from jinja2 import Template
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,32 @@ class LogEmitter(ABC):
             event_data: Event data dictionary with field values
         """
         pass
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Return True if this emitter can render this event type.
+
+        Default: returns False. Subclasses override with _supported_types check.
+        During migration, un-migrated emitters return False for all events
+        (they still work via the old emit_event() path).
+        """
+        return False
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render a SecurityEvent to this emitter's format.
+
+        Default: raises NotImplementedError. Subclasses implement per-type
+        render methods during Phase 7.2 migration.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has not implemented emit() for {event.event_type}"
+        )
+
+    def emit_raw(self, event_data: dict[str, Any]) -> None:
+        """Emit from raw dict -- escape hatch for RawLogEntry.
+
+        Delegates to existing emit_event() pipeline.
+        """
+        self.emit_event(event_data)
 
     @abstractmethod
     def _render_event(self, event_data: dict[str, Any]) -> str:

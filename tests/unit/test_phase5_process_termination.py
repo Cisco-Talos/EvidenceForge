@@ -46,7 +46,7 @@ def timestamp():
 class TestProcessTermination:
     """Test process termination event generation."""
 
-    def test_emits_4689(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_emits_process_terminate(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
         pid = activity_gen.generate_process(
@@ -60,12 +60,11 @@ class TestProcessTermination:
             'C:\\Windows\\System32\\cmd.exe', logon_id
         )
 
-        assert mock_emitters['windows_event_security'].emit_event.called
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4689
-        assert event_data['ProcessId'] == f'0x{pid:x}'
-        assert event_data['ProcessName'] == 'C:\\Windows\\System32\\cmd.exe'
-        assert event_data['Status'] == '0x0'
+        assert mock_emitters['windows_event_security'].emit.called
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "process_terminate"
+        assert event.process.pid == pid
+        assert event.process.image == 'C:\\Windows\\System32\\cmd.exe'
 
     def test_removes_process_from_state(self, activity_gen, test_user, win_system, timestamp, state_manager):
         state_manager.set_current_time(timestamp)
@@ -96,16 +95,14 @@ class TestProcessTermination:
             'C:\\Windows\\System32\\cmd.exe', logon_id
         )
 
-        # Find the TERMINATE call (filter out CREATE calls)
+        # Find the process_terminate event dispatched via emit()
         terminate_calls = [
-            c for c in mock_emitters['ecar'].emit_event.call_args_list
-            if c[0][0].get('action') == 'TERMINATE'
+            c for c in mock_emitters['ecar'].emit.call_args_list
+            if c[0][0].event_type == 'process_terminate'
         ]
         assert len(terminate_calls) == 1
-        event_data = terminate_calls[0][0][0]
-        assert event_data['object'] == 'PROCESS'
-        assert event_data['action'] == 'TERMINATE'
-        assert event_data['pid'] == pid
+        event = terminate_calls[0][0][0]
+        assert event.process.pid == pid
 
     def test_has_subject_sid(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
         sid_registry = {'alice.smith': 'S-1-5-21-123-456-789-1001'}
@@ -123,5 +120,5 @@ class TestProcessTermination:
             'C:\\Windows\\System32\\cmd.exe', logon_id
         )
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['SubjectUserSid'] == 'S-1-5-21-123-456-789-1001'
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.auth.user_sid == 'S-1-5-21-123-456-789-1001'

@@ -12,6 +12,7 @@ from typing import Any
 
 from jinja2 import Template
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -57,6 +58,27 @@ class BashHistoryEmitter(LogEmitter):
     Maintains a dict of _SingleHistoryWriter instances keyed by (username, hostname).
     The parent thread consumes from the queue; dispatch happens in _run().
     """
+
+    _supported_types: set[str] = {"bash_command"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Bash history only for Linux hosts."""
+        return (
+            event.event_type in self._supported_types
+            and event.host is not None
+            and event.host.os_category == "linux"
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Extract fields from SecurityEvent and delegate to existing dispatch."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'username': event.auth.username if event.auth else 'unknown',
+            'hostname': event.host.hostname if event.host else 'unknown',
+            'command': event.shell.command if event.shell else '',
+            'exit_code': event.shell.exit_code if event.shell else 0,
+        }
+        self.emit_event(event_data)
 
     def __init__(
         self,

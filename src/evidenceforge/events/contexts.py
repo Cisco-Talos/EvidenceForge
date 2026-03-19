@@ -1,0 +1,158 @@
+"""Composable context dataclasses for the canonical event model.
+
+Each context represents a domain-specific facet of a security event.
+ActivityGenerator populates contexts; emitters and StateManager read from them.
+All use @dataclass(slots=True) for memory efficiency.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(slots=True)
+class HostContext:
+    """The system where this event occurs."""
+
+    hostname: str
+    ip: str
+    os: str  # e.g., "Windows Server 2019", "Ubuntu 22.04"
+    os_category: str  # "windows" | "linux"
+    system_type: str  # "workstation" | "server" | "domain_controller"
+    domain: str = ""
+    fqdn: str = ""  # Precomputed: hostname.domain (Windows Computer field)
+    netbios_domain: str = ""  # Precomputed: domain.split('.')[0].upper()
+
+
+@dataclass(slots=True)
+class AuthContext:
+    """Authentication/session details."""
+
+    username: str
+    full_name: str = ""
+    user_sid: str = ""
+    logon_id: str = ""  # Allocated by StateManager.create_session()
+    logon_type: int = 2
+    auth_package: str = "Negotiate"
+    result: str = "success"  # "success" | "failure"
+    failure_reason: str = ""  # Windows FailureReason (%%2313, %%2304, %%2307)
+    failure_status: str = ""  # Windows Status (0xc000006d)
+    failure_substatus: str = ""  # Windows SubStatus (0xc000006a, 0xc0000064, etc.)
+    source_ip: str = ""
+    source_port: int = 0
+    elevated: bool = False
+    logon_process: str = ""  # LogonProcessName (User32, Kerberos, NtLmSsp)
+    lm_package: str = ""  # LmPackageName (-, NTLM V2)
+    logon_guid: str = ""  # LogonGuid ({uuid} or null GUID)
+    subject_sid: str = ""  # SubjectUserSid (usually SYSTEM S-1-5-18)
+    subject_username: str = ""  # SubjectUserName (usually SYSTEM)
+    subject_domain: str = ""  # SubjectDomainName (usually NT AUTHORITY)
+    subject_logon_id: str = ""  # SubjectLogonId (usually 0x3e7)
+    reporting_pid: int = 0  # PID of the process reporting this event (e.g., lsass for logons)
+
+
+@dataclass(slots=True)
+class ProcessContext:
+    """Process creation/termination details."""
+
+    pid: int  # Allocated by StateManager.create_process()
+    parent_pid: int
+    image: str  # Full path
+    command_line: str
+    username: str
+    integrity_level: str = "Medium"
+    logon_id: str = ""  # For 4688/4689 SubjectLogonId + TargetLogonId
+    parent_image: str = ""  # ParentProcessName (4688)
+    token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
+    mandatory_label: str = ""  # MandatoryLabel SID
+
+
+@dataclass(slots=True)
+class NetworkContext:
+    """Network connection details -- shared across Zeek, eCAR, Snort."""
+
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    protocol: str  # "tcp" | "udp" | "icmp"
+    service: str = ""
+    zeek_uid: str = ""  # From StateManager.open_connection()
+    conn_id: str = ""  # From StateManager.open_connection()
+    duration: float | None = None
+    orig_bytes: int | None = None
+    resp_bytes: int | None = None
+    orig_pkts: int = 0
+    resp_pkts: int = 0
+    orig_ip_bytes: int | None = None
+    resp_ip_bytes: int | None = None
+    conn_state: str = ""
+    history: str = ""
+    local_orig: bool = True
+    local_resp: bool = False
+    ip_proto: int = 6  # TCP=6, UDP=17, ICMP=1
+    missed_bytes: int = 0
+
+
+@dataclass(slots=True)
+class DnsContext:
+    """DNS query/response details."""
+
+    query: str
+    query_type: str = "A"
+    response_ip: str = ""
+    rcode: str = "NOERROR"
+
+
+@dataclass(slots=True)
+class FileContext:
+    """File operation details."""
+
+    path: str
+    action: str  # "create" | "modify" | "delete" | "read"
+    pid: int = 0
+
+
+@dataclass(slots=True)
+class RegistryContext:
+    """Windows registry operation details."""
+
+    key: str
+    value: str = ""
+    action: str = ""  # "create" | "modify" | "delete"
+    pid: int = 0
+
+
+@dataclass(slots=True)
+class IdsContext:
+    """IDS/IPS alert details for Snort."""
+
+    sid: int
+    message: str
+    classification: str
+    priority: int = 2
+
+
+@dataclass(slots=True)
+class KerberosContext:
+    """Kerberos protocol details for DC events (4768 TGT, 4769 service ticket)."""
+
+    target_username: str
+    target_domain: str
+    target_sid: str = ""
+    service_name: str = ""  # "krbtgt" for TGT, SPN for service ticket
+    service_sid: str = ""
+    ticket_options: str = ""
+    ticket_status: str = "0x0"
+    encryption_type: str = ""  # e.g., "0x12" (AES-256)
+    pre_auth_type: int = 0  # 4768 only
+    source_ip: str = ""  # IPv6-mapped: "::ffff:x.x.x.x"
+    source_port: int = 0
+
+
+@dataclass(slots=True)
+class ShellContext:
+    """Shell command execution details (bash_history)."""
+
+    command: str
+    exit_code: int = 0

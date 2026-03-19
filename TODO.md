@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 6 - Expert-Identified Realism Fixes (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model ✅ COMPLETE (7.1-7.4); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-18 (Improvement loop complete: eval 75.4→90.6, 765 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7 complete: all emission through EventDispatcher, 761 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -974,7 +974,194 @@
   - Fix: use correct labels in ground truth generation
   - Files: `ground_truth.py`
 
+### 6.6 Phase 7 Eval Expert Panel Findings (2026-03-19)
+
+**Source:** 4-expert blind panel A/B comparison on `baseline-test` scenario (old pre-Phase-7 vs new post-Phase-7 data).
+**Eval scores:** Old 82.3/100 → New 83.7/100 (+1.4). Tells: 36 → 30 (-6).
+**Resolved by Phase 7:** 6 tells fixed (lsass PID sharing, PowerShell on Linux, UDP history "DdA", UDP conn_state OTH, missing logoffs, missing service/anonymous logons).
+
+#### New findings (not previously tracked):
+
+**P0 — Instant Giveaways:**
+- [ ] **Fabricated PTR records return forward lookup names** (Expert Panel #EP1)
+  - `140.82.121.4.in-addr.arpa` → `api.github.com`; real rDNS is `lb-140-82-121-4-iad.github.com`
+  - Fix: use realistic rDNS patterns (CDN edge names, cloud instance names)
+  - Files: `activity.py` (REVERSE_DNS map, `_emit_dns_lookup`)
+- [ ] **Cross-provider DNS: Google hostnames resolve to AWS IPs** (Expert Panel #EP2)
+  - `105-10-37-226.bc.googleusercontent.com` → `54.230.26.104` (CloudFront IP)
+  - Fix: ensure generated hostname provider matches the IP provider
+  - Files: `activity.py` (`_generate_random_hostname`)
+- [ ] **`service:"https"` on port 80 connections** (Expert Panel #EP3)
+  - Generator applies scenario service label; Zeek would detect HTTP on port 80
+  - Fix: port-based service override (80→http, 443→https, 22→ssh)
+  - Files: `activity.py` (`generate_connection` or `execute_baseline_activity`)
+
+**P1 — Expert-Level Tells:**
+- [ ] **Every user gets SeDebugPrivilege on 4672** (Expert Panel #EP4)
+  - 4672 privilege list is identical for all users; only admins should have SeDebugPrivilege
+  - Fix: persona-aware privilege lists (admin vs standard user)
+  - Files: `emitters/windows.py` (`_render_logon` 4672 section)
+- [ ] **No Zeek http.log, ssl.log, or files.log** (Expert Panel #EP5)
+  - Only conn.log + dns.log implemented; analysts expect protocol-specific logs
+  - Fix: implement http.log and ssl.log emitters (major feature)
+  - Files: new emitters needed
+- [ ] **No syslog auth.log entries for storyline SSH lateral movement** (Expert Panel #EP6)
+  - SSH to WEB-01/FILES-01 visible in Zeek but no corresponding syslog auth messages
+  - Fix: emit syslog auth entries for storyline SSH connections
+  - Files: `engine.py` (storyline execution), `activity.py`
+- [ ] **SYSTEM process (mimikatz) with explorer.exe parent** (Expert Panel #EP7)
+  - Credential dump as SYSTEM should have implant/cmd.exe parent, not explorer
+  - Fix: storyline processes use correct parent chain from attack sequence
+  - Files: `engine.py` (storyline process creation parent selection)
+- [ ] **DC EventRecordID offset too low** (~11K) (Expert Panel #EP8)
+  - Production DCs have 100K+ events; starting at 11K implies fresh install
+  - Fix: increase DC initial offset to 50K-200K range
+  - Files: `emitters/windows.py` (RecordID counter initialization)
+- [ ] **eCAR ICMP flows use `protocol:"tcp"` instead of `"icmp"`** (Expert Panel #EP9)
+  - ICMP has no ports; eCAR should use protocol:"icmp" or omit ICMP FLOWs
+  - Files: `activity.py` (`_emit_ecar_flow_event`)
+
+**P2 — Polish Issues:**
+- [ ] **Zeek duration has 16+ decimal places** (Expert Panel #EP10)
+  - Real Zeek uses microsecond precision (6 decimal places max)
+  - Fix: round duration to 6 decimal places
+  - Files: `activity.py` (`generate_connection`) or `emitters/zeek.py`
+- [ ] **Mechanically regular Kerberos ticket timing** (Expert Panel #EP11)
+  - TGT/TGS at even ~7-10min intervals; real Kerberos is bursty around user activity
+  - Fix: cluster Kerberos around user activity windows, add jitter
+  - Files: `engine.py` (`_generate_system_traffic` Kerberos section)
+- [ ] **DNS query set too curated — no Windows telemetry noise** (Expert Panel #EP12)
+  - Missing: settings-win.data.microsoft.com, ocsp.digicert.com, *.windowsupdate.com
+  - Fix: add Windows telemetry/OCSP/CRL noise domains to DNS query pool
+  - Files: `activity.py` (`_emit_dns_lookup` or new background DNS method)
+- [ ] **NTP server mismatch: Zeek shows NIST, syslog shows Ubuntu pool** (Expert Panel #EP13)
+  - Cross-source inconsistency between network and host logs
+  - Fix: use same NTP server IPs in both Zeek conn and syslog timesyncd
+  - Files: `engine.py` (`_generate_system_traffic` NTP section)
+- [ ] **UFW BLOCK entries don't appear in Zeek conn.log** (Expert Panel #EP14)
+  - Blocked SYN packets should appear as S0/REJ in Zeek if sensor is on same segment
+  - Fix: emit corresponding Zeek conn records for UFW-blocked connections
+  - Files: `engine.py` (syslog UFW generation)
+- [ ] **Zeek `missed_bytes` always 0** (Expert Panel #EP15)
+  - Real captures have some packet loss; ~1-5% of long connections should have missed_bytes > 0
+  - Fix: probabilistic missed_bytes for long-duration connections
+  - Files: `activity.py` (`generate_connection`)
+- [ ] **Round `.0` timestamps on SSH/ICMP Zeek connections** (Expert Panel #EP16)
+  - Storyline/system connections land on exact seconds; real pcap has fractional precision
+  - Fix: add microsecond jitter to all Zeek timestamps
+  - Files: `engine.py` (storyline/system traffic timestamp generation)
+
+**P3 — Nitpicks:**
+- [ ] **No 4778/4779 (RDP reconnect/disconnect) events** (Expert Panel #EP17)
+  - LogonType 10 (RDP) events present but no corresponding session events
+  - Fix: emit 4778/4779 pairs for RDP logons
+  - Files: `activity.py` or `engine.py`
+
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
+
+---
+
+## Phase 7: Canonical Event Model
+
+**Goal:** Replace manual per-emitter field coordination with a canonical `SecurityEvent` intermediate representation. Eliminates cross-format consistency bugs by construction — two emitters cannot disagree about shared fields because there is only one source of truth.
+
+**PRD:** See `docs/event-model-prd.md` for full design, data model, and rationale.
+
+**Architecture:** Two-phase build + dispatcher. ActivityGenerator allocates IDs from StateManager first, builds complete SecurityEvent second, dispatches to EventDispatcher which routes to StateManager.apply() + matching emitters.
+
+### 7.1 Foundation (events package + dispatcher + base emitter changes) ✅ COMPLETE
+
+- [x] Create `src/evidenceforge/events/__init__.py` — re-exports SecurityEvent, RawLogEntry, all context types
+- [x] Create `src/evidenceforge/events/contexts.py` — all context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`)
+- [x] Create `src/evidenceforge/events/base.py` — `SecurityEvent` and `RawLogEntry` dataclasses
+- [x] Create `src/evidenceforge/events/dispatcher.py` — `EventDispatcher` with `NetworkVisibilityEngine` integration via existing `get_log_formats_for_connection()` API
+- [x] Add `apply(event)` to `state_manager.py` — records state from fully-constructed SecurityEvent (teardown/updates only, no ID allocation)
+- [x] Add `can_handle()`, `emit()`, `emit_raw()` to `emitters/base.py` (non-abstract defaults for backward compat)
+- [x] Implement `_supported_types` on all 8 emitter subclasses (windows, zeek, zeek_dns, ecar, syslog, bash_history, snort, web)
+- [x] Update `engine.py` — create `EventDispatcher`, pass to `ActivityGenerator`
+- [x] Update `ActivityGenerator.__init__()` — accept `dispatcher: EventDispatcher` (optional for backward compat with tests)
+- [x] Add `_build_host_context(system)` helper to ActivityGenerator
+- [x] Write `tests/unit/test_events.py` — 11 tests: event/context construction, defaults, slots enforcement
+- [x] Write `tests/unit/test_dispatcher.py` — 18 tests: routing, visibility filtering, state_manager.apply(), raw escape hatch, emit/emit_raw defaults, _build_host_context
+- [x] Run all existing tests — 793 passed, zero regressions
+
+### 7.2 Migrate Activity Types (one at a time, one commit each)
+
+Migrate each `generate_*` method: refactor to two-phase build + dispatch, implement emitter `_render_{event_type}()` methods, retire corresponding `_emit_ecar_*` helper. Run tests after each.
+
+- [x] **7.2.1** `generate_logon()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor to build SecurityEvent with HostContext + AuthContext
+  - [x] Implement `WindowsEventEmitter._render_logon()`, `SyslogEmitter._render_logon()`, `EcarEmitter._render_logon()`
+  - [x] Auto-create EventDispatcher when not provided (backward compat)
+  - [x] Add fqdn/netbios_domain to HostContext, auth fields to AuthContext
+  - [x] Run tests — 756 passed, zero regressions
+- [x] **7.2.4** `generate_logoff()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor to build SecurityEvent with HostContext + AuthContext
+  - [x] Implement `_render_logoff()` on all 3 emitters
+  - [x] StateManager.apply() handles end_session (no double-call)
+  - [x] Run tests — 757 passed
+- [x] **7.2.5** `generate_failed_logon()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor with AuthContext (result="failure", failure_substatus populated)
+  - [x] Add failure_status/failure_substatus to AuthContext
+  - [x] Implement `_render_failed_logon()` on all 3 emitters
+  - [x] Run tests — 756 passed
+- [x] **7.2.3** `generate_process()` — Windows + eCAR (2 formats; Linux skips native log)
+  - [x] Refactor to build SecurityEvent with ProcessContext
+  - [x] Implement `_render_process_create()` on Windows + eCAR emitters
+  - [x] eCAR file/module/registry helpers remain via emit_event (probabilistic diversity)
+  - [x] Run tests — 756 passed
+- [x] **7.2.6** `generate_process_termination()` — Windows + eCAR (2 formats)
+  - [x] Refactor with ProcessContext; StateManager.apply() handles end_process
+  - [x] Implement `_render_process_terminate()` on Windows + eCAR emitters
+  - [x] Run tests — 756 passed
+- [x] **7.2.8** `generate_system_process()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor with event_type="system_process_create"
+  - [x] Windows: 4688 with NT AUTHORITY domain; Syslog: daemon/cron message; eCAR: reuses process_create
+  - [x] Run tests — 756 passed
+- [x] **7.2.2** `generate_connection()` — Zeek conn (1 format via dispatch; eCAR FLOW still via helper)
+  - [x] Refactor to build SecurityEvent with NetworkContext
+  - [x] Add orig_ip_bytes, resp_ip_bytes, ip_proto, missed_bytes to NetworkContext
+  - [x] Implement ZeekEmitter.emit() for "connection" type
+  - [x] Conn state/history/packet derivation stays in activity.py (connection semantics)
+  - [x] eCAR FLOW/CONNECT remains via _emit_ecar_flow_event helper
+  - [x] Run tests — 756 passed
+- [x] **7.2.7** `generate_bash_command()` — bash_history (1 format)
+  - [x] Add ShellContext (command, exit_code) to contexts.py
+  - [x] Add can_handle/emit to BashHistoryEmitter (Linux-only filter)
+  - [x] Run tests — 763 passed
+- [x] **7.2.9** `generate_machine_account_logon()` — Windows (1 format)
+  - [x] Add _build_dc_host_context helper for raw DC hostname strings
+  - [x] Implement _render_machine_logon on WindowsEmitter (4624 type 3)
+  - [x] Run tests — 763 passed
+- [x] **7.2.10** `generate_kerberos_tgt()` — Windows (1 format)
+  - [x] Add KerberosContext dataclass for 4768/4769 fields
+  - [x] Implement _render_kerberos_tgt on WindowsEmitter (4768)
+  - [x] Run tests — 763 passed
+- [x] **7.2.11** `generate_kerberos_service_ticket()` — Windows (1 format)
+  - [x] Implement _render_kerberos_service on WindowsEmitter (4769)
+  - [x] Run tests — 763 passed
+- [x] **7.2.12** `generate_ntlm_validation()` — Windows (1 format)
+  - [x] Implement _render_ntlm_validation on WindowsEmitter (4776)
+  - [x] Uses AuthContext (not KerberosContext — it's NTLM)
+  - [x] Run tests — 763 passed
+
+### 7.3 Cleanup ✅ COMPLETE
+
+- [x] Remove orphaned `_emit_ecar_logon()` and `_emit_ecar_process()` (dead code from 7.2)
+- [x] Convert 4 active eCAR helpers to `dispatch_raw()` (file, registry, flow, module)
+- [x] Replace `ActivityGenerator.network_visibility` → `self._network_visibility` / `dispatcher.visibility_engine`
+- [x] Replace `self.emitters` eCAR guards → `self.dispatcher.emitters`
+- [x] Verify all tests pass — 761 passing
+
+### 7.4 Remaining Emissions ✅ COMPLETE
+
+- [x] Migrate DNS lookups (`_emit_dns_lookup`) to dispatch_raw — 3 zeek_dns call sites
+- [x] Remove `ActivityGenerator.emitters` dict entirely — all emission via dispatcher
+- [x] Migrate engine.py `_generate_system_traffic` direct emissions to dispatch_raw — 9 call sites (2 Windows, 7 syslog)
+- [x] Update `docs/PRD.md` Post-MVP section with Phase 7 status
+- [x] Final eval comparison: A/B on `baseline-test` — 82.3→83.7, expert panel 36→30 tells
+
+**Phase 7 Milestone:** ✅ All event emission goes through EventDispatcher. 12 activity types use canonical SecurityEvent dispatch; eCAR diversity helpers, DNS lookups, and engine system traffic use dispatch_raw (RawLogEntry). Zero direct `self.emitters[]` bracket access in activity.py. 761+ tests passing, zero regressions.
 
 ---
 

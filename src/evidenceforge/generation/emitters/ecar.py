@@ -6,12 +6,104 @@ from pathlib import Path
 from typing import Any
 from datetime import datetime
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
 
 class EcarEmitter(LogEmitter):
     """Emitter for eCAR (extended Cyber Analytics Repository) format."""
+
+    _supported_types: set[str] = {
+        "logon", "logoff", "failed_logon",
+        "process_create", "process_terminate", "system_process_create",
+    }
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """eCAR handles events regardless of OS (cross-platform EDR)."""
+        return event.event_type in self._supported_types
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Dispatch to per-type render method."""
+        renderer = {
+            "logon": self._render_logon,
+            "logoff": self._render_logoff,
+            "failed_logon": self._render_failed_logon,
+            "process_create": self._render_process_create,
+            "process_terminate": self._render_process_terminate,
+            "system_process_create": self._render_process_create,  # Same rendering
+        }.get(event.event_type)
+        if renderer is None:
+            raise NotImplementedError(
+                f"EcarEmitter: no render method for {event.event_type}"
+            )
+        renderer(event)
+
+    def _render_logon(self, event: SecurityEvent) -> None:
+        """Render eCAR USER_SESSION/LOGIN event."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'USER_SESSION',
+            'action': 'LOGIN',
+            'principal': event.auth.username,
+            'src_ip': event.auth.source_ip,
+        }
+        self.emit_event(event_data)
+
+    def _render_logoff(self, event: SecurityEvent) -> None:
+        """Render eCAR USER_SESSION/LOGOUT event."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'USER_SESSION',
+            'action': 'LOGOUT',
+            'principal': event.auth.username,
+        }
+        self.emit_event(event_data)
+
+    def _render_failed_logon(self, event: SecurityEvent) -> None:
+        """Render eCAR USER_SESSION/LOGIN with failure_reason."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'USER_SESSION',
+            'action': 'LOGIN',
+            'principal': event.auth.username,
+            'src_ip': event.auth.source_ip,
+            'failure_reason': 'bad_password',
+        }
+        self.emit_event(event_data)
+
+    def _render_process_create(self, event: SecurityEvent) -> None:
+        """Render eCAR PROCESS/CREATE event."""
+        proc = event.process
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'PROCESS',
+            'action': 'CREATE',
+            'pid': proc.pid,
+            'ppid': proc.parent_pid,
+            'principal': proc.username,
+            'image_path': proc.image,
+            'command_line': proc.command_line,
+        }
+        self.emit_event(event_data)
+
+    def _render_process_terminate(self, event: SecurityEvent) -> None:
+        """Render eCAR PROCESS/TERMINATE event."""
+        proc = event.process
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'PROCESS',
+            'action': 'TERMINATE',
+            'pid': proc.pid,
+            'principal': proc.username,
+            'image_path': proc.image,
+        }
+        self.emit_event(event_data)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Route to threaded or non-threaded path."""

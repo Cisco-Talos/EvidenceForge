@@ -62,9 +62,9 @@ class TestConnStateDistribution:
                 orig_bytes=500,
                 resp_bytes=1000,
             )
-            if mock_emitters['zeek_conn'].emit_event.called:
-                event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-                states.add(event_data['conn_state'])
+            if mock_emitters['zeek_conn'].emit.called:
+                event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+                states.add(event.network.conn_state)
 
         # Should see at least 2 different states in 200 connections
         assert len(states) >= 2, f"Only saw states: {states}"
@@ -72,7 +72,6 @@ class TestConnStateDistribution:
     def test_history_matches_conn_state(self, activity_gen, timestamp, state_manager, mock_emitters):
         """History string should be a valid pattern for its conn_state."""
         from evidenceforge.generation.activity import TCP_CONN_STATE_DISTRIBUTION
-        # Build set of valid histories per conn_state
         valid_histories: dict[str, set[str]] = {}
         for state, _, hist in TCP_CONN_STATE_DISTRIBUTION:
             valid_histories.setdefault(state, set()).add(hist)
@@ -90,10 +89,10 @@ class TestConnStateDistribution:
                 orig_bytes=500,
                 resp_bytes=1000,
             )
-            if mock_emitters['zeek_conn'].emit_event.called:
-                event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-                state = event_data['conn_state']
-                history = event_data['history']
+            if mock_emitters['zeek_conn'].emit.called:
+                event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+                state = event.network.conn_state
+                history = event.network.history
                 assert history in valid_histories.get(state, set()), \
                     f"History '{history}' not valid for state '{state}'"
 
@@ -105,24 +104,21 @@ class TestConnStateByteConsistency:
         """S0 connections should have resp_bytes=0 and no duration."""
         state_manager.set_current_time(timestamp)
 
-        # Generate connection with no duration → S0
         activity_gen.generate_connection(
             src_ip="10.0.10.1",
             dst_ip="93.184.216.34",
             time=timestamp,
             dst_port=443,
-            # No duration → forced S0
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['conn_state'] == 'S0'
-        assert event_data['duration'] is None
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.conn_state == 'S0'
+        assert event.network.duration is None
 
     def test_rej_no_resp_bytes(self, activity_gen, timestamp, state_manager, mock_emitters):
         """REJ connections should have resp_bytes=0."""
         state_manager.set_current_time(timestamp)
 
-        # We need to generate many connections to hit REJ (2% chance)
         rej_found = False
         for i in range(500):
             mock_emitters['zeek_conn'].reset_mock()
@@ -135,13 +131,12 @@ class TestConnStateByteConsistency:
                 orig_bytes=500,
                 resp_bytes=1000,
             )
-            if mock_emitters['zeek_conn'].emit_event.called:
-                event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-                if event_data['conn_state'] == 'REJ':
-                    assert event_data['resp_bytes'] == 0
-                    assert event_data['duration'] is None
+            if mock_emitters['zeek_conn'].emit.called:
+                event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+                if event.network.conn_state == 'REJ':
+                    assert event.network.resp_bytes == 0
+                    assert event.network.duration is None
                     rej_found = True
                     break
 
-        # REJ should appear within 500 connections (2% = ~10 expected)
         assert rej_found, "No REJ connection found in 500 attempts"

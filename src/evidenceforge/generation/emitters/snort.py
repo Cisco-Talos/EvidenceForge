@@ -10,6 +10,8 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class SnortEmitter(LogEmitter):
     """Emitter for Snort/Suricata fast alert format."""
 
+    _supported_types: set[str] = set()
+
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Route to threaded or non-threaded path."""
         if self.threaded:

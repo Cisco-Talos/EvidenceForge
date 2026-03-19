@@ -5,10 +5,12 @@ EventRecordIDs in sorted order (ensuring monotonic IDs match chronological
 order), then renders to XML and writes to disk.
 """
 
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -21,7 +23,366 @@ class WindowsEventEmitter(LogEmitter):
     EventRecordIDs to be assigned after chronological sorting, ensuring
     higher RecordID always corresponds to same-or-later timestamp (matching
     real Windows Event Log behavior).
+
+    _supported_types will be populated during Phase 7.2 migration.
     """
+
+    _supported_types: set[str] = {
+        "logon", "logoff", "failed_logon",
+        "process_create", "process_terminate", "system_process_create",
+        "machine_logon", "kerberos_tgt", "kerberos_service", "ntlm_validation",
+    }
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Windows emitter handles events on Windows hosts."""
+        return (
+            event.event_type in self._supported_types
+            and event.host is not None
+            and event.host.os_category == "windows"
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Dispatch to per-type render method."""
+        renderer = {
+            "logon": self._render_logon,
+            "logoff": self._render_logoff,
+            "failed_logon": self._render_failed_logon,
+            "process_create": self._render_process_create,
+            "process_terminate": self._render_process_terminate,
+            "system_process_create": self._render_system_process_create,
+            "machine_logon": self._render_machine_logon,
+            "kerberos_tgt": self._render_kerberos_tgt,
+            "kerberos_service": self._render_kerberos_service,
+            "ntlm_validation": self._render_ntlm_validation,
+        }.get(event.event_type)
+        if renderer is None:
+            raise NotImplementedError(
+                f"WindowsEventEmitter: no render method for {event.event_type}"
+            )
+        renderer(event)
+
+    def _render_logon(self, event: SecurityEvent) -> None:
+        """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4624,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': auth.logon_id,
+            'LogonType': auth.logon_type,
+            'WorkstationName': host.hostname,
+            'ProcessId': f'0x{auth.reporting_pid:x}' if auth.reporting_pid else '0x2e0',
+            'ProcessName': r'C:\Windows\System32\lsass.exe',
+            'IpAddress': auth.source_ip,
+            'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            'LogonProcessName': auth.logon_process,
+            'AuthenticationPackageName': auth.auth_package,
+            'LmPackageName': auth.lm_package,
+            'LogonGuid': auth.logon_guid,
+        }
+        self.emit_event(event_data)
+
+        # 4672 special privileges (when auth.elevated is True)
+        if auth.elevated:
+            priv_data = {
+                'EventID': 4672,
+                'TimeCreated': event.timestamp,
+                'Computer': host.fqdn,
+                'Channel': 'Security',
+                'Level': 0,
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': rng.randint(100, 500),
+                'SubjectUserSid': auth.user_sid,
+                'SubjectUserName': auth.username,
+                'SubjectDomainName': host.netbios_domain,
+                'SubjectLogonId': auth.logon_id,
+                'PrivilegeList': (
+                    'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
+                    'SeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
+                    'SeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\t'
+                    'SeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
+                    'SeDelegateSessionUserImpersonatePrivilege'
+                ),
+            }
+            self.emit_event(priv_data)
+
+    def _render_logoff(self, event: SecurityEvent) -> None:
+        """Render Windows 4634 (logoff)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4634,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': auth.logon_id,
+            'LogonType': auth.logon_type,
+        }
+        self.emit_event(event_data)
+
+    def _render_failed_logon(self, event: SecurityEvent) -> None:
+        """Render Windows 4625 (failed logon)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4625,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'Status': auth.failure_status,
+            'SubStatus': auth.failure_substatus,
+            'FailureReason': auth.failure_reason,
+            'LogonType': auth.logon_type,
+            'IpAddress': auth.source_ip,
+            'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+        }
+        self.emit_event(event_data)
+
+    def _render_process_create(self, event: SecurityEvent) -> None:
+        """Render Windows 4688 (new process created)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4688,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.user_sid,
+            'SubjectUserName': auth.username,
+            'SubjectDomainName': host.netbios_domain,
+            'SubjectLogonId': proc.logon_id,
+            'NewProcessId': f'0x{proc.pid:x}',
+            'NewProcessName': proc.image,
+            'TokenElevationType': proc.token_elevation or '%%1938',
+            'ProcessId': f'0x{proc.parent_pid:x}',
+            'CommandLine': proc.command_line,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': proc.logon_id,
+            'ParentProcessName': proc.parent_image,
+            'MandatoryLabel': proc.mandatory_label or 'S-1-16-8192',
+        }
+        self.emit_event(event_data)
+
+    def _render_process_terminate(self, event: SecurityEvent) -> None:
+        """Render Windows 4689 (process exited)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4689,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': auth.user_sid,
+            'SubjectUserName': auth.username,
+            'SubjectDomainName': host.netbios_domain,
+            'SubjectLogonId': proc.logon_id,
+            'Status': '0x0',
+            'ProcessId': f'0x{proc.pid:x}',
+            'ProcessName': proc.image,
+        }
+        self.emit_event(event_data)
+
+    def _render_system_process_create(self, event: SecurityEvent) -> None:
+        """Render Windows 4688 for system-account process (SYSTEM, LOCAL SERVICE, etc.)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4688,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'NewProcessId': f'0x{proc.pid:x}',
+            'NewProcessName': proc.image,
+            'TokenElevationType': proc.token_elevation or '%%1936',
+            'ProcessId': f'0x{proc.parent_pid:x}',
+            'CommandLine': proc.command_line,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': auth.subject_domain,
+            'TargetLogonId': proc.logon_id,
+            'ParentProcessName': proc.parent_image,
+            'MandatoryLabel': proc.mandatory_label or 'S-1-16-16384',
+        }
+        self.emit_event(event_data)
+
+    def _render_machine_logon(self, event: SecurityEvent) -> None:
+        """Render Windows 4624 for machine account logon (type 3 on DC)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
+        workstation = auth.username.rstrip('$') if auth.username.endswith('$') else auth.username
+
+        event_data = {
+            'EventID': 4624,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': auth.logon_id,
+            'LogonType': 3,
+            'LogonProcessName': auth.logon_process,
+            'AuthenticationPackageName': auth.auth_package,
+            'WorkstationName': workstation,
+            'LogonGuid': auth.logon_guid,
+            'TransmittedServices': '-',
+            'LmPackageName': auth.lm_package,
+            'KeyLength': 0,
+            'ProcessId': '0x0',
+            'ProcessName': '-',
+            'IpAddress': auth.source_ip,
+            'IpPort': str(rng.randint(49152, 65535)),
+            'ImpersonationLevel': '%%1833',
+            'RestrictedAdminMode': '-',
+            'TargetOutboundUserName': '-',
+            'TargetOutboundDomainName': '-',
+            'VirtualAccount': '%%1843',
+            'TargetLinkedLogonId': '0x0',
+            'ElevatedToken': '%%1842',
+        }
+        self.emit_event(event_data)
+
+    def _render_kerberos_tgt(self, event: SecurityEvent) -> None:
+        """Render Windows 4768 (Kerberos TGT request)."""
+        rng = random.Random()
+        krb = event.kerberos
+        host = event.host
+
+        event_data = {
+            'EventID': 4768,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': krb.target_username,
+            'TargetDomainName': krb.target_domain,
+            'TargetSid': krb.target_sid,
+            'ServiceName': krb.service_name,
+            'ServiceSid': krb.service_sid,
+            'TicketOptions': krb.ticket_options,
+            'Status': krb.ticket_status,
+            'TicketEncryptionType': krb.encryption_type,
+            'PreAuthType': krb.pre_auth_type,
+            'IpAddress': krb.source_ip,
+            'IpPort': krb.source_port,
+        }
+        self.emit_event(event_data)
+
+    def _render_kerberos_service(self, event: SecurityEvent) -> None:
+        """Render Windows 4769 (Kerberos service ticket request)."""
+        rng = random.Random()
+        krb = event.kerberos
+        host = event.host
+
+        event_data = {
+            'EventID': 4769,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': krb.target_username,
+            'TargetDomainName': krb.target_domain,
+            'ServiceName': krb.service_name,
+            'ServiceSid': krb.service_sid,
+            'TicketOptions': krb.ticket_options,
+            'TicketEncryptionType': krb.encryption_type,
+            'IpAddress': krb.source_ip,
+            'IpPort': krb.source_port,
+            'Status': krb.ticket_status,
+        }
+        self.emit_event(event_data)
+
+    def _render_ntlm_validation(self, event: SecurityEvent) -> None:
+        """Render Windows 4776 (NTLM credential validation)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4776,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
+            'LogonAccount': auth.username,
+            'SourceWorkstation': auth.source_ip,  # workstation stored in source_ip
+            'Status': '0x0',
+        }
+        self.emit_event(event_data)
 
     def __init__(
         self,

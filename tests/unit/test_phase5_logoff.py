@@ -59,11 +59,11 @@ class TestLogoffWindows:
 
         activity_gen.generate_logoff(test_user, win_system, timestamp, logon_id)
 
-        assert mock_emitters['windows_event_security'].emit_event.called
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4634
-        assert event_data['TargetUserName'] == 'alice.smith'
-        assert event_data['TargetLogonId'] == logon_id
+        assert mock_emitters['windows_event_security'].emit.called
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "logoff"
+        assert event.auth.username == 'alice.smith'
+        assert event.auth.logon_id == logon_id
 
     def test_logoff_ends_session(self, activity_gen, test_user, win_system, timestamp, state_manager):
         state_manager.set_current_time(timestamp)
@@ -80,8 +80,8 @@ class TestLogoffWindows:
 
         activity_gen.generate_logoff(test_user, win_system, timestamp, logon_id, logon_type=3)
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['LogonType'] == 3
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.auth.logon_type == 3
 
     def test_logoff_emits_ecar_logout(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -90,11 +90,10 @@ class TestLogoffWindows:
 
         activity_gen.generate_logoff(test_user, win_system, timestamp, logon_id)
 
-        assert mock_emitters['ecar'].emit_event.called
-        event_data = mock_emitters['ecar'].emit_event.call_args[0][0]
-        assert event_data['object'] == 'USER_SESSION'
-        assert event_data['action'] == 'LOGOUT'
-        assert event_data['principal'] == 'alice.smith'
+        assert mock_emitters['ecar'].emit.called
+        event = mock_emitters['ecar'].emit.call_args[0][0]
+        assert event.event_type == "logoff"
+        assert event.auth.username == 'alice.smith'
 
 
 class TestLogoffLinux:
@@ -107,19 +106,35 @@ class TestLogoffLinux:
 
         activity_gen.generate_logoff(test_user, linux_system, timestamp, logon_id)
 
-        assert mock_emitters['syslog'].emit_event.called
-        event_data = mock_emitters['syslog'].emit_event.call_args[0][0]
-        assert 'session closed' in event_data['message']
-        assert 'alice.smith' in event_data['message']
+        assert mock_emitters['syslog'].emit.called
+        event = mock_emitters['syslog'].emit.call_args[0][0]
+        assert event.event_type == "logoff"
+        assert event.auth.username == 'alice.smith'
 
-    def test_logoff_linux_does_not_emit_windows(self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters):
+    def test_logoff_linux_does_not_emit_windows(self, test_user, linux_system, timestamp, state_manager):
+        """Logoff on Linux should not dispatch to Windows emitter."""
+        # Use real emitter can_handle logic by setting return values on mocks
+        win_mock = Mock()
+        win_mock.can_handle = Mock(return_value=False)
+        syslog_mock = Mock()
+        syslog_mock.can_handle = Mock(return_value=True)
+        ecar_mock = Mock()
+        ecar_mock.can_handle = Mock(return_value=True)
+        emitters = {
+            'windows_event_security': win_mock,
+            'syslog': syslog_mock,
+            'ecar': ecar_mock,
+            'zeek_conn': Mock(),
+        }
+        gen = ActivityGenerator(state_manager, emitters)
         state_manager.set_current_time(timestamp)
-        logon_id = activity_gen.generate_logon(test_user, linux_system, timestamp)
-        mock_emitters['windows_event_security'].reset_mock()
+        logon_id = gen.generate_logon(test_user, linux_system, timestamp)
+        win_mock.reset_mock()
+        win_mock.can_handle = Mock(return_value=False)
 
-        activity_gen.generate_logoff(test_user, linux_system, timestamp, logon_id)
+        gen.generate_logoff(test_user, linux_system, timestamp, logon_id)
 
-        assert not mock_emitters['windows_event_security'].emit_event.called
+        assert not win_mock.emit.called
 
     def test_logoff_linux_emits_ecar_logout(self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -128,9 +143,9 @@ class TestLogoffLinux:
 
         activity_gen.generate_logoff(test_user, linux_system, timestamp, logon_id)
 
-        assert mock_emitters['ecar'].emit_event.called
-        event_data = mock_emitters['ecar'].emit_event.call_args[0][0]
-        assert event_data['action'] == 'LOGOUT'
+        assert mock_emitters['ecar'].emit.called
+        event = mock_emitters['ecar'].emit.call_args[0][0]
+        assert event.event_type == "logoff"
 
 
 class TestLogoffNoEcar:
@@ -147,5 +162,5 @@ class TestLogoffNoEcar:
         logon_id = gen.generate_logon(user, system, timestamp)
         gen.generate_logoff(user, system, timestamp, logon_id)
 
-        # Should not raise, 4634 should still be emitted
-        assert emitters['windows_event_security'].emit_event.called
+        # Should not raise, logoff SecurityEvent dispatched
+        assert emitters['windows_event_security'].emit.called

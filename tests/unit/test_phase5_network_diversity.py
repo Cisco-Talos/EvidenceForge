@@ -111,8 +111,8 @@ class TestDnsLookupEmission:
         )
         # Should emit to zeek_dns (first call is the actual NOERROR lookup;
         # additional NXDOMAIN background queries may follow)
-        assert mock_emitters['zeek_dns'].emit_event.called
-        dns_event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
+        assert mock_emitters['zeek_dns'].emit_raw.called
+        dns_event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
         # Query type varies (A, AAAA, PTR, SRV, MX) — validate based on type
         qtype_name = dns_event['qtype_name']
         if qtype_name == 'A':
@@ -140,10 +140,10 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        # Should also emit a UDP/53 conn record
-        assert mock_emitters['zeek_conn'].emit_event.called
-        conn_event = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert conn_event.get('proto') == 'udp' or conn_event.get('id.resp_p') == 53
+        # Should also emit a UDP/53 conn record via dispatch
+        assert mock_emitters['zeek_conn'].emit.called
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.protocol == 'udp' or event.network.dst_port == 53
 
     def test_dns_timestamp_precedes_connection_time(self, activity_gen, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -152,7 +152,7 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        dns_event = mock_emitters['zeek_dns'].emit_event.call_args[0][0]
+        dns_event = mock_emitters['zeek_dns'].emit_raw.call_args[0][0]
         # DNS timestamp should be before the connection timestamp
         assert dns_event['ts'] < timestamp
 
@@ -165,12 +165,12 @@ class TestDnsLookupEmission:
             time=timestamp,
         )
         # Get the first dns.log event (the NOERROR lookup)
-        dns_event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
+        dns_event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
         dns_uid = dns_event['uid']
 
-        # Get the first conn.log event (the UDP/53 record)
-        conn_event = mock_emitters['zeek_conn'].emit_event.call_args_list[0][0][0]
-        conn_uid = conn_event['uid']
+        # Get the first conn.log event (the UDP/53 record) — dispatched via emit()
+        conn_event = mock_emitters['zeek_conn'].emit.call_args_list[0][0][0]
+        conn_uid = conn_event.network.zeek_uid
 
         # UIDs must match — this is how Zeek correlates logs
         assert dns_uid == conn_uid, (
@@ -208,13 +208,13 @@ class TestDnsQueryTypeSemantics:
         qtypes_seen = set()
         for _ in range(200):
             state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
-            mock_emitters['zeek_dns'].emit_event.reset_mock()
+            mock_emitters['zeek_dns'].emit_raw.reset_mock()
             activity_gen._emit_dns_lookup(
                 src_ip='10.0.10.1', dst_ip='172.217.14.206',
                 time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             )
-            if mock_emitters['zeek_dns'].emit_event.called:
-                event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
+            if mock_emitters['zeek_dns'].emit_raw.called:
+                event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
                 qtypes_seen.add(event['qtype_name'])
         assert 'CNAME' not in qtypes_seen, "CNAME should never be an explicit qtype"
 
@@ -222,13 +222,13 @@ class TestDnsQueryTypeSemantics:
         """AAAA queries must return IPv6 addresses."""
         for _ in range(100):
             state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
-            mock_emitters['zeek_dns'].emit_event.reset_mock()
+            mock_emitters['zeek_dns'].emit_raw.reset_mock()
             activity_gen._emit_dns_lookup(
                 src_ip='10.0.10.1', dst_ip='172.217.14.206',
                 time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             )
-            if mock_emitters['zeek_dns'].emit_event.called:
-                event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
+            if mock_emitters['zeek_dns'].emit_raw.called:
+                event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
                 if event['qtype_name'] == 'AAAA':
                     assert ':' in event['answers'], (
                         f"AAAA answer must be IPv6, got: {event['answers']}"
@@ -240,13 +240,13 @@ class TestDnsQueryTypeSemantics:
         """PTR queries must use in-addr.arpa format."""
         for _ in range(200):
             state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
-            mock_emitters['zeek_dns'].emit_event.reset_mock()
+            mock_emitters['zeek_dns'].emit_raw.reset_mock()
             activity_gen._emit_dns_lookup(
                 src_ip='10.0.10.1', dst_ip='172.217.14.206',
                 time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             )
-            if mock_emitters['zeek_dns'].emit_event.called:
-                event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
+            if mock_emitters['zeek_dns'].emit_raw.called:
+                event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
                 if event['qtype_name'] == 'PTR':
                     assert event['query'].endswith('.in-addr.arpa'), (
                         f"PTR query must end with .in-addr.arpa, got: {event['query']}"
@@ -261,13 +261,13 @@ class TestDnsQueryTypeSemantics:
         """SRV queries should appear for AD service discovery."""
         for _ in range(300):
             state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
-            mock_emitters['zeek_dns'].emit_event.reset_mock()
+            mock_emitters['zeek_dns'].emit_raw.reset_mock()
             activity_gen._emit_dns_lookup(
                 src_ip='10.0.10.1', dst_ip='172.217.14.206',
                 time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             )
-            if mock_emitters['zeek_dns'].emit_event.called:
-                event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
+            if mock_emitters['zeek_dns'].emit_raw.called:
+                event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
                 if event['qtype_name'] == 'SRV':
                     assert event['query'].startswith('_'), (
                         f"SRV query should start with _, got: {event['query']}"

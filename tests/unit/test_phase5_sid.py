@@ -98,11 +98,11 @@ class TestSIDInWindowsEvents:
         state_manager.set_current_time(timestamp)
         activity_gen.generate_logon(test_user, test_system, timestamp)
 
-        # First call is always 4624 (may also emit 4672 for special privileges)
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert event_data['SubjectUserSid'] == 'S-1-5-18'  # SYSTEM
-        assert SID_PATTERN.match(event_data['TargetUserSid'])
-        assert event_data['TargetUserSid'] == activity_gen._get_sid('alice.smith')
+        # Logon now dispatched via SecurityEvent
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.auth.subject_sid == 'S-1-5-18'  # SYSTEM
+        assert SID_PATTERN.match(event.auth.user_sid)
+        assert event.auth.user_sid == activity_gen._get_sid('alice.smith')
 
     def test_logoff_4634_has_sid(self, activity_gen, test_user, test_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -111,10 +111,11 @@ class TestSIDInWindowsEvents:
 
         activity_gen.generate_logoff(test_user, test_system, timestamp, logon_id)
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4634
-        assert SID_PATTERN.match(event_data['TargetUserSid'])
-        assert event_data['TargetUserSid'] == activity_gen._get_sid('alice.smith')
+        # Logoff dispatched via SecurityEvent
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "logoff"
+        assert SID_PATTERN.match(event.auth.user_sid)
+        assert event.auth.user_sid == activity_gen._get_sid('alice.smith')
 
     def test_process_4688_has_sids(self, activity_gen, test_user, test_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -126,10 +127,11 @@ class TestSIDInWindowsEvents:
             'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
         )
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4688
-        assert SID_PATTERN.match(event_data['SubjectUserSid'])
-        assert event_data['SubjectUserSid'] == activity_gen._get_sid('alice.smith')
+        # Process dispatched via SecurityEvent
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "process_create"
+        assert SID_PATTERN.match(event.auth.user_sid)
+        assert event.auth.user_sid == activity_gen._get_sid('alice.smith')
 
     def test_no_sid_registry_uses_fallback(self, state_manager, mock_emitters, timestamp):
         """ActivityGenerator without sid_registry still works with fallback SIDs."""
@@ -140,10 +142,10 @@ class TestSIDInWindowsEvents:
 
         gen.generate_logon(user, system, timestamp)
 
-        # First call is always 4624 (may also emit 4672 for special privileges)
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert event_data['SubjectUserSid'] == 'S-1-5-18'  # SYSTEM always known
-        assert event_data['TargetUserSid'] == 'S-1-5-21-0-0-0-0'  # Fallback
+        # Logon dispatched via SecurityEvent
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.auth.subject_sid == 'S-1-5-18'  # SYSTEM always known
+        assert event.auth.user_sid == 'S-1-5-21-0-0-0-0'  # Fallback
 
 
 class TestEngineSIDRegistry:

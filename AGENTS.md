@@ -141,6 +141,12 @@ evidence-forge/
 │       │   ├── format_def.py    # Pydantic models for format definitions
 │       │   └── state.py         # Runtime state models (dataclasses)
 │       │
+│       ├── events/                  # Canonical event model (intermediate representation)
+│       │   ├── __init__.py          # Re-exports SecurityEvent, RawLogEntry, all contexts
+│       │   ├── base.py              # SecurityEvent, RawLogEntry dataclasses
+│       │   ├── contexts.py          # Composable context dataclasses (HostContext, AuthContext, etc.)
+│       │   └── dispatcher.py        # EventDispatcher (routes events to StateManager + emitters)
+│       │
 │       ├── validation/
 │       │   ├── __init__.py
 │       │   └── schema.py        # Pydantic-based schema validation
@@ -149,7 +155,7 @@ evidence-forge/
 │       │   ├── __init__.py
 │       │   ├── engine.py        # Main generation orchestrator (includes persona logic)
 │       │   ├── state_manager.py # State tracking (sessions, processes, connections)
-│       │   ├── activity.py      # Activity script execution (includes persona behavior)
+│       │   ├── activity.py      # Activity generation (builds SecurityEvents, dispatches via EventDispatcher)
 │       │   ├── network_visibility.py  # Network visibility/perspective logic
 │       │   └── emitters/
 │       │       ├── __init__.py
@@ -559,6 +565,47 @@ def redact_secrets(obj: dict[str, Any]) -> dict[str, Any]:
 
 ## Key Architecture Patterns
 
+### Canonical Event Model
+
+The generation engine uses a **canonical event model** -- an intermediate representation layer between activity generation and log rendering. Instead of ActivityGenerator calling each emitter separately with manually-coordinated fields, it builds a single `SecurityEvent` object that carries all shared metadata. An `EventDispatcher` routes the event to StateManager and to matching emitters.
+
+**Core principle: consistency by construction, not by coordination.** Two emitters cannot disagree about a port number because there is only one port number -- on the event object.
+
+**Two-phase build + dispatch pattern:**
+
+```python
+def generate_logon(self, user, system, time, logon_type=2, source_ip=None):
+    # Phase 1: Allocate IDs from StateManager
+    logon_id = self.state_manager.create_session(...)
+
+    # Phase 2: Build complete SecurityEvent
+    event = SecurityEvent(
+        timestamp=time,
+        event_type="logon",
+        host=self._build_host_context(system),
+        auth=AuthContext(username=user.username, logon_id=logon_id, ...),
+    )
+
+    # Phase 3: Dispatch (routes to matching emitters)
+    self.dispatcher.dispatch(event)
+    return logon_id
+```
+
+**Key types** (all in `src/evidenceforge/events/`):
+- `SecurityEvent` -- Canonical event carrying composable context objects
+- `RawLogEntry` -- Escape hatch for single-format entries that bypass the event model
+- Context dataclasses: `HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`
+- `EventDispatcher` -- Routes events to `StateManager.apply()` + matching emitters, with network visibility filtering via `NetworkVisibilityEngine.get_log_formats_for_connection()`
+
+**Event model rules:**
+- ActivityGenerator builds `SecurityEvent` objects; it never calls emitter methods directly
+- IDs (logon_id, pid, zeek_uid) are allocated by StateManager *before* building the SecurityEvent (two-phase build)
+- `StateManager.apply()` records state from a fully-constructed event; it does not allocate IDs
+- Each emitter declares `_supported_types` and implements `can_handle(event)` for self-selection
+- `RawLogEntry` is the escape hatch for simple, single-format log entries -- use sparingly
+- Events are transient -- they are GC'd after dispatch; StateManager owns durable state
+- Full design details in `docs/event-model-prd.md`
+
 ### LLM Client Abstraction (Future)
 
 The LLM client abstraction is planned for future built-in LLM integration. Currently, scenario creation is handled by Claude Code Skills (external to the codebase). The patterns below are kept as reference for when the `llm/` module is implemented.
@@ -792,7 +839,8 @@ class StateManager:
 **State rules:**
 - StateManager is the ONLY place to track sessions, processes, connections
 - Emitters READ state (to get LogonIDs, PIDs for events)
-- Orchestrator WRITES state (creates sessions/processes as scenario executes)
+- ActivityGenerator WRITES state (allocates IDs via `create_session()`, `create_process()`, `open_connection()` before building SecurityEvents)
+- `apply(event)` records state from a fully-constructed `SecurityEvent` — handles teardown (logoff, process termination) and updates (connection bytes). Does NOT allocate IDs.
 - No automatic cleanup (realistic incompleteness is acceptable per PRD)
 - Thread-safe for reads, single-threaded for writes
 
@@ -802,87 +850,51 @@ All log format emitters inherit from `LogEmitter` ABC:
 
 ```python
 from abc import ABC, abstractmethod
-from pathlib import Path
+from evidenceforge.events import SecurityEvent
 
 class LogEmitter(ABC):
     """Base class for all log format emitters."""
 
-    def __init__(self, output_path: Path, state_manager: StateManager):
-        self.output_path = output_path
-        self.state_manager = state_manager
-        self._buffer: list[str] = []
-        self._buffer_size = 10_000  # Flush every 10K events
+    _supported_types: set[str] = set()  # Overridden by each subclass
 
     @abstractmethod
-    def emit_event(self, event: Event) -> None:
-        """Emit a single event to the log.
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Return True if this emitter can render this event type."""
+        ...
 
-        Args:
-            event: Event to emit (type depends on emitter)
+    @abstractmethod
+    def emit(self, event: SecurityEvent) -> None:
+        """Render a SecurityEvent to this emitter's format.
+
+        Implementations build a field dict from SecurityEvent contexts,
+        then pass it to the existing Jinja2 template for final string rendering.
         """
-        pass
+        ...
+
+    def emit_raw(self, event_data: dict[str, Any]) -> None:
+        """Emit from raw dict -- used by RawLogEntry escape hatch."""
+        ...
 
     @abstractmethod
     def flush(self) -> None:
         """Flush buffered events to disk."""
-        pass
-
-    def _write_buffered(self, line: str) -> None:
-        """Add line to buffer, flush if needed."""
-        self._buffer.append(line)
-        if len(self._buffer) >= self._buffer_size:
-            self.flush()
+        ...
 ```
 
-**Example emitter (Zeek conn.log):**
-```python
-from datetime import datetime
-
-class ZeekConnEmitter(LogEmitter):
-    """Zeek connection log emitter."""
-
-    def emit_event(self, event: ConnectionEvent) -> None:
-        """Emit a Zeek conn.log line."""
-        # Get connection state from StateManager
-        conn = self.state_manager.get_connection(event.conn_id)
-
-        # Format as TSV
-        line = "\t".join([
-            str(event.timestamp.timestamp()),  # ts
-            conn.conn_id,  # uid
-            conn.src_ip,  # id.orig_h
-            str(conn.src_port),  # id.orig_p
-            conn.dst_ip,  # id.resp_h
-            str(conn.dst_port),  # id.resp_p
-            conn.protocol,  # proto
-            "-",  # service (can be "-" if unknown)
-            str(conn.duration),  # duration
-            str(conn.bytes_sent),  # orig_bytes
-            str(conn.bytes_received),  # resp_bytes
-            conn.state,  # conn_state
-            # ... additional fields
-        ])
-
-        self._write_buffered(line)
-
-    def flush(self) -> None:
-        """Write buffer to disk."""
-        if not self._buffer:
-            return
-
-        with self.output_path.open("a") as f:
-            f.write("\n".join(self._buffer) + "\n")
-
-        logger.debug("Flushed %d events to %s", len(self._buffer), self.output_path)
-        self._buffer.clear()
-```
+Each emitter's `emit()` method follows this pattern:
+1. Build a field dict from SecurityEvent contexts (explicit `_render_{event_type}()` method)
+2. Pass the dict to the existing Jinja2 template for final string formatting
+3. Buffer the rendered string (or raw dict for WindowsEventEmitter's deferred rendering)
 
 **Emitter rules:**
 - Read state from StateManager, never mutate it
 - Buffer writes (10K events), use atomic flush
-- Use Jinja2 templates from format definitions for rendering
-- Handle timezone conversion (UTC → system/format timezone)
+- Use Jinja2 templates from format definitions for final string rendering
+- Handle timezone conversion (UTC -> system/format timezone)
 - Each emitter runs in separate thread, writes to separate file
+- Emitters declare `_supported_types` and implement `can_handle()` for dispatcher self-selection
+- Emitters receive `SecurityEvent` objects via `emit()`, not raw dicts (except via `emit_raw()` escape hatch)
+- OS-specific emitters (Windows, Syslog) check `event.host.os_category` in `can_handle()`
 
 ### Format Definitions
 
@@ -1347,6 +1359,15 @@ def test_state_manager_creates_unique_pids(user_count: int):
         pids.add(pid)
 ```
 
+### Event Model Tests
+
+Tests for the canonical event model follow these patterns:
+- **Event construction:** Verify `SecurityEvent` with various context combinations creates valid objects
+- **Dispatcher routing:** Verify `EventDispatcher` routes events to correct emitters based on `can_handle()` and network visibility
+- **Render parity:** For each migrated activity type, verify rendered output is structurally equivalent to pre-migration output
+- **Slots enforcement:** Verify `slots=True` prevents adding undeclared attributes on context dataclasses
+- **Two-phase build:** Verify IDs allocated by StateManager appear on the SecurityEvent and in rendered output
+
 ## Skills
 
 Claude Code Skills handle the interactive, creative aspects of scenario creation -- work that was originally planned as a built-in conversational CLI.
@@ -1490,6 +1511,26 @@ eforge install-skills --global
 
        def close(self):
            self.flush()  # Final flush on close
+   ```
+
+9. **Bypass the event model by calling emitters directly from ActivityGenerator**
+   ```python
+   # WRONG -- manual coordination across emitters
+   def generate_logon(self, user, system, time):
+       logon_id = self.state_manager.create_session(...)
+       self.emitters['windows'].emit_event({"EventID": 4624, "TargetLogonId": logon_id, ...})
+       self.emitters['syslog'].emit_event({"message": f"session opened for user {user}", ...})
+       self.emitters['ecar'].emit_event({"action": "start", "logon_id": logon_id, ...})
+
+   # CORRECT -- build SecurityEvent, dispatch handles routing
+   def generate_logon(self, user, system, time):
+       logon_id = self.state_manager.create_session(...)
+       event = SecurityEvent(
+           timestamp=time, event_type="logon",
+           host=self._build_host_context(system),
+           auth=AuthContext(username=user.username, logon_id=logon_id, ...),
+       )
+       self.dispatcher.dispatch(event)
    ```
 
 ### DO
