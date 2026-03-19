@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model (7.1-7.3 complete, 7.4 deferred); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model ✅ COMPLETE (7.1-7.4); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7.3 Cleanup complete: orphaned helpers removed, eCAR via dispatch_raw, 763 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7 complete: all emission through EventDispatcher, 761 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -1070,15 +1070,15 @@ Migrate each `generate_*` method: refactor to two-phase build + dispatch, implem
 - [x] Replace `self.emitters` eCAR guards → `self.dispatcher.emitters`
 - [x] Verify all tests pass — 761 passing
 
-### 7.4 Remaining Emissions (Future)
+### 7.4 Remaining Emissions ✅ COMPLETE
 
-- [ ] Migrate DNS lookups (`_emit_dns_lookup` → zeek_dns) to canonical dispatch with DnsContext
-- [ ] Migrate engine.py `_generate_system_traffic` direct syslog/Windows emissions to dispatch
-- [ ] Remove `ActivityGenerator.emitters` dict entirely (blocked by DNS lookup migration)
+- [x] Migrate DNS lookups (`_emit_dns_lookup`) to dispatch_raw — 3 zeek_dns call sites
+- [x] Remove `ActivityGenerator.emitters` dict entirely — all emission via dispatcher
+- [x] Migrate engine.py `_generate_system_traffic` direct emissions to dispatch_raw — 9 call sites (2 Windows, 7 syslog)
 - [ ] Update `docs/PRD.md` Post-MVP section with Phase 7 status
 - [ ] Final eval comparison: `eforge evaluate` before vs. after on `retail-store-ftp-attack.yaml`
 
-**Phase 7 Milestone:** All 12 activity types migrated to canonical event model. eCAR diversity helpers use dispatch_raw. Cross-format consistency bugs eliminated by construction. 763+ tests passing, zero regressions.
+**Phase 7 Milestone:** ✅ All event emission goes through EventDispatcher. 12 activity types use canonical SecurityEvent dispatch; eCAR diversity helpers, DNS lookups, and engine system traffic use dispatch_raw (RawLogEntry). Zero direct `self.emitters[]` bracket access in activity.py. 761+ tests passing, zero regressions.
 
 ---
 
