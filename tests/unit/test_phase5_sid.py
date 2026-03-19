@@ -127,10 +127,11 @@ class TestSIDInWindowsEvents:
             'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
         )
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4688
-        assert SID_PATTERN.match(event_data['SubjectUserSid'])
-        assert event_data['SubjectUserSid'] == activity_gen._get_sid('alice.smith')
+        # Process dispatched via SecurityEvent
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "process_create"
+        assert SID_PATTERN.match(event.auth.user_sid)
+        assert event.auth.user_sid == activity_gen._get_sid('alice.smith')
 
     def test_no_sid_registry_uses_fallback(self, state_manager, mock_emitters, timestamp):
         """ActivityGenerator without sid_registry still works with fallback SIDs."""

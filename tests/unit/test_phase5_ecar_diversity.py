@@ -122,16 +122,17 @@ class TestEcarDiversityInProcessCreation:
                 'C:\\Windows\\System32\\cmd.exe', f'cmd.exe /c echo {i}'
             )
 
-        # Collect all unique eCAR object types from both emit_event (old) and emit (new dispatch)
+        # Collect all unique eCAR object types from emit_event (helpers) and emit (dispatch)
         object_types = set()
         for call in mock_emitters['ecar'].emit_event.call_args_list:
             event_data = call[0][0]
             object_types.add(event_data.get('object'))
-        # Logon now dispatched via emit() as SecurityEvent
+        # Map dispatched SecurityEvent types to eCAR object types
+        _TYPE_MAP = {"logon": "USER_SESSION", "process_create": "PROCESS", "process_terminate": "PROCESS"}
         for call in mock_emitters['ecar'].emit.call_args_list:
             event = call[0][0]
-            if event.event_type == "logon":
-                object_types.add('USER_SESSION')
+            if event.event_type in _TYPE_MAP:
+                object_types.add(_TYPE_MAP[event.event_type])
 
         # Should have at least PROCESS + USER_SESSION + some of FILE, MODULE, REGISTRY
         assert 'PROCESS' in object_types

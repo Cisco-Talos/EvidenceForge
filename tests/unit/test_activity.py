@@ -194,14 +194,14 @@ class TestActivityGenerator:
         assert isinstance(pid, int)
         assert pid > 0
 
-        # Verify Windows emitter received 4688 event
-        assert mock_emitters['windows_event_security'].emit_event.called
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['EventID'] == 4688
-        assert event_data['SubjectUserName'] == test_user.username
-        assert event_data['SubjectLogonId'] == logon_id
-        assert event_data['NewProcessName'] == process_name
-        assert event_data['CommandLine'] == command_line
+        # Verify Windows emitter received process_create SecurityEvent
+        assert mock_emitters['windows_event_security'].emit.called
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "process_create"
+        assert event.auth.username == test_user.username
+        assert event.process.logon_id == logon_id
+        assert event.process.image == process_name
+        assert event.process.command_line == command_line
 
     def test_generate_process_with_parent_pid(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """generate_process should accept parent PID."""
@@ -224,8 +224,8 @@ class TestActivityGenerator:
             "notepad.exe", "notepad.exe", parent_pid=parent_pid
         )
 
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args[0][0]
-        assert event_data['ProcessId'] == f'0x{parent_pid:x}'
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.process.parent_pid == parent_pid
 
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and emit Zeek conn.log."""
@@ -378,16 +378,12 @@ class TestActivityGenerator:
         # Should have created session first
         assert len(state_manager.get_sessions_for_user(test_user.username)) == 1
 
-        # Verify both logon (dispatched) and process (emit_event) events emitted
+        # Verify both logon and process events dispatched via emit()
         emitter = mock_emitters['windows_event_security']
-        # Logon goes through dispatch (emit), process still uses emit_event
-        assert emitter.emit.called  # logon SecurityEvent
-        event = emitter.emit.call_args[0][0]
-        assert event.event_type == "logon"
-        # Process still via emit_event (not yet migrated)
-        assert emitter.emit_event.called
-        process_calls = [c for c in emitter.emit_event.call_args_list if c[0][0].get('EventID') == 4688]
-        assert len(process_calls) >= 1
+        assert emitter.emit.called
+        event_types = [c[0][0].event_type for c in emitter.emit.call_args_list]
+        assert "logon" in event_types or "failed_logon" in event_types
+        assert "process_create" in event_types
 
     def test_execute_baseline_activity_process_uses_existing_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should use existing session for process."""
@@ -403,12 +399,12 @@ class TestActivityGenerator:
         # Should NOT have created another session
         assert len(state_manager.get_sessions_for_user(test_user.username)) == 1
 
-        # Verify only process event emitted via emit_event (no additional logon dispatch)
+        # Verify only process event dispatched (no additional logon)
         emitter = mock_emitters['windows_event_security']
-        assert not emitter.emit.called  # No new logon dispatch after reset
-        calls = emitter.emit_event.call_args_list
-        assert len(calls) == 1
-        assert calls[0][0][0]['EventID'] == 4688
+        emit_calls = emitter.emit.call_args_list
+        event_types = [c[0][0].event_type for c in emit_calls]
+        assert "process_create" in event_types
+        assert "logon" not in event_types  # No new logon after reset
 
     def test_execute_baseline_activity_connection_web(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should handle web connection."""

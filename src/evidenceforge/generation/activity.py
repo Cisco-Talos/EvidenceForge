@@ -841,9 +841,11 @@ class ActivityGenerator:
         command_line: str,
         parent_pid: int = 4
     ) -> int:
-        """Generate process creation event and emit Windows 4688.
+        """Generate process creation event across all applicable log formats.
 
-        Creates process in StateManager and emits Windows Event 4688.
+        Creates process in StateManager, builds a SecurityEvent, and dispatches
+        to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
+        probabilistic eCAR file/module/registry events.
 
         Args:
             user: User creating the process
@@ -857,70 +859,54 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
-        # Create process in StateManager
+        from evidenceforge.events.contexts import ProcessContext
+
+        # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
             image=process_name,
             command_line=command_line,
             username=user.username,
-            integrity_level='Medium'  # Phase 1: Fixed integrity level
+            integrity_level='Medium'
         )
 
-        # Phase 2.10: OS-aware multi-format emission
-        os_category = _get_os_category(system.os)
+        # Phase 2: Build SecurityEvent
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_create",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line=command_line,
+                username=user.username,
+                integrity_level='Medium',
+                logon_id=logon_id,
+                parent_image=self._lookup_process_name(system.hostname, parent_pid),
+                token_elevation='%%1938',
+                mandatory_label='S-1-16-8192',
+            ),
+        )
 
-        # Emit to native OS log format
-        if os_category == 'windows':
-            # Emit Windows Event 4688 (A new process has been created)
-            event_data = {
-                'EventID': 4688,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 9999),
-                # Process variant fields
-                'SubjectUserSid': self._get_sid(user.username),
-                'SubjectUserName': user.username,
-                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'SubjectLogonId': logon_id,
-                'NewProcessId': f'0x{pid:x}',
-                'NewProcessName': process_name,
-                'TokenElevationType': '%%1938',  # Limited token (UAC filtered)
-                'ProcessId': f'0x{parent_pid:x}',
-                'CommandLine': command_line,
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'TargetLogonId': logon_id,
-                'ParentProcessName': self._lookup_process_name(system.hostname, parent_pid),
-                'MandatoryLabel': 'S-1-16-8192',  # Medium integrity
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
+        # Phase 3: Dispatch to matching emitters
+        self.dispatcher.dispatch(event)
 
-        elif os_category == 'linux':
-            # Linux process creation may not generate syslog (depends on auditd config)
-            # For now, skip native log (eCAR would provide visibility if enabled)
-            pass
-
-        # Emit eCAR if available (optional EDR/XDR layer)
-        self._emit_ecar_process(user, system, time, pid, parent_pid, process_name, command_line, logon_id)
-
-        # Phase 5.2: Probabilistic eCAR object diversity
+        # Phase 5.2: Probabilistic eCAR object diversity (still via emit_event)
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         if 'ecar' in self.emitters:
-            # 40% chance: file event after process creation
             if rng.random() < 0.40:
                 action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
                 self._emit_ecar_file_event(system, time, pid, action, user.username)
-            # 30% chance: module load (Windows only)
             if os_category == 'windows' and rng.random() < 0.30:
                 self._emit_ecar_module_event(system, time, pid, user.username)
-            # 20% chance: registry event (Windows system processes only)
             if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
                 self._emit_ecar_registry_event(system, time, pid, user.username)
 
@@ -936,11 +922,10 @@ class ActivityGenerator:
         process_name: str,
         logon_id: str,
     ) -> None:
-        """Generate process termination event and emit Windows 4689.
+        """Generate process termination event across all applicable log formats.
 
-        Ends process in StateManager and emits:
-        - Windows: Event 4689 (process exited)
-        - eCAR: PROCESS/TERMINATE (if available)
+        Builds a SecurityEvent and dispatches to matching emitters (Windows 4689,
+        eCAR PROCESS/TERMINATE). StateManager.apply() handles end_process.
 
         Args:
             user: User who owned the process
@@ -950,43 +935,28 @@ class ActivityGenerator:
             process_name: Full path of the terminated process
             logon_id: LogonID of the owning session
         """
-        # End process in StateManager
-        self.state_manager.end_process(system.hostname, pid)
+        from evidenceforge.events.contexts import ProcessContext
 
-        os_category = _get_os_category(system.os)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_terminate",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+            ),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=process_name,
+                command_line='',
+                username=user.username,
+                logon_id=logon_id,
+            ),
+        )
 
-        if os_category == 'windows':
-            event_data = {
-                'EventID': 4689,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                'SubjectUserSid': self._get_sid(user.username),
-                'SubjectUserName': user.username,
-                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'SubjectLogonId': logon_id,
-                'Status': '0x0',
-                'ProcessId': f'0x{pid:x}',
-                'ProcessName': process_name,
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
-
-        # Emit eCAR PROCESS/TERMINATE if available
-        if 'ecar' in self.emitters:
-            event_data = {
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'PROCESS',
-                'action': 'TERMINATE',
-                'pid': pid,
-                'principal': user.username,
-                'image_path': process_name,
-            }
-            self.emitters['ecar'].emit_event(event_data)
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}")
 

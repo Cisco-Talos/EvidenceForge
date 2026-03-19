@@ -14,7 +14,10 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class EcarEmitter(LogEmitter):
     """Emitter for eCAR (extended Cyber Analytics Repository) format."""
 
-    _supported_types: set[str] = {"logon", "logoff", "failed_logon"}
+    _supported_types: set[str] = {
+        "logon", "logoff", "failed_logon",
+        "process_create", "process_terminate",
+    }
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """eCAR handles events regardless of OS (cross-platform EDR)."""
@@ -26,6 +29,8 @@ class EcarEmitter(LogEmitter):
             "logon": self._render_logon,
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
+            "process_create": self._render_process_create,
+            "process_terminate": self._render_process_terminate,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -66,6 +71,36 @@ class EcarEmitter(LogEmitter):
             'principal': event.auth.username,
             'src_ip': event.auth.source_ip,
             'failure_reason': 'bad_password',
+        }
+        self.emit_event(event_data)
+
+    def _render_process_create(self, event: SecurityEvent) -> None:
+        """Render eCAR PROCESS/CREATE event."""
+        proc = event.process
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'PROCESS',
+            'action': 'CREATE',
+            'pid': proc.pid,
+            'ppid': proc.parent_pid,
+            'principal': proc.username,
+            'image_path': proc.image,
+            'command_line': proc.command_line,
+        }
+        self.emit_event(event_data)
+
+    def _render_process_terminate(self, event: SecurityEvent) -> None:
+        """Render eCAR PROCESS/TERMINATE event."""
+        proc = event.process
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'PROCESS',
+            'action': 'TERMINATE',
+            'pid': proc.pid,
+            'principal': proc.username,
+            'image_path': proc.image,
         }
         self.emit_event(event_data)
 

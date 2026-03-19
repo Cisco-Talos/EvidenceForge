@@ -27,7 +27,10 @@ class WindowsEventEmitter(LogEmitter):
     _supported_types will be populated during Phase 7.2 migration.
     """
 
-    _supported_types: set[str] = {"logon", "logoff", "failed_logon"}
+    _supported_types: set[str] = {
+        "logon", "logoff", "failed_logon",
+        "process_create", "process_terminate",
+    }
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Windows emitter handles events on Windows hosts."""
@@ -43,6 +46,8 @@ class WindowsEventEmitter(LogEmitter):
             "logon": self._render_logon,
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
+            "process_create": self._render_process_create,
+            "process_terminate": self._render_process_terminate,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -158,6 +163,64 @@ class WindowsEventEmitter(LogEmitter):
             'LogonType': auth.logon_type,
             'IpAddress': auth.source_ip,
             'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+        }
+        self.emit_event(event_data)
+
+    def _render_process_create(self, event: SecurityEvent) -> None:
+        """Render Windows 4688 (new process created)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4688,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.user_sid,
+            'SubjectUserName': auth.username,
+            'SubjectDomainName': host.netbios_domain,
+            'SubjectLogonId': proc.logon_id,
+            'NewProcessId': f'0x{proc.pid:x}',
+            'NewProcessName': proc.image,
+            'TokenElevationType': proc.token_elevation or '%%1938',
+            'ProcessId': f'0x{proc.parent_pid:x}',
+            'CommandLine': proc.command_line,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': proc.logon_id,
+            'ParentProcessName': proc.parent_image,
+            'MandatoryLabel': proc.mandatory_label or 'S-1-16-8192',
+        }
+        self.emit_event(event_data)
+
+    def _render_process_terminate(self, event: SecurityEvent) -> None:
+        """Render Windows 4689 (process exited)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4689,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': auth.user_sid,
+            'SubjectUserName': auth.username,
+            'SubjectDomainName': host.netbios_domain,
+            'SubjectLogonId': proc.logon_id,
+            'Status': '0x0',
+            'ProcessId': f'0x{proc.pid:x}',
+            'ProcessName': proc.image,
         }
         self.emit_event(event_data)
 
