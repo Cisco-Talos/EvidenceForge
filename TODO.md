@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 next); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model (7.1 complete, 7.2 in progress — 6 of 12 methods migrated); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7.1 Foundation complete: events package, dispatcher, 793 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7.2: logon/logoff/failed_logon/process/system_process migrated, 756 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -1006,50 +1006,45 @@
 
 Migrate each `generate_*` method: refactor to two-phase build + dispatch, implement emitter `_render_{event_type}()` methods, retire corresponding `_emit_ecar_*` helper. Run tests after each.
 
-- [ ] **7.2.1** `generate_logon()` — Windows + syslog + eCAR (3 formats)
-  - [ ] Refactor to build SecurityEvent with HostContext + AuthContext
-  - [ ] Implement `WindowsEventEmitter._render_logon()`, `SyslogEmitter._render_logon()`, `EcarEmitter._render_logon()`
-  - [ ] Retire `_emit_ecar_logon()` helper
-  - [ ] Run tests + eval comparison
+- [x] **7.2.1** `generate_logon()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor to build SecurityEvent with HostContext + AuthContext
+  - [x] Implement `WindowsEventEmitter._render_logon()`, `SyslogEmitter._render_logon()`, `EcarEmitter._render_logon()`
+  - [x] Auto-create EventDispatcher when not provided (backward compat)
+  - [x] Add fqdn/netbios_domain to HostContext, auth fields to AuthContext
+  - [x] Run tests — 756 passed, zero regressions
+- [x] **7.2.4** `generate_logoff()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor to build SecurityEvent with HostContext + AuthContext
+  - [x] Implement `_render_logoff()` on all 3 emitters
+  - [x] StateManager.apply() handles end_session (no double-call)
+  - [x] Run tests — 757 passed
+- [x] **7.2.5** `generate_failed_logon()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor with AuthContext (result="failure", failure_substatus populated)
+  - [x] Add failure_status/failure_substatus to AuthContext
+  - [x] Implement `_render_failed_logon()` on all 3 emitters
+  - [x] Run tests — 756 passed
+- [x] **7.2.3** `generate_process()` — Windows + eCAR (2 formats; Linux skips native log)
+  - [x] Refactor to build SecurityEvent with ProcessContext
+  - [x] Implement `_render_process_create()` on Windows + eCAR emitters
+  - [x] eCAR file/module/registry helpers remain via emit_event (probabilistic diversity)
+  - [x] Run tests — 756 passed
+- [x] **7.2.6** `generate_process_termination()` — Windows + eCAR (2 formats)
+  - [x] Refactor with ProcessContext; StateManager.apply() handles end_process
+  - [x] Implement `_render_process_terminate()` on Windows + eCAR emitters
+  - [x] Run tests — 756 passed
+- [x] **7.2.8** `generate_system_process()` — Windows + syslog + eCAR (3 formats)
+  - [x] Refactor with event_type="system_process_create"
+  - [x] Windows: 4688 with NT AUTHORITY domain; Syslog: daemon/cron message; eCAR: reuses process_create
+  - [x] Run tests — 756 passed
 - [ ] **7.2.2** `generate_connection()` — Zeek conn + Zeek DNS + eCAR FLOW + Snort (4 formats)
   - [ ] Refactor to build SecurityEvent with NetworkContext (+ optional DnsContext, IdsContext)
   - [ ] Implement render methods on ZeekEmitter, ZeekDnsEmitter, EcarEmitter, SnortEmitter
-  - [ ] Retire `_emit_ecar_flow_event()` helper
   - [ ] Move visibility filtering from ActivityGenerator into dispatcher
   - [ ] Run tests + eval comparison
-- [ ] **7.2.3** `generate_process()` — Windows + syslog + eCAR + bash_history (4 formats)
-  - [ ] Refactor to build SecurityEvent with HostContext + ProcessContext
-  - [ ] Implement render methods on WindowsEventEmitter, SyslogEmitter, EcarEmitter, BashHistoryEmitter
-  - [ ] Retire `_emit_ecar_process()` helper
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.4** `generate_logoff()` — Windows + syslog + eCAR (3 formats)
-  - [ ] Refactor to build SecurityEvent with HostContext + AuthContext
-  - [ ] Implement render methods
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.5** `generate_failed_logon()` — Windows + eCAR (2 formats)
-  - [ ] Refactor with AuthContext (result="failure", failure_reason populated)
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.6** `generate_process_termination()` — Windows + eCAR (2 formats)
-  - [ ] Refactor with HostContext + ProcessContext
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.7** `generate_bash_command()` — bash_history (1 format)
-  - [ ] Refactor with HostContext + AuthContext
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.8** `generate_system_process()` — Windows + eCAR (2 formats)
-  - [ ] Refactor with event_type="system_process_create"
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.9** `generate_machine_account_logon()` — Windows (1 format)
-  - [ ] Refactor with event_type="machine_logon"
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.10** `generate_kerberos_tgt()` — Windows (1 format)
-  - [ ] Refactor with event_type="kerberos_tgt"
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.11** `generate_kerberos_service_ticket()` — Windows (1 format)
-  - [ ] Refactor with event_type="kerberos_service"
-  - [ ] Run tests + eval comparison
-- [ ] **7.2.12** `generate_ntlm_validation()` — Windows (1 format)
-  - [ ] Refactor with event_type="ntlm_validation"
-  - [ ] Run tests + eval comparison
+- **Deferred:** 7.2.7 (bash_command), 7.2.9 (machine_logon), 7.2.10-12 (kerberos/ntlm)
+  - These are single-format methods that don't benefit from multi-format dispatch
+  - bash_command: only targets bash_history emitter, has early OS-type return
+  - DC methods: Windows-only, called from engine._generate_system_traffic, emit raw event dicts
+  - Will migrate in 7.3 cleanup or as-needed when adding new format targets
 
 ### 7.3 Cleanup
 
