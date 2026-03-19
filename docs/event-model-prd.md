@@ -1,7 +1,9 @@
 # PRD: EvidenceForge Canonical Event Model
 
+> **Status:** ✅ COMPLETE (Phase 7, implemented 2026-03-19)
 > **Addendum to:** `docs/PRD.md` (main EvidenceForge PRD)
 > **Scope:** Architectural refactor of the generation engine to use a canonical event model for cross-log consistency by construction.
+> **Results:** All 12 generate_* methods migrated. A/B eval: 82.3→83.7 (+1.4). Expert panel: 6 tells fixed, 0 regressions.
 
 ## 1. Overview
 

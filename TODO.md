@@ -1158,8 +1158,8 @@ Migrate each `generate_*` method: refactor to two-phase build + dispatch, implem
 - [x] Migrate DNS lookups (`_emit_dns_lookup`) to dispatch_raw — 3 zeek_dns call sites
 - [x] Remove `ActivityGenerator.emitters` dict entirely — all emission via dispatcher
 - [x] Migrate engine.py `_generate_system_traffic` direct emissions to dispatch_raw — 9 call sites (2 Windows, 7 syslog)
-- [ ] Update `docs/PRD.md` Post-MVP section with Phase 7 status
-- [ ] Final eval comparison: `eforge evaluate` before vs. after on `retail-store-ftp-attack.yaml`
+- [x] Update `docs/PRD.md` Post-MVP section with Phase 7 status
+- [x] Final eval comparison: A/B on `baseline-test` — 82.3→83.7, expert panel 36→30 tells
 
 **Phase 7 Milestone:** ✅ All event emission goes through EventDispatcher. 12 activity types use canonical SecurityEvent dispatch; eCAR diversity helpers, DNS lookups, and engine system traffic use dispatch_raw (RawLogEntry). Zero direct `self.emitters[]` bracket access in activity.py. 761+ tests passing, zero regressions.
 

@@ -1114,9 +1114,11 @@ Required scenario files:
 - `/eforge evaluate` skill for qualitative LLM review
 - Full details in `docs/data-quality-prd.md`
 
-### Post-MVP: Canonical Event Model (Phase 6)
+### Post-MVP: Canonical Event Model ✅ COMPLETE (Phase 7)
 
-Architectural refactor to replace manual per-emitter field coordination with a canonical `SecurityEvent` intermediate representation. Eliminates cross-format consistency bugs by construction — two emitters cannot disagree about shared fields because there is only one source of truth.
+Architectural refactor replacing manual per-emitter field coordination with a canonical `SecurityEvent` intermediate representation. All 12 `generate_*` methods build SecurityEvents with composable context dataclasses (HostContext, AuthContext, ProcessContext, NetworkContext, KerberosContext, ShellContext) and dispatch through EventDispatcher. Remaining single-format emissions (eCAR diversity, DNS lookups, engine system traffic) use dispatch_raw(RawLogEntry).
+
+**Results:** A/B eval comparison showed +1.4 overall score improvement (82.3→83.7). Expert panel found 6 tells fixed by the migration, 0 regressions introduced. OS-aware filtering via `can_handle()` prevents cross-OS emission bugs by construction.
 
 - Full details in `docs/event-model-prd.md`
 
