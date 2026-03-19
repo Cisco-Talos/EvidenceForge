@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 6 - Expert-Identified Realism Fixes (44 findings from blind expert panel, 11 resolved)
+**Status:** Phase 6 - Expert-Identified Realism Fixes (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-18 (Phase 6.1 P0 complete: 5 critical fixes, 702 tests passing)
+**Last Updated:** 2026-03-18 (Improvement loop complete: eval 75.4→90.6, 765 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -804,8 +804,8 @@
 
 ### 6.4 P3: Minor (Nice-to-Have Improvements)
 
-- [ ] **Fix eCAR DNS FLOW protocol to UDP** (Assessment #33)
-  - eCAR shows `protocol: "tcp"` for DNS while Zeek correctly shows UDP
+- [x] **Fix eCAR DNS FLOW protocol to UDP** (Assessment #33, Improvement Loop Iter 2)
+  - eCAR now uses `"udp"` for DNS (port 53) and NTP (port 123) connections
   - Files: `activity.py` (`_emit_ecar_flow_event`)
 - [ ] **Add process attribution to eCAR FLOWs** (Assessment #34)
   - `pid: -1` on all FLOW events; real EDR tracks socket-to-process mapping
@@ -834,12 +834,145 @@
 - [ ] **Multiple answers for popular DNS domains** (Assessment #42)
   - Every query returns single answer; CDN domains return multiple A records
   - Files: `activity.py` (`_emit_dns_lookup`)
-- [ ] **Add `<Events>` root XML wrapper** (Assessment #43)
-  - Standalone `<Event>` elements without containing root element
-  - Files: `emitters/windows.py`
+- [x] **Add `<Events>` root XML wrapper** (Assessment #43, Improvement Loop Iter 2)
+  - XML declaration + `<Events>` root + `</Events>` footer via header/footer templates
+  - Files: `emitters/base.py`, `formats/format_def.py`, `formats/definitions/windows_event_security.yaml`
 - [ ] **Set AA flag for internal DNS** (Assessment #44)
   - Internal zone queries (corp.local) show AA: false; should be authoritative
   - Files: `activity.py` (`_emit_dns_lookup`)
+
+### 6.5 Improvement Loop Findings (2026-03-18)
+
+**Source:** Automated improvement loop with 4-expert blind panel on `insider-exfiltration` scenario.
+**Baseline:** Eval 75.4/100 → **Final: 90.6/100** across 5 iterations.
+
+#### Resolved in improvement loop:
+- [x] **Zeek UID source port mismatch** (P0, Iter 2)
+  - conn.log and dns.log had different `id.orig_p` for same UID
+  - Fix: pass `src_port` through `generate_connection()` to dns.log emission
+  - Files: `activity.py` (`generate_connection`, `_emit_dns_lookup`)
+- [x] **TCP orig_pkts inconsistent with history** (P0, Iter 2)
+  - `orig_pkts: 1` with `history: "ShADadfF"` (implies 4+ orig packets)
+  - Fix: derive TCP packet counts from history field characters
+  - Files: `activity.py` (`generate_connection`)
+- [x] **External CDN hostnames resolve to internal IPs** (P0, Iter 3)
+  - `cdn-3986.cloudfront.net` → `10.10.100.16` (impossible in reality)
+  - Fix: internal IPs get internal hostnames (`srv-01.corp.local` pattern)
+  - Files: `activity.py` (`_emit_dns_lookup`, `_generate_internal_hostname`)
+- [x] **Fabricated CDN/cloud hostnames** (P0, Iter 3)
+  - `server-68-352.compute.amazonaws.com`, `cdn-NNNN.cloudfront.net` — wrong format
+  - Fix: realistic formats (ec2-x-x-x-x, d{hash}.cloudfront.net, e{id}.dscb.akamaiedge.net)
+  - Files: `activity.py` (`_generate_random_hostname`)
+- [x] **Reserved domains in DNS** (P1, Iter 3)
+  - `api.example.com`, `blog.example.com`, `cdn.example.com`, `www.example.com`
+  - Fix: replaced with real service domains in REVERSE_DNS map
+  - Files: `activity.py` (REVERSE_DNS)
+- [x] **Same IPv6 for all AAAA queries** (P1, Iter 3)
+  - 87% of AAAA responses used `2607:f8b0:` (Google prefix) regardless of provider
+  - Fix: diverse prefixes per provider (Azure, Akamai, AWS, Cloudflare, Fastly)
+  - Files: `activity.py` (`_ipv4_to_fake_ipv6`)
+- [x] **4625 SID contradiction with SubStatus** (P0, Iter 4)
+  - SubStatus `0xc0000064` (user not found) paired with valid domain SID
+  - Fix: NULL SID `S-1-0-0` for unknown-user failures; varied SubStatus types
+  - Files: `activity.py` (`generate_failed_logon`)
+- [x] **4768:4769 TGT/TGS 1:1 ratio** (P0, Iter 4)
+  - Exact same count (90,344 each) — statistically impossible
+  - Fix: 2-5 TGS per TGT; TGS targets member servers (60%) not just DCs
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [x] **Zero ICMP traffic** (P0, Iter 5)
+  - 250K conn.log entries with no ICMP at all
+  - Fix: servers ping each other 0-1 times per hour
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [x] **NXDOMAIN `NonExistentSite` literal** (P2, Iter 2)
+  - Placeholder string used as AD site name
+  - Fix: replaced with `Default-First-Site-Name`
+  - Files: `activity.py` (`_emit_dns_lookup`)
+
+#### Eval scoring fixes (Iter 1):
+- [x] **FQDN hostname normalization** — eval VisibilityModel and all dimension scorers
+  now handle both bare and FQDN hostnames (Source Correctness: 1→100)
+- [x] **PreAuthType integer coercion** — Windows parser now coerces to int (Parsability: 92→99.5)
+- [x] **Timezone-aware work hours** — eval compares in scenario timezone, not UTC
+- [x] **AD ports in common ports list** — Kerberos (88), LDAP (389) no longer flagged as anomalous
+- [x] **Deep off-hours anomaly detection** — only midnight-5am flagged, not all off-hours
+
+#### Remaining tells (not yet addressed):
+
+**P0 — Instant Giveaways:**
+- [ ] **RFC 5737 documentation IP (203.0.113.50) for exfiltration target**
+  - TEST-NET-3 range instantly recognizable; also has `local_resp: true`
+  - Fix: use realistic cloud storage IPs; fix `_is_private_ip()` for exfil destinations
+  - Files: `activity.py` (storyline connection handling), scenario YAML
+- [ ] **No DNS resolution for exfiltration/storyline targets**
+  - Connections to 203.0.113.50 (pCloud) have no corresponding DNS queries
+  - Fix: emit DNS lookup before each storyline network connection
+  - Files: `engine.py` (storyline execution), `activity.py`
+- [ ] **Kernel uptime counters non-monotonic in syslog**
+  - Values jump randomly (1061731 → 516344 → 460933) instead of increasing
+  - Fix: track per-host uptime state in StateManager, increment monotonically
+  - Files: `engine.py` (syslog generation), `state_manager.py`
+- [ ] **EventRecordID timestamps go backward within same computer**
+  - Higher RecordID has earlier timestamp (events shuffled then sequentially numbered)
+  - Fix: sort events by timestamp before assigning EventRecordIDs per computer
+  - Files: `emitters/windows.py` or `engine.py` (event ordering)
+- [ ] **No SSH/RDP connections in Zeek despite syslog SSH sessions**
+  - Syslog shows active sshd but conn.log has zero port 22/3389 traffic
+  - Fix: generate Zeek conn.log entries for SSH connections to Linux hosts
+  - Files: `engine.py` (`_generate_system_traffic`)
+
+**P1 — Expert-Level Tells:**
+- [ ] **No LogonType 5 (Service) events**
+  - Zero events; real Windows servers constantly generate type 5 for services
+  - Fix: emit 4624 type 5 for service accounts (svc*, $-suffix) in system traffic
+  - Files: `engine.py` (`_generate_system_traffic`), `activity.py`
+- [ ] **No ANONYMOUS LOGON (S-1-5-7) events**
+  - Real environments have frequent anonymous logons from network discovery
+  - Fix: emit periodic 4624 type 3 with ANONYMOUS LOGON on servers/DCs
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [ ] **LmPackageName always "-" even for NTLM authentications**
+  - Should be "NTLM V2" when AuthenticationPackageName is "NTLM"
+  - Files: `activity.py` (`generate_logon`, `generate_failed_logon`)
+- [ ] **Zeek history "SS" is invalid**
+  - Repeated SYN is still "S" in real Zeek; "SS" never appears
+  - Fix: remove "SS" from `_TCP_CONN_ENTRIES` history patterns
+  - Files: `activity.py` (`_TCP_CONN_ENTRIES`)
+- [ ] **Service distribution unrealistic** (too much Kerberos/LDAP, too little HTTPS)
+  - Real enterprises have HTTPS as dominant protocol
+  - Fix: increase baseline HTTPS connections, reduce Kerberos frequency
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [ ] **No 4770 TGT Renewal events**
+  - TGTs expire every ~10 hours; 3-day window should have renewals
+  - Fix: emit 4770 events periodically on DCs
+  - Files: `activity.py` (new `generate_kerberos_renewal`), `engine.py`
+- [ ] **4672 Special Privileges ratio too low** (9% vs expected ~30%+)
+  - Every admin/service/machine account logon should generate paired 4672
+  - Fix: emit 4672 for machine accounts, service accounts, admin logons
+  - Files: `activity.py` (`generate_logon`, `generate_machine_account_logon`)
+
+**P2 — Polish Issues:**
+- [ ] **Events grouped by computer, not chronologically interleaved**
+  - Windows XML has all EXEC-WS-01 events, then all EXEC-WS-02, etc.
+  - Fix: sort events globally by timestamp before writing
+  - Files: `emitters/windows.py` or `engine.py`
+- [ ] **Syslog only from 2 hosts** (DMZ-WEB-01, SRV-LOG-01)
+  - 118-system environment should have more syslog sources
+  - Fix: emit syslog for all Linux systems, or add forwarding from Windows
+  - Files: `engine.py` (syslog target selection)
+- [ ] **No TXT DNS queries** (SPF/DKIM/DMARC checks)
+  - Fix: add periodic TXT lookups for email-related domains
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **Audit serial numbers non-monotonic in syslog**
+  - Jump erratically instead of incrementing per boot
+  - Fix: track per-host audit serial in StateManager
+  - Files: `engine.py`, `state_manager.py`
+- [ ] **DNS-then-service paired pattern too uniform**
+  - Every connection preceded by DNS with 10-50ms gap; needs caching, concurrency
+  - Fix: skip DNS for cached domains, add temporal jitter
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **Ground truth mislabels file servers as "C2 Servers"**
+  - Internal SMB servers listed under "C2 Server" IOC category
+  - Fix: use correct labels in ground truth generation
+  - Files: `ground_truth.py`
 
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
 
