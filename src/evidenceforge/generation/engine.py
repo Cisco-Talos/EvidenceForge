@@ -1719,6 +1719,91 @@ class GenerationEngine:
                             resp_bytes=rng.randint(5000, 200000),
                         )
 
+        # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
+        for system in self.scenario.environment.systems:
+            os_cat_svc = _get_os_category(system.os)
+            if os_cat_svc != 'windows' or 'windows_event_security' not in self.emitters:
+                continue
+
+            ad_domain = getattr(self.activity_generator, '_ad_domain', 'corp.local')
+            netbios = getattr(self.activity_generator, '_netbios_domain', 'CORP')
+            computer_fqdn = f"{system.hostname}.{ad_domain}"
+
+            # LogonType 5 (Service): 2-5 per hour on servers, 1-2 on workstations
+            sys_type_svc = (system.type or 'workstation').lower()
+            num_svc = rng.randint(2, 5) if sys_type_svc != 'workstation' else rng.randint(1, 2)
+            for _ in range(num_svc):
+                offset = rng.randint(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                svc_accounts = ['SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE']
+                svc_user = rng.choice(svc_accounts)
+                svc_sid = {'SYSTEM': 'S-1-5-18', 'LOCAL SERVICE': 'S-1-5-19',
+                           'NETWORK SERVICE': 'S-1-5-20'}[svc_user]
+                svc_domain = 'NT AUTHORITY'
+                self.emitters['windows_event_security'].emit_event({
+                    'EventID': 4624,
+                    'TimeCreated': ts,
+                    'Computer': computer_fqdn,
+                    'Channel': 'Security',
+                    'Level': 0,
+                    'EventRecordID': self.activity_generator._get_next_event_record_id(system.hostname),
+                    'ExecutionProcessID': 4,
+                    'ExecutionThreadID': rng.randint(100, 500),
+                    'SubjectUserSid': 'S-1-5-18',
+                    'SubjectUserName': system.hostname + '$',
+                    'SubjectDomainName': netbios,
+                    'SubjectLogonId': '0x3e7',
+                    'TargetUserSid': svc_sid,
+                    'TargetUserName': svc_user,
+                    'TargetDomainName': svc_domain,
+                    'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
+                    'LogonType': 5,
+                    'LogonProcessName': 'Advapi',
+                    'AuthenticationPackageName': 'Negotiate',
+                    'LmPackageName': '-',
+                    'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                    'WorkstationName': '-',
+                    'ProcessId': f'0x{rng.choice([0x1f4, 0x2c8, 0x340]):x}',
+                    'ProcessName': r'C:\Windows\System32\services.exe',
+                    'IpAddress': '-',
+                    'IpPort': 0,
+                })
+
+            # ANONYMOUS LOGON: 1-3 per hour on servers/DCs (network discovery, null sessions)
+            if sys_type_svc in ('server', 'domain_controller'):
+                num_anon = rng.randint(1, 3)
+                for _ in range(num_anon):
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.emitters['windows_event_security'].emit_event({
+                        'EventID': 4624,
+                        'TimeCreated': ts,
+                        'Computer': computer_fqdn,
+                        'Channel': 'Security',
+                        'Level': 0,
+                        'EventRecordID': self.activity_generator._get_next_event_record_id(system.hostname),
+                        'ExecutionProcessID': 4,
+                        'ExecutionThreadID': rng.randint(100, 500),
+                        'SubjectUserSid': 'S-1-0-0',
+                        'SubjectUserName': '-',
+                        'SubjectDomainName': '-',
+                        'SubjectLogonId': '0x0',
+                        'TargetUserSid': 'S-1-5-7',
+                        'TargetUserName': 'ANONYMOUS LOGON',
+                        'TargetDomainName': 'NT AUTHORITY',
+                        'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
+                        'LogonType': 3,
+                        'LogonProcessName': 'NtLmSsp',
+                        'AuthenticationPackageName': 'NTLM',
+                        'LmPackageName': 'NTLM V2',
+                        'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                        'WorkstationName': '-',
+                        'ProcessId': '0x0',
+                        'ProcessName': '-',
+                        'IpAddress': '-',
+                        'IpPort': 0,
+                    })
+
         # Phase 6.2: Machine account ($) authentication to DCs
         # Every Windows domain-joined system authenticates as COMPUTERNAME$ to DCs
         dc_ips = self._infra_ips.get('dc', [])

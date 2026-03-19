@@ -1998,6 +1998,7 @@ class ActivityGenerator:
             return {
                 'LogonProcessName': 'User32',
                 'AuthenticationPackageName': 'Negotiate',
+                'LmPackageName': '-',
                 'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
             }
         elif logon_type in (3, 4, 5, 8, 9):
@@ -2007,18 +2008,21 @@ class ActivityGenerator:
                 return {
                     'LogonProcessName': 'Kerberos',
                     'AuthenticationPackageName': 'Kerberos',
+                    'LmPackageName': '-',
                     'LogonGuid': f'{{{uuid.uuid4()}}}',
                 }
             elif roll < 0.90:
                 return {
                     'LogonProcessName': 'NtLmSsp',
                     'AuthenticationPackageName': 'NTLM',
+                    'LmPackageName': 'NTLM V2',
                     'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
                 }
             else:
                 return {
                     'LogonProcessName': 'NtLmSsp',
                     'AuthenticationPackageName': 'Negotiate',
+                    'LmPackageName': '-',
                     'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
                 }
         elif logon_type == 10:
@@ -2026,6 +2030,7 @@ class ActivityGenerator:
             return {
                 'LogonProcessName': 'NtLmSsp',
                 'AuthenticationPackageName': rng.choice(['CredSSP', 'Negotiate']),
+                'LmPackageName': '-',
                 'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
             }
         else:
@@ -2033,6 +2038,7 @@ class ActivityGenerator:
             return {
                 'LogonProcessName': 'Negotiate',
                 'AuthenticationPackageName': 'Negotiate',
+                'LmPackageName': '-',
                 'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
             }
 
