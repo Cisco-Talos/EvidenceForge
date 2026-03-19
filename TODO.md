@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 6 - Expert-Identified Realism Fixes (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model (planned); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-18 (Improvement loop complete: eval 75.4→90.6, 765 tests passing)
+**Last Updated:** 2026-03-19 (Phase 7 PRD approved: docs/event-model-prd.md)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -975,6 +975,94 @@
   - Files: `ground_truth.py`
 
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
+
+---
+
+## Phase 7: Canonical Event Model
+
+**Goal:** Replace manual per-emitter field coordination with a canonical `SecurityEvent` intermediate representation. Eliminates cross-format consistency bugs by construction — two emitters cannot disagree about shared fields because there is only one source of truth.
+
+**PRD:** See `docs/event-model-prd.md` for full design, data model, and rationale.
+
+**Architecture:** Two-phase build + dispatcher. ActivityGenerator allocates IDs from StateManager first, builds complete SecurityEvent second, dispatches to EventDispatcher which routes to StateManager.apply() + matching emitters.
+
+### 7.1 Foundation (events package + dispatcher + base emitter changes)
+
+- [ ] Create `src/evidenceforge/events/__init__.py` — re-exports SecurityEvent, RawLogEntry, all context types
+- [ ] Create `src/evidenceforge/events/contexts.py` — all context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`)
+- [ ] Create `src/evidenceforge/events/base.py` — `SecurityEvent` and `RawLogEntry` dataclasses
+- [ ] Create `src/evidenceforge/events/dispatcher.py` — `EventDispatcher` with `NetworkVisibilityEngine` integration via existing `get_log_formats_for_connection()` API
+- [ ] Add `apply(event)` to `state_manager.py` — records state from fully-constructed SecurityEvent (teardown/updates only, no ID allocation)
+- [ ] Add `can_handle()`, `emit()`, `emit_raw()` to `emitters/base.py`
+- [ ] Implement `_supported_types` on all 8 emitter subclasses (windows, zeek, zeek_dns, ecar, syslog, bash_history, snort, web)
+- [ ] Update `engine.py` — create `EventDispatcher`, pass to `ActivityGenerator`
+- [ ] Update `ActivityGenerator.__init__()` — accept `dispatcher: EventDispatcher`, set convenience refs to `state_manager` and `emitters`
+- [ ] Add `_build_host_context(system)` helper to ActivityGenerator
+- [ ] Write `tests/unit/test_events.py` — event/context construction, slots enforcement
+- [ ] Write `tests/unit/test_dispatcher.py` — routing, visibility filtering, state_manager.apply(), raw escape hatch
+- [ ] Write `test_emitter_can_handle_*` — each emitter correctly accepts/rejects event types
+- [ ] Run all existing tests — zero regressions
+
+### 7.2 Migrate Activity Types (one at a time, one commit each)
+
+Migrate each `generate_*` method: refactor to two-phase build + dispatch, implement emitter `_render_{event_type}()` methods, retire corresponding `_emit_ecar_*` helper. Run tests after each.
+
+- [ ] **7.2.1** `generate_logon()` — Windows + syslog + eCAR (3 formats)
+  - [ ] Refactor to build SecurityEvent with HostContext + AuthContext
+  - [ ] Implement `WindowsEventEmitter._render_logon()`, `SyslogEmitter._render_logon()`, `EcarEmitter._render_logon()`
+  - [ ] Retire `_emit_ecar_logon()` helper
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.2** `generate_connection()` — Zeek conn + Zeek DNS + eCAR FLOW + Snort (4 formats)
+  - [ ] Refactor to build SecurityEvent with NetworkContext (+ optional DnsContext, IdsContext)
+  - [ ] Implement render methods on ZeekEmitter, ZeekDnsEmitter, EcarEmitter, SnortEmitter
+  - [ ] Retire `_emit_ecar_flow_event()` helper
+  - [ ] Move visibility filtering from ActivityGenerator into dispatcher
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.3** `generate_process()` — Windows + syslog + eCAR + bash_history (4 formats)
+  - [ ] Refactor to build SecurityEvent with HostContext + ProcessContext
+  - [ ] Implement render methods on WindowsEventEmitter, SyslogEmitter, EcarEmitter, BashHistoryEmitter
+  - [ ] Retire `_emit_ecar_process()` helper
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.4** `generate_logoff()` — Windows + syslog + eCAR (3 formats)
+  - [ ] Refactor to build SecurityEvent with HostContext + AuthContext
+  - [ ] Implement render methods
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.5** `generate_failed_logon()` — Windows + eCAR (2 formats)
+  - [ ] Refactor with AuthContext (result="failure", failure_reason populated)
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.6** `generate_process_termination()` — Windows + eCAR (2 formats)
+  - [ ] Refactor with HostContext + ProcessContext
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.7** `generate_bash_command()` — bash_history (1 format)
+  - [ ] Refactor with HostContext + AuthContext
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.8** `generate_system_process()` — Windows + eCAR (2 formats)
+  - [ ] Refactor with event_type="system_process_create"
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.9** `generate_machine_account_logon()` — Windows (1 format)
+  - [ ] Refactor with event_type="machine_logon"
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.10** `generate_kerberos_tgt()` — Windows (1 format)
+  - [ ] Refactor with event_type="kerberos_tgt"
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.11** `generate_kerberos_service_ticket()` — Windows (1 format)
+  - [ ] Refactor with event_type="kerberos_service"
+  - [ ] Run tests + eval comparison
+- [ ] **7.2.12** `generate_ntlm_validation()` — Windows (1 format)
+  - [ ] Refactor with event_type="ntlm_validation"
+  - [ ] Run tests + eval comparison
+
+### 7.3 Cleanup
+
+- [ ] Remove `ActivityGenerator.network_visibility` (now handled by dispatcher)
+- [ ] Remove `ActivityGenerator.emitters` convenience reference
+- [ ] Remove any remaining direct `emitter.emit_event(dict)` calls
+- [ ] Rename old `emit_event()` to `emit_raw()` if not already done
+- [ ] Update `docs/PRD.md` Post-MVP section with Phase 7 status
+- [ ] Final eval comparison: `eforge evaluate` before vs. after on `retail-store-ftp-attack.yaml`
+- [ ] Verify all tests pass, coverage maintained
+
+**Phase 7 Milestone:** All activity types migrated to canonical event model. Cross-format consistency bugs eliminated by construction. Eval scores equal or better than pre-migration. No test regressions.
 
 ---
 

@@ -1114,6 +1114,12 @@ Required scenario files:
 - `/eforge evaluate` skill for qualitative LLM review
 - Full details in `docs/data-quality-prd.md`
 
+### Post-MVP: Canonical Event Model (Phase 6)
+
+Architectural refactor to replace manual per-emitter field coordination with a canonical `SecurityEvent` intermediate representation. Eliminates cross-format consistency bugs by construction — two emitters cannot disagree about shared fields because there is only one source of truth.
+
+- Full details in `docs/event-model-prd.md`
+
 ### Post-MVP: Data Realism Improvements (Phase 5)
 
 Phase 4 evaluation revealed that while signal integrity is excellent (100/100), the background noise is too shallow and uniform for the data to pass casual inspection by an experienced analyst. Phase 5 addresses these generator-level limitations in 5 incremental sub-phases.
