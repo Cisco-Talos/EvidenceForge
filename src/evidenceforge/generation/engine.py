@@ -1629,11 +1629,14 @@ class GenerationEngine:
                             resp_bytes=rng.randint(500, 50000),
                         )
 
-            # Scheduled tasks: 0-2 per hour, anchored to quarter-hour marks
-            if rng.random() < 0.6:
-                # Pick a quarter-hour slot (0, 900, 1800, 2700) with jitter
-                slot = rng.choice([0, 900, 1800, 2700])
-                offset = slot + rng.gauss(0, 30)
+            # Scheduled tasks: periodic at fixed intervals with small jitter.
+            # Real system processes run at predictable intervals (cron every 15 min,
+            # Windows Task Scheduler at fixed offsets) with minor timing jitter.
+            # Use deterministic per-host offset so same system fires at same times.
+            host_seed = hash(system.hostname) % 900  # 0-899s offset within 15-min
+            for slot_base in [0, 900, 1800, 2700]:  # Every 15 minutes
+                # Small jitter (±5s) around fixed schedule
+                offset = slot_base + host_seed + rng.gauss(0, 5)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
@@ -1663,6 +1666,25 @@ class GenerationEngine:
                         system=system, time=ts,
                         process_name=task_name, command_line=task_cmd,
                         parent_pid=parent_pid, username='root',
+                    )
+
+            # ICMP: monitoring pings between servers, 1-2 per hour
+            sys_type = (system.type or 'workstation').lower()
+            if sys_type in ('server', 'domain_controller') and rng.random() < 0.7:
+                # Servers ping each other and the default gateway
+                targets = [s.ip for s in self.scenario.environment.systems
+                           if s.ip != system.ip and s.type and
+                           s.type.lower() in ('server', 'domain_controller')][:5]
+                if targets:
+                    target_ip = rng.choice(targets)
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip, dst_ip=target_ip, time=ts,
+                        dst_port=0, proto='icmp',
+                        duration=rng.uniform(0.0001, 0.005),
+                        orig_bytes=64, resp_bytes=64,
                     )
 
         # Phase 6.2: Machine account ($) authentication to DCs
