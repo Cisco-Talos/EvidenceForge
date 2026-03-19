@@ -616,7 +616,6 @@ class ActivityGenerator:
             dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
         """
         self.state_manager = state_manager
-        self.emitters = emitters  # TODO(7.4): remove after DNS lookup migration
         if dispatcher is None and emitters:
             # Auto-create dispatcher for backward compat with tests
             dispatcher = EventDispatcher(
@@ -1307,20 +1306,21 @@ class ActivityGenerator:
         )
 
         # Emit Zeek dns.log record
-        if 'zeek_dns' in self.emitters:
+        if 'zeek_dns' in self.dispatcher.emitters:
             # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
             if rng.random() < 0.002:
-                self.emitters['zeek_dns'].emit_event({
-                    'ts': dns_time, 'uid': dns_uid,
-                    'id.orig_h': src_ip, 'id.orig_p': src_port,
-                    'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                    'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                    'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                    'qtype': 1, 'qtype_name': 'A',
-                    'rcode': 2, 'rcode_name': 'SERVFAIL',
-                    'AA': False, 'TC': False, 'RD': True, 'RA': True,
-                    'answers': '-', 'TTLs': '-', 'rejected': False,
-                })
+                self.dispatcher.dispatch_raw(RawLogEntry(
+                    timestamp=dns_time, target_emitter='zeek_dns',
+                    data={'ts': dns_time, 'uid': dns_uid,
+                          'id.orig_h': src_ip, 'id.orig_p': src_port,
+                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                          'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                          'qtype': 1, 'qtype_name': 'A',
+                          'rcode': 2, 'rcode_name': 'SERVFAIL',
+                          'AA': False, 'TC': False, 'RD': True, 'RA': True,
+                          'answers': '-', 'TTLs': '-', 'rejected': False},
+                ))
                 return
 
             # Determine query type, query string, and answer
@@ -1385,30 +1385,18 @@ class ActivityGenerator:
             ttls_str = ', '.join([str(ttl)] * num_answers)
 
             # This lookup precedes an actual connection, so always NOERROR
-            self.emitters['zeek_dns'].emit_event({
-                'ts': dns_time,
-                'uid': dns_uid,
-                'id.orig_h': src_ip,
-                'id.orig_p': src_port,
-                'id.resp_h': dns_server_ip,
-                'id.resp_p': 53,
-                'proto': 'udp',
-                'trans_id': rng.randint(1, 65535),
-                'query': query,
-                'qclass': 1,
-                'qclass_name': 'C_INTERNET',
-                'qtype': qtype,
-                'qtype_name': qtype_name,
-                'rcode': 0,
-                'rcode_name': 'NOERROR',
-                'AA': is_internal,
-                'TC': False,
-                'RD': True,
-                'RA': True,
-                'answers': answers,
-                'TTLs': ttls_str,
-                'rejected': False,
-            })
+            self.dispatcher.dispatch_raw(RawLogEntry(
+                timestamp=dns_time, target_emitter='zeek_dns',
+                data={'ts': dns_time, 'uid': dns_uid,
+                      'id.orig_h': src_ip, 'id.orig_p': src_port,
+                      'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                      'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                      'query': query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                      'qtype': qtype, 'qtype_name': qtype_name,
+                      'rcode': 0, 'rcode_name': 'NOERROR',
+                      'AA': is_internal, 'TC': False, 'RD': True, 'RA': True,
+                      'answers': answers, 'TTLs': ttls_str, 'rejected': False},
+            ))
 
             # Phase 6.0: ~20% chance of emitting an additional NXDOMAIN query
             # (suffix search failure, WPAD probe, etc.) alongside the real lookup
@@ -1431,30 +1419,18 @@ class ActivityGenerator:
                     orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
                     src_port=nx_src_port,
                 )
-                self.emitters['zeek_dns'].emit_event({
-                    'ts': nx_time,
-                    'uid': nx_uid,
-                    'id.orig_h': src_ip,
-                    'id.orig_p': nx_src_port,
-                    'id.resp_h': dns_server_ip,
-                    'id.resp_p': 53,
-                    'proto': 'udp',
-                    'trans_id': rng.randint(1, 65535),
-                    'query': nx_query,
-                    'qclass': 1,
-                    'qclass_name': 'C_INTERNET',
-                    'qtype': 1,
-                    'qtype_name': 'A',
-                    'rcode': 3,
-                    'rcode_name': 'NXDOMAIN',
-                    'AA': True,  # AD DNS is authoritative for .corp.local
-                    'TC': False,
-                    'RD': True,
-                    'RA': True,
-                    'answers': '-',
-                    'TTLs': '-',
-                    'rejected': False,
-                })
+                self.dispatcher.dispatch_raw(RawLogEntry(
+                    timestamp=nx_time, target_emitter='zeek_dns',
+                    data={'ts': nx_time, 'uid': nx_uid,
+                          'id.orig_h': src_ip, 'id.orig_p': nx_src_port,
+                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
+                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                          'query': nx_query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
+                          'qtype': 1, 'qtype_name': 'A',
+                          'rcode': 3, 'rcode_name': 'NXDOMAIN',
+                          'AA': True, 'TC': False, 'RD': True, 'RA': True,
+                          'answers': '-', 'TTLs': '-', 'rejected': False},
+                ))
 
     def get_baseline_pattern(
         self,
