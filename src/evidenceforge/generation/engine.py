@@ -25,6 +25,7 @@ from evidenceforge.generation.emitters import (
     SnortEmitter,
     WebEmitter,
 )
+from evidenceforge.events.base import RawLogEntry
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
@@ -1749,34 +1750,24 @@ class GenerationEngine:
                 svc_sid = {'SYSTEM': 'S-1-5-18', 'LOCAL SERVICE': 'S-1-5-19',
                            'NETWORK SERVICE': 'S-1-5-20'}[svc_user]
                 svc_domain = 'NT AUTHORITY'
-                self.emitters['windows_event_security'].emit_event({
-                    'EventID': 4624,
-                    'TimeCreated': ts,
-                    'Computer': computer_fqdn,
-                    'Channel': 'Security',
-                    'Level': 0,
-                    # EventRecordID assigned by WindowsEventEmitter at flush time
-                    'ExecutionProcessID': 4,
-                    'ExecutionThreadID': rng.randint(100, 500),
-                    'SubjectUserSid': 'S-1-5-18',
-                    'SubjectUserName': system.hostname + '$',
-                    'SubjectDomainName': netbios,
-                    'SubjectLogonId': '0x3e7',
-                    'TargetUserSid': svc_sid,
-                    'TargetUserName': svc_user,
-                    'TargetDomainName': svc_domain,
-                    'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
-                    'LogonType': 5,
-                    'LogonProcessName': 'Advapi',
-                    'AuthenticationPackageName': 'Negotiate',
-                    'LmPackageName': '-',
-                    'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-                    'WorkstationName': '-',
-                    'ProcessId': f'0x{rng.choice([0x1f4, 0x2c8, 0x340]):x}',
-                    'ProcessName': r'C:\Windows\System32\services.exe',
-                    'IpAddress': '-',
-                    'IpPort': 0,
-                })
+                self.dispatcher.dispatch_raw(RawLogEntry(
+                    timestamp=ts, target_emitter='windows_event_security',
+                    data={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
+                          'Channel': 'Security', 'Level': 0,
+                          'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
+                          'SubjectUserSid': 'S-1-5-18', 'SubjectUserName': system.hostname + '$',
+                          'SubjectDomainName': netbios, 'SubjectLogonId': '0x3e7',
+                          'TargetUserSid': svc_sid, 'TargetUserName': svc_user,
+                          'TargetDomainName': svc_domain,
+                          'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
+                          'LogonType': 5, 'LogonProcessName': 'Advapi',
+                          'AuthenticationPackageName': 'Negotiate', 'LmPackageName': '-',
+                          'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                          'WorkstationName': '-',
+                          'ProcessId': f'0x{rng.choice([0x1f4, 0x2c8, 0x340]):x}',
+                          'ProcessName': r'C:\Windows\System32\services.exe',
+                          'IpAddress': '-', 'IpPort': 0},
+                ))
 
             # ANONYMOUS LOGON: 1-3 per hour on servers/DCs (network discovery, null sessions)
             if sys_type_svc in ('server', 'domain_controller'):
@@ -1784,34 +1775,22 @@ class GenerationEngine:
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    self.emitters['windows_event_security'].emit_event({
-                        'EventID': 4624,
-                        'TimeCreated': ts,
-                        'Computer': computer_fqdn,
-                        'Channel': 'Security',
-                        'Level': 0,
-                        # EventRecordID assigned by WindowsEventEmitter at flush time
-                        'ExecutionProcessID': 4,
-                        'ExecutionThreadID': rng.randint(100, 500),
-                        'SubjectUserSid': 'S-1-0-0',
-                        'SubjectUserName': '-',
-                        'SubjectDomainName': '-',
-                        'SubjectLogonId': '0x0',
-                        'TargetUserSid': 'S-1-5-7',
-                        'TargetUserName': 'ANONYMOUS LOGON',
-                        'TargetDomainName': 'NT AUTHORITY',
-                        'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
-                        'LogonType': 3,
-                        'LogonProcessName': 'NtLmSsp',
-                        'AuthenticationPackageName': 'NTLM',
-                        'LmPackageName': 'NTLM V2',
-                        'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-                        'WorkstationName': '-',
-                        'ProcessId': '0x0',
-                        'ProcessName': '-',
-                        'IpAddress': '-',
-                        'IpPort': 0,
-                    })
+                    self.dispatcher.dispatch_raw(RawLogEntry(
+                        timestamp=ts, target_emitter='windows_event_security',
+                        data={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
+                              'Channel': 'Security', 'Level': 0,
+                              'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
+                              'SubjectUserSid': 'S-1-0-0', 'SubjectUserName': '-',
+                              'SubjectDomainName': '-', 'SubjectLogonId': '0x0',
+                              'TargetUserSid': 'S-1-5-7', 'TargetUserName': 'ANONYMOUS LOGON',
+                              'TargetDomainName': 'NT AUTHORITY',
+                              'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
+                              'LogonType': 3, 'LogonProcessName': 'NtLmSsp',
+                              'AuthenticationPackageName': 'NTLM', 'LmPackageName': 'NTLM V2',
+                              'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                              'WorkstationName': '-', 'ProcessId': '0x0', 'ProcessName': '-',
+                              'IpAddress': '-', 'IpPort': 0},
+                    ))
 
         # Phase 6.2: Machine account ($) authentication to DCs
         # Every Windows domain-joined system authenticates as COMPUTERNAME$ to DCs
@@ -1938,12 +1917,12 @@ class GenerationEngine:
                                 'fstrim', 'motd-news', 'ua-timer', 'systemd-tmpfiles-clean']
                     svc = rng.choice(services)
                     action = rng.choice(['Starting', 'Finished'])
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd', 'pid': sys_pids.get('systemd', 1),
                         'facility': 3, 'severity': 6,
-                        'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.',
-                    })
+                        'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.'},
+                    ))
                 elif source_roll < 0.35:
                     # CRON — uppercase, (user) CMD (command)
                     cron_cmds = [
@@ -1956,12 +1935,12 @@ class GenerationEngine:
                     cron_pid = self.state_manager.create_process(
                         system.hostname, sys_pids.get('cron', 0),
                         '/usr/sbin/cron', f'CRON[{user}]', user, 'System')
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'CRON', 'pid': cron_pid,
                         'facility': 9, 'severity': 6,
-                        'message': f'({user}) CMD ({cmd})',
-                    })
+                        'message': f'({user}) CMD ({cmd})'},
+                    ))
                 elif source_roll < 0.50:
                     # kernel — no PID, includes uptime counter
                     if is_dmz and rng.random() < 0.5:
@@ -1980,23 +1959,23 @@ class GenerationEngine:
                         msg = (f'[{uptime}.{rng.randint(100000,999999)}] audit: type=1400 '
                                f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{audit_serial}): '
                                f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"')
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'kernel', 'pid': None,
                         'facility': 0, 'severity': 5,
-                        'message': msg,
-                    })
+                        'message': msg},
+                    ))
                 elif source_roll < 0.65:
                     # systemd-logind — session tracking
                     sid = rng.randint(100, 9999)
                     user = rng.choice(['root', 'admin', 'www-data', 'ubuntu'])
                     action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-logind', 'pid': sys_pids.get('systemd_logind', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
-                        'message': action,
-                    })
+                        'message': action},
+                    ))
                 elif source_roll < 0.80:
                     # sshd — disconnect/keepalive messages (use scenario system IPs)
                     other_ips = [s.ip for s in self.scenario.environment.systems if s.ip != system.ip]
@@ -2007,15 +1986,15 @@ class GenerationEngine:
                         f'Disconnected from user admin {ip} port {port}',
                         f'pam_unix(sshd:session): session closed for user admin',
                     ]
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'sshd', 'pid': rng.randint(5000, 60000),
                         'facility': 10, 'severity': 6,
-                        'message': rng.choice(msgs),
-                    })
+                        'message': rng.choice(msgs)},
+                    ))
                 elif source_roll < 0.90:
                     # snapd
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'snapd', 'pid': sys_pids.get('snapd', rng.randint(500, 2000)),
                         'facility': 3, 'severity': 6,
@@ -2023,8 +2002,8 @@ class GenerationEngine:
                             'autorefresh.go:540: auto-refresh: all snaps are up-to-date',
                             'daemon.go:460: gracefully waiting for running hooks',
                             'stateengine.go:150: state ensure starting',
-                        ]),
-                    })
+                        ])},
+                    ))
                 else:
                     # systemd-timesyncd: "for the first time" only once per system
                     ntp_ip = rng.choice(['91.189.89.198', '91.189.89.199', '91.189.94.4'])
@@ -2039,13 +2018,13 @@ class GenerationEngine:
                             f'Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).',
                             f'Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).',
                         ])
-                    self.emitters['syslog'].emit_event({
+                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-timesyncd',
                         'pid': sys_pids.get('timesyncd', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
-                        'message': msg,
-                    })
+                        'message': msg},
+                    ))
 
         # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour), evenly spaced
         systems = self.scenario.environment.systems
