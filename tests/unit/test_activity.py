@@ -228,7 +228,7 @@ class TestActivityGenerator:
         assert event.process.parent_pid == parent_pid
 
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
-        """generate_connection should open connection and emit Zeek conn.log."""
+        """generate_connection should open connection and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         state_manager.set_current_time(timestamp)
         src_ip = "10.0.0.1"
@@ -243,33 +243,33 @@ class TestActivityGenerator:
         assert uid
         assert len(uid) > 0
 
-        # Verify Zeek emitter received conn.log event
-        assert mock_emitters['zeek_conn'].emit_event.called
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['uid'] == uid
-        assert event_data['id.orig_h'] == src_ip
-        assert event_data['id.resp_h'] == dst_ip
-        assert event_data['id.resp_p'] == dst_port
-        assert event_data['service'] == "https"
+        # Verify Zeek emitter received connection SecurityEvent
+        assert mock_emitters['zeek_conn'].emit.called
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.event_type == "connection"
+        assert event.network.zeek_uid == uid
+        assert event.network.src_ip == src_ip
+        assert event.network.dst_ip == dst_ip
+        assert event.network.dst_port == dst_port
+        assert event.network.service == "https"
 
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
-        """generate_connection should include byte counts for SF connections."""
+        """generate_connection should include byte counts in NetworkContext."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         state_manager.set_current_time(timestamp)
         orig_bytes = 1000
         resp_bytes = 5000
 
-        # Provide duration to ensure connection completes (mostly SF)
         activity_gen.generate_connection(
             "10.0.0.1", "93.184.216.34", timestamp,
             orig_bytes=orig_bytes, resp_bytes=resp_bytes, duration=1.5,
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        # orig_bytes should be preserved; resp_bytes may be adjusted for non-SF states
-        assert event_data['orig_bytes'] == orig_bytes or event_data['orig_bytes'] >= 0
-        assert event_data['resp_bytes'] is not None
-        assert event_data['orig_pkts'] is not None
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        net = event.network
+        assert net.orig_bytes == orig_bytes or net.orig_bytes >= 0
+        assert net.resp_bytes is not None
+        assert net.orig_pkts is not None
 
     def test_generate_connection_with_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection with duration sets a valid conn_state."""
@@ -282,13 +282,13 @@ class TestActivityGenerator:
             duration=duration, orig_bytes=100, resp_bytes=200
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        # Duration may be adjusted for non-SF states (RSTO/RSTR reduce it)
-        assert event_data['conn_state'] in ('SF', 'S0', 'S1', 'REJ', 'RSTO', 'RSTR', 'OTH')
-        if event_data['conn_state'] == 'SF':
-            assert event_data['duration'] == duration
-        elif event_data['conn_state'] in ('RSTO', 'RSTR'):
-            assert event_data['duration'] is not None and event_data['duration'] <= duration
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        net = event.network
+        assert net.conn_state in ('SF', 'S0', 'S1', 'REJ', 'RSTO', 'RSTR', 'OTH')
+        if net.conn_state == 'SF':
+            assert net.duration == duration
+        elif net.conn_state in ('RSTO', 'RSTR'):
+            assert net.duration is not None and net.duration <= duration
 
     def test_generate_connection_without_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection without duration should set conn_state to S0."""
@@ -299,23 +299,19 @@ class TestActivityGenerator:
             "10.0.0.1", "93.184.216.34", timestamp
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['conn_state'] == 'S0'  # Connection attempt, no reply
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.conn_state == 'S0'
 
     def test_generate_connection_skips_invalid(self, activity_gen, mock_emitters):
         """generate_connection should skip invalid connections."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
 
-        # Try to create connection to same IP (localhost)
         uid = activity_gen.generate_connection(
             "127.0.0.1", "10.0.0.1", timestamp
         )
 
-        # Should return empty UID
         assert uid == ""
-
-        # Zeek emitter should NOT be called
-        assert not mock_emitters['zeek_conn'].emit_event.called
+        assert not mock_emitters['zeek_conn'].emit.called
 
     def test_get_baseline_pattern_developer(self, activity_gen):
         """Should return developer pattern for developer persona."""
@@ -413,13 +409,12 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'connection_web')
 
-        # Verify Zeek emitter called
-        assert mock_emitters['zeek_conn'].emit_event.called
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['service'] in ['http', 'https']
-        assert event_data['id.resp_p'] in [80, 443]
-        # Phase 5.3: 30% chance of random CDN/cloud IP, so check it's a valid external IP
-        dst_ip = event_data['id.resp_h']
+        # Connection dispatched as SecurityEvent
+        assert mock_emitters['zeek_conn'].emit.called
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.service in ['http', 'https']
+        assert event.network.dst_port in [80, 443]
+        dst_ip = event.network.dst_ip
         assert dst_ip in EXTERNAL_IPS['connection_web'] or not dst_ip.startswith('10.')
 
     def test_execute_baseline_activity_connection_email(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
@@ -429,10 +424,10 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'connection_email')
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['service'] == 'smtp'
-        assert event_data['id.resp_p'] == 587
-        assert event_data['id.resp_h'] in EXTERNAL_IPS['connection_email']
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.service == 'smtp'
+        assert event.network.dst_port == 587
+        assert event.network.dst_ip in EXTERNAL_IPS['connection_email']
 
     def test_execute_baseline_activity_connection_git(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should handle git connection."""
@@ -441,31 +436,29 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'connection_git')
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['service'] == 'https'
-        assert event_data['id.resp_p'] == 443
-        assert event_data['id.resp_h'] in EXTERNAL_IPS['connection_git']
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.service == 'https'
+        assert event.network.dst_port == 443
+        assert event.network.dst_ip in EXTERNAL_IPS['connection_git']
 
     def test_execute_baseline_activity_connection_db(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should handle database connection with detected servers."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         state_manager.set_current_time(timestamp)
 
-        # Set up scenario-detected DB servers (required for DB connections)
         activity_gen._db_servers = [{'ip': '10.10.100.20', 'port': 1433, 'service': 'mssql'}]
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'connection_db')
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['service'] == 'mssql'
-        assert event_data['id.resp_p'] == 1433
-        assert event_data['id.resp_h'] == '10.10.100.20'
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.service == 'mssql'
+        assert event.network.dst_port == 1433
+        assert event.network.dst_ip == '10.10.100.20'
 
     def test_execute_baseline_activity_connection_excludes_src_ip(self, activity_gen, test_user, state_manager, mock_emitters):
         """execute_baseline_activity should not connect system to itself."""
-        # Create system with IP matching one of the external IPs
         system = System(
             hostname="WEB-01",
-            ip="93.184.216.34",  # Matches connection_web IP
+            ip="93.184.216.34",
             os="Windows Server 2019",
             type="server"
         )
@@ -474,29 +467,25 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, system, timestamp, 'connection_web')
 
-        # Should have chosen different IP
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['id.resp_h'] != system.ip
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.dst_ip != system.ip
 
     def test_execute_baseline_activity_connection_skips_if_all_match_src(self, activity_gen, test_user, mock_emitters):
         """execute_baseline_activity should skip connection if all destinations match source."""
-        # Create system with IP that would match all destinations (hypothetical)
         system = System(
             hostname="TEST-01",
-            ip="10.0.100.10",  # Matches connection_db IP
+            ip="10.0.100.10",
             os="Windows 10",
             type="workstation"
         )
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
 
-        # Mock EXTERNAL_IPS to have only one IP that matches source
         with patch('evidenceforge.generation.activity.EXTERNAL_IPS', {
-            'connection_test': ["10.0.100.10"]  # Only IP matches source
+            'connection_test': ["10.0.100.10"]
         }):
             activity_gen.execute_baseline_activity(test_user, system, timestamp, 'connection_test')
 
-        # Should NOT have called Zeek emitter
-        assert not mock_emitters['zeek_conn'].emit_event.called
+        assert not mock_emitters['zeek_conn'].emit.called
 
     def test_event_record_id_increments(self, activity_gen, test_user, test_system):
         """EventRecordID should increment per-host for each Windows event."""
@@ -547,13 +536,13 @@ class TestActivityGenerator:
             orig_bytes=orig_bytes, resp_bytes=resp_bytes, duration=2.0,
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['orig_pkts'] >= 1
-        # resp_pkts may be None for non-SF states (e.g., RSTO with reduced resp_bytes=0)
-        if event_data['conn_state'] == 'SF':
-            assert event_data['resp_pkts'] >= 1
-            assert event_data['orig_ip_bytes'] > orig_bytes
-            assert event_data['resp_ip_bytes'] > resp_bytes
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        net = event.network
+        assert net.orig_pkts >= 1
+        if net.conn_state == 'SF':
+            assert net.resp_pkts >= 1
+            assert net.orig_ip_bytes > orig_bytes
+            assert net.resp_ip_bytes > resp_bytes
 
     def test_generate_connection_tcp_proto(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should set correct ip_proto for TCP."""
@@ -564,9 +553,9 @@ class TestActivityGenerator:
             "10.0.0.1", "93.184.216.34", timestamp, proto='tcp'
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['proto'] == 'tcp'
-        assert event_data['ip_proto'] == 6
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.protocol == 'tcp'
+        assert event.network.ip_proto == 6
 
     def test_generate_connection_udp_proto(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should set correct ip_proto for UDP."""
@@ -577,9 +566,9 @@ class TestActivityGenerator:
             "10.0.0.1", "93.184.216.34", timestamp, proto='udp'
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['proto'] == 'udp'
-        assert event_data['ip_proto'] == 17
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.protocol == 'udp'
+        assert event.network.ip_proto == 17
 
     def test_generate_connection_icmp_proto(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should set correct ip_proto for ICMP."""
@@ -590,6 +579,6 @@ class TestActivityGenerator:
             "10.0.0.1", "93.184.216.34", timestamp, proto='icmp'
         )
 
-        event_data = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert event_data['proto'] == 'icmp'
-        assert event_data['ip_proto'] == 1
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.protocol == 'icmp'
+        assert event.network.ip_proto == 1

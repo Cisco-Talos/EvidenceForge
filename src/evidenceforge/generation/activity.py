@@ -973,9 +973,11 @@ class ActivityGenerator:
         resp_bytes: Optional[int] = None,
         src_port: Optional[int] = None,
     ) -> str:
-        """Generate network connection and emit Zeek conn.log event.
+        """Generate network connection across all applicable log formats.
 
-        Opens connection in StateManager and emits Zeek connection record.
+        Opens connection in StateManager, builds a SecurityEvent with
+        NetworkContext, and dispatches to matching emitters (Zeek conn,
+        Snort, eCAR FLOW). Dispatcher handles network visibility filtering.
 
         Args:
             src_ip: Source IP address
@@ -987,10 +989,13 @@ class ActivityGenerator:
             duration: Connection duration in seconds
             orig_bytes: Bytes sent by originator
             resp_bytes: Bytes sent by responder
+            src_port: Source port (auto-assigned ephemeral if None)
 
         Returns:
             Zeek UID (18-character string)
         """
+        from evidenceforge.events.contexts import NetworkContext
+
         # Validate connection would be observable by network sensors
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
@@ -998,7 +1003,7 @@ class ActivityGenerator:
                 f"Skipping invalid network connection: {src_ip} -> {dst_ip}. "
                 f"Reason: {reason}. Network sensors would not observe this traffic."
             )
-            return ""  # Return empty UID to indicate skipped connection
+            return ""
 
         # Phase 2.5: Check network topology visibility
         if not self.network_visibility.is_connection_visible(src_ip, dst_ip):
@@ -1009,52 +1014,38 @@ class ActivityGenerator:
             return ""
 
         if src_port is None:
-            src_port = _get_rng().randint(49152, 65535)  # Ephemeral port
+            src_port = _get_rng().randint(49152, 65535)
 
-        # Create connection in StateManager
+        # Phase 1: Allocate IDs from StateManager
         conn_id = self.state_manager.open_connection(
-            src_ip=src_ip,
-            src_port=src_port,
-            dst_ip=dst_ip,
-            dst_port=dst_port,
-            protocol=proto
+            src_ip=src_ip, src_port=src_port,
+            dst_ip=dst_ip, dst_port=dst_port, protocol=proto
         )
-
-        # Get Zeek UID from StateManager (generated at open_connection time)
-        # All Zeek log types for this connection share this UID
         uid = self.state_manager.get_zeek_uid(conn_id)
-
-        # Update connection bytes if provided
         if orig_bytes is not None and resp_bytes is not None:
             self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
-        # Phase 6.0: Protocol-aware connection state selection
+        # Protocol-aware connection state selection
         rng = _get_rng()
 
         if proto == 'icmp':
-            # ICMP: no connection state, OTH always, no history
             conn_state = 'OTH'
             history = '-'
-            # Zeek encodes ICMP type/code as ports
             src_port = 8   # Echo request type
             dst_port = 0   # Echo reply type
         elif proto == 'udp':
-            # UDP: datagram-based history (D/d), limited conn_states
             entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
             conn_state, _, history = entry
             if conn_state == 'S0':
                 duration = None
                 resp_bytes = 0
         else:
-            # TCP: full handshake-based history and conn_states
             if duration is not None:
                 entry = rng.choices(_TCP_CONN_ENTRIES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
                 conn_state, _, history = entry
             else:
                 conn_state = 'S0'
                 history = 'S'
-
-            # Adjust bytes/duration for consistency with TCP connection state
             if conn_state in ('S0', 'REJ'):
                 duration = None
                 resp_bytes = 0
@@ -1068,10 +1059,8 @@ class ActivityGenerator:
 
         # Calculate packet counts — enforce consistency with history
         if proto == 'udp' and history:
-            # Count D/d characters for exact packet counts
             orig_pkts = history.count('D')
             resp_pkts = history.count('d')
-            # Adjust bytes to match packet counts (UDP: 28-byte IP+UDP header)
             if orig_pkts > 0 and orig_bytes:
                 orig_bytes = max(orig_bytes, orig_pkts * 28)
             if resp_pkts > 0 and resp_bytes:
@@ -1079,59 +1068,47 @@ class ActivityGenerator:
             elif resp_pkts == 0:
                 resp_bytes = 0
         elif proto == 'tcp' and history and history != '-':
-            # TCP: derive minimum packet counts from history field
-            # Uppercase letters = originator packets, lowercase = responder
             hist_orig = sum(1 for c in history if c.isupper())
             hist_resp = sum(1 for c in history if c.islower())
-            # Also account for data volume (1 packet per ~1460 bytes payload)
             byte_orig = max(1, (orig_bytes // 1460) + 1) if orig_bytes else 1
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
         else:
-            # ICMP or unknown: simple estimate
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
-        # IP+protocol header overhead: TCP 52-72 bytes (IP+TCP+options), UDP 28 bytes
         overhead = 28 if proto == 'udp' else _get_rng().randint(52, 72)
         orig_ip_bytes = (orig_bytes + orig_pkts * overhead) if orig_bytes and orig_pkts else None
         resp_ip_bytes = (resp_bytes + resp_pkts * overhead) if resp_bytes and resp_pkts else None
 
-        # Emit Zeek conn.log event
-        event_data = {
-            'ts': time,
-            'uid': uid,
-            'id.orig_h': src_ip,
-            'id.orig_p': src_port,
-            'id.resp_h': dst_ip,
-            'id.resp_p': dst_port,
-            'proto': proto,
-            'service': service,
-            'duration': duration,
-            'orig_bytes': orig_bytes,
-            'resp_bytes': resp_bytes,
-            'conn_state': conn_state,
-            'local_orig': _is_private_ip(src_ip),
-            'local_resp': _is_private_ip(dst_ip),
-            'missed_bytes': 0,
-            'history': history,
-            'orig_pkts': orig_pkts,
-            'orig_ip_bytes': orig_ip_bytes,
-            'resp_pkts': resp_pkts,
-            'resp_ip_bytes': resp_ip_bytes,
-            'ip_proto': 6 if proto == 'tcp' else 17 if proto == 'udp' else 1,  # TCP=6, UDP=17, ICMP=1
-        }
+        ip_proto = 6 if proto == 'tcp' else 17 if proto == 'udp' else 1
 
-        # Phase 2.5: Emit to sensor-appropriate formats
-        visible_formats = self.network_visibility.get_log_formats_for_connection(src_ip, dst_ip)
-        for format_name in visible_formats:
-            if format_name in self.emitters:
-                self.emitters[format_name].emit_event(event_data)
-        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid}, formats: {visible_formats})")
+        # Phase 2: Build SecurityEvent with NetworkContext
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip=src_ip, src_port=src_port,
+                dst_ip=dst_ip, dst_port=dst_port,
+                protocol=proto, service=service or '',
+                zeek_uid=uid, conn_id=conn_id,
+                duration=duration,
+                orig_bytes=orig_bytes, resp_bytes=resp_bytes,
+                orig_pkts=orig_pkts, resp_pkts=resp_pkts,
+                orig_ip_bytes=orig_ip_bytes, resp_ip_bytes=resp_ip_bytes,
+                conn_state=conn_state, history=history,
+                local_orig=_is_private_ip(src_ip),
+                local_resp=_is_private_ip(dst_ip),
+                ip_proto=ip_proto,
+            ),
+        )
 
-        # Phase 5.2: Emit eCAR FLOW/CONNECT for eCAR-equipped hosts
-        # Use src_ip to find the hostname for this connection
+        # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
+        self.dispatcher.dispatch(event)
+        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
+
+        # eCAR FLOW still via helper (not format-filtered by visibility)
         self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port)
 
         return uid

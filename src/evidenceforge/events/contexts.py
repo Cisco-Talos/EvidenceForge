@@ -79,15 +79,19 @@ class NetworkContext:
     service: str = ""
     zeek_uid: str = ""  # From StateManager.open_connection()
     conn_id: str = ""  # From StateManager.open_connection()
-    duration: float = 0.0
-    orig_bytes: int = 0
-    resp_bytes: int = 0
+    duration: float | None = None
+    orig_bytes: int | None = None
+    resp_bytes: int | None = None
     orig_pkts: int = 0
     resp_pkts: int = 0
+    orig_ip_bytes: int | None = None
+    resp_ip_bytes: int | None = None
     conn_state: str = ""
     history: str = ""
     local_orig: bool = True
     local_resp: bool = False
+    ip_proto: int = 6  # TCP=6, UDP=17, ICMP=1
+    missed_bytes: int = 0
 
 
 @dataclass(slots=True)

@@ -80,9 +80,9 @@ class TestLocalResp:
             src_ip='10.10.10.50', dst_ip='10.10.100.10', time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             dst_port=445, proto='tcp', service='smb', duration=0.5, orig_bytes=500, resp_bytes=1000,
         )
-        call_args = mock_emitters['zeek_conn'].emit_event.call_args_list[-1][0][0]
-        assert call_args['local_resp'] is True
-        assert call_args['local_orig'] is True
+        event = mock_emitters['zeek_conn'].emit.call_args_list[-1][0][0]
+        assert event.network.local_resp is True
+        assert event.network.local_orig is True
 
     def test_external_destination_sets_local_resp_false(self, activity_gen, state_manager, mock_emitters):
         state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
@@ -90,9 +90,9 @@ class TestLocalResp:
             src_ip='10.10.10.50', dst_ip='52.97.145.162', time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             dst_port=443, proto='tcp', service='https', duration=0.5, orig_bytes=500, resp_bytes=1000,
         )
-        call_args = mock_emitters['zeek_conn'].emit_event.call_args_list[-1][0][0]
-        assert call_args['local_resp'] is False
-        assert call_args['local_orig'] is True
+        event = mock_emitters['zeek_conn'].emit.call_args_list[-1][0][0]
+        assert event.network.local_resp is False
+        assert event.network.local_orig is True
 
 
 class TestTCPOverhead:
@@ -104,11 +104,9 @@ class TestTCPOverhead:
             src_ip='10.10.10.50', dst_ip='10.10.100.10', time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             dst_port=443, proto='tcp', service='https', duration=0.5, orig_bytes=3000, resp_bytes=10000,
         )
-        call_args = mock_emitters['zeek_conn'].emit_event.call_args_list[-1][0][0]
-        orig_bytes = call_args['orig_bytes']
-        orig_pkts = call_args['orig_pkts']
-        orig_ip_bytes = call_args['orig_ip_bytes']
-        overhead_per_pkt = (orig_ip_bytes - orig_bytes) / orig_pkts
+        event = mock_emitters['zeek_conn'].emit.call_args_list[-1][0][0]
+        net = event.network
+        overhead_per_pkt = (net.orig_ip_bytes - net.orig_bytes) / net.orig_pkts
         assert 52 <= overhead_per_pkt <= 72
 
     def test_udp_overhead_is_28(self, activity_gen, state_manager, mock_emitters):
@@ -117,12 +115,10 @@ class TestTCPOverhead:
             src_ip='10.10.10.50', dst_ip='10.10.100.10', time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc),
             dst_port=53, proto='udp', service='dns', duration=0.01, orig_bytes=100, resp_bytes=200,
         )
-        call_args = mock_emitters['zeek_conn'].emit_event.call_args_list[-1][0][0]
-        orig_bytes = call_args['orig_bytes']
-        orig_pkts = call_args['orig_pkts']
-        orig_ip_bytes = call_args['orig_ip_bytes']
-        if orig_pkts and orig_ip_bytes and orig_bytes:
-            overhead_per_pkt = (orig_ip_bytes - orig_bytes) / orig_pkts
+        event = mock_emitters['zeek_conn'].emit.call_args_list[-1][0][0]
+        net = event.network
+        if net.orig_pkts and net.orig_ip_bytes and net.orig_bytes:
+            overhead_per_pkt = (net.orig_ip_bytes - net.orig_bytes) / net.orig_pkts
             assert overhead_per_pkt == 28
 
 

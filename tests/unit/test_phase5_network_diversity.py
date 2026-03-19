@@ -140,10 +140,10 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        # Should also emit a UDP/53 conn record
-        assert mock_emitters['zeek_conn'].emit_event.called
-        conn_event = mock_emitters['zeek_conn'].emit_event.call_args[0][0]
-        assert conn_event.get('proto') == 'udp' or conn_event.get('id.resp_p') == 53
+        # Should also emit a UDP/53 conn record via dispatch
+        assert mock_emitters['zeek_conn'].emit.called
+        event = mock_emitters['zeek_conn'].emit.call_args[0][0]
+        assert event.network.protocol == 'udp' or event.network.dst_port == 53
 
     def test_dns_timestamp_precedes_connection_time(self, activity_gen, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -168,9 +168,9 @@ class TestDnsLookupEmission:
         dns_event = mock_emitters['zeek_dns'].emit_event.call_args_list[0][0][0]
         dns_uid = dns_event['uid']
 
-        # Get the first conn.log event (the UDP/53 record)
-        conn_event = mock_emitters['zeek_conn'].emit_event.call_args_list[0][0][0]
-        conn_uid = conn_event['uid']
+        # Get the first conn.log event (the UDP/53 record) — dispatched via emit()
+        conn_event = mock_emitters['zeek_conn'].emit.call_args_list[0][0][0]
+        conn_uid = conn_event.network.zeek_uid
 
         # UIDs must match — this is how Zeek correlates logs
         assert dns_uid == conn_uid, (

@@ -174,9 +174,9 @@ class TestNetworkContext:
         assert ctx.service == ""
         assert ctx.zeek_uid == ""
         assert ctx.conn_id == ""
-        assert ctx.duration == 0.0
-        assert ctx.orig_bytes == 0
-        assert ctx.resp_bytes == 0
+        assert ctx.duration is None
+        assert ctx.orig_bytes is None
+        assert ctx.resp_bytes is None
         assert ctx.orig_pkts == 0
         assert ctx.resp_pkts == 0
         assert ctx.conn_state == ""

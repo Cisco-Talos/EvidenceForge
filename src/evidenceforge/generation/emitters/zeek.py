@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -16,7 +17,39 @@ class ZeekEmitter(LogEmitter):
     Each connection includes source/dest IPs, ports, protocol, and connection state.
     """
 
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"connection"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Zeek conn emitter handles connection events."""
+        return event.event_type in self._supported_types and event.network is not None
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render connection SecurityEvent to Zeek conn.log format."""
+        net = event.network
+        event_data = {
+            'ts': event.timestamp,
+            'uid': net.zeek_uid,
+            'id.orig_h': net.src_ip,
+            'id.orig_p': net.src_port,
+            'id.resp_h': net.dst_ip,
+            'id.resp_p': net.dst_port,
+            'proto': net.protocol,
+            'service': net.service or None,
+            'duration': net.duration,
+            'orig_bytes': net.orig_bytes,
+            'resp_bytes': net.resp_bytes,
+            'conn_state': net.conn_state,
+            'local_orig': net.local_orig,
+            'local_resp': net.local_resp,
+            'missed_bytes': net.missed_bytes,
+            'history': net.history,
+            'orig_pkts': net.orig_pkts,
+            'orig_ip_bytes': net.orig_ip_bytes,
+            'resp_pkts': net.resp_pkts,
+            'resp_ip_bytes': net.resp_ip_bytes,
+            'ip_proto': net.ip_proto,
+        }
+        self.emit_event(event_data)
 
     def __init__(
         self,
