@@ -5,10 +5,12 @@ EventRecordIDs in sorted order (ensuring monotonic IDs match chronological
 order), then renders to XML and writes to disk.
 """
 
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -25,7 +27,139 @@ class WindowsEventEmitter(LogEmitter):
     _supported_types will be populated during Phase 7.2 migration.
     """
 
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"logon", "logoff", "failed_logon"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Windows emitter handles events on Windows hosts."""
+        return (
+            event.event_type in self._supported_types
+            and event.host is not None
+            and event.host.os_category == "windows"
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Dispatch to per-type render method."""
+        renderer = {
+            "logon": self._render_logon,
+            "logoff": self._render_logoff,
+            "failed_logon": self._render_failed_logon,
+        }.get(event.event_type)
+        if renderer is None:
+            raise NotImplementedError(
+                f"WindowsEventEmitter: no render method for {event.event_type}"
+            )
+        renderer(event)
+
+    def _render_logon(self, event: SecurityEvent) -> None:
+        """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4624,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': auth.logon_id,
+            'LogonType': auth.logon_type,
+            'WorkstationName': host.hostname,
+            'ProcessId': f'0x{auth.reporting_pid:x}' if auth.reporting_pid else '0x2e0',
+            'ProcessName': r'C:\Windows\System32\lsass.exe',
+            'IpAddress': auth.source_ip,
+            'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            'LogonProcessName': auth.logon_process,
+            'AuthenticationPackageName': auth.auth_package,
+            'LmPackageName': auth.lm_package,
+            'LogonGuid': auth.logon_guid,
+        }
+        self.emit_event(event_data)
+
+        # 4672 special privileges (when auth.elevated is True)
+        if auth.elevated:
+            priv_data = {
+                'EventID': 4672,
+                'TimeCreated': event.timestamp,
+                'Computer': host.fqdn,
+                'Channel': 'Security',
+                'Level': 0,
+                'ExecutionProcessID': 4,
+                'ExecutionThreadID': rng.randint(100, 500),
+                'SubjectUserSid': auth.user_sid,
+                'SubjectUserName': auth.username,
+                'SubjectDomainName': host.netbios_domain,
+                'SubjectLogonId': auth.logon_id,
+                'PrivilegeList': (
+                    'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
+                    'SeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
+                    'SeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\t'
+                    'SeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
+                    'SeDelegateSessionUserImpersonatePrivilege'
+                ),
+            }
+            self.emit_event(priv_data)
+
+    def _render_logoff(self, event: SecurityEvent) -> None:
+        """Render Windows 4634 (logoff)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4634,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonId': auth.logon_id,
+            'LogonType': auth.logon_type,
+        }
+        self.emit_event(event_data)
+
+    def _render_failed_logon(self, event: SecurityEvent) -> None:
+        """Render Windows 4625 (failed logon)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4625,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TargetUserSid': auth.user_sid,
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'Status': auth.failure_status,
+            'SubStatus': auth.failure_substatus,
+            'FailureReason': auth.failure_reason,
+            'LogonType': auth.logon_type,
+            'IpAddress': auth.source_ip,
+            'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+        }
+        self.emit_event(event_data)
 
     def __init__(
         self,

@@ -102,6 +102,19 @@ class TestHostContext:
             os_category="windows", system_type="workstation",
         )
         assert ctx.domain == ""
+        assert ctx.fqdn == ""
+        assert ctx.netbios_domain == ""
+
+    def test_fqdn_and_netbios_precomputed(self):
+        ctx = HostContext(
+            hostname="WS-01", ip="10.0.1.50", os="Windows 10",
+            os_category="windows", system_type="workstation",
+            domain="corp.local",
+            fqdn="WS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        assert ctx.fqdn == "WS-01.corp.local"
+        assert ctx.netbios_domain == "CORP"
 
     def test_slots_prevents_dynamic_attributes(self):
         ctx = HostContext(
@@ -126,6 +139,28 @@ class TestAuthContext:
         assert ctx.elevated is False
         assert ctx.logon_id == ""
         assert ctx.user_sid == ""
+        assert ctx.logon_process == ""
+        assert ctx.lm_package == ""
+        assert ctx.logon_guid == ""
+        assert ctx.subject_sid == ""
+        assert ctx.subject_username == ""
+        assert ctx.subject_domain == ""
+        assert ctx.subject_logon_id == ""
+
+
+class TestProcessContext:
+    """Tests for ProcessContext dataclass."""
+
+    def test_defaults(self):
+        ctx = ProcessContext(
+            pid=1234, parent_pid=4, image="cmd.exe",
+            command_line="cmd.exe /c dir", username="alice",
+        )
+        assert ctx.integrity_level == "Medium"
+        assert ctx.logon_id == ""
+        assert ctx.parent_image == ""
+        assert ctx.token_elevation == ""
+        assert ctx.mandatory_label == ""
 
 
 class TestNetworkContext:

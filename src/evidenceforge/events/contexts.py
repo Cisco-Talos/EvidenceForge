@@ -20,6 +20,8 @@ class HostContext:
     os_category: str  # "windows" | "linux"
     system_type: str  # "workstation" | "server" | "domain_controller"
     domain: str = ""
+    fqdn: str = ""  # Precomputed: hostname.domain (Windows Computer field)
+    netbios_domain: str = ""  # Precomputed: domain.split('.')[0].upper()
 
 
 @dataclass(slots=True)
@@ -33,10 +35,20 @@ class AuthContext:
     logon_type: int = 2
     auth_package: str = "Negotiate"
     result: str = "success"  # "success" | "failure"
-    failure_reason: str = ""
+    failure_reason: str = ""  # Windows FailureReason (%%2313, %%2304, %%2307)
+    failure_status: str = ""  # Windows Status (0xc000006d)
+    failure_substatus: str = ""  # Windows SubStatus (0xc000006a, 0xc0000064, etc.)
     source_ip: str = ""
     source_port: int = 0
     elevated: bool = False
+    logon_process: str = ""  # LogonProcessName (User32, Kerberos, NtLmSsp)
+    lm_package: str = ""  # LmPackageName (-, NTLM V2)
+    logon_guid: str = ""  # LogonGuid ({uuid} or null GUID)
+    subject_sid: str = ""  # SubjectUserSid (usually SYSTEM S-1-5-18)
+    subject_username: str = ""  # SubjectUserName (usually SYSTEM)
+    subject_domain: str = ""  # SubjectDomainName (usually NT AUTHORITY)
+    subject_logon_id: str = ""  # SubjectLogonId (usually 0x3e7)
+    reporting_pid: int = 0  # PID of the process reporting this event (e.g., lsass for logons)
 
 
 @dataclass(slots=True)
@@ -49,6 +61,10 @@ class ProcessContext:
     command_line: str
     username: str
     integrity_level: str = "Medium"
+    logon_id: str = ""  # For 4688/4689 SubjectLogonId + TargetLogonId
+    parent_image: str = ""  # ParentProcessName (4688)
+    token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
+    mandatory_label: str = ""  # MandatoryLabel SID
 
 
 @dataclass(slots=True)

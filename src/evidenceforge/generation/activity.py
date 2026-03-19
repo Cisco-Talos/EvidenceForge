@@ -13,7 +13,8 @@ from datetime import datetime, timedelta
 from threading import local, get_ident, Lock
 from typing import Optional
 
-from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -616,6 +617,12 @@ class ActivityGenerator:
         """
         self.state_manager = state_manager
         self.emitters = emitters
+        if dispatcher is None and emitters:
+            # Auto-create dispatcher for backward compat with tests
+            dispatcher = EventDispatcher(
+                state_manager=state_manager,
+                emitters=emitters,
+            )
         self.dispatcher = dispatcher
         self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
@@ -632,14 +639,21 @@ class ActivityGenerator:
         self.network_visibility = network_visibility
 
     def _build_host_context(self, system: System) -> HostContext:
-        """Build a HostContext from a System model object."""
+        """Build a HostContext from a System model object.
+
+        Precomputes FQDN and NetBIOS domain so render methods don't have to.
+        """
+        ad_domain = getattr(self, '_ad_domain', '')
+        hostname = system.hostname
         return HostContext(
-            hostname=system.hostname,
+            hostname=hostname,
             ip=system.ip,
             os=system.os,
             os_category=_get_os_category(system.os),
             system_type=system.type,
-            domain=getattr(system, '_domain', ''),
+            domain=ad_domain,
+            fqdn=f"{hostname}.{ad_domain}" if ad_domain else hostname,
+            netbios_domain=ad_domain.split('.')[0].upper() if ad_domain else 'CORP',
         )
 
     def generate_logon(
@@ -650,9 +664,10 @@ class ActivityGenerator:
         logon_type: int = 2,
         source_ip: Optional[str] = None
     ) -> str:
-        """Generate logon event and emit Windows 4624.
+        """Generate logon event across all applicable log formats.
 
-        Creates session in StateManager and emits Windows Event 4624 (successful logon).
+        Creates session in StateManager, builds a SecurityEvent, and dispatches
+        to matching emitters (Windows 4624 + optional 4672, syslog auth, eCAR).
 
         Args:
             user: User logging on
@@ -668,7 +683,7 @@ class ActivityGenerator:
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
 
-        # Create session in StateManager
+        # Phase 1: Allocate IDs from StateManager
         logon_id = self.state_manager.create_session(
             username=user.username,
             system=system.hostname,
@@ -676,75 +691,35 @@ class ActivityGenerator:
             source_ip=source_ip
         )
 
-        # Phase 2.10: OS-aware multi-format emission
-        os_category = _get_os_category(system.os)
+        # Select auth package (semantic data, not format-specific)
+        auth_pkg = self._select_auth_package(logon_type)
 
-        # Emit to native OS log format
-        if os_category == 'windows':
-            # Emit Windows Event 4624 (An account was successfully logged on)
-            event_data = {
-                'EventID': 4624,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,  # Information
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,    # System process
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                # Logon variant fields — Subject is SYSTEM (lsass reports logon events)
-                'SubjectUserSid': self._get_sid('SYSTEM'),
-                'SubjectUserName': 'SYSTEM',
-                'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': '0x3e7',
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'TargetLogonId': logon_id,
-                'LogonType': logon_type,
-                'WorkstationName': system.hostname,
-                'ProcessId': f'0x{self._get_system_pid(system.hostname, "lsass", 0x2e0):x}',
-                'ProcessName': r'C:\Windows\System32\lsass.exe',
-                'IpAddress': source_ip,
-                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
-                **self._select_auth_package(logon_type),
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
+        # Phase 2: Build SecurityEvent with all contexts
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logon",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                logon_type=logon_type,
+                auth_package=auth_pkg.get('AuthenticationPackageName', 'Negotiate'),
+                source_ip=source_ip,
+                elevated=_get_rng().random() < 0.15,
+                logon_process=auth_pkg.get('LogonProcessName', ''),
+                lm_package=auth_pkg.get('LmPackageName', '-'),
+                logon_guid=auth_pkg.get('LogonGuid', '{00000000-0000-0000-0000-000000000000}'),
+                subject_sid=self._get_sid('SYSTEM'),
+                subject_username='SYSTEM',
+                subject_domain='NT AUTHORITY',
+                subject_logon_id='0x3e7',
+                reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2e0),
+            ),
+        )
 
-        elif os_category == 'linux':
-            # Emit syslog authentication message
-            if 'syslog' in self.emitters:
-                event_data = {
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'facility': 10,  # authpriv
-                    'severity': 6,   # info
-                    'app_name': 'sshd' if logon_type == 3 else 'login',
-                    'pid': _get_rng().randint(1000, 9999),
-                    'message': f'Accepted password for {user.username} from {source_ip} port {_get_rng().randint(49152, 65535)}'
-                }
-                self.emitters['syslog'].emit_event(event_data)
-
-        # Emit eCAR if available (optional EDR/XDR layer)
-        self._emit_ecar_logon(user, system, time, logon_id, logon_type, source_ip)
-
-        # Phase 5.2: Emit 4672 (special privileges) for ~15% of logons (admin accounts)
-        if os_category == 'windows' and _get_rng().random() < 0.15:
-            priv_event = {
-                'EventID': 4672,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                'SubjectUserSid': self._get_sid(user.username),
-                'SubjectUserName': user.username,
-                'SubjectDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'SubjectLogonId': logon_id,
-                'PrivilegeList': 'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\tSeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\tSeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\tSeDelegateSessionUserImpersonatePrivilege',
-            }
-            self.emitters['windows_event_security'].emit_event(priv_event)
+        # Phase 3: Dispatch to matching emitters
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
@@ -757,12 +732,11 @@ class ActivityGenerator:
         logon_type: int = 2,
         source_ip: Optional[str] = None,
     ) -> None:
-        """Generate a failed logon event (bad password).
+        """Generate a failed logon event.
 
-        Does NOT create a session in StateManager. Emits:
-        - Windows: Event 4625 (failed logon)
-        - Linux: syslog "Failed password"
-        - eCAR: USER_SESSION/LOGIN with failure_reason (if available)
+        Does NOT create a session in StateManager. Builds a SecurityEvent with
+        result="failure" and dispatches to matching emitters (Windows 4625,
+        syslog "Failed password", eCAR LOGIN with failure_reason).
 
         Args:
             user: User attempting to log on
@@ -774,87 +748,48 @@ class ActivityGenerator:
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
 
-        os_category = _get_os_category(system.os)
+        # Determine failure substatus with correct SID handling
+        rng = _get_rng()
+        substatus_roll = rng.random()
+        if substatus_roll < 0.60:
+            substatus = '0xc000006a'  # Wrong password
+            user_sid = self._get_sid(user.username)
+            failure_reason = '%%2313'
+        elif substatus_roll < 0.85:
+            substatus = '0xc0000064'  # User not found: NULL SID
+            user_sid = 'S-1-0-0'
+            failure_reason = '%%2313'
+        elif substatus_roll < 0.95:
+            substatus = '0xc0000234'  # Account locked out
+            user_sid = self._get_sid(user.username)
+            failure_reason = '%%2304'
+        else:
+            substatus = '0xc0000072'  # Account disabled
+            user_sid = self._get_sid(user.username)
+            failure_reason = '%%2307'
 
-        if os_category == 'windows':
-            event_data = {
-                'EventID': 4625,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 9999),
-                'SubjectUserSid': self._get_sid('SYSTEM'),
-                'SubjectUserName': 'SYSTEM',
-                'SubjectDomainName': 'NT AUTHORITY',
-                'SubjectLogonId': '0x3e7',
-            }
-            # Varied failure substatus with correct SID handling
-            rng = _get_rng()
-            substatus_roll = rng.random()
-            if substatus_roll < 0.60:
-                # Wrong password (most common): user exists, so valid SID
-                event_data['SubStatus'] = '0xc000006a'
-                event_data['TargetUserSid'] = self._get_sid(user.username)
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2313'
-            elif substatus_roll < 0.85:
-                # User not found: NULL SID required
-                event_data['SubStatus'] = '0xc0000064'
-                event_data['TargetUserSid'] = 'S-1-0-0'
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2313'
-            elif substatus_roll < 0.95:
-                # Account locked out
-                event_data['SubStatus'] = '0xc0000234'
-                event_data['TargetUserSid'] = self._get_sid(user.username)
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2304'
-            else:
-                # Account disabled
-                event_data['SubStatus'] = '0xc0000072'
-                event_data['TargetUserSid'] = self._get_sid(user.username)
-                event_data['TargetUserName'] = user.username
-                event_data['TargetDomainName'] = getattr(self, '_netbios_domain', 'CORP')
-                event_data['FailureReason'] = '%%2307'
-            event_data.update({
-                'Status': '0xc000006d',
-                'LogonType': logon_type,
-                'IpAddress': source_ip,
-                'IpPort': _get_rng().randint(49152, 65535) if logon_type == 3 else 0,
-            })
-            self.emitters['windows_event_security'].emit_event(event_data)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="failed_logon",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=user_sid,
+                logon_type=logon_type,
+                auth_package='Negotiate',
+                result='failure',
+                failure_reason=failure_reason,
+                failure_status='0xc000006d',
+                failure_substatus=substatus,
+                source_ip=source_ip,
+                subject_sid=self._get_sid('SYSTEM'),
+                subject_username='SYSTEM',
+                subject_domain='NT AUTHORITY',
+                subject_logon_id='0x3e7',
+            ),
+        )
 
-        elif os_category == 'linux':
-            if 'syslog' in self.emitters:
-                event_data = {
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'facility': 10,  # authpriv
-                    'severity': 4,   # warning
-                    'app_name': 'sshd' if logon_type == 3 else 'login',
-                    'pid': _get_rng().randint(1000, 9999),
-                    'message': f'Failed password for {user.username} from {source_ip} port {_get_rng().randint(49152, 65535)} ssh2',
-                }
-                self.emitters['syslog'].emit_event(event_data)
-
-        # Emit eCAR failed login if available
-        if 'ecar' in self.emitters:
-            event_data = {
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'USER_SESSION',
-                'action': 'LOGIN',
-                'principal': user.username,
-                'src_ip': source_ip,
-                'failure_reason': 'bad_password',
-            }
-            self.emitters['ecar'].emit_event(event_data)
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
 
@@ -866,12 +801,10 @@ class ActivityGenerator:
         logon_id: str,
         logon_type: int = 2,
     ) -> None:
-        """Generate logoff event across OS-appropriate formats.
+        """Generate logoff event across all applicable log formats.
 
-        Ends session in StateManager and emits:
-        - Windows: Event 4634 (logoff)
-        - Linux: syslog "session closed"
-        - eCAR: USER_SESSION/LOGOUT (if available)
+        Ends session in StateManager, builds a SecurityEvent, and dispatches
+        to matching emitters (Windows 4634, syslog session closed, eCAR LOGOUT).
 
         Args:
             user: User logging off
@@ -880,56 +813,21 @@ class ActivityGenerator:
             logon_id: LogonID from the logon event
             logon_type: Logon type for the session being ended
         """
-        # End session in StateManager
-        self.state_manager.end_session(logon_id)
+        # Build SecurityEvent (StateManager.apply() handles end_session)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logoff",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+                logon_type=logon_type,
+            ),
+        )
 
-        # Phase 5.1: OS-aware multi-format emission
-        os_category = _get_os_category(system.os)
-
-        if os_category == 'windows':
-            # Emit Windows Event 4634 (An account was logged off)
-            event_data = {
-                'EventID': 4634,
-                'TimeCreated': time,
-                'Computer': f"{system.hostname}.{getattr(self, '_ad_domain', 'corp.local')}",
-                'Channel': 'Security',
-                'Level': 0,
-                # EventRecordID assigned by WindowsEventEmitter at flush time
-                'ExecutionProcessID': 4,
-                'ExecutionThreadID': _get_rng().randint(100, 500),
-                # Logoff variant fields
-                'TargetUserSid': self._get_sid(user.username),
-                'TargetUserName': user.username,
-                'TargetDomainName': getattr(self, '_netbios_domain', 'CORP'),
-                'TargetLogonId': logon_id,
-                'LogonType': logon_type,
-            }
-            self.emitters['windows_event_security'].emit_event(event_data)
-
-        elif os_category == 'linux':
-            # Emit syslog session closed message
-            if 'syslog' in self.emitters:
-                event_data = {
-                    'timestamp': time,
-                    'hostname': system.hostname,
-                    'facility': 10,  # authpriv
-                    'severity': 6,   # info
-                    'app_name': 'sshd' if logon_type == 3 else 'login',
-                    'pid': _get_rng().randint(1000, 9999),
-                    'message': f'session closed for user {user.username}',
-                }
-                self.emitters['syslog'].emit_event(event_data)
-
-        # Emit eCAR USER_SESSION/LOGOUT if available
-        if 'ecar' in self.emitters:
-            event_data = {
-                'timestamp': time,
-                'hostname': system.hostname,
-                'object': 'USER_SESSION',
-                'action': 'LOGOUT',
-                'principal': user.username,
-            }
-            self.emitters['ecar'].emit_event(event_data)
+        # Phase 3: Dispatch to matching emitters
+        self.dispatcher.dispatch(event)
 
         logger.debug(f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})")
 

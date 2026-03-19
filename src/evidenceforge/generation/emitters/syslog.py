@@ -1,8 +1,10 @@
 """Syslog emitter for Linux system logs."""
 
+import random
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -10,7 +12,79 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class SyslogEmitter(LogEmitter):
     """Emitter for Linux syslog format."""
 
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"logon", "logoff", "failed_logon"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Syslog emitter handles events on Linux hosts."""
+        return (
+            event.event_type in self._supported_types
+            and event.host is not None
+            and event.host.os_category == "linux"
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Dispatch to per-type render method."""
+        renderer = {
+            "logon": self._render_logon,
+            "logoff": self._render_logoff,
+            "failed_logon": self._render_failed_logon,
+        }.get(event.event_type)
+        if renderer is None:
+            raise NotImplementedError(
+                f"SyslogEmitter: no render method for {event.event_type}"
+            )
+        renderer(event)
+
+    def _render_logon(self, event: SecurityEvent) -> None:
+        """Render syslog authentication message for successful logon."""
+        rng = random.Random()
+        auth = event.auth
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname,
+            'facility': 10,  # authpriv
+            'severity': 6,   # info
+            'app_name': 'sshd' if auth.logon_type == 3 else 'login',
+            'pid': rng.randint(1000, 9999),
+            'message': (
+                f'Accepted password for {auth.username} from {auth.source_ip} '
+                f'port {rng.randint(49152, 65535)}'
+            ),
+        }
+        self.emit_event(event_data)
+
+    def _render_logoff(self, event: SecurityEvent) -> None:
+        """Render syslog session closed message."""
+        rng = random.Random()
+        auth = event.auth
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname,
+            'facility': 10,  # authpriv
+            'severity': 6,   # info
+            'app_name': 'sshd' if auth.logon_type == 3 else 'login',
+            'pid': rng.randint(1000, 9999),
+            'message': f'session closed for user {auth.username}',
+        }
+        self.emit_event(event_data)
+
+    def _render_failed_logon(self, event: SecurityEvent) -> None:
+        """Render syslog 'Failed password' message."""
+        rng = random.Random()
+        auth = event.auth
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname,
+            'facility': 10,  # authpriv
+            'severity': 4,   # warning
+            'app_name': 'sshd' if auth.logon_type == 3 else 'login',
+            'pid': rng.randint(1000, 9999),
+            'message': (
+                f'Failed password for {auth.username} from {auth.source_ip} '
+                f'port {rng.randint(49152, 65535)} ssh2'
+            ),
+        }
+        self.emit_event(event_data)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Route to threaded or non-threaded path."""

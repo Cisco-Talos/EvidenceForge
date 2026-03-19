@@ -321,7 +321,7 @@ class TestCanHandleDefault:
             assert isinstance(cls._supported_types, set), f"{cls.__name__}._supported_types is not a set"
 
     def test_emit_raises_not_implemented(self):
-        """Base emit() raises NotImplementedError."""
+        """emit() raises NotImplementedError for unsupported event types."""
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
         from evidenceforge.formats import load_format
         from pathlib import Path
@@ -330,7 +330,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         with tempfile.NamedTemporaryFile(suffix=".log") as f:
             emitter = SyslogEmitter(format_def, Path(f.name))
-            event = SecurityEvent(timestamp=_make_ts(), event_type="logon")
+            event = SecurityEvent(timestamp=_make_ts(), event_type="unsupported_type")
             with pytest.raises(NotImplementedError, match="SyslogEmitter"):
                 emitter.emit(event)
 
@@ -379,6 +379,31 @@ class TestBuildHostContext:
         assert ctx.os == "Windows 10 Enterprise"
         assert ctx.os_category == "windows"
         assert ctx.system_type == "workstation"
+        # No _ad_domain set → fqdn is bare hostname, netbios is default
+        assert ctx.fqdn == "WS-01"
+        assert ctx.netbios_domain == "CORP"
+
+    def test_build_host_context_with_domain(self):
+        """_build_host_context() precomputes FQDN and NetBIOS when domain is set."""
+        from evidenceforge.generation.activity import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from unittest.mock import MagicMock
+
+        sm = StateManager()
+        gen = ActivityGenerator(state_manager=sm, emitters={})
+        gen._ad_domain = "corp.local"
+
+        system = MagicMock()
+        system.hostname = "WS-01"
+        system.ip = "10.0.1.50"
+        system.os = "Windows 10 Enterprise"
+        system.type = "workstation"
+
+        ctx = gen._build_host_context(system)
+
+        assert ctx.domain == "corp.local"
+        assert ctx.fqdn == "WS-01.corp.local"
+        assert ctx.netbios_domain == "CORP"
 
     def test_build_host_context_linux(self):
         """_build_host_context() correctly detects Linux OS."""

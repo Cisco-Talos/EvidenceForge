@@ -4,6 +4,7 @@ import pytest
 from datetime import datetime, timezone
 from unittest.mock import Mock, MagicMock, patch
 
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import (
     ActivityGenerator,
     _is_invalid_network_connection,
@@ -81,8 +82,12 @@ class TestActivityGenerator:
 
     @pytest.fixture
     def activity_gen(self, state_manager, mock_emitters):
-        """Create activity generator with mocked emitters."""
-        return ActivityGenerator(state_manager, mock_emitters)
+        """Create activity generator with mocked emitters and dispatcher."""
+        dispatcher = EventDispatcher(
+            state_manager=state_manager,
+            emitters=mock_emitters,
+        )
+        return ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
 
     @pytest.fixture
     def test_user(self):
@@ -105,7 +110,7 @@ class TestActivityGenerator:
         )
 
     def test_generate_logon_creates_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
-        """generate_logon should create session and emit Windows 4624."""
+        """generate_logon should create session and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
         state_manager.set_current_time(timestamp)
 
@@ -117,13 +122,13 @@ class TestActivityGenerator:
         assert sessions[0].logon_id == logon_id
         assert sessions[0].username == test_user.username
 
-        # Verify Windows emitter received 4624 event (may also emit 4672 for special privileges)
-        assert mock_emitters['windows_event_security'].emit_event.called
-        calls = mock_emitters['windows_event_security'].emit_event.call_args_list
-        event_data = calls[0][0][0]  # First call is always 4624
-        assert event_data['EventID'] == 4624
-        assert event_data['TargetUserName'] == test_user.username
-        assert event_data['TargetLogonId'] == logon_id
+        # Verify emitters received SecurityEvent via dispatch
+        assert mock_emitters['windows_event_security'].emit.called
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.event_type == "logon"
+        assert event.auth.username == test_user.username
+        assert event.auth.logon_id == logon_id
+        assert event.host.os_category == "windows"
 
     def test_generate_logon_interactive_uses_system_ip(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """Interactive logon (type 2) should use system IP as source."""
@@ -132,10 +137,10 @@ class TestActivityGenerator:
 
         activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
 
-        # First call is always 4624 (may also emit 4672 for special privileges)
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert event_data['LogonType'] == 2
-        assert event_data['IpAddress'] == test_system.ip
+        # SecurityEvent dispatched to Windows emitter
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.auth.logon_type == 2
+        assert event.auth.source_ip == test_system.ip
 
     def test_generate_logon_network_allows_custom_ip(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """Network logon (type 3) should allow custom source IP."""
@@ -145,10 +150,10 @@ class TestActivityGenerator:
 
         activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=3, source_ip=source_ip)
 
-        # First call is always 4624 (may also emit 4672 for special privileges)
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert event_data['LogonType'] == 3
-        assert event_data['IpAddress'] == source_ip
+        # SecurityEvent dispatched to Windows emitter
+        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert event.auth.logon_type == 3
+        assert event.auth.source_ip == source_ip
 
     def test_generate_logoff_ends_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """generate_logoff should end session and emit Windows 4634."""
@@ -165,12 +170,13 @@ class TestActivityGenerator:
         # Verify session ended
         assert len(state_manager.get_sessions_for_user(test_user.username)) == 0
 
-        # Verify Windows emitter received 4634 event
-        logoff_call = mock_emitters['windows_event_security'].emit_event.call_args_list[-1]
-        event_data = logoff_call[0][0]
-        assert event_data['EventID'] == 4634
-        assert event_data['TargetUserName'] == test_user.username
-        assert event_data['TargetLogonId'] == logon_id
+        # Verify Windows emitter received logoff SecurityEvent via dispatch
+        # Last emit() call should be the logoff (logon was the first)
+        emit_calls = mock_emitters['windows_event_security'].emit.call_args_list
+        logoff_event = emit_calls[-1][0][0]
+        assert logoff_event.event_type == "logoff"
+        assert logoff_event.auth.username == test_user.username
+        assert logoff_event.auth.logon_id == logon_id
 
     def test_generate_process_creates_process(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """generate_process should create process and emit Windows 4688."""
@@ -353,10 +359,11 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'logon')
 
-        # Verify Windows emitter received logon event (4624 success or 4625 failed)
-        assert mock_emitters['windows_event_security'].emit_event.called
-        event_data = mock_emitters['windows_event_security'].emit_event.call_args_list[0][0][0]
-        assert event_data['EventID'] in (4624, 4625)
+        # Both logon and failed_logon dispatched via SecurityEvent
+        emitter = mock_emitters['windows_event_security']
+        assert emitter.emit.called
+        event = emitter.emit.call_args[0][0]
+        assert event.event_type in ("logon", "failed_logon")
 
     def test_execute_baseline_activity_process_creates_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should create session before process if needed."""
@@ -371,11 +378,16 @@ class TestActivityGenerator:
         # Should have created session first
         assert len(state_manager.get_sessions_for_user(test_user.username)) == 1
 
-        # Verify both logon (4624) and process (4688) events emitted
-        calls = mock_emitters['windows_event_security'].emit_event.call_args_list
-        event_ids = [call[0][0]['EventID'] for call in calls]
-        assert 4624 in event_ids  # Logon
-        assert 4688 in event_ids  # Process
+        # Verify both logon (dispatched) and process (emit_event) events emitted
+        emitter = mock_emitters['windows_event_security']
+        # Logon goes through dispatch (emit), process still uses emit_event
+        assert emitter.emit.called  # logon SecurityEvent
+        event = emitter.emit.call_args[0][0]
+        assert event.event_type == "logon"
+        # Process still via emit_event (not yet migrated)
+        assert emitter.emit_event.called
+        process_calls = [c for c in emitter.emit_event.call_args_list if c[0][0].get('EventID') == 4688]
+        assert len(process_calls) >= 1
 
     def test_execute_baseline_activity_process_uses_existing_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should use existing session for process."""
@@ -391,8 +403,10 @@ class TestActivityGenerator:
         # Should NOT have created another session
         assert len(state_manager.get_sessions_for_user(test_user.username)) == 1
 
-        # Verify only process event emitted (no additional logon)
-        calls = mock_emitters['windows_event_security'].emit_event.call_args_list
+        # Verify only process event emitted via emit_event (no additional logon dispatch)
+        emitter = mock_emitters['windows_event_security']
+        assert not emitter.emit.called  # No new logon dispatch after reset
+        calls = emitter.emit_event.call_args_list
         assert len(calls) == 1
         assert calls[0][0][0]['EventID'] == 4688
 

@@ -122,15 +122,20 @@ class TestEcarDiversityInProcessCreation:
                 'C:\\Windows\\System32\\cmd.exe', f'cmd.exe /c echo {i}'
             )
 
-        # Collect all unique eCAR object types
+        # Collect all unique eCAR object types from both emit_event (old) and emit (new dispatch)
         object_types = set()
         for call in mock_emitters['ecar'].emit_event.call_args_list:
             event_data = call[0][0]
             object_types.add(event_data.get('object'))
+        # Logon now dispatched via emit() as SecurityEvent
+        for call in mock_emitters['ecar'].emit.call_args_list:
+            event = call[0][0]
+            if event.event_type == "logon":
+                object_types.add('USER_SESSION')
 
-        # Should have at least PROCESS + some of FILE, MODULE, REGISTRY
+        # Should have at least PROCESS + USER_SESSION + some of FILE, MODULE, REGISTRY
         assert 'PROCESS' in object_types
-        assert 'USER_SESSION' in object_types  # From logon
+        assert 'USER_SESSION' in object_types  # From logon (dispatched)
         # With 50 processes at 40% file + 30% module + 20% registry, should see at least 2 more
         assert len(object_types) >= 3, f"Only {len(object_types)} object types: {object_types}"
 

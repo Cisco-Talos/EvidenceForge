@@ -146,10 +146,12 @@ class TestThreadLocalRNG:
                 )
             }
 
-            # Create state manager and activity generator
+            # Create state manager, dispatcher, and activity generator
+            from evidenceforge.events.dispatcher import EventDispatcher
             sm = StateManager()
             sm.set_current_time(datetime.now())
-            ag = ActivityGenerator(sm, emitters)
+            dispatcher = EventDispatcher(state_manager=sm, emitters=emitters)
+            ag = ActivityGenerator(sm, emitters, dispatcher=dispatcher)
 
             # Create dummy user and system with all required fields
             from evidenceforge.models.scenario import User, System
