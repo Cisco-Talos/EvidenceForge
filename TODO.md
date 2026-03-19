@@ -974,6 +974,89 @@
   - Fix: use correct labels in ground truth generation
   - Files: `ground_truth.py`
 
+### 6.6 Phase 7 Eval Expert Panel Findings (2026-03-19)
+
+**Source:** 4-expert blind panel A/B comparison on `baseline-test` scenario (old pre-Phase-7 vs new post-Phase-7 data).
+**Eval scores:** Old 82.3/100 → New 83.7/100 (+1.4). Tells: 36 → 30 (-6).
+**Resolved by Phase 7:** 6 tells fixed (lsass PID sharing, PowerShell on Linux, UDP history "DdA", UDP conn_state OTH, missing logoffs, missing service/anonymous logons).
+
+#### New findings (not previously tracked):
+
+**P0 — Instant Giveaways:**
+- [ ] **Fabricated PTR records return forward lookup names** (Expert Panel #EP1)
+  - `140.82.121.4.in-addr.arpa` → `api.github.com`; real rDNS is `lb-140-82-121-4-iad.github.com`
+  - Fix: use realistic rDNS patterns (CDN edge names, cloud instance names)
+  - Files: `activity.py` (REVERSE_DNS map, `_emit_dns_lookup`)
+- [ ] **Cross-provider DNS: Google hostnames resolve to AWS IPs** (Expert Panel #EP2)
+  - `105-10-37-226.bc.googleusercontent.com` → `54.230.26.104` (CloudFront IP)
+  - Fix: ensure generated hostname provider matches the IP provider
+  - Files: `activity.py` (`_generate_random_hostname`)
+- [ ] **`service:"https"` on port 80 connections** (Expert Panel #EP3)
+  - Generator applies scenario service label; Zeek would detect HTTP on port 80
+  - Fix: port-based service override (80→http, 443→https, 22→ssh)
+  - Files: `activity.py` (`generate_connection` or `execute_baseline_activity`)
+
+**P1 — Expert-Level Tells:**
+- [ ] **Every user gets SeDebugPrivilege on 4672** (Expert Panel #EP4)
+  - 4672 privilege list is identical for all users; only admins should have SeDebugPrivilege
+  - Fix: persona-aware privilege lists (admin vs standard user)
+  - Files: `emitters/windows.py` (`_render_logon` 4672 section)
+- [ ] **No Zeek http.log, ssl.log, or files.log** (Expert Panel #EP5)
+  - Only conn.log + dns.log implemented; analysts expect protocol-specific logs
+  - Fix: implement http.log and ssl.log emitters (major feature)
+  - Files: new emitters needed
+- [ ] **No syslog auth.log entries for storyline SSH lateral movement** (Expert Panel #EP6)
+  - SSH to WEB-01/FILES-01 visible in Zeek but no corresponding syslog auth messages
+  - Fix: emit syslog auth entries for storyline SSH connections
+  - Files: `engine.py` (storyline execution), `activity.py`
+- [ ] **SYSTEM process (mimikatz) with explorer.exe parent** (Expert Panel #EP7)
+  - Credential dump as SYSTEM should have implant/cmd.exe parent, not explorer
+  - Fix: storyline processes use correct parent chain from attack sequence
+  - Files: `engine.py` (storyline process creation parent selection)
+- [ ] **DC EventRecordID offset too low** (~11K) (Expert Panel #EP8)
+  - Production DCs have 100K+ events; starting at 11K implies fresh install
+  - Fix: increase DC initial offset to 50K-200K range
+  - Files: `emitters/windows.py` (RecordID counter initialization)
+- [ ] **eCAR ICMP flows use `protocol:"tcp"` instead of `"icmp"`** (Expert Panel #EP9)
+  - ICMP has no ports; eCAR should use protocol:"icmp" or omit ICMP FLOWs
+  - Files: `activity.py` (`_emit_ecar_flow_event`)
+
+**P2 — Polish Issues:**
+- [ ] **Zeek duration has 16+ decimal places** (Expert Panel #EP10)
+  - Real Zeek uses microsecond precision (6 decimal places max)
+  - Fix: round duration to 6 decimal places
+  - Files: `activity.py` (`generate_connection`) or `emitters/zeek.py`
+- [ ] **Mechanically regular Kerberos ticket timing** (Expert Panel #EP11)
+  - TGT/TGS at even ~7-10min intervals; real Kerberos is bursty around user activity
+  - Fix: cluster Kerberos around user activity windows, add jitter
+  - Files: `engine.py` (`_generate_system_traffic` Kerberos section)
+- [ ] **DNS query set too curated — no Windows telemetry noise** (Expert Panel #EP12)
+  - Missing: settings-win.data.microsoft.com, ocsp.digicert.com, *.windowsupdate.com
+  - Fix: add Windows telemetry/OCSP/CRL noise domains to DNS query pool
+  - Files: `activity.py` (`_emit_dns_lookup` or new background DNS method)
+- [ ] **NTP server mismatch: Zeek shows NIST, syslog shows Ubuntu pool** (Expert Panel #EP13)
+  - Cross-source inconsistency between network and host logs
+  - Fix: use same NTP server IPs in both Zeek conn and syslog timesyncd
+  - Files: `engine.py` (`_generate_system_traffic` NTP section)
+- [ ] **UFW BLOCK entries don't appear in Zeek conn.log** (Expert Panel #EP14)
+  - Blocked SYN packets should appear as S0/REJ in Zeek if sensor is on same segment
+  - Fix: emit corresponding Zeek conn records for UFW-blocked connections
+  - Files: `engine.py` (syslog UFW generation)
+- [ ] **Zeek `missed_bytes` always 0** (Expert Panel #EP15)
+  - Real captures have some packet loss; ~1-5% of long connections should have missed_bytes > 0
+  - Fix: probabilistic missed_bytes for long-duration connections
+  - Files: `activity.py` (`generate_connection`)
+- [ ] **Round `.0` timestamps on SSH/ICMP Zeek connections** (Expert Panel #EP16)
+  - Storyline/system connections land on exact seconds; real pcap has fractional precision
+  - Fix: add microsecond jitter to all Zeek timestamps
+  - Files: `engine.py` (storyline/system traffic timestamp generation)
+
+**P3 — Nitpicks:**
+- [ ] **No 4778/4779 (RDP reconnect/disconnect) events** (Expert Panel #EP17)
+  - LogonType 10 (RDP) events present but no corresponding session events
+  - Fix: emit 4778/4779 pairs for RDP logons
+  - Files: `activity.py` or `engine.py`
+
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
 
 ---
