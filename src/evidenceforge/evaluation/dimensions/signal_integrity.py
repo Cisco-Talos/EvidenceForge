@@ -34,7 +34,9 @@ ACTIVITY_KEYWORDS: dict[str, list[str]] = {
     "logoff": ["logoff", "log off", "logout", "sign out"],
     "process": [
         "execute", "run", "launch", "start", "spawn",
-        "powershell", "cmd", "command",
+        "powershell", "cmd", "command", "search", "read",
+        "enumerate", "dump", "query", "list", "archive",
+        "compress", "delete", "remove", "clean",
     ],
     "connection": [
         "connect", "access", "download", "upload",
@@ -355,7 +357,14 @@ class SignalIntegrityScorer(DimensionScorer):
     def _host_matches(record_host: Any, expected: str) -> bool:
         if record_host is None:
             return False
-        return str(record_host).lower() == expected.lower()
+        record_str = str(record_host).lower()
+        expected_lower = expected.lower()
+        # Exact match or FQDN prefix match (WEB-01.corp.local matches WEB-01)
+        return (
+            record_str == expected_lower
+            or record_str.startswith(expected_lower + ".")
+            or expected_lower.startswith(record_str + ".")
+        )
 
     # --- Step 3: Scoring ---
 

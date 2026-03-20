@@ -1034,7 +1034,7 @@ class GenerationEngine:
         keywords = {
             'logon': ['logon', 'log in', 'login', 'authenticate', 'sign in'],
             'logoff': ['logoff', 'log off', 'logout', 'sign out'],
-            'process': ['execute', 'run', 'launch', 'start', 'spawn', 'powershell', 'cmd', 'command'],
+            'process': ['execute', 'run', 'launch', 'start', 'spawn', 'powershell', 'cmd', 'command', 'search', 'read', 'enumerate', 'dump', 'query', 'list', 'archive', 'compress', 'delete', 'remove', 'clean'],
             'connection': ['connect', 'access', 'download', 'upload', 'communicate', 'c2', 'exfiltrate', 'ssh', 'rdp', 'remote'],
         }
 
@@ -1097,14 +1097,29 @@ class GenerationEngine:
             # Get or create session for this user
             sessions = self.state_manager.get_sessions_for_user(actor.username)
             if not sessions:
-                # Create session first
-                logon_id = self.activity_generator.generate_logon(actor, system, time, logon_type=3)
+                # Create session first with timestamp slightly before the process
+                logon_time = time - timedelta(seconds=random.uniform(0.5, 2.0))
+                logon_id = self.activity_generator.generate_logon(actor, system, logon_time, logon_type=3)
             else:
                 logon_id = sessions[0].logon_id  # Use first active session
 
-            # Use details or create malicious-looking process
-            process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
-            command_line = details.get('command_line', 'powershell.exe -enc <base64_encoded_command>')
+            # Linux command events: emit bash_history + eCAR for commands
+            from evidenceforge.generation.activity import _get_os_category
+            linux_command = details.get('command')
+            os_category = _get_os_category(system.os)
+            if linux_command and os_category == 'linux':
+                # Emit bash history entry
+                self.activity_generator.generate_bash_command(
+                    actor, system, time, linux_command
+                )
+                # Also generate eCAR PROCESS/CREATE for the command
+                cmd_binary = linux_command.split()[0] if linux_command.strip() else '/bin/bash'
+                process_name = cmd_binary
+                command_line = linux_command
+            else:
+                # Use details or create malicious-looking process (Windows)
+                process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+                command_line = details.get('command_line', 'powershell.exe -enc <base64_encoded_command>')
 
             # Replace base64 placeholder with actual encoded command
             if '<base64_encoded_command>' in command_line:

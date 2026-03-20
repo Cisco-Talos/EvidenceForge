@@ -15,17 +15,24 @@ class BashHistoryParser(LogParser):
     format_name = "bash_history"
 
     def can_parse(self, path: Path) -> bool:
-        return path.suffix == ".history" and "bash_history" in str(path)
+        return (path.suffix in (".history", ".bash_history") and "bash_history" in str(path))
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         """Parse a single bash history file.
 
-        Expects path like: bash_history/<hostname>/<username>.history
+        Supports path layouts:
+        - bash_history/<hostname>/<username>.history  (old flat layout)
+        - <host_fqdn>/bash_history/<username>.bash_history  (new per-host layout)
         Format: #<epoch> followed by command on next line.
         """
         # Extract hostname and username from path
         username = path.stem
-        hostname = path.parent.name
+        if path.parent.name == "bash_history":
+            # New layout: <host_fqdn>/bash_history/<user>.bash_history
+            hostname = path.parent.parent.name
+        else:
+            # Old layout: bash_history/<hostname>/<user>.history
+            hostname = path.parent.name
 
         with path.open(encoding="utf-8") as f:
             lines = f.readlines()

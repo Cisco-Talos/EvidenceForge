@@ -1455,7 +1455,7 @@ class ActivityGenerator:
         user: User,
         system: System,
         time: datetime,
-        activity_type: str = 'default'
+        activity_type_or_command: str = 'default'
     ) -> None:
         """Generate bash command history entry via dispatch.
 
@@ -1466,32 +1466,37 @@ class ActivityGenerator:
             user: User executing command
             system: Linux system
             time: Command execution time
-            activity_type: Type of activity (process_code, process_build, etc.)
+            activity_type_or_command: Either an activity type key (process_code, etc.)
+                or a direct command string (if it contains spaces or '/')
         """
         from evidenceforge.events.contexts import ShellContext
 
-        # Select command based on activity type
-        commands = {
-            'process_code': ['vim script.py', 'nano config.conf', 'code .', 'git status',
-                             'git diff', 'python3 -m pytest', 'cat README.md'],
-            'process_build': ['make', 'gcc -o output source.c', 'npm run build',
-                              'docker build -t app .', 'cargo build --release'],
-            'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz',
-                               'curl -I https://api.example.com/health'],
-            'process_user_apps': ['ls -la', 'cd /var/www/html', 'tail -f /var/log/syslog',
-                                  'grep -r "error" /var/log/', 'systemctl status apache2',
-                                  'free -m', 'uptime', 'cat /etc/hostname',
-                                  'netstat -tlnp', 'du -sh /var/log/*', 'w',
-                                  'journalctl -u apache2 --since "1 hour ago"',
-                                  'htop', 'ss -tulnp', 'ip addr show'],
-            'default': ['ls -la', 'ps aux', 'top', 'df -h', 'whoami', 'pwd',
-                        'cat /etc/os-release', 'uptime', 'free -m', 'w',
-                        'tail -20 /var/log/syslog', 'history', 'date',
-                        'ls /tmp', 'mount | grep -v tmpfs']
-        }
+        # If the argument looks like a direct command (contains / or spaces), use it directly
+        if '/' in activity_type_or_command or ' ' in activity_type_or_command:
+            command = activity_type_or_command
+        else:
+            # Select command based on activity type
+            commands = {
+                'process_code': ['vim script.py', 'nano config.conf', 'code .', 'git status',
+                                 'git diff', 'python3 -m pytest', 'cat README.md'],
+                'process_build': ['make', 'gcc -o output source.c', 'npm run build',
+                                  'docker build -t app .', 'cargo build --release'],
+                'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz',
+                                   'curl -I https://api.example.com/health'],
+                'process_user_apps': ['ls -la', 'cd /var/www/html', 'tail -f /var/log/syslog',
+                                      'grep -r "error" /var/log/', 'systemctl status apache2',
+                                      'free -m', 'uptime', 'cat /etc/hostname',
+                                      'netstat -tlnp', 'du -sh /var/log/*', 'w',
+                                      'journalctl -u apache2 --since "1 hour ago"',
+                                      'htop', 'ss -tulnp', 'ip addr show'],
+                'default': ['ls -la', 'ps aux', 'top', 'df -h', 'whoami', 'pwd',
+                            'cat /etc/os-release', 'uptime', 'free -m', 'w',
+                            'tail -20 /var/log/syslog', 'history', 'date',
+                            'ls /tmp', 'mount | grep -v tmpfs']
+            }
 
-        command_list = commands.get(activity_type, commands['default'])
-        command = _get_rng().choice(command_list)
+            command_list = commands.get(activity_type_or_command, commands['default'])
+            command = _get_rng().choice(command_list)
 
         event = SecurityEvent(
             timestamp=time,
