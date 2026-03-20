@@ -19,6 +19,9 @@ from evidenceforge.generation.emitters import (
     WindowsEventEmitter,
     ZeekEmitter,
     ZeekDnsEmitter,
+    ZeekHttpEmitter,
+    ZeekSslEmitter,
+    ZeekFilesEmitter,
     EcarEmitter,
     SyslogEmitter,
     BashHistoryEmitter,
@@ -179,12 +182,15 @@ class GenerationEngine:
         formats_to_generate = [
             'windows_event_security',  # Phase 1 - Temporary (activity.py still uses this)
             'zeek_conn',               # Phase 1 - Network visibility
-            'zeek_dns',                # Phase 5.3 - DNS query logging (NEW)
-            'ecar',                    # Phase 2.2 - Primary host EDR/XDR (NEW)
-            'syslog',                  # Phase 2.2 - Linux native logs (NEW)
-            'bash_history',            # Phase 2.2 - Command history (NEW)
-            'snort_alert',             # Phase 2.2 - IDS alerts (NEW)
-            'web_access'               # Phase 2.2 - Web logs (NEW)
+            'zeek_dns',                # Phase 5.3 - DNS query logging
+            'zeek_http',               # Zeek expansion - HTTP logging
+            'zeek_ssl',                # Zeek expansion - SSL/TLS logging
+            'zeek_files',              # Zeek expansion - File transfer logging
+            'ecar',                    # Phase 2.2 - Primary host EDR/XDR
+            'syslog',                  # Phase 2.2 - Linux native logs
+            'bash_history',            # Phase 2.2 - Command history
+            'snort_alert',             # Phase 2.2 - IDS alerts
+            'web_access'               # Phase 2.2 - Web logs
         ]
 
         # Map format names to emitter classes
@@ -192,6 +198,9 @@ class GenerationEngine:
             'windows_event_security': WindowsEventEmitter,
             'zeek_conn': ZeekEmitter,
             'zeek_dns': ZeekDnsEmitter,
+            'zeek_http': ZeekHttpEmitter,
+            'zeek_ssl': ZeekSslEmitter,
+            'zeek_files': ZeekFilesEmitter,
             'ecar': EcarEmitter,
             'syslog': SyslogEmitter,
             'bash_history': BashHistoryEmitter,

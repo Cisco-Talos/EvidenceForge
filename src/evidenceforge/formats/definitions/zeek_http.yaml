@@ -1,0 +1,147 @@
+name: zeek_http
+version: "1.0"
+description: "Zeek http.log format (JSON output) - HTTP request/response logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of HTTP request"
+
+  - name: uid
+    type: string
+    required: true
+    description: "Connection UID (shared with conn.log)"
+    constraints:
+      pattern: "^[A-Za-z0-9]{17,19}$"
+
+  - name: id.orig_h
+    type: ip_address
+    required: true
+    description: "Client IP address"
+
+  - name: id.orig_p
+    type: port
+    required: true
+    description: "Client port"
+
+  - name: id.resp_h
+    type: ip_address
+    required: true
+    description: "Server IP address"
+
+  - name: id.resp_p
+    type: port
+    required: true
+    description: "Server port"
+
+  - name: trans_depth
+    type: integer
+    required: true
+    description: "Pipelined depth into the connection"
+
+  - name: method
+    type: string
+    required: true
+    description: "HTTP method (GET, POST, etc.)"
+
+  - name: host
+    type: string
+    required: true
+    description: "Host header value"
+
+  - name: uri
+    type: string
+    required: true
+    description: "URI path"
+
+  - name: version
+    type: string
+    required: false
+    description: "HTTP version (1.0, 1.1)"
+
+  - name: user_agent
+    type: string
+    required: false
+    description: "User-Agent header"
+
+  - name: request_body_len
+    type: integer
+    required: true
+    description: "Request body length"
+
+  - name: response_body_len
+    type: integer
+    required: true
+    description: "Response body length"
+
+  - name: status_code
+    type: integer
+    required: true
+    description: "HTTP response status code"
+
+  - name: status_msg
+    type: string
+    required: true
+    description: "HTTP response status message"
+
+  - name: tags
+    type: string
+    required: false
+    description: "Tags array (rendered as JSON array)"
+
+  - name: referrer
+    type: string
+    required: false
+    description: "Referer header"
+
+  - name: resp_fuids
+    type: string
+    required: false
+    description: "Response file UIDs (rendered as JSON array)"
+
+  - name: resp_mime_types
+    type: string
+    required: false
+    description: "Response MIME types (rendered as JSON array)"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "trans_depth": {{ trans_depth | tojson }},
+      "method": {{ method | tojson }},
+      "host": {{ host | tojson }},
+      "uri": {{ uri | tojson }}
+      {%- if version is not none %},
+      "version": {{ version | tojson }}
+      {%- endif %}
+      {%- if user_agent is not none %},
+      "user_agent": {{ user_agent | tojson }}
+      {%- endif %},
+      "request_body_len": {{ request_body_len | tojson }},
+      "response_body_len": {{ response_body_len | tojson }},
+      "status_code": {{ status_code | tojson }},
+      "status_msg": {{ status_msg | tojson }}
+      {%- if tags is not none %},
+      "tags": {{ tags | tojson }}
+      {%- endif %}
+      {%- if referrer is not none %},
+      "referrer": {{ referrer | tojson }}
+      {%- endif %}
+      {%- if resp_fuids is not none %},
+      "resp_fuids": {{ resp_fuids | tojson }}
+      {%- endif %}
+      {%- if resp_mime_types is not none %},
+      "resp_mime_types": {{ resp_mime_types | tojson }}
+      {%- endif %}
+    }

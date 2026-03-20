@@ -1,0 +1,99 @@
+name: zeek_ssl
+version: "1.0"
+description: "Zeek ssl.log format (JSON output) - SSL/TLS handshake logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of SSL/TLS handshake"
+
+  - name: uid
+    type: string
+    required: true
+    description: "Connection UID (shared with conn.log)"
+    constraints:
+      pattern: "^[A-Za-z0-9]{17,19}$"
+
+  - name: id.orig_h
+    type: ip_address
+    required: true
+    description: "Client IP address"
+
+  - name: id.orig_p
+    type: port
+    required: true
+    description: "Client port"
+
+  - name: id.resp_h
+    type: ip_address
+    required: true
+    description: "Server IP address"
+
+  - name: id.resp_p
+    type: port
+    required: true
+    description: "Server port"
+
+  - name: version
+    type: string
+    required: false
+    description: "SSL/TLS version (TLSv10, TLSv12, TLSv13)"
+
+  - name: cipher
+    type: string
+    required: false
+    description: "Cipher suite name"
+
+  - name: server_name
+    type: string
+    required: false
+    description: "SNI hostname"
+
+  - name: resumed
+    type: boolean
+    required: false
+    description: "Was session resumed?"
+
+  - name: established
+    type: boolean
+    required: false
+    description: "Was connection established?"
+
+  - name: ssl_history
+    type: string
+    required: false
+    description: "SSL handshake history"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }}
+      {%- if version is not none %},
+      "version": {{ version | tojson }}
+      {%- endif %}
+      {%- if cipher is not none %},
+      "cipher": {{ cipher | tojson }}
+      {%- endif %}
+      {%- if server_name is not none %},
+      "server_name": {{ server_name | tojson }}
+      {%- endif %}
+      {%- if resumed is not none %},
+      "resumed": {{ resumed | tojson }}
+      {%- endif %}
+      {%- if established is not none %},
+      "established": {{ established | tojson }}
+      {%- endif %}
+      {%- if ssl_history is not none %},
+      "ssl_history": {{ ssl_history | tojson }}
+      {%- endif %}
+    }

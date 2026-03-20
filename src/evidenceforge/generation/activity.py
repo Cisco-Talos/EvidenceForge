@@ -1294,6 +1294,79 @@ class ActivityGenerator:
             ),
         )
 
+        # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
+        rng = _get_rng()
+        if service == 'ssl' and proto == 'tcp' and conn_state == 'SF':
+            from evidenceforge.events.contexts import SslContext
+            server_name = REVERSE_DNS.get(dst_ip, dst_ip)
+            _TLS_CIPHERS = [
+                'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+                'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+                'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+                'TLS_AES_128_GCM_SHA256',
+                'TLS_AES_256_GCM_SHA384',
+                'TLS_CHACHA20_POLY1305_SHA256',
+            ]
+            tls_version = rng.choice(['TLSv12', 'TLSv12', 'TLSv12', 'TLSv13'])
+            event.ssl = SslContext(
+                version=tls_version,
+                cipher=rng.choice(_TLS_CIPHERS),
+                server_name=server_name,
+                resumed=rng.random() < 0.6,
+                established=True,
+                ssl_history='CsiI' if rng.random() < 0.7 else 'CsijI',
+            )
+        elif service == 'http' and proto == 'tcp' and conn_state == 'SF':
+            from evidenceforge.events.contexts import HttpContext
+            _USER_AGENTS = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            ]
+            host = REVERSE_DNS.get(dst_ip, dst_ip)
+            if dst_port not in (80, 443):
+                host = f'{host}:{dst_port}'
+            _URIS = ['/', '/index.html', '/api/v1/status', '/favicon.ico', '/robots.txt',
+                      '/assets/main.css', '/assets/app.js', '/images/logo.png']
+            resp_body_len = resp_bytes or rng.randint(200, 50000)
+            event.http = HttpContext(
+                method='GET',
+                host=host,
+                uri=rng.choice(_URIS),
+                version='1.1',
+                user_agent=rng.choice(_USER_AGENTS),
+                request_body_len=0,
+                response_body_len=resp_body_len,
+                status_code=200,
+                status_msg='OK',
+                tags=[],
+            )
+            # Probabilistic file transfer for HTTP responses with content
+            if resp_body_len > 100 and rng.random() < 0.3:
+                from evidenceforge.events.contexts import FileTransferContext
+                from evidenceforge.utils.ids import generate_zeek_uid
+                fuid = generate_zeek_uid('F')
+                _MIME_TYPES = ['text/html', 'text/plain', 'application/javascript',
+                               'text/css', 'image/png', 'image/jpeg', 'application/json']
+                event.file_transfer = FileTransferContext(
+                    fuid=fuid,
+                    source='HTTP',
+                    depth=0,
+                    analyzers=[],
+                    mime_type=rng.choice(_MIME_TYPES),
+                    duration=rng.uniform(0.0, 0.01),
+                    local_orig=_is_private_ip(dst_ip),
+                    is_orig=False,
+                    seen_bytes=resp_body_len,
+                    total_bytes=resp_body_len,
+                    missing_bytes=0,
+                    overflow_bytes=0,
+                    timedout=False,
+                )
+                event.http.resp_fuids = [fuid]
+                event.http.resp_mime_types = [event.file_transfer.mime_type]
+
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")

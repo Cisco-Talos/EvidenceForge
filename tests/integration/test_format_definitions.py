@@ -401,8 +401,8 @@ class TestLoadAllFormats:
         """Test that all format definitions load successfully."""
         formats = load_all_formats()
 
-        # Phase 1 (2) + Phase 2.2 (5) + Phase 5.3 (1) = 8 formats
-        assert len(formats) == 8
+        # Phase 1 (2) + Phase 2.2 (5) + Phase 5.3 (1) + Zeek expansion (3) = 11 formats
+        assert len(formats) == 11
         assert "windows_event_security" in formats
         assert "zeek_conn" in formats
         assert "ecar" in formats
