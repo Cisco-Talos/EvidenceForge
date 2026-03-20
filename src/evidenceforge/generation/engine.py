@@ -22,6 +22,14 @@ from evidenceforge.generation.emitters import (
     ZeekHttpEmitter,
     ZeekSslEmitter,
     ZeekFilesEmitter,
+    ZeekDhcpEmitter,
+    ZeekNtpEmitter,
+    ZeekWeirdEmitter,
+    ZeekX509Emitter,
+    ZeekOcspEmitter,
+    ZeekPeEmitter,
+    ZeekPacketFilterEmitter,
+    ZeekReporterEmitter,
     EcarEmitter,
     SyslogEmitter,
     BashHistoryEmitter,
@@ -186,6 +194,14 @@ class GenerationEngine:
             'zeek_http',               # Zeek expansion - HTTP logging
             'zeek_ssl',                # Zeek expansion - SSL/TLS logging
             'zeek_files',              # Zeek expansion - File transfer logging
+            'zeek_dhcp',               # Zeek expansion - DHCP logging
+            'zeek_ntp',                # Zeek expansion - NTP logging
+            'zeek_weird',              # Zeek expansion - Anomaly logging
+            'zeek_x509',               # Zeek expansion - X.509 certificate logging
+            'zeek_ocsp',               # Zeek expansion - OCSP response logging
+            'zeek_pe',                 # Zeek expansion - PE analysis logging
+            'zeek_packet_filter',      # Zeek expansion - Packet filter state
+            'zeek_reporter',           # Zeek expansion - Sensor diagnostics
             'ecar',                    # Phase 2.2 - Primary host EDR/XDR
             'syslog',                  # Phase 2.2 - Linux native logs
             'bash_history',            # Phase 2.2 - Command history
@@ -201,6 +217,14 @@ class GenerationEngine:
             'zeek_http': ZeekHttpEmitter,
             'zeek_ssl': ZeekSslEmitter,
             'zeek_files': ZeekFilesEmitter,
+            'zeek_dhcp': ZeekDhcpEmitter,
+            'zeek_ntp': ZeekNtpEmitter,
+            'zeek_weird': ZeekWeirdEmitter,
+            'zeek_x509': ZeekX509Emitter,
+            'zeek_ocsp': ZeekOcspEmitter,
+            'zeek_pe': ZeekPeEmitter,
+            'zeek_packet_filter': ZeekPacketFilterEmitter,
+            'zeek_reporter': ZeekReporterEmitter,
             'ecar': EcarEmitter,
             'syslog': SyslogEmitter,
             'bash_history': BashHistoryEmitter,

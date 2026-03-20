@@ -1,0 +1,87 @@
+name: zeek_weird
+version: "1.0"
+description: "Zeek weird.log format (JSON output) - Network anomaly logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of anomaly"
+
+  - name: uid
+    type: string
+    required: false
+    description: "Connection UID (if associated with a connection)"
+
+  - name: id.orig_h
+    type: ip_address
+    required: false
+    description: "Originator IP (if associated)"
+
+  - name: id.orig_p
+    type: port
+    required: false
+    description: "Originator port (if associated)"
+
+  - name: id.resp_h
+    type: ip_address
+    required: false
+    description: "Responder IP (if associated)"
+
+  - name: id.resp_p
+    type: port
+    required: false
+    description: "Responder port (if associated)"
+
+  - name: name
+    type: string
+    required: true
+    description: "Anomaly name"
+
+  - name: addl
+    type: string
+    required: false
+    description: "Additional info"
+
+  - name: notice
+    type: boolean
+    required: true
+    description: "Should generate notice?"
+
+  - name: peer
+    type: string
+    required: true
+    description: "Zeek peer name"
+
+  - name: source
+    type: string
+    required: false
+    description: "Source analyzer"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }}
+      {%- if uid is not none %},
+      "uid": {{ uid | tojson }}
+      {%- endif %}
+      {%- if data is defined and data['id.orig_h'] is defined %},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }}
+      {%- endif %},
+      "name": {{ name | tojson }},
+      "notice": {{ notice | tojson }},
+      "peer": {{ peer | tojson }}
+      {%- if addl is not none %},
+      "addl": {{ addl | tojson }}
+      {%- endif %}
+      {%- if source is not none %},
+      "source": {{ source | tojson }}
+      {%- endif %}
+    }

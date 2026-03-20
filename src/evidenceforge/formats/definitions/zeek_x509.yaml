@@ -1,0 +1,111 @@
+name: zeek_x509
+version: "1.0"
+description: "Zeek x509.log format (JSON output) - X.509 certificate logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp"
+
+  - name: fingerprint
+    type: string
+    required: true
+    description: "Certificate SHA256 fingerprint"
+
+  - name: certificate.version
+    type: integer
+    required: true
+    description: "X.509 version"
+
+  - name: certificate.serial
+    type: string
+    required: true
+    description: "Serial number"
+
+  - name: certificate.subject
+    type: string
+    required: true
+    description: "Subject DN"
+
+  - name: certificate.issuer
+    type: string
+    required: true
+    description: "Issuer DN"
+
+  - name: certificate.not_valid_before
+    type: float
+    required: true
+    description: "Valid from (epoch)"
+
+  - name: certificate.not_valid_after
+    type: float
+    required: true
+    description: "Valid until (epoch)"
+
+  - name: certificate.key_alg
+    type: string
+    required: true
+    description: "Key algorithm"
+
+  - name: certificate.sig_alg
+    type: string
+    required: true
+    description: "Signature algorithm"
+
+  - name: certificate.key_type
+    type: string
+    required: true
+    description: "Key type (rsa, ecdsa)"
+
+  - name: certificate.key_length
+    type: integer
+    required: true
+    description: "Key length in bits"
+
+  - name: certificate.exponent
+    type: string
+    required: false
+    description: "RSA exponent"
+
+  - name: host_cert
+    type: boolean
+    required: true
+    description: "Is host certificate?"
+
+  - name: client_cert
+    type: boolean
+    required: true
+    description: "Is client certificate?"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "fingerprint": {{ fingerprint | tojson }},
+      "certificate.version": {{ data['certificate.version'] | tojson }},
+      "certificate.serial": {{ data['certificate.serial'] | tojson }},
+      "certificate.subject": {{ data['certificate.subject'] | tojson }},
+      "certificate.issuer": {{ data['certificate.issuer'] | tojson }},
+      "certificate.not_valid_before": {{ data['certificate.not_valid_before'] | tojson }},
+      "certificate.not_valid_after": {{ data['certificate.not_valid_after'] | tojson }},
+      "certificate.key_alg": {{ data['certificate.key_alg'] | tojson }},
+      "certificate.sig_alg": {{ data['certificate.sig_alg'] | tojson }},
+      "certificate.key_type": {{ data['certificate.key_type'] | tojson }},
+      "certificate.key_length": {{ data['certificate.key_length'] | tojson }}
+      {%- if data['certificate.exponent'] is defined and data['certificate.exponent'] is not none %},
+      "certificate.exponent": {{ data['certificate.exponent'] | tojson }}
+      {%- endif %}
+      {%- if san_dns is not none %},
+      "san.dns": {{ san_dns | tojson }}
+      {%- endif %}
+      {%- if basic_constraints_ca is not none %},
+      "basic_constraints.ca": {{ basic_constraints_ca | tojson }}
+      {%- endif %},
+      "host_cert": {{ host_cert | tojson }},
+      "client_cert": {{ client_cert | tojson }}
+    }

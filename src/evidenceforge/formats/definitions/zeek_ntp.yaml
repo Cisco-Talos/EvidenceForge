@@ -1,0 +1,129 @@
+name: zeek_ntp
+version: "1.0"
+description: "Zeek ntp.log format (JSON output) - NTP protocol logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of NTP transaction"
+
+  - name: uid
+    type: string
+    required: true
+    description: "Connection UID (shared with conn.log)"
+    constraints:
+      pattern: "^[A-Za-z0-9]{17,19}$"
+
+  - name: id.orig_h
+    type: ip_address
+    required: true
+    description: "Client IP address"
+
+  - name: id.orig_p
+    type: port
+    required: true
+    description: "Client port"
+
+  - name: id.resp_h
+    type: ip_address
+    required: true
+    description: "NTP server IP"
+
+  - name: id.resp_p
+    type: port
+    required: true
+    description: "NTP server port (usually 123)"
+
+  - name: version
+    type: integer
+    required: true
+    description: "NTP version (3 or 4)"
+
+  - name: mode
+    type: integer
+    required: true
+    description: "NTP mode (3=client, 4=server)"
+
+  - name: stratum
+    type: integer
+    required: true
+    description: "Stratum level"
+
+  - name: poll
+    type: float
+    required: true
+    description: "Poll interval"
+
+  - name: precision
+    type: float
+    required: true
+    description: "Clock precision"
+
+  - name: root_delay
+    type: float
+    required: true
+    description: "Root delay"
+
+  - name: root_disp
+    type: float
+    required: true
+    description: "Root dispersion"
+
+  - name: ref_id
+    type: string
+    required: true
+    description: "Reference ID"
+
+  - name: ref_time
+    type: float
+    required: true
+    description: "Reference timestamp"
+
+  - name: org_time
+    type: float
+    required: true
+    description: "Originate timestamp"
+
+  - name: rec_time
+    type: float
+    required: true
+    description: "Receive timestamp"
+
+  - name: xmt_time
+    type: float
+    required: true
+    description: "Transmit timestamp"
+
+  - name: num_exts
+    type: integer
+    required: true
+    description: "Number of extensions"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "version": {{ version | tojson }},
+      "mode": {{ mode | tojson }},
+      "stratum": {{ stratum | tojson }},
+      "poll": {{ poll | tojson }},
+      "precision": {{ precision | tojson }},
+      "root_delay": {{ root_delay | tojson }},
+      "root_disp": {{ root_disp | tojson }},
+      "ref_id": {{ ref_id | tojson }},
+      "ref_time": {{ ref_time | tojson }},
+      "org_time": {{ org_time | tojson }},
+      "rec_time": {{ rec_time | tojson }},
+      "xmt_time": {{ xmt_time | tojson }},
+      "num_exts": {{ num_exts | tojson }}
+    }

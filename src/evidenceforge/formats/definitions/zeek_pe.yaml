@@ -1,0 +1,117 @@
+name: zeek_pe
+version: "1.0"
+description: "Zeek pe.log format (JSON output) - Portable Executable analysis"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp"
+
+  - name: id
+    type: string
+    required: true
+    description: "File ID (F-prefix)"
+
+  - name: machine
+    type: string
+    required: true
+    description: "Machine type (I386, AMD64)"
+
+  - name: compile_ts
+    type: float
+    required: true
+    description: "Compile timestamp (epoch)"
+
+  - name: os
+    type: string
+    required: true
+    description: "Target OS"
+
+  - name: subsystem
+    type: string
+    required: true
+    description: "Subsystem (WINDOWS_GUI, WINDOWS_CUI)"
+
+  - name: is_exe
+    type: boolean
+    required: true
+    description: "Is executable?"
+
+  - name: is_64bit
+    type: boolean
+    required: true
+    description: "Is 64-bit?"
+
+  - name: uses_aslr
+    type: boolean
+    required: true
+    description: "Uses ASLR?"
+
+  - name: uses_dep
+    type: boolean
+    required: true
+    description: "Uses DEP?"
+
+  - name: uses_code_integrity
+    type: boolean
+    required: true
+    description: "Uses code integrity?"
+
+  - name: uses_seh
+    type: boolean
+    required: true
+    description: "Uses SEH?"
+
+  - name: has_import_table
+    type: boolean
+    required: true
+    description: "Has import table?"
+
+  - name: has_export_table
+    type: boolean
+    required: true
+    description: "Has export table?"
+
+  - name: has_cert_table
+    type: boolean
+    required: true
+    description: "Has certificate table?"
+
+  - name: has_debug_data
+    type: boolean
+    required: true
+    description: "Has debug data?"
+
+  - name: section_names
+    type: string
+    required: false
+    description: "Section names (rendered as JSON array)"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "id": {{ id | tojson }},
+      "machine": {{ machine | tojson }},
+      "compile_ts": {{ compile_ts | tojson }},
+      "os": {{ os | tojson }},
+      "subsystem": {{ subsystem | tojson }},
+      "is_exe": {{ is_exe | tojson }},
+      "is_64bit": {{ is_64bit | tojson }},
+      "uses_aslr": {{ uses_aslr | tojson }},
+      "uses_dep": {{ uses_dep | tojson }},
+      "uses_code_integrity": {{ uses_code_integrity | tojson }},
+      "uses_seh": {{ uses_seh | tojson }},
+      "has_import_table": {{ has_import_table | tojson }},
+      "has_export_table": {{ has_export_table | tojson }},
+      "has_cert_table": {{ has_cert_table | tojson }},
+      "has_debug_data": {{ has_debug_data | tojson }}
+      {%- if section_names is not none %},
+      "section_names": {{ section_names | tojson }}
+      {%- endif %}
+    }

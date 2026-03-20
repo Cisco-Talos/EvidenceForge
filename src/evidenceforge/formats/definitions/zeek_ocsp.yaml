@@ -1,0 +1,67 @@
+name: zeek_ocsp
+version: "1.0"
+description: "Zeek ocsp.log format (JSON output) - OCSP response logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp"
+
+  - name: id
+    type: string
+    required: true
+    description: "OCSP response file ID"
+
+  - name: hashAlgorithm
+    type: string
+    required: true
+    description: "Hash algorithm"
+
+  - name: issuerNameHash
+    type: string
+    required: true
+    description: "Issuer name hash (hex)"
+
+  - name: issuerKeyHash
+    type: string
+    required: true
+    description: "Issuer key hash (hex)"
+
+  - name: serialNumber
+    type: string
+    required: true
+    description: "Certificate serial number (hex)"
+
+  - name: certStatus
+    type: string
+    required: true
+    description: "Certificate status (good, revoked, unknown)"
+
+  - name: thisUpdate
+    type: float
+    required: true
+    description: "OCSP response timestamp (epoch)"
+
+  - name: nextUpdate
+    type: float
+    required: true
+    description: "Next update timestamp (epoch)"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "id": {{ id | tojson }},
+      "hashAlgorithm": {{ hashAlgorithm | tojson }},
+      "issuerNameHash": {{ issuerNameHash | tojson }},
+      "issuerKeyHash": {{ issuerKeyHash | tojson }},
+      "serialNumber": {{ serialNumber | tojson }},
+      "certStatus": {{ certStatus | tojson }},
+      "thisUpdate": {{ thisUpdate | tojson }},
+      "nextUpdate": {{ nextUpdate | tojson }}
+    }

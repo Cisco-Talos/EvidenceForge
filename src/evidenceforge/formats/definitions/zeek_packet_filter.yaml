@@ -1,0 +1,43 @@
+name: zeek_packet_filter
+version: "1.0"
+description: "Zeek packet_filter.log format (JSON output) - Packet filter state"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp"
+
+  - name: node
+    type: string
+    required: true
+    description: "Zeek node name"
+
+  - name: filter
+    type: string
+    required: true
+    description: "BPF filter expression"
+
+  - name: init
+    type: boolean
+    required: true
+    description: "Is initialization?"
+
+  - name: success
+    type: boolean
+    required: true
+    description: "Was filter successful?"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "node": {{ node | tojson }},
+      "filter": {{ filter | tojson }},
+      "init": {{ init | tojson }},
+      "success": {{ success | tojson }}
+    }

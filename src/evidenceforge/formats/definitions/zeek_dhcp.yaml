@@ -1,0 +1,69 @@
+name: zeek_dhcp
+version: "1.0"
+description: "Zeek dhcp.log format (JSON output) - DHCP transaction logging"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp of DHCP transaction"
+
+  - name: uids
+    type: string
+    required: true
+    description: "Connection UIDs (rendered as JSON array)"
+
+  - name: client_addr
+    type: ip_address
+    required: true
+    description: "DHCP client IP address"
+
+  - name: mac
+    type: string
+    required: true
+    description: "Client MAC address"
+
+  - name: host_name
+    type: string
+    required: false
+    description: "Client hostname"
+
+  - name: domain
+    type: string
+    required: false
+    description: "Client domain"
+
+  - name: msg_types
+    type: string
+    required: true
+    description: "DHCP message types (rendered as JSON array)"
+
+  - name: duration
+    type: float
+    required: false
+    description: "Transaction duration in seconds"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "uids": {{ uids | tojson }},
+      "client_addr": {{ client_addr | tojson }}
+      {%- if mac is not none %},
+      "mac": {{ mac | tojson }}
+      {%- endif %}
+      {%- if host_name is not none %},
+      "host_name": {{ host_name | tojson }}
+      {%- endif %}
+      {%- if domain is not none %},
+      "domain": {{ domain | tojson }}
+      {%- endif %},
+      "msg_types": {{ msg_types | tojson }}
+      {%- if duration is not none %},
+      "duration": {{ duration | tojson }}
+      {%- endif %}
+    }

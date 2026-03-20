@@ -1,0 +1,37 @@
+name: zeek_reporter
+version: "1.0"
+description: "Zeek reporter.log format (JSON output) - Sensor diagnostics"
+category: network
+
+fields:
+  - name: ts
+    type: timestamp
+    required: true
+    description: "Timestamp"
+
+  - name: level
+    type: string
+    required: true
+    description: "Severity level (Reporter::WARNING, etc.)"
+
+  - name: message
+    type: string
+    required: true
+    description: "Log message"
+
+  - name: location
+    type: string
+    required: true
+    description: "Source location"
+
+output:
+  format: json
+  file_extension: ".json"
+  encoding: utf-8
+  template: |
+    {
+      "ts": {{ ts | tojson }},
+      "level": {{ level | tojson }},
+      "message": {{ message | tojson }},
+      "location": {{ location | tojson }}
+    }

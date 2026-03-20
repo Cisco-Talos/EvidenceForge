@@ -140,6 +140,14 @@ class TestGenerationEngine:
         )
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -149,7 +157,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_creates_emitters(
         self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns,
-        mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Engine initialization should create emitters for each format."""
@@ -164,7 +172,7 @@ class TestGenerationEngine:
         # Verify emitters created (8 original + 3 Zeek expansion = 11)
         assert mock_windows.called
         assert mock_zeek.called
-        assert len(engine.emitters) == 11
+        assert len(engine.emitters) == 19
         assert 'windows_event_security' in engine.emitters
         assert 'zeek_conn' in engine.emitters
         assert 'zeek_http' in engine.emitters
@@ -172,6 +180,14 @@ class TestGenerationEngine:
         assert 'zeek_files' in engine.emitters
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -180,7 +196,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_resolves_time_window(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Engine should correctly resolve time window from duration."""
@@ -196,6 +212,14 @@ class TestGenerationEngine:
         assert engine.end_time == datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -204,7 +228,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_creates_output_directory(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Engine should create output directory if it doesn't exist."""
@@ -219,6 +243,14 @@ class TestGenerationEngine:
         assert output_dir.exists()
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -227,7 +259,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_initialize_sets_state_manager_time(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Engine should set StateManager initial time to scenario start."""
@@ -338,6 +370,14 @@ class TestGenerationEngine:
         assert times == []
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -346,7 +386,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_generate_baseline_filters_enabled_users(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Baseline generation should only process enabled users."""
@@ -377,6 +417,14 @@ class TestGenerationEngine:
         assert mock_activity_instance.get_baseline_pattern.called
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -385,7 +433,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_generate_baseline_hour_by_hour(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Baseline generation should iterate hour-by-hour."""
@@ -482,6 +530,14 @@ class TestGenerationEngine:
 
     @patch('evidenceforge.generation.engine.GroundTruthGenerator')
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -490,7 +546,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_tracks_malicious_events(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter,
         mock_activity_gen, mock_gt_gen, scenario_with_storyline, tmp_path
     ):
         """Storyline execution should track malicious events."""
@@ -515,6 +571,14 @@ class TestGenerationEngine:
 
     @patch('evidenceforge.generation.engine.GroundTruthGenerator')
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -523,7 +587,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_generate_calls_ground_truth_when_malicious_events(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter,
         mock_activity_gen, mock_gt_gen, scenario_with_storyline, tmp_path
     ):
         """Should generate ground truth when malicious events exist."""
@@ -549,6 +613,14 @@ class TestGenerationEngine:
 
     @patch('evidenceforge.generation.engine.GroundTruthGenerator')
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -557,7 +629,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_generate_skips_ground_truth_without_malicious_events(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter,
         mock_activity_gen, mock_gt_gen, minimal_scenario, tmp_path
     ):
         """Should NOT generate ground truth for baseline-only scenarios."""
@@ -576,6 +648,14 @@ class TestGenerationEngine:
         assert not mock_gt_gen.called
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -584,7 +664,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_finalize_closes_emitters(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Finalize should close all emitters."""
@@ -606,6 +686,14 @@ class TestGenerationEngine:
         assert mock_zeek_instance.close.called
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -614,7 +702,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_progress_callback_invoked(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Progress callback should be invoked during generation."""
@@ -643,6 +731,14 @@ class TestGenerationEngine:
         assert len(phase_ends) > 0
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -651,7 +747,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_progress_callback_not_required(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """Generation should work without progress callback."""
@@ -681,6 +777,14 @@ class TestGenerationEngine:
         assert id3 == id2 + 1
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -689,7 +793,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_event_logon_type(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         scenario_with_storyline, tmp_path
     ):
         """Storyline logon events should use network logon type."""
@@ -715,6 +819,14 @@ class TestGenerationEngine:
         assert call_args[1]['logon_type'] == 3
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -723,7 +835,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_event_connection_validation(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         scenario_with_storyline, tmp_path
     ):
         """Storyline connections should validate dst_ip != src_ip."""
@@ -752,6 +864,14 @@ class TestGenerationEngine:
         assert not call_args[1]['dst_ip'].startswith("10.")  # Not an internal IP
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -760,7 +880,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_generate_user_activity_uses_primary_system(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         minimal_scenario, tmp_path
     ):
         """User activity should prefer primary_system if set."""
@@ -792,6 +912,14 @@ class TestGenerationEngine:
         assert call_args[1]['system'].hostname == "TEST-01"
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
+    @patch('evidenceforge.generation.engine.ZeekReporterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPacketFilterEmitter')
+    @patch('evidenceforge.generation.engine.ZeekPeEmitter')
+    @patch('evidenceforge.generation.engine.ZeekOcspEmitter')
+    @patch('evidenceforge.generation.engine.ZeekX509Emitter')
+    @patch('evidenceforge.generation.engine.ZeekWeirdEmitter')
+    @patch('evidenceforge.generation.engine.ZeekNtpEmitter')
+    @patch('evidenceforge.generation.engine.ZeekDhcpEmitter')
     @patch('evidenceforge.generation.engine.ZeekFilesEmitter')
     @patch('evidenceforge.generation.engine.ZeekSslEmitter')
     @patch('evidenceforge.generation.engine.ZeekHttpEmitter')
@@ -800,7 +928,7 @@ class TestGenerationEngine:
     @patch('evidenceforge.generation.engine.WindowsEventEmitter')
     @patch('evidenceforge.generation.engine.load_format')
     def test_execute_storyline_skips_missing_actor(
-        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_activity_gen,
+        self, mock_load_format, mock_windows, mock_zeek, mock_zeek_dns, mock_zeek_http, mock_zeek_ssl, mock_zeek_files, mock_zeek_dhcp, mock_zeek_ntp, mock_zeek_weird, mock_zeek_x509, mock_zeek_ocsp, mock_zeek_pe, mock_zeek_pf, mock_zeek_reporter, mock_activity_gen,
         scenario_with_storyline, tmp_path
     ):
         """Storyline should skip events with missing actor."""

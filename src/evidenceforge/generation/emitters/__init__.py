@@ -8,6 +8,14 @@ from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_dhcp import ZeekDhcpEmitter
+from evidenceforge.generation.emitters.zeek_ntp import ZeekNtpEmitter
+from evidenceforge.generation.emitters.zeek_weird import ZeekWeirdEmitter
+from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
+from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
+from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter
+from evidenceforge.generation.emitters.zeek_packet_filter import ZeekPacketFilterEmitter
+from evidenceforge.generation.emitters.zeek_reporter import ZeekReporterEmitter
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
@@ -23,6 +31,14 @@ __all__ = [
     "ZeekHttpEmitter",
     "ZeekSslEmitter",
     "ZeekFilesEmitter",
+    "ZeekDhcpEmitter",
+    "ZeekNtpEmitter",
+    "ZeekWeirdEmitter",
+    "ZeekX509Emitter",
+    "ZeekOcspEmitter",
+    "ZeekPeEmitter",
+    "ZeekPacketFilterEmitter",
+    "ZeekReporterEmitter",
     "EcarEmitter",
     "SyslogEmitter",
     "BashHistoryEmitter",
