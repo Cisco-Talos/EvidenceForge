@@ -1100,7 +1100,8 @@ class GenerationEngine:
                 service=service,
                 duration=random.uniform(1.0, 30.0),
                 orig_bytes=random.randint(1000, 10000),
-                resp_bytes=random.randint(5000, 50000)
+                resp_bytes=random.randint(5000, 50000),
+                emit_dns=True,
             )
 
             malicious_event['dst_ip'] = dst_ip
@@ -1899,15 +1900,14 @@ class GenerationEngine:
             num_events = rng.randint(30, 80) if is_dmz else rng.randint(12, 30)
 
             # Kernel uptime: monotonically increasing (seconds since boot)
-            # Computed from deterministic boot offset + elapsed scenario time
             scenario_start = self.scenario.time_window.start
             boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
-            hours_elapsed = (current_hour - scenario_start).total_seconds()
 
             for _ in range(num_events):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                uptime = int(boot_uptime + hours_elapsed + offset)
+                # Use exact event timestamp for monotonic uptime (not hour + random offset)
+                uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
 
                 # Pick a random syslog source
                 source_roll = rng.random()
@@ -1978,9 +1978,19 @@ class GenerationEngine:
                     ))
                 elif source_roll < 0.80:
                     # sshd — disconnect/keepalive messages (use scenario system IPs)
+                    # Generate matching Zeek SSH connection + syslog message together
                     other_ips = [s.ip for s in self.scenario.environment.systems if s.ip != system.ip]
                     ip = rng.choice(other_ips) if other_ips else system.ip
                     port = rng.randint(49152, 65535)
+                    # Emit Zeek conn record for this SSH session
+                    self.activity_generator.generate_connection(
+                        src_ip=ip, dst_ip=system.ip, time=ts,
+                        dst_port=22, proto='tcp', service='ssh',
+                        duration=rng.uniform(30.0, 1800.0),
+                        orig_bytes=rng.randint(2000, 50000),
+                        resp_bytes=rng.randint(5000, 200000),
+                        src_port=port,
+                    )
                     msgs = [
                         f'Received disconnect from {ip} port {port}:11: disconnected by user',
                         f'Disconnected from user admin {ip} port {port}',
