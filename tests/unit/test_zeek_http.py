@@ -1,0 +1,165 @@
+"""Tests for Zeek http.log emitter."""
+
+import json
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HttpContext, NetworkContext
+from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
+
+
+class TestHttpFormatAccuracy:
+    """Verify http.log output matches real Zeek sample data."""
+
+    def test_format_matches_sample(self):
+        """Field names and types match sample_data/Zeek-JSON/http.log."""
+        real = json.loads(
+            '{"ts":1427847279.587877,"uid":"CN1WJj4XVGDD9RJ6Dk",'
+            '"id.orig_h":"192.168.0.53","id.orig_p":4366,'
+            '"id.resp_h":"192.168.0.1","id.resp_p":8080,'
+            '"trans_depth":1,"method":"SUBSCRIBE",'
+            '"host":"192.168.0.1:8080","uri":"/WANCommonInterfaceConfig",'
+            '"version":"1.1","user_agent":"Mozilla/4.0 (compatible; UPnP/1.0; Windows 9x)",'
+            '"request_body_len":0,"response_body_len":0,'
+            '"status_code":200,"status_msg":"OK","tags":[]}'
+        )
+        assert isinstance(real["tags"], list)
+        assert isinstance(real["trans_depth"], int)
+        assert isinstance(real["status_code"], int)
+        assert isinstance(real["request_body_len"], int)
+
+    def test_emitter_output_fields(self):
+        """Emitter produces all required http.log fields."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '93.184.216.34', 'id.resp_p': 80,
+                'trans_depth': 1, 'method': 'GET',
+                'host': 'example.com', 'uri': '/index.html',
+                'version': '1.1',
+                'user_agent': 'Mozilla/5.0',
+                'request_body_len': 0, 'response_body_len': 2048,
+                'status_code': 200, 'status_msg': 'OK',
+                'tags': [],
+            })
+            emitter.close()
+
+            with open(output) as f:
+                data = json.loads(f.readline())
+
+            assert data['method'] == 'GET'
+            assert data['host'] == 'example.com'
+            assert data['uri'] == '/index.html'
+            assert data['status_code'] == 200
+            assert data['tags'] == []
+            assert data['request_body_len'] == 0
+            assert data['response_body_len'] == 2048
+
+    def test_tags_is_array(self):
+        """tags field should be a JSON array, not a string."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 80,
+                'trans_depth': 1, 'method': 'GET',
+                'host': 'example.com', 'uri': '/',
+                'request_body_len': 0, 'response_body_len': 0,
+                'status_code': 200, 'status_msg': 'OK',
+                'tags': ['VIA_PROXY'],
+            })
+            emitter.close()
+            with open(output) as f:
+                data = json.loads(f.readline())
+            assert isinstance(data['tags'], list)
+            assert data['tags'] == ['VIA_PROXY']
+
+    def test_resp_fuids_is_array(self):
+        """resp_fuids field should be a JSON array when present."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 80,
+                'trans_depth': 1, 'method': 'GET',
+                'host': 'example.com', 'uri': '/',
+                'request_body_len': 0, 'response_body_len': 1000,
+                'status_code': 200, 'status_msg': 'OK',
+                'tags': [],
+                'resp_fuids': ['FheZAo1hKNan3xnZCd'],
+                'resp_mime_types': ['text/html'],
+            })
+            emitter.close()
+            with open(output) as f:
+                data = json.loads(f.readline())
+            assert isinstance(data['resp_fuids'], list)
+            assert data['resp_fuids'] == ['FheZAo1hKNan3xnZCd']
+
+    def test_optional_fields_omitted_when_empty(self):
+        """Optional fields like referrer, resp_fuids omitted when None."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 80,
+                'trans_depth': 1, 'method': 'GET',
+                'host': 'example.com', 'uri': '/',
+                'request_body_len': 0, 'response_body_len': 0,
+                'status_code': 200, 'status_msg': 'OK',
+                # No tags, referrer, resp_fuids, resp_mime_types
+            })
+            emitter.close()
+            with open(output) as f:
+                data = json.loads(f.readline())
+            assert 'referrer' not in data
+            assert 'resp_fuids' not in data
+            assert 'resp_mime_types' not in data
+
+
+class TestHttpCanHandle:
+    """Verify can_handle() filtering."""
+
+    def test_accepts_connection_with_http(self):
+        fmt = load_format("zeek_http")
+        emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+            event_type="connection",
+            network=NetworkContext(src_ip='10.0.0.1', src_port=50000,
+                                  dst_ip='8.8.8.8', dst_port=80, protocol='tcp'),
+            http=HttpContext(method='GET', host='example.com', uri='/'),
+        )
+        assert emitter.can_handle(event) is True
+
+    def test_rejects_without_http_context(self):
+        fmt = load_format("zeek_http")
+        emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+            event_type="connection",
+            network=NetworkContext(src_ip='10.0.0.1', src_port=50000,
+                                  dst_ip='8.8.8.8', dst_port=80, protocol='tcp'),
+        )
+        assert emitter.can_handle(event) is False

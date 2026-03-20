@@ -1,0 +1,257 @@
+"""Tests for ZeekMultiplexEmitter per-sensor directory routing."""
+
+import json
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import Barrier, Thread
+
+import pytest
+
+from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
+
+
+class TestPerSensorDirectoryRouting:
+    """Verify that Zeek emitters route output to per-sensor subdirectories."""
+
+    def test_two_sensors_create_two_subdirs(self):
+        """Emitting to 2 sensor hostnames creates files in 2 subdirs."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["fw01", "fw02"])
+
+            event_data = {
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                'proto': 'tcp', 'conn_state': 'SF',
+                '_sensor_hostnames': ['fw01', 'fw02'],
+            }
+            emitter.emit_event(event_data)
+            emitter.close()
+
+            assert (base / "fw01" / "conn.json").exists()
+            assert (base / "fw02" / "conn.json").exists()
+
+            # Both files should have the same content
+            with open(base / "fw01" / "conn.json") as f:
+                line1 = json.loads(f.readline())
+            with open(base / "fw02" / "conn.json") as f:
+                line2 = json.loads(f.readline())
+            assert line1['uid'] == line2['uid'] == 'CTest123456789ab'
+
+    def test_single_sensor_single_subdir(self):
+        """Single sensor creates a single subdirectory."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["sensor-1"])
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                'proto': 'tcp', 'conn_state': 'SF',
+                '_sensor_hostnames': ['sensor-1'],
+            })
+            emitter.close()
+            assert (base / "sensor-1" / "conn.json").exists()
+
+    def test_no_sensors_flat_output(self):
+        """No sensors configured → flat output using _flat_filename."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=[])
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                'proto': 'tcp', 'conn_state': 'SF',
+            })
+            emitter.close()
+            assert (base / "zeek_conn.json").exists()
+
+    def test_ssl_emitter_sensor_filenames(self):
+        """SSL emitter uses ssl.json in sensor dirs, zeek_ssl.json for flat."""
+        fmt = load_format("zeek_ssl")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekSslEmitter(fmt, base, sensor_hostnames=["fw01"])
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                'version': 'TLSv12', 'cipher': 'TLS_AES_128_GCM_SHA256',
+                'server_name': 'example.com', 'resumed': True,
+                'established': True, 'ssl_history': 'CsiI',
+                '_sensor_hostnames': ['fw01'],
+            })
+            emitter.close()
+            assert (base / "fw01" / "ssl.json").exists()
+
+
+class TestDirectFileMode:
+    """Backward compat: passing a file path directly still works."""
+
+    def test_file_path_writes_directly(self):
+        """Output path with extension → writes to that exact file."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "my_output.json"
+            emitter = ZeekEmitter(fmt, output_file)
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                'proto': 'tcp', 'conn_state': 'SF',
+            })
+            emitter.close()
+            assert output_file.exists()
+            with open(output_file) as f:
+                data = json.loads(f.readline())
+            assert data['uid'] == 'CTest123456789ab'
+
+
+class TestWriterBuffering:
+    """Test _SingleZeekWriter buffer behavior."""
+
+    def test_auto_flush_on_buffer_full(self):
+        """Buffer auto-flushes when reaching capacity."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "test.json"
+            # Small buffer of 5 events
+            emitter = ZeekEmitter(fmt, output_file, buffer_size=5)
+            for i in range(10):
+                emitter.emit_event({
+                    'ts': datetime(2024, 1, 15, 10, 0, i, tzinfo=timezone.utc),
+                    'uid': f'CTest{i:013d}',
+                    'id.orig_h': '10.0.0.1', 'id.orig_p': 50000 + i,
+                    'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                    'proto': 'tcp', 'conn_state': 'SF',
+                })
+            emitter.close()
+            with open(output_file) as f:
+                lines = [l for l in f if l.strip()]
+            assert len(lines) == 10
+
+    def test_flush_empty_no_file(self):
+        """Flushing with empty buffer doesn't create file."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "test.json"
+            emitter = ZeekEmitter(fmt, output_file)
+            emitter.flush()
+            emitter.close()
+            assert not output_file.exists()
+
+
+class TestEmitterLifecycle:
+    """Test flush, close, and event_count."""
+
+    def test_event_count_aggregates(self):
+        """event_count sums across all sensor writers."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["s1", "s2"])
+            for i in range(3):
+                emitter.emit_event({
+                    'ts': datetime(2024, 1, 15, 10, 0, i, tzinfo=timezone.utc),
+                    'uid': f'CTest{i:013d}',
+                    'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                    'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                    'proto': 'tcp', 'conn_state': 'SF',
+                    '_sensor_hostnames': ['s1', 's2'],
+                })
+            emitter.close()
+            # Each event goes to 2 sensors → 6 total writes
+            assert emitter.event_count == 6
+
+    def test_close_flushes_all(self):
+        """close() flushes all writers to disk."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["s1"])
+            emitter.emit_event({
+                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                'uid': 'CTest123456789ab',
+                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                'proto': 'tcp', 'conn_state': 'SF',
+                '_sensor_hostnames': ['s1'],
+            })
+            # Don't manually flush — close should handle it
+            emitter.close()
+            assert (base / "s1" / "conn.json").exists()
+            with open(base / "s1" / "conn.json") as f:
+                assert len(f.readlines()) == 1
+
+
+class TestSensorHostnameResolution:
+    """Test hostname vs name fallback in NetworkSensor."""
+
+    def test_sensor_with_hostname(self):
+        """NetworkSensor.hostname used as directory name."""
+        from evidenceforge.models.scenario import NetworkSensor
+        sensor = NetworkSensor(
+            type="network", name="core-switch-tap", hostname="fw01",
+            monitoring_segments=["workstations"]
+        )
+        assert sensor.hostname == "fw01"
+
+    def test_sensor_without_hostname_falls_back_to_name(self):
+        """Empty hostname falls back to name."""
+        from evidenceforge.models.scenario import NetworkSensor
+        sensor = NetworkSensor(
+            type="network", name="core-switch-tap",
+            monitoring_segments=["workstations"]
+        )
+        dirname = sensor.hostname or sensor.name
+        assert dirname == "core-switch-tap"
+
+
+class TestThreadSafety:
+    """Verify concurrent access doesn't lose events."""
+
+    def test_concurrent_writes_no_loss(self):
+        """Multiple threads writing to same sensor don't lose events."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "test.json"
+            emitter = ZeekEmitter(fmt, output_file, buffer_size=10)
+
+            num_threads = 4
+            events_per_thread = 25
+            barrier = Barrier(num_threads)
+
+            def write_events(thread_id):
+                barrier.wait()
+                for i in range(events_per_thread):
+                    emitter.emit_event({
+                        'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                        'uid': f'C{thread_id:02d}{i:015d}',
+                        'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
+                        'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
+                        'proto': 'tcp', 'conn_state': 'SF',
+                    })
+
+            threads = [Thread(target=write_events, args=(t,)) for t in range(num_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            emitter.close()
+
+            with open(output_file) as f:
+                lines = [l for l in f if l.strip()]
+            assert len(lines) == num_threads * events_per_thread

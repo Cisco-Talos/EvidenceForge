@@ -457,3 +457,107 @@ class TestZeekUidGeneration:
             uid = generate_zeek_uid()
             for ch in uid:
                 assert ch in base62, f"Non-base62 char '{ch}' in UID: {uid}"
+
+
+SAMPLE_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
+
+
+class TestSampleDataFieldValidation:
+    """Validate all Zeek sample data has correct field names and types."""
+
+    def _parse_first_line(self, filename):
+        path = SAMPLE_DIR / filename
+        with open(path) as f:
+            return json.loads(f.readline())
+
+    def test_ssl_sample_fields(self):
+        data = self._parse_first_line("ssl.log")
+        assert isinstance(data["ts"], float)
+        assert isinstance(data["uid"], str)
+        assert isinstance(data["id.orig_h"], str)
+        assert isinstance(data["version"], str)
+        assert isinstance(data["cipher"], str)
+        assert isinstance(data["resumed"], bool)
+        assert isinstance(data["established"], bool)
+
+    def test_http_sample_fields(self):
+        data = self._parse_first_line("http.log")
+        assert isinstance(data["ts"], float)
+        assert isinstance(data["uid"], str)
+        assert isinstance(data["trans_depth"], int)
+        assert isinstance(data["method"], str)
+        assert isinstance(data["host"], str)
+        assert isinstance(data["uri"], str)
+        assert isinstance(data["status_code"], int)
+        assert isinstance(data["tags"], list)
+
+    def test_files_sample_fields(self):
+        data = self._parse_first_line("files.log")
+        assert data["fuid"].startswith("F")
+        assert isinstance(data["uid"], str)
+        assert isinstance(data["source"], str)
+        assert isinstance(data["analyzers"], list)
+        assert isinstance(data["seen_bytes"], int)
+        assert isinstance(data["is_orig"], bool)
+        assert isinstance(data["timedout"], bool)
+
+    def test_dhcp_sample_fields(self):
+        data = self._parse_first_line("dhcp.log")
+        assert isinstance(data["uids"], list)
+        assert isinstance(data["client_addr"], str)
+        assert isinstance(data["mac"], str)
+        assert isinstance(data["msg_types"], list)
+
+    def test_ntp_sample_fields(self):
+        data = self._parse_first_line("ntp.log")
+        assert isinstance(data["version"], int)
+        assert isinstance(data["mode"], int)
+        assert isinstance(data["stratum"], int)
+        assert isinstance(data["poll"], float)
+
+    def test_x509_sample_fields(self):
+        data = self._parse_first_line("x509.log")
+        assert isinstance(data["fingerprint"], str)
+        assert isinstance(data["certificate.version"], int)
+        assert isinstance(data["certificate.subject"], str)
+        assert isinstance(data["certificate.issuer"], str)
+        assert isinstance(data["certificate.key_length"], int)
+        assert isinstance(data["host_cert"], bool)
+
+    def test_weird_sample_fields(self):
+        data = self._parse_first_line("weird.log")
+        assert isinstance(data["name"], str)
+        assert isinstance(data["notice"], bool)
+        assert isinstance(data["peer"], str)
+
+    def test_pe_sample_fields(self):
+        data = self._parse_first_line("pe.log")
+        assert isinstance(data["machine"], str)
+        assert isinstance(data["is_exe"], bool)
+        assert isinstance(data["is_64bit"], bool)
+        assert isinstance(data["section_names"], list)
+
+    def test_ocsp_sample_fields(self):
+        data = self._parse_first_line("ocsp.log")
+        assert isinstance(data["hashAlgorithm"], str)
+        assert isinstance(data["certStatus"], str)
+        assert isinstance(data["serialNumber"], str)
+
+    def test_packet_filter_sample_fields(self):
+        data = self._parse_first_line("packet_filter.log")
+        assert isinstance(data["node"], str)
+        assert isinstance(data["filter"], str)
+        assert isinstance(data["init"], bool)
+        assert isinstance(data["success"], bool)
+
+    def test_reporter_sample_fields(self):
+        data = self._parse_first_line("reporter.log")
+        assert isinstance(data["level"], str)
+        assert isinstance(data["message"], str)
+        assert isinstance(data["location"], str)
+
+    def test_all_formats_load(self):
+        """All 19 format YAMLs load successfully."""
+        from evidenceforge.formats import load_all_formats
+        formats = load_all_formats()
+        assert len(formats) == 19
