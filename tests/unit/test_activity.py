@@ -236,7 +236,7 @@ class TestActivityGenerator:
         dst_port = 443
 
         uid = activity_gen.generate_connection(
-            src_ip, dst_ip, timestamp, dst_port=dst_port, service="https"
+            src_ip, dst_ip, timestamp, dst_port=dst_port, service="ssl"
         )
 
         # Verify UID returned
@@ -251,7 +251,7 @@ class TestActivityGenerator:
         assert event.network.src_ip == src_ip
         assert event.network.dst_ip == dst_ip
         assert event.network.dst_port == dst_port
-        assert event.network.service == "https"
+        assert event.network.service == "ssl"
 
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should include byte counts in NetworkContext."""
@@ -412,7 +412,7 @@ class TestActivityGenerator:
         # Connection dispatched as SecurityEvent
         assert mock_emitters['zeek_conn'].emit.called
         event = mock_emitters['zeek_conn'].emit.call_args[0][0]
-        assert event.network.service in ['http', 'https']
+        assert event.network.service in ['http', 'ssl']
         assert event.network.dst_port in [80, 443]
         dst_ip = event.network.dst_ip
         assert dst_ip in EXTERNAL_IPS['connection_web'] or not dst_ip.startswith('10.')
@@ -437,7 +437,7 @@ class TestActivityGenerator:
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'connection_git')
 
         event = mock_emitters['zeek_conn'].emit.call_args[0][0]
-        assert event.network.service == 'https'
+        assert event.network.service == 'ssl'
         assert event.network.dst_port == 443
         assert event.network.dst_ip in EXTERNAL_IPS['connection_git']
 

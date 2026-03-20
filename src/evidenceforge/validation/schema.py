@@ -323,7 +323,12 @@ class ScenarioValidator:
         if not self.scenario.environment.network:
             return
 
-        known_formats = {"zeek_conn", "snort_alert", "web_access"}
+        known_formats = {
+            "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
+            "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
+            "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
+            "snort_alert", "web_access",
+        }
 
         for idx, sensor in enumerate(self.scenario.environment.network.sensors):
             for seg_idx, seg_name in enumerate(sensor.monitoring_segments):

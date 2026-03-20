@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Formats subject to network visibility filtering
-_NETWORK_FORMATS = {"zeek_conn", "zeek_dns", "snort_alert"}
+_NETWORK_FORMATS = {
+    "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
+    "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
+    "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
+    "snort_alert",
+}
 
 
 class EventDispatcher:
@@ -55,11 +60,19 @@ class EventDispatcher:
     def _get_matching_emitters(self, event: SecurityEvent) -> list[LogEmitter]:
         """Two-layer filtering: format eligibility + network visibility."""
         # For network events, determine which formats can see this traffic
+        # and annotate the event with observing sensor hostnames
         visible_formats: set[str] | None = None
         if event.network and self.visibility_engine:
             visible_formats = self.visibility_engine.get_log_formats_for_connection(
                 event.network.src_ip, event.network.dst_ip
             )
+            # Annotate event with sensor hostnames for per-sensor routing
+            sensors = self.visibility_engine.get_observing_sensors(
+                event.network.src_ip, event.network.dst_ip
+            )
+            event._observing_sensor_hostnames = [
+                s.hostname or s.name for s in sensors
+            ]
 
         matched = []
         for format_name, emitter in self.emitters.items():

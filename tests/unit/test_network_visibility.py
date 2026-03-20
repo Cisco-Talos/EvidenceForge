@@ -38,9 +38,13 @@ class TestNoNetworkConfig:
         assert engine.is_connection_visible("192.168.1.1", "8.8.8.8") is True
 
     def test_no_config_default_formats(self):
-        """Default log formats should be zeek_conn when no config."""
+        """Default log formats should include all Zeek formats when no config."""
         engine = NetworkVisibilityEngine(None, [])
-        assert engine.get_log_formats_for_connection("10.0.0.1", "8.8.8.8") == {"zeek_conn"}
+        formats = engine.get_log_formats_for_connection("10.0.0.1", "8.8.8.8")
+        assert "zeek_conn" in formats
+        assert "zeek_dns" in formats
+        assert "zeek_http" in formats
+        assert "zeek_ssl" in formats
 
     def test_no_config_no_observing_sensors(self):
         """No observing sensors when no config."""

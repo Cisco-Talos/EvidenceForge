@@ -199,20 +199,37 @@ class GenerationEngine:
             'web_access': WebEmitter,
         }
 
+        # Collect Zeek sensor hostnames for per-sensor directory routing
+        _zeek_sensor_hostnames: list[str] = []
+        if self.scenario.environment.network and self.scenario.environment.network.sensors:
+            _zeek_sensor_hostnames = [
+                s.hostname or s.name
+                for s in self.scenario.environment.network.sensors
+                if any(fmt.startswith("zeek_") for fmt in s.log_formats)
+            ]
+
+        _ZEEK_FORMATS = {k for k in emitter_classes if k.startswith("zeek_")}
+
         for format_name in formats_to_generate:
             format_def = load_format(format_name)
 
-            # bash_history uses a directory (per-user-per-host files), not a single file
-            if format_name == 'bash_history':
+            if format_name in _ZEEK_FORMATS:
+                # Zeek emitters use per-sensor directory multiplexing
+                emitter_class = emitter_classes[format_name]
+                emitter = emitter_class(
+                    format_def, self.output_dir, threaded=True,
+                    sensor_hostnames=_zeek_sensor_hostnames,
+                )
+            elif format_name == 'bash_history':
+                # bash_history uses a directory (per-user-per-host files)
                 output_path = self.output_dir / "bash_history"
+                emitter = emitter_classes[format_name](format_def, output_path, threaded=True)
             else:
                 output_path = self.output_dir / f"{format_name}{format_def.output.file_extension}"
-
-            emitter_class = emitter_classes[format_name]
-            emitter = emitter_class(format_def, output_path, threaded=True)
+                emitter = emitter_classes[format_name](format_def, output_path, threaded=True)
 
             self.emitters[format_name] = emitter
-            logger.info(f"Initialized {format_name} emitter (threaded) -> {output_path}")
+            logger.info(f"Initialized {format_name} emitter (threaded)")
 
         # Initialize network visibility engine (Phase 2.5)
         from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
@@ -1100,7 +1117,7 @@ class GenerationEngine:
             else:
                 dst_ip = details.get('dst_ip', random.choice(_c2_ips))
                 dst_port = details.get('dst_port', 443)
-                service = details.get('service', 'https')
+                service = details.get('service', 'ssl')
 
             # Validate destination is different from source
             if dst_ip == system.ip and not is_ssh:

@@ -14,7 +14,7 @@ fields:
     required: true
     description: "Unique connection identifier (shared with conn.log UDP record)"
     constraints:
-      pattern: "^[A-Za-z0-9]{18}$"
+      pattern: "^[A-Za-z0-9]{17,19}$"
 
   - name: id.orig_h
     type: ip_address
@@ -51,6 +51,11 @@ fields:
       min_value: 0
       max_value: 65535
 
+  - name: rtt
+    type: float
+    required: false
+    description: "Round-trip time for the query (seconds)"
+
   - name: query
     type: string
     required: true
@@ -76,7 +81,7 @@ fields:
     required: true
     description: "Query type name"
     constraints:
-      allowed_values: ["A", "AAAA", "CNAME", "MX", "NS", "PTR", "SOA", "SRV", "TXT"]
+      allowed_values: ["A", "AAAA", "CNAME", "MX", "NIMLOC", "NS", "PTR", "SOA", "SRV", "TXT"]
 
   - name: rcode
     type: integer
@@ -92,38 +97,53 @@ fields:
 
   - name: AA
     type: boolean
-    required: false
+    required: true
     description: "Authoritative Answer flag"
 
   - name: TC
     type: boolean
-    required: false
+    required: true
     description: "Truncation flag"
 
   - name: RD
     type: boolean
-    required: false
+    required: true
     description: "Recursion Desired flag"
 
   - name: RA
     type: boolean
-    required: false
+    required: true
     description: "Recursion Available flag"
+
+  - name: Z
+    type: integer
+    required: true
+    description: "DNS header reserved bits (Z field), typically 0"
 
   - name: answers
     type: string
     required: false
-    description: "Answer records (comma-separated)"
+    description: "Answer records (rendered as JSON array of strings by template)"
 
   - name: TTLs
     type: string
     required: false
-    description: "Answer TTLs (comma-separated)"
+    description: "Answer TTLs (rendered as JSON array of floats by template)"
 
   - name: rejected
     type: boolean
-    required: false
+    required: true
     description: "Whether the query was rejected"
+
+  - name: opcode
+    type: integer
+    required: true
+    description: "DNS opcode (0=query)"
+
+  - name: opcode_name
+    type: string
+    required: true
+    description: "DNS opcode name"
 
 output:
   format: json
@@ -131,26 +151,36 @@ output:
   encoding: utf-8
   template: |
     {
-      "ts": {{ ts }},
-      "uid": "{{ uid }}",
-      "id.orig_h": "{{ id_orig_h }}",
-      "id.orig_p": {{ id_orig_p }},
-      "id.resp_h": "{{ id_resp_h }}",
-      "id.resp_p": {{ id_resp_p }},
-      "proto": "{{ proto }}",
-      "trans_id": {{ trans_id }},
-      "query": "{{ query }}",
-      "qclass": {{ qclass | default(1) }},
-      "qclass_name": "{{ qclass_name | default('C_INTERNET') }}",
-      "qtype": {{ qtype | default(1) }},
-      "qtype_name": "{{ qtype_name | default('A') }}",
-      "rcode": {{ rcode | default(0) }},
-      "rcode_name": "{{ rcode_name | default('NOERROR') }}",
-      "AA": {%- if AA is defined and AA %} true {%- else %} false {%- endif %},
-      "TC": {%- if TC is defined and TC %} true {%- else %} false {%- endif %},
-      "RD": {%- if RD is defined and RD %} true {%- else %} false {%- endif %},
-      "RA": {%- if RA is defined and RA %} true {%- else %} false {%- endif %},
-      "answers": "{{ answers | default('-') }}",
-      "TTLs": "{{ TTLs | default('-') }}",
-      "rejected": {%- if rejected is defined and rejected %} true {%- else %} false {%- endif %}
+      "ts": {{ ts | tojson }},
+      "uid": {{ uid | tojson }},
+      "id.orig_h": {{ data['id.orig_h'] | tojson }},
+      "id.orig_p": {{ data['id.orig_p'] | tojson }},
+      "id.resp_h": {{ data['id.resp_h'] | tojson }},
+      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "proto": {{ proto | tojson }},
+      "trans_id": {{ trans_id | tojson }}
+      {%- if rtt is not none %},
+      "rtt": {{ rtt | tojson }}
+      {%- endif %},
+      "query": {{ query | tojson }},
+      "qclass": {{ qclass | tojson }},
+      "qclass_name": {{ qclass_name | tojson }},
+      "qtype": {{ qtype | tojson }},
+      "qtype_name": {{ qtype_name | tojson }},
+      "rcode": {{ rcode | tojson }},
+      "rcode_name": {{ rcode_name | tojson }},
+      "AA": {{ AA | tojson }},
+      "TC": {{ TC | tojson }},
+      "RD": {{ RD | tojson }},
+      "RA": {{ RA | tojson }},
+      "Z": {{ Z | tojson }}
+      {%- if answers is not none %},
+      "answers": {{ answers | tojson }}
+      {%- endif %}
+      {%- if TTLs is not none %},
+      "TTLs": {{ TTLs | tojson }}
+      {%- endif %},
+      "rejected": {{ rejected | tojson }},
+      "opcode": {{ opcode | tojson }},
+      "opcode_name": {{ opcode_name | tojson }}
     }

@@ -117,18 +117,18 @@ class TestDnsLookupEmission:
         qtype_name = dns_event['qtype_name']
         if qtype_name == 'A':
             assert dns_event['query'] == 'www.google.com'
-            # Multi-answer DNS: may include sibling IPs from the same pool
+            # Multi-answer DNS: answers is a list, may include sibling IPs
             assert '172.217.14.206' in dns_event['answers']
         elif qtype_name == 'AAAA':
             assert dns_event['query'] == 'www.google.com'
-            assert ':' in dns_event['answers']  # IPv6
+            assert ':' in dns_event['answers'][0]  # IPv6
         elif qtype_name == 'PTR':
             assert dns_event['query'].endswith('.in-addr.arpa')
-            assert dns_event['answers'] == 'www.google.com'
+            assert dns_event['answers'] == ['www.google.com']
         elif qtype_name == 'SRV':
             assert dns_event['query'].startswith('_')
         elif qtype_name == 'MX':
-            assert 'mail.' in dns_event['answers']
+            assert 'mail.' in dns_event['answers'][0]
         assert dns_event['id.orig_h'] == '10.0.10.1'
         assert dns_event['id.resp_p'] == 53
         assert dns_event['proto'] == 'udp'
@@ -230,7 +230,7 @@ class TestDnsQueryTypeSemantics:
             if mock_emitters['zeek_dns'].emit_raw.called:
                 event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
                 if event['qtype_name'] == 'AAAA':
-                    assert ':' in event['answers'], (
+                    assert ':' in event['answers'][0], (
                         f"AAAA answer must be IPv6, got: {event['answers']}"
                     )
                     return  # Found at least one AAAA
@@ -251,9 +251,12 @@ class TestDnsQueryTypeSemantics:
                     assert event['query'].endswith('.in-addr.arpa'), (
                         f"PTR query must end with .in-addr.arpa, got: {event['query']}"
                     )
-                    # Answer should be a hostname, not an IP
-                    assert '.' in event['answers'] and not event['answers'][0].isdigit(), (
-                        f"PTR answer should be hostname, got: {event['answers']}"
+                    # Answer should be a list containing a hostname, not an IP
+                    assert isinstance(event['answers'], list) and len(event['answers']) > 0, (
+                        f"PTR answers should be a non-empty list, got: {event['answers']}"
+                    )
+                    assert '.' in event['answers'][0] and not event['answers'][0][0].isdigit(), (
+                        f"PTR answer should be hostname, got: {event['answers'][0]}"
                     )
                     return
 
@@ -314,13 +317,22 @@ class TestZeekDnsEmitter:
             'proto': 'udp',
             'trans_id': 12345,
             'query': 'www.google.com',
+            'qclass': 1,
+            'qclass_name': 'C_INTERNET',
             'qtype': 1,
             'qtype_name': 'A',
             'rcode': 0,
             'rcode_name': 'NOERROR',
-            'answers': '172.217.14.206',
-            'TTLs': '300',
+            'AA': False,
+            'TC': False,
+            'RD': True,
+            'RA': True,
+            'Z': 0,
+            'answers': ['172.217.14.206'],
+            'TTLs': [300.0],
             'rejected': False,
+            'opcode': 0,
+            'opcode_name': 'query',
         })
         emitter.flush()
 
@@ -330,7 +342,8 @@ class TestZeekDnsEmitter:
 
         parsed = json.loads(lines[0])
         assert parsed['query'] == 'www.google.com'
-        assert parsed['answers'] == '172.217.14.206'
+        assert parsed['answers'] == ['172.217.14.206']
+        assert parsed['TTLs'] == [300.0]
         assert parsed['rcode_name'] == 'NOERROR'
 
 

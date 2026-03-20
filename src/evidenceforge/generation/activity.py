@@ -1270,7 +1270,7 @@ class ActivityGenerator:
         ip_proto = 6 if proto == 'tcp' else 17 if proto == 'udp' else 1
 
         # Port-based service correction (Zeek detects service from payload, not scenario labels)
-        _PORT_SERVICE = {80: 'http', 443: 'https', 22: 'ssh', 53: 'dns', 25: 'smtp', 587: 'smtp', 88: 'kerberos', 389: 'ldap', 445: 'smb'}
+        _PORT_SERVICE = {80: 'http', 443: 'ssl', 22: 'ssh', 53: 'dns', 25: 'smtp', 587: 'smtp', 88: 'kerberos', 389: 'ldap', 445: 'smb'}
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
             service = _PORT_SERVICE[dst_port]
 
@@ -1584,7 +1584,8 @@ class ActivityGenerator:
                           'qtype': 1, 'qtype_name': 'A',
                           'rcode': 2, 'rcode_name': 'SERVFAIL',
                           'AA': False, 'TC': False, 'RD': True, 'RA': True,
-                          'answers': '-', 'TTLs': '-', 'rejected': False},
+                          'Z': 0, 'rejected': False,
+                          'opcode': 0, 'opcode_name': 'query'},
                 ))
                 return
 
@@ -1606,25 +1607,25 @@ class ActivityGenerator:
                             break
                     if sibling_ips:
                         extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
-                        answers = ', '.join([dst_ip] + extra)
+                        answers = [dst_ip] + extra
                     else:
-                        answers = dst_ip
+                        answers = [dst_ip]
                 else:
-                    answers = dst_ip
+                    answers = [dst_ip]
             elif qtype_roll < 0.85:
                 # AAAA record: hostname → IPv6
                 qtype, qtype_name = 28, 'AAAA'
                 query = hostname
-                answers = _IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))
+                answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
             elif qtype_roll < 0.93:
                 # PTR record: reversed IP → rDNS name (not forward hostname)
                 qtype, qtype_name = 12, 'PTR'
                 octets = dst_ip.split('.')
                 query = '.'.join(reversed(octets)) + '.in-addr.arpa'
                 if _is_private_ip(dst_ip):
-                    answers = hostname  # Internal PTR can match forward name
+                    answers = [hostname]  # Internal PTR can match forward name
                 else:
-                    answers = _generate_rdns_name(rng, dst_ip)
+                    answers = [_generate_rdns_name(rng, dst_ip)]
             elif qtype_roll < 0.98:
                 # SRV record: AD service discovery
                 qtype, qtype_name = 33, 'SRV'
@@ -1636,14 +1637,14 @@ class ActivityGenerator:
                 # Determine port from service prefix
                 svc_prefix = query.split('.')[0]  # e.g., '_ldap'
                 port = _SRV_PORT_MAP.get(svc_prefix, 389)
-                answers = f'0 100 {port} {dc_hostname}'
+                answers = [f'0 100 {port} {dc_hostname}']
                 is_internal = True
             else:
                 # MX record: domain → mail server
                 qtype, qtype_name = 15, 'MX'
                 parts = hostname.split('.', 1)
                 query = parts[1] if len(parts) > 1 else hostname
-                answers = f'10 mail.{query}'
+                answers = [f'10 mail.{query}']
 
             # Phase 6.0: varied TTLs with cache-aging jitter for realism
             # External services use short TTLs (CDN/cloud load balancing)
@@ -1656,13 +1657,12 @@ class ActivityGenerator:
             ttl = max(1, base_ttl - rng.randint(0, base_ttl // 2))
 
             # Match TTLs count to answers count for multi-answer responses
-            num_answers = answers.count(', ') + 1 if isinstance(answers, str) and ', ' in answers else 1
+            num_answers = len(answers)
             # Each answer can have slightly different remaining TTL
             ttls = []
             for _ in range(num_answers):
                 jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
-                ttls.append(str(jittered))
-            ttls_str = ', '.join(ttls)
+                ttls.append(float(jittered))
 
             # This lookup precedes an actual connection, so always NOERROR
             self.dispatcher.dispatch_raw(RawLogEntry(
@@ -1671,11 +1671,14 @@ class ActivityGenerator:
                       'id.orig_h': src_ip, 'id.orig_p': src_port,
                       'id.resp_h': dns_server_ip, 'id.resp_p': 53,
                       'proto': 'udp', 'trans_id': rng.randint(1, 65535),
+                      'rtt': rng.uniform(0.0005, 0.1),
                       'query': query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
                       'qtype': qtype, 'qtype_name': qtype_name,
                       'rcode': 0, 'rcode_name': 'NOERROR',
                       'AA': is_internal, 'TC': False, 'RD': True, 'RA': True,
-                      'answers': answers, 'TTLs': ttls_str, 'rejected': False},
+                      'Z': 0, 'answers': answers, 'TTLs': ttls,
+                      'rejected': False,
+                      'opcode': 0, 'opcode_name': 'query'},
             ))
 
             # Phase 6.0: ~20% chance of emitting an additional NXDOMAIN query
@@ -1712,7 +1715,8 @@ class ActivityGenerator:
                           'qtype': 1, 'qtype_name': 'A',
                           'rcode': 3, 'rcode_name': 'NXDOMAIN',
                           'AA': True, 'TC': False, 'RD': True, 'RA': True,
-                          'answers': '-', 'TTLs': '-', 'rejected': False},
+                          'Z': 0, 'rejected': False,
+                          'opcode': 0, 'opcode_name': 'query'},
                 ))
 
     def get_baseline_pattern(
@@ -1927,8 +1931,8 @@ class ActivityGenerator:
 
             # Set service and port based on activity type
             if activity_type in ('connection_web', 'connection_saas'):
-                service = rng.choice(['http', 'https'])
-                dst_port = 443 if service == 'https' else 80
+                service = rng.choice(['http', 'ssl'])
+                dst_port = 443 if service == 'ssl' else 80
             elif activity_type == 'connection_email':
                 service = 'smtp'
                 # Route through internal Exchange if detected (P1-15)
@@ -1939,7 +1943,7 @@ class ActivityGenerator:
                 else:
                     dst_port = 587
             elif activity_type == 'connection_git':
-                service = 'https'
+                service = 'ssl'
                 dst_port = 443
             elif activity_type == 'connection_db':
                 db_servers = getattr(self, '_db_servers', [])

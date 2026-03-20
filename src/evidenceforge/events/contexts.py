@@ -7,7 +7,7 @@ All use @dataclass(slots=True) for memory efficiency.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -156,3 +156,114 @@ class ShellContext:
 
     command: str
     exit_code: int = 0
+
+
+# --- Zeek protocol-layer contexts (Phase: Zeek expansion) ---
+
+
+@dataclass(slots=True)
+class SslContext:
+    """SSL/TLS handshake details for Zeek ssl.log."""
+
+    version: str = ""  # "TLSv12", "TLSv13"
+    cipher: str = ""  # "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    server_name: str = ""  # SNI hostname
+    resumed: bool = False
+    established: bool = True
+    ssl_history: str = ""  # e.g., "CsiI"
+
+
+@dataclass(slots=True)
+class HttpContext:
+    """HTTP request/response details for Zeek http.log."""
+
+    method: str = "GET"
+    host: str = ""  # Host header value
+    uri: str = "/"
+    version: str = "1.1"
+    user_agent: str = ""
+    request_body_len: int = 0
+    response_body_len: int = 0
+    status_code: int = 200
+    status_msg: str = "OK"
+    referrer: str = ""
+    trans_depth: int = 1
+    tags: list[str] = field(default_factory=list)
+    resp_fuids: list[str] = field(default_factory=list)
+    resp_mime_types: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class FileTransferContext:
+    """File transfer metadata for Zeek files.log.
+
+    Distinct from FileContext (file-system operations). This tracks
+    network file transfers observed by Zeek.
+    """
+
+    fuid: str = ""  # F-prefix Zeek file UID
+    source: str = ""  # "HTTP", "SSL", "SMTP"
+    depth: int = 0
+    analyzers: list[str] = field(default_factory=list)
+    mime_type: str = ""
+    duration: float = 0.0
+    local_orig: bool = False
+    is_orig: bool = False
+    seen_bytes: int = 0
+    total_bytes: int | None = None
+    missing_bytes: int = 0
+    overflow_bytes: int = 0
+    timedout: bool = False
+
+
+@dataclass(slots=True)
+class X509Context:
+    """X.509 certificate details for Zeek x509.log."""
+
+    fingerprint: str = ""  # SHA256 hex
+    certificate_version: int = 3
+    certificate_serial: str = ""
+    certificate_subject: str = ""
+    certificate_issuer: str = ""
+    certificate_not_valid_before: float = 0.0
+    certificate_not_valid_after: float = 0.0
+    certificate_key_alg: str = "rsaEncryption"
+    certificate_sig_alg: str = "sha256WithRSAEncryption"
+    certificate_key_type: str = "rsa"
+    certificate_key_length: int = 2048
+    certificate_exponent: str = "65537"
+    san_dns: list[str] = field(default_factory=list)
+    basic_constraints_ca: bool = False
+    host_cert: bool = True
+    client_cert: bool = False
+
+
+@dataclass(slots=True)
+class DhcpContext:
+    """DHCP transaction details for Zeek dhcp.log."""
+
+    client_addr: str = ""
+    mac: str = ""
+    host_name: str = ""
+    domain: str = ""
+    msg_types: list[str] = field(default_factory=list)  # ["REQUEST", "ACK"]
+    duration: float = 0.0
+
+
+@dataclass(slots=True)
+class NtpContext:
+    """NTP protocol details for Zeek ntp.log."""
+
+    version: int = 3
+    mode: int = 3  # 3=client, 4=server
+    stratum: int = 2
+    poll: float = 512.0
+    precision: float = 0.0
+    root_delay: float = 0.0
+    root_disp: float = 0.0
+    ref_id: str = ""
+    ref_ts: float = 0.0
+    org_ts: float = 0.0
+    rec_ts: float = 0.0
+    xmt_ts: float = 0.0
+    num_exts: int = 0

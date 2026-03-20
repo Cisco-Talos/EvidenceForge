@@ -6,21 +6,27 @@ and emitters. RawLogEntry is the escape hatch for single-format entries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.contexts import (
     AuthContext,
+    DhcpContext,
     DnsContext,
     FileContext,
+    FileTransferContext,
     HostContext,
+    HttpContext,
     IdsContext,
     KerberosContext,
     NetworkContext,
+    NtpContext,
     ProcessContext,
     RegistryContext,
     ShellContext,
+    SslContext,
+    X509Context,
 )
 
 
@@ -45,6 +51,17 @@ class SecurityEvent:
     ids: IdsContext | None = None
     kerberos: KerberosContext | None = None
     shell: ShellContext | None = None
+
+    # Zeek protocol-layer contexts (Phase: Zeek expansion)
+    ssl: SslContext | None = None
+    http: HttpContext | None = None
+    file_transfer: FileTransferContext | None = None
+    x509: X509Context | None = None
+    dhcp: DhcpContext | None = None
+    ntp: NtpContext | None = None
+
+    # Sensor routing metadata (not a context — set by dispatcher)
+    _observing_sensor_hostnames: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

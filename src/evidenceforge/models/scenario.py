@@ -349,6 +349,8 @@ class NetworkSensor(BaseModel):
     Attributes:
         type: Sensor type (network|ids|firewall)
         name: Sensor identifier
+        hostname: Sensor hostname used as output directory name (e.g., "fw01").
+                  If unset, falls back to name.
         monitoring_segments: List of segment names this sensor monitors
         direction: Traffic direction visible (inbound|outbound|bidirectional)
         placement: How the sensor is connected (span|tap).
@@ -360,6 +362,7 @@ class NetworkSensor(BaseModel):
 
     type: str = Field(..., pattern="^(network|ids|firewall)$")
     name: str
+    hostname: str = ""
     monitoring_segments: list[str]
     direction: str = Field(
         default="bidirectional", pattern="^(inbound|outbound|bidirectional)$"

@@ -15,7 +15,7 @@ fields:
     required: true
     description: "Unique connection identifier"
     constraints:
-      pattern: "^[A-Za-z0-9]{18}$"
+      pattern: "^[A-Za-z0-9]{17,19}$"
 
   - name: id.orig_h
     type: ip_address
