@@ -17,6 +17,7 @@ class EcarEmitter(LogEmitter):
     _supported_types: set[str] = {
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
+        "ssh_session",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -32,6 +33,7 @@ class EcarEmitter(LogEmitter):
             "process_create": self._render_process_create,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
+            "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(

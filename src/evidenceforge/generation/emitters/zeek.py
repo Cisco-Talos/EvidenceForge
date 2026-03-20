@@ -17,14 +17,14 @@ class ZeekEmitter(LogEmitter):
     Each connection includes source/dest IPs, ports, protocol, and connection state.
     """
 
-    _supported_types: set[str] = {"connection"}
+    _supported_types: set[str] = {"connection", "ssh_session"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        """Zeek conn emitter handles connection events."""
+        """Zeek conn emitter handles connection and session events with network context."""
         return event.event_type in self._supported_types and event.network is not None
 
     def emit(self, event: SecurityEvent) -> None:
-        """Render connection SecurityEvent to Zeek conn.log format."""
+        """Render SecurityEvent to Zeek conn.log format."""
         net = event.network
         event_data = {
             'ts': event.timestamp,

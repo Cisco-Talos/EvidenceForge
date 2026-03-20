@@ -12,7 +12,7 @@ from evidenceforge.generation.emitters.base import LogEmitter
 class SyslogEmitter(LogEmitter):
     """Emitter for Linux syslog format."""
 
-    _supported_types: set[str] = {"logon", "logoff", "failed_logon", "system_process_create"}
+    _supported_types: set[str] = {"logon", "logoff", "failed_logon", "system_process_create", "ssh_session"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Syslog emitter handles events on Linux hosts."""
@@ -29,6 +29,7 @@ class SyslogEmitter(LogEmitter):
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "system_process_create": self._render_system_process,
+            "ssh_session": self._render_ssh_session,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -100,6 +101,25 @@ class SyslogEmitter(LogEmitter):
             'facility': facility,
             'severity': 6,
             'message': f'{app_name}[{proc.pid}]: started: {proc.command_line}',
+        }
+        self.emit_event(event_data)
+
+    def _render_ssh_session(self, event: SecurityEvent) -> None:
+        """Render syslog auth message for SSH session establishment."""
+        rng = random.Random()
+        auth = event.auth
+        net = event.network
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname,
+            'facility': 10,  # authpriv
+            'severity': 6,   # info
+            'app_name': 'sshd',
+            'pid': rng.randint(5000, 60000),
+            'message': (
+                f'Accepted password for {auth.username} from {net.src_ip} '
+                f'port {net.src_port} ssh2'
+            ),
         }
         self.emit_event(event_data)
 

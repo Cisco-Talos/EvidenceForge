@@ -983,7 +983,7 @@ class GenerationEngine:
             'logon': ['logon', 'log in', 'login', 'authenticate', 'sign in'],
             'logoff': ['logoff', 'log off', 'logout', 'sign out'],
             'process': ['execute', 'run', 'launch', 'start', 'spawn', 'powershell', 'cmd', 'command'],
-            'connection': ['connect', 'access', 'download', 'upload', 'communicate', 'c2', 'exfiltrate'],
+            'connection': ['connect', 'access', 'download', 'upload', 'communicate', 'c2', 'exfiltrate', 'ssh', 'rdp', 'remote'],
         }
 
         activity_lower = activity.lower()
@@ -1061,7 +1061,12 @@ class GenerationEngine:
                     self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
                 )
 
-            parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
+            # Use previous storyline process as parent (attack chain continuity)
+            last_pid = getattr(self, '_last_storyline_pid', None)
+            if last_pid and self.activity_generator._is_pid_alive(system, last_pid):
+                parent_pid = last_pid
+            else:
+                parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
             pid = self.activity_generator.generate_process(
                 user=actor,
                 system=system,
@@ -1073,36 +1078,67 @@ class GenerationEngine:
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
 
+            self._last_storyline_pid = pid  # Track for parent chain continuity
             malicious_event['process_name'] = process_name
             malicious_event['command_line'] = command_line
             malicious_event['pid'] = pid
 
         elif event_type == 'connection':
+            # Detect SSH from activity keywords or MITRE technique
+            is_ssh = ('ssh' in activity.lower()
+                      or details.get('technique', '').startswith('T1021.004')
+                      or details.get('dst_port') == 22
+                      or details.get('service') == 'ssh')
+
             # Default C2 IPs: realistic cloud hosting ranges (not RFC 5737)
             _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88', '64.227.38.102', '108.61.13.174']
-            dst_ip = details.get('dst_ip', random.choice(_c2_ips))
-            dst_port = details.get('dst_port', 443)
-            service = details.get('service', 'https')
+            if is_ssh:
+                # SSH: target is the storyline system, source is from details or actor's workstation
+                dst_ip = system.ip
+                dst_port = 22
+                service = 'ssh'
+            else:
+                dst_ip = details.get('dst_ip', random.choice(_c2_ips))
+                dst_port = details.get('dst_port', 443)
+                service = details.get('service', 'https')
 
             # Validate destination is different from source
-            if dst_ip == system.ip:
+            if dst_ip == system.ip and not is_ssh:
                 logger.warning(
                     f"Skipping storyline connection: dst_ip {dst_ip} matches system IP {system.ip}. "
                     f"Adjusting to external IP."
                 )
                 dst_ip = random.choice(['159.65.43.201', '134.209.29.115', '167.71.156.88'])
 
-            uid = self.activity_generator.generate_connection(
-                src_ip=system.ip,
-                dst_ip=dst_ip,
-                time=time,
-                dst_port=dst_port,
-                service=service,
-                duration=random.uniform(1.0, 30.0),
-                orig_bytes=random.randint(1000, 10000),
-                resp_bytes=random.randint(5000, 50000),
-                emit_dns=True,
-            )
+            # SSH connections use compound ssh_session event (Zeek + syslog + eCAR)
+            if is_ssh:
+                source_ip = details.get('source_ip', system.ip)
+                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), system)
+                uid = self.activity_generator.generate_ssh_session(
+                    user=actor, target_system=target, time=time, source_ip=source_ip,
+                )
+            elif dst_port == 22:
+                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), None)
+                if target:
+                    uid = self.activity_generator.generate_ssh_session(
+                        user=actor, target_system=target, time=time, source_ip=system.ip,
+                    )
+                else:
+                    uid = self.activity_generator.generate_connection(
+                        src_ip=system.ip, dst_ip=dst_ip, time=time,
+                        dst_port=22, service='ssh', duration=random.uniform(30.0, 1800.0),
+                        orig_bytes=random.randint(2000, 50000), resp_bytes=random.randint(5000, 200000),
+                        emit_dns=True,
+                    )
+            else:
+                uid = self.activity_generator.generate_connection(
+                    src_ip=system.ip, dst_ip=dst_ip, time=time,
+                    dst_port=dst_port, service=service,
+                    duration=random.uniform(1.0, 30.0),
+                    orig_bytes=random.randint(1000, 10000),
+                    resp_bytes=random.randint(5000, 50000),
+                    emit_dns=True,
+                )
 
             malicious_event['dst_ip'] = dst_ip
             malicious_event['dst_port'] = dst_port
