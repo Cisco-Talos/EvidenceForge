@@ -43,6 +43,9 @@ class _SingleHistoryWriter:
     def flush(self) -> None:
         if not self.buffer:
             return
+        # Sort entries by timestamp to ensure monotonic ordering
+        # Bash history format: #<epoch>\n<command>\n — sort by epoch line
+        self._sort_by_timestamp()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
@@ -50,6 +53,15 @@ class _SingleHistoryWriter:
                 if not entry.endswith("\n"):
                     f.write("\n")
         self.buffer.clear()
+
+    def _sort_by_timestamp(self) -> None:
+        """Sort buffer entries by embedded epoch timestamps."""
+        def _extract_ts(entry: str) -> int:
+            for line in entry.split('\n'):
+                if line.startswith('#') and line[1:].strip().isdigit():
+                    return int(line[1:].strip())
+            return 0
+        self.buffer.sort(key=_extract_ts)
 
 
 class BashHistoryEmitter(LogEmitter):

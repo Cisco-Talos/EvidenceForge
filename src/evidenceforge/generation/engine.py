@@ -1533,6 +1533,8 @@ class GenerationEngine:
 
         pids['agetty1'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty1 linux', 'root')
         pids['agetty2'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty2 linux', 'root')
+        pids['snapd'] = _c(pids['systemd'], '/usr/lib/snapd/snapd', '/usr/lib/snapd/snapd', 'root')
+        pids['timesyncd'] = _c(pids['systemd'], '/usr/lib/systemd/systemd-timesyncd', '/usr/lib/systemd/systemd-timesyncd', 'systemd-timesync')
 
         # User login shell (sshd forks per-session sshd, then bash)
         pids['bash'] = _c(pids['sshd'], '/bin/bash', '-bash', 'root')
@@ -1706,8 +1708,10 @@ class GenerationEngine:
                 task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
 
             for slot_base in [0, 900, 1800, 2700]:  # Every 15 minutes
-                # Small jitter (±5s) around fixed schedule
-                offset = slot_base + host_seed + rng.gauss(0, 5)
+                # Moderate jitter: cron fires on schedule but system load adds
+                # a few seconds of variance (enough to break perfect intervals
+                # while keeping CV < 0.3 for ~900s intervals)
+                offset = slot_base + host_seed + rng.gauss(0, 8) + rng.uniform(0, 3)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
@@ -1736,7 +1740,7 @@ class GenerationEngine:
                            s.type.lower() in ('server', 'domain_controller')][:5]
                 if targets:
                     target_ip = rng.choice(targets)
-                    offset = rng.randint(0, 3599)
+                    offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
@@ -1979,7 +1983,7 @@ class GenerationEngine:
                     ))
                 elif source_roll < 0.50:
                     # kernel — no PID, includes uptime counter
-                    if is_dmz and rng.random() < 0.5:
+                    if is_dmz and rng.random() < 0.85:
                         # UFW BLOCK messages on DMZ servers
                         src_ip = f'{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}'
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
@@ -2008,7 +2012,7 @@ class GenerationEngine:
                     action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
                     self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'systemd-logind', 'pid': sys_pids.get('systemd_logind', rng.randint(400, 800)),
+                        'app_name': 'systemd-logind', 'pid': sys_pids.get('logind', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
                         'message': action},
                     ))

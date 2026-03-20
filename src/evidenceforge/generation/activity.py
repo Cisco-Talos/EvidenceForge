@@ -127,8 +127,12 @@ PROCESS_TEMPLATES = {
         ('C:\\Program Files\\nodejs\\node.exe', 'node.exe scripts/build.js'),
     ],
     'process_query': [
-        ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S localhost -Q "SELECT * FROM users"'),
-        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "Get-EventLog -LogName Security -Newest 100"'),
+        ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S {db_server} -Q "{sql_query}"'),
+        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "{ps_command}"'),
+        ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S {db_server} -d {db_name} -Q "{sql_query}"'),
+        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -ExecutionPolicy Bypass -File {ps_script}'),
+        ('C:\\Windows\\System32\\wbem\\WMIC.exe', 'WMIC.exe {wmic_query}'),
+        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "{ps_command}"'),
     ],
     'process_user_apps': [
         ('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'chrome.exe --type=renderer --enable-features=NetworkService'),
@@ -197,6 +201,88 @@ PROCESS_TEMPLATES_LINUX = {
     ],
 }
 
+# Parameterized command-line value pools for process_query variety
+_QUERY_PARAMS = {
+    'db_server': ['localhost', 'DB-SRV-01', 'sqlprod01', '10.0.2.50', 'SQLEXPRESS'],
+    'db_name': ['master', 'inventory', 'analytics', 'hr_records', 'webapp_prod', 'reporting'],
+    'sql_query': [
+        'SELECT TOP 100 * FROM dbo.Users ORDER BY LastLogin DESC',
+        'SELECT COUNT(*) FROM dbo.Orders WHERE OrderDate > GETDATE()-7',
+        'SELECT name, status FROM sys.databases',
+        'EXEC sp_who2',
+        'SELECT @@VERSION',
+        'SELECT * FROM INFORMATION_SCHEMA.TABLES',
+        'SELECT TOP 50 * FROM dbo.AuditLog ORDER BY EventTime DESC',
+        'BACKUP DATABASE {db_name} TO DISK = N\'D:\\Backups\\{db_name}.bak\'',
+        'SELECT name, recovery_model_desc FROM sys.databases',
+        'DBCC CHECKDB ({db_name}) WITH NO_INFOMSGS',
+    ],
+    'ps_command': [
+        'Get-EventLog -LogName Security -Newest 100',
+        'Get-Process | Sort-Object CPU -Descending | Select-Object -First 20',
+        'Get-Service | Where-Object {{$_.Status -eq \\"Running\\"}}',
+        'Get-ADUser -Filter * -Properties LastLogonDate | Sort LastLogonDate',
+        'Get-WinEvent -FilterHashtable @{{LogName=\\"System\\";Level=2}} -MaxEvents 50',
+        'Test-NetConnection -ComputerName DC-01 -Port 389',
+        'Get-ChildItem -Path C:\\Shares -Recurse | Measure-Object -Property Length -Sum',
+        'Get-DnsServerZone | Format-Table -AutoSize',
+        'Invoke-Command -ComputerName FILE-SRV-01 -ScriptBlock {{Get-Disk}}',
+        'Get-ScheduledTask | Where-Object {{$_.State -ne \\"Disabled\\"}}',
+    ],
+    'ps_script': [
+        'C:\\Scripts\\backup-check.ps1',
+        'C:\\Scripts\\health-report.ps1',
+        'C:\\Scripts\\disk-usage.ps1',
+        'C:\\Scripts\\user-audit.ps1',
+        'C:\\Admin\\update-inventory.ps1',
+    ],
+    'wmic_query': [
+        'os get Caption,Version,OSArchitecture /format:list',
+        'diskdrive get Size,Model,Status /format:list',
+        'service where "State=\'Running\'" get Name,ProcessId /format:csv',
+        'process where "WorkingSetSize>100000000" get Name,ProcessId,WorkingSetSize',
+        'cpu get LoadPercentage,NumberOfCores /format:list',
+    ],
+}
+
+_QUERY_PARAMS_LINUX = {
+    'mysql_db': ['wordpress', 'inventory', 'analytics', 'appdb', 'logging'],
+    'mysql_query': [
+        'SELECT COUNT(*) FROM sessions WHERE active=1',
+        'SHOW PROCESSLIST',
+        'SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema=\'{db}\'',
+        'SHOW DATABASES',
+        'SELECT * FROM wp_users LIMIT 10',
+    ],
+    'psql_db': ['postgres', 'appdata', 'metrics', 'warehouse'],
+    'redis_cmd': [
+        'redis-cli INFO memory',
+        'redis-cli DBSIZE',
+        'redis-cli GET session:active_count',
+        'redis-cli KEYS "cache:*" | head -20',
+        'redis-cli MONITOR',
+    ],
+}
+
+
+def _parameterize_command(rng, command_line: str) -> str:
+    """Replace {placeholders} in command lines with random realistic values.
+
+    Runs multiple passes since expanding one placeholder (e.g., {sql_query})
+    may introduce new placeholders (e.g., {db_name} inside the query text).
+    """
+    for _pass in range(3):  # Max 3 passes to resolve nested placeholders
+        changed = False
+        for key, values in _QUERY_PARAMS.items():
+            placeholder = '{' + key + '}'
+            while placeholder in command_line:
+                command_line = command_line.replace(placeholder, rng.choice(values), 1)
+                changed = True
+        if not changed:
+            break
+    return command_line
+
+
 # Per-persona process type weights (Phase 5.1)
 # Maps persona name to relative probability of each process template category
 PERSONA_PROCESS_WEIGHTS = {
@@ -235,14 +321,16 @@ PERSONA_APP_INDICES_LINUX = {
 # Phase 6.3: Expanded from 7 to 20+ patterns for realism
 TCP_CONN_STATE_DISTRIBUTION = [
     # Normal completions (SF) — various data exchange patterns
-    ('SF', 54, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
-    ('SF', 10, 'ShADaDadfF'),    # Multiple data exchanges before FIN
-    ('SF', 5, 'ShADadTtFf'),     # Normal with retransmissions (T=orig retx, t=resp retx)
-    ('SF', 4, 'ShADadfFa'),      # FIN-ACK with trailing ACK
-    ('SF', 3, 'ShADaDaDadfF'),   # Bulk transfer (many data rounds)
-    ('SF', 2, 'ShADadFf'),       # Originator FIN first (client closes)
-    ('SF', 2, 'ShADadfF'),       # Responder FIN first (server closes)
-    ('SF', 1, 'ShADadTFf'),      # Retransmit then FIN
+    ('SF', 27, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
+    ('SF', 14, 'ShADaDadfF'),    # Multiple data exchanges before FIN
+    ('SF', 8, 'ShADadTtFf'),     # Normal with retransmissions (T=orig retx, t=resp retx)
+    ('SF', 7, 'ShADadfFa'),      # FIN-ACK with trailing ACK
+    ('SF', 6, 'ShADaDaDadfF'),   # Bulk transfer (many data rounds)
+    ('SF', 5, 'ShADadFf'),       # Originator FIN first (client closes)
+    ('SF', 5, 'ShADaDadfFa'),    # Multi-exchange with trailing ACK
+    ('SF', 4, 'ShADadTFf'),      # Retransmit then FIN
+    ('SF', 3, 'ShADaDadFf'),     # Multi data then client closes
+    ('SF', 2, 'ShADaDaTtdfF'),   # Multi data with retransmissions
     # Connection attempts (S0)
     ('S0', 3, 'S'),              # Single SYN, no reply
     ('S0', 2, 'S'),              # SYN retransmit (Zeek deduplicates to single 'S')
@@ -1114,11 +1202,22 @@ class ActivityGenerator:
         if proto == 'icmp':
             conn_state = 'OTH'
             history = '-'
-            src_port = 8   # Echo request type
-            dst_port = 0   # Echo reply type
+            src_port = 0   # ICMP has no ports; Zeek emits 0
+            dst_port = 0
         elif proto == 'udp':
-            entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
-            conn_state, _, history = entry
+            # DNS connections with responses must not be S0 (no-response)
+            if service == 'dns' and resp_bytes and resp_bytes > 0:
+                # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
+                dns_roll = rng.random()
+                if dns_roll < 0.05:
+                    conn_state, history = 'SF', 'DDd'   # Retransmitted query
+                elif dns_roll < 0.07:
+                    conn_state, history = 'SF', 'Ddd'   # Multi-packet response
+                else:
+                    conn_state, history = 'SF', 'Dd'
+            else:
+                entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
+                conn_state, _, history = entry
             if conn_state == 'S0':
                 duration = None
                 resp_bytes = 0
@@ -1132,7 +1231,10 @@ class ActivityGenerator:
             if conn_state in ('S0', 'REJ'):
                 duration = None
                 resp_bytes = 0
-                if conn_state == 'REJ':
+                # S0 = SYN only, no handshake completed — orig_bytes is just the SYN packet
+                if conn_state == 'S0':
+                    orig_bytes = rng.choice([0, 40, 44, 48, 60])
+                elif conn_state == 'REJ':
                     orig_bytes = orig_bytes if orig_bytes else 0
             elif conn_state in ('RSTO', 'RSTR'):
                 if duration is not None:
@@ -1197,7 +1299,8 @@ class ActivityGenerator:
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # eCAR FLOW still via helper (not format-filtered by visibility)
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port, protocol=proto)
+        flow_hostname = REVERSE_DNS.get(src_ip, src_ip)
+        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, flow_hostname, src_port=src_port, protocol=proto)
 
         return uid
 
@@ -1296,10 +1399,22 @@ class ActivityGenerator:
 
         # Select command based on activity type
         commands = {
-            'process_code': ['vim script.py', 'nano config.conf', 'code .'],
-            'process_build': ['make', 'gcc -o output source.c', 'npm run build'],
-            'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz'],
-            'default': ['ls -la', 'ps aux', 'top', 'df -h']
+            'process_code': ['vim script.py', 'nano config.conf', 'code .', 'git status',
+                             'git diff', 'python3 -m pytest', 'cat README.md'],
+            'process_build': ['make', 'gcc -o output source.c', 'npm run build',
+                              'docker build -t app .', 'cargo build --release'],
+            'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz',
+                               'curl -I https://api.example.com/health'],
+            'process_user_apps': ['ls -la', 'cd /var/www/html', 'tail -f /var/log/syslog',
+                                  'grep -r "error" /var/log/', 'systemctl status apache2',
+                                  'free -m', 'uptime', 'cat /etc/hostname',
+                                  'netstat -tlnp', 'du -sh /var/log/*', 'w',
+                                  'journalctl -u apache2 --since "1 hour ago"',
+                                  'htop', 'ss -tulnp', 'ip addr show'],
+            'default': ['ls -la', 'ps aux', 'top', 'df -h', 'whoami', 'pwd',
+                        'cat /etc/os-release', 'uptime', 'free -m', 'w',
+                        'tail -20 /var/log/syslog', 'history', 'date',
+                        'ls /tmp', 'mount | grep -v tmpfs']
         }
 
         command_list = commands.get(activity_type, commands['default'])
@@ -1450,6 +1565,10 @@ class ActivityGenerator:
             resp_bytes=rng.randint(80, 400),
             src_port=src_port,
         )
+        # If connection was filtered (e.g. same-host DNS), generate standalone UID
+        if not dns_uid:
+            from evidenceforge.utils.ids import generate_zeek_uid
+            dns_uid = generate_zeek_uid("C")
 
         # Emit Zeek dns.log record
         if 'zeek_dns' in self.dispatcher.emitters:
@@ -1526,12 +1645,24 @@ class ActivityGenerator:
                 query = parts[1] if len(parts) > 1 else hostname
                 answers = f'10 mail.{query}'
 
-            # Phase 6.0: varied TTLs (not just round numbers)
-            ttl = rng.choice([30, 60, 120, 247, 300, 598, 1800, 3600, 7200, 86400])
+            # Phase 6.0: varied TTLs with cache-aging jitter for realism
+            # External services use short TTLs (CDN/cloud load balancing)
+            # Internal services use longer TTLs (stable infrastructure)
+            if is_internal:
+                base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+            else:
+                base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
+            # Simulate cache aging: subtract 0-50% of the original TTL
+            ttl = max(1, base_ttl - rng.randint(0, base_ttl // 2))
 
             # Match TTLs count to answers count for multi-answer responses
             num_answers = answers.count(', ') + 1 if isinstance(answers, str) and ', ' in answers else 1
-            ttls_str = ', '.join([str(ttl)] * num_answers)
+            # Each answer can have slightly different remaining TTL
+            ttls = []
+            for _ in range(num_answers):
+                jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
+                ttls.append(str(jittered))
+            ttls_str = ', '.join(ttls)
 
             # This lookup precedes an actual connection, so always NOERROR
             self.dispatcher.dispatch_raw(RawLogEntry(
@@ -1568,6 +1699,9 @@ class ActivityGenerator:
                     orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
                     src_port=nx_src_port,
                 )
+                if not nx_uid:
+                    from evidenceforge.utils.ids import generate_zeek_uid
+                    nx_uid = generate_zeek_uid("C")
                 self.dispatcher.dispatch_raw(RawLogEntry(
                     timestamp=nx_time, target_emitter='zeek_dns',
                     data={'ts': nx_time, 'uid': nx_uid,
@@ -1687,9 +1821,13 @@ class ActivityGenerator:
                 # Pick a source IP from another system for network logons
                 source_ip = None
                 if logon_type == 3 and hasattr(self, '_all_system_ips'):
-                    other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
-                    if other_ips:
-                        source_ip = rng.choice(other_ips)
+                    # ~30% of Type 3 logons are local services authenticating to themselves
+                    if rng.random() < 0.30:
+                        source_ip = rng.choice([system.ip, '127.0.0.1'])
+                    else:
+                        other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
+                        if other_ips:
+                            source_ip = rng.choice(other_ips)
                 self.generate_logon(user, system, time, logon_type=logon_type,
                                     source_ip=source_ip if source_ip else system.ip)
                 # Don't create a session — these are background auth events
@@ -1719,13 +1857,38 @@ class ActivityGenerator:
                     persona_key = (user.persona or 'default').lower()
                     indices = PERSONA_APP_INDICES.get(persona_key, PERSONA_APP_INDICES['default'])
                     pool = [pool[i] for i in indices if i < len(pool)]
-                process_name, command_line = _get_rng().choice(pool)
+                rng = _get_rng()
+                process_name, command_line = rng.choice(pool)
                 # Phase 5.1: Substitute username placeholder in paths
                 process_name = process_name.replace('{username}', user.username)
                 command_line = command_line.replace('{username}', user.username)
+                # Parameterize command templates (process_query variety)
+                command_line = _parameterize_command(rng, command_line)
                 parent_pid = self._select_parent_pid(system, user, process_name)
                 pid = self.generate_process(user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid)
                 self._record_user_process(system, user, pid, process_name)
+
+                # Generate network connections for processes that connect to remote services
+                exe_lower = process_name.rsplit('\\', 1)[-1].lower()
+                if exe_lower == 'sqlcmd.exe' and activity_type == 'process_query':
+                    # Extract server from command line (-S flag)
+                    db_port = 1433
+                    db_ip = '127.0.0.1'  # Default localhost
+                    if '-S ' in command_line:
+                        server = command_line.split('-S ')[1].split()[0]
+                        # Resolve server name to IP if possible
+                        db_ip = REVERSE_DNS.get(server) or next(
+                            (ip for name, ip in REVERSE_DNS.items() if server.lower() in name.lower()),
+                            '10.0.2.50'  # Default DB server IP
+                        )
+                    conn_time = time + timedelta(milliseconds=rng.randint(50, 200))
+                    self.generate_connection(
+                        src_ip=system.ip, dst_ip=db_ip, time=conn_time,
+                        dst_port=db_port, proto='tcp', service='mssql',
+                        duration=rng.uniform(0.5, 5.0),
+                        orig_bytes=rng.randint(200, 2000),
+                        resp_bytes=rng.randint(500, 50000),
+                    )
 
             elif os_category == 'linux' and activity_type in PROCESS_TEMPLATES_LINUX:
                 # Phase 5.6: Per-persona app pool for Linux user diversity
@@ -2070,6 +2233,13 @@ class ActivityGenerator:
         'cmd.exe', 'powershell.exe', 'pwsh.exe', 'WindowsTerminal.exe',
         'outlook.exe', 'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',
     }
+    # GUI apps that users launch from Start Menu / desktop — always parent=explorer.exe
+    _WINDOWS_GUI_APPS = {
+        'outlook.exe', 'winword.exe', 'excel.exe', 'powerpnt.exe',
+        'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',
+        'teams.exe', 'onedrive.exe', 'acrobat.exe', '7zfm.exe',
+        'notepad++.exe', 'idea64.exe', 'sublime_text.exe', 'code.exe',
+    }
     _LINUX_SHELLS = {'/bin/bash', '/bin/zsh', '/bin/sh', '/usr/bin/bash', '/usr/bin/zsh'}
 
     def _is_pid_alive(self, system: System, pid: int) -> bool:
@@ -2080,7 +2250,8 @@ class ActivityGenerator:
         """Select a realistic parent PID based on process type and history.
 
         Builds process trees with depth by tracking recent user processes.
-        Windows user processes typically spawn from explorer.exe or shells.
+        Windows GUI apps always spawn from explorer.exe.
+        CLI/script processes can spawn from shells.
         Linux user processes typically spawn from login shells.
 
         Only returns PIDs that are still alive in the state manager.
@@ -2101,13 +2272,17 @@ class ActivityGenerator:
             if exe_name in self._WINDOWS_SHELLS:
                 return sys_pids.get('explorer', 4)
 
-            # Check for a running shell in history that could be parent
+            # GUI apps always spawn from explorer.exe (user launches via Start Menu/desktop)
+            if exe_name in self._WINDOWS_GUI_APPS:
+                return sys_pids.get('explorer', 4)
+
+            # CLI/script processes: check for a running shell as parent
             shells = [(pid, name) for pid, name in alive_history
                       if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SHELLS]
             if shells and rng.random() < 0.6:
                 return shells[-1][0]
 
-            # Check for a browser/app that could spawn this process
+            # Check for a browser/app that could spawn this process (e.g. download+run)
             spawners = [(pid, name) for pid, name in alive_history
                         if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SPAWNERS]
             if spawners and rng.random() < 0.3:

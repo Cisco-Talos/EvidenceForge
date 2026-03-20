@@ -141,6 +141,12 @@ class ZeekEmitter(LogEmitter):
         # The template may have pretty-printing for readability
         try:
             data = json.loads(rendered)
+            # Round duration to 6 decimal places (matches real Zeek precision)
+            if 'duration' in data and isinstance(data['duration'], float):
+                data['duration'] = round(data['duration'], 6)
+            # Round timestamp to 6 decimal places
+            if 'ts' in data and isinstance(data['ts'], float):
+                data['ts'] = round(data['ts'], 6)
             # Re-serialize as compact JSON (no whitespace, single line)
             rendered = json.dumps(data, separators=(',', ':'))
         except json.JSONDecodeError:
