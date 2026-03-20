@@ -37,6 +37,13 @@ class SyslogEmitter(LogEmitter):
             )
         renderer(event)
 
+    def _session_pid(self, logon_id: str) -> int:
+        """Derive a stable sshd PID from a session's logon ID.
+
+        Ensures the same session produces the same PID across logon/logoff events.
+        """
+        return 1000 + (hash(logon_id) % 59000)  # Range 1000-59999
+
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render syslog authentication message for successful logon."""
         rng = random.Random()
@@ -46,8 +53,8 @@ class SyslogEmitter(LogEmitter):
             'hostname': event.host.hostname,
             'facility': 10,  # authpriv
             'severity': 6,   # info
-            'app_name': 'sshd' if auth.logon_type == 3 else 'login',
-            'pid': rng.randint(1000, 9999),
+            'app_name': 'sshd',
+            'pid': self._session_pid(auth.logon_id),
             'message': (
                 f'Accepted password for {auth.username} from {auth.source_ip} '
                 f'port {rng.randint(49152, 65535)}'
@@ -57,15 +64,14 @@ class SyslogEmitter(LogEmitter):
 
     def _render_logoff(self, event: SecurityEvent) -> None:
         """Render syslog session closed message."""
-        rng = random.Random()
         auth = event.auth
         event_data = {
             'timestamp': event.timestamp,
             'hostname': event.host.hostname,
             'facility': 10,  # authpriv
             'severity': 6,   # info
-            'app_name': 'sshd' if auth.logon_type == 3 else 'login',
-            'pid': rng.randint(1000, 9999),
+            'app_name': 'sshd',
+            'pid': self._session_pid(auth.logon_id),
             'message': f'session closed for user {auth.username}',
         }
         self.emit_event(event_data)
@@ -79,8 +85,8 @@ class SyslogEmitter(LogEmitter):
             'hostname': event.host.hostname,
             'facility': 10,  # authpriv
             'severity': 4,   # warning
-            'app_name': 'sshd' if auth.logon_type == 3 else 'login',
-            'pid': rng.randint(1000, 9999),
+            'app_name': 'sshd',
+            'pid': self._session_pid(auth.logon_id) if auth.logon_id else rng.randint(5000, 60000),
             'message': (
                 f'Failed password for {auth.username} from {auth.source_ip} '
                 f'port {rng.randint(49152, 65535)} ssh2'
