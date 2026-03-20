@@ -232,31 +232,33 @@ class GenerationEngine:
             'web_access': WebEmitter,
         }
 
-        # Collect Zeek sensor hostnames for per-sensor directory routing
-        _zeek_sensor_hostnames: list[str] = []
+        # Build per-format sensor hostname mapping for network sensors
+        _sensor_hostnames_by_format: dict[str, list[str]] = {}
         if self.scenario.environment.network and self.scenario.environment.network.sensors:
-            _zeek_sensor_hostnames = [
-                s.hostname or s.name
-                for s in self.scenario.environment.network.sensors
-                if any(fmt.startswith("zeek_") for fmt in s.log_formats)
-            ]
+            for s in self.scenario.environment.network.sensors:
+                hostname = s.hostname or s.name
+                for fmt in s.log_formats:
+                    _sensor_hostnames_by_format.setdefault(fmt, []).append(hostname)
 
         _ZEEK_FORMATS = {k for k in emitter_classes if k.startswith("zeek_")}
+        # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
+        _SENSOR_FORMATS = _ZEEK_FORMATS | {'snort_alert'}
+        _HOST_FORMATS = {'windows_event_security', 'ecar', 'syslog', 'bash_history'}
 
         for format_name in formats_to_generate:
             format_def = load_format(format_name)
 
-            if format_name in _ZEEK_FORMATS:
-                # Zeek emitters use per-sensor directory multiplexing
+            if format_name in _SENSOR_FORMATS:
+                # Network sensor emitters use per-sensor directory multiplexing
+                sensor_hostnames = _sensor_hostnames_by_format.get(format_name, [])
                 emitter_class = emitter_classes[format_name]
                 emitter = emitter_class(
                     format_def, self.output_dir, threaded=True,
-                    sensor_hostnames=_zeek_sensor_hostnames,
+                    sensor_hostnames=sensor_hostnames,
                 )
-            elif format_name == 'bash_history':
-                # bash_history uses a directory (per-user-per-host files)
-                output_path = self.output_dir / "bash_history"
-                emitter = emitter_classes[format_name](format_def, output_path, threaded=True)
+            elif format_name in _HOST_FORMATS:
+                # Host-based emitters route to per-host FQDN directories internally
+                emitter = emitter_classes[format_name](format_def, self.output_dir, threaded=True)
             else:
                 output_path = self.output_dir / f"{format_name}{format_def.output.file_extension}"
                 emitter = emitter_classes[format_name](format_def, output_path, threaded=True)

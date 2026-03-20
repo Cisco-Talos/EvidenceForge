@@ -2,17 +2,23 @@
 
 Buffers raw event dicts, sorts by timestamp on flush, assigns per-computer
 EventRecordIDs in sorted order (ensuring monotonic IDs match chronological
-order), then renders to XML and writes to disk.
+order), then renders to XML and writes to per-host FQDN directories.
 """
 
+import logging
 import random
 from datetime import datetime
 from pathlib import Path
+from queue import Empty
+from threading import Lock
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+
+win_logger = logging.getLogger(__name__)
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -404,18 +410,47 @@ class WindowsEventEmitter(LogEmitter):
         buffer_size: int = 10000,
         threaded: bool = False,
     ):
+        # Detect direct file mode (backward compat for tests)
+        self._direct_file_mode = output_path.suffix != ""
+        self._base_dir = output_path.parent if self._direct_file_mode else output_path
+        self._direct_file_path = output_path if self._direct_file_mode else None
+        self._host_writers: dict[str, _SingleHostWriter] = {}
+        self._host_writers_lock = Lock()
+
         super().__init__(format_def, output_path, buffer_size, threaded)
         # Buffer raw event dicts instead of rendered strings
         self._event_dicts: list[dict[str, Any]] = []
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
 
-    def emit_event(self, event_data: dict[str, Any]) -> None:
-        """Buffer a Windows Event dict for deferred rendering.
+    def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
+        writer = self._host_writers.get(host_fqdn)
+        if writer is not None:
+            return writer
+        with self._host_writers_lock:
+            writer = self._host_writers.get(host_fqdn)
+            if writer is not None:
+                return writer
+            if host_fqdn and not self._direct_file_mode:
+                path = self._base_dir / host_fqdn / "windows_event_security.xml"
+            elif self._direct_file_path:
+                path = self._direct_file_path
+            else:
+                path = self._base_dir / "windows_event_security.xml"
+            writer = _SingleHostWriter(path, self.buffer_size)
+            # Write XML header immediately for new host files
+            header = self.format_def.output.header_template
+            if header:
+                writer.write_header(header)
+            self._host_writers[host_fqdn] = writer
+            return writer
 
-        In threaded mode, posts dict to the queue. In non-threaded mode,
-        adds to the local dict buffer directly.
-        """
+    def _buffer_event(self, rendered: str) -> None:
+        """Override base class to route through default host writer (backward compat for tests)."""
+        self._get_host_writer("").write(rendered)
+
+    def emit_event(self, event_data: dict[str, Any]) -> None:
+        """Buffer a Windows Event dict for deferred rendering."""
         if self.threaded:
             self._emit_threaded(event_data)
         else:
@@ -433,15 +468,8 @@ class WindowsEventEmitter(LogEmitter):
         return self._template.render(**event_data)
 
     def _run(self) -> None:
-        """Thread run loop — buffers dicts from queue instead of rendering.
-
-        Overrides base class to route events through the dict buffer
-        for deferred rendering with correct RecordID assignment.
-        """
-        from queue import Empty
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Emitter thread started for {self.format_def.name}")
+        """Thread run loop — buffers dicts from queue instead of rendering."""
+        win_logger.debug(f"Emitter thread started for {self.format_def.name}")
 
         while not self._stop_event.is_set():
             try:
@@ -453,44 +481,28 @@ class WindowsEventEmitter(LogEmitter):
                 self._event_queue.task_done()
             except Empty:
                 if self._flush_barrier.is_set():
-                    logger.debug(f"Flushing {self.format_def.name} emitter at barrier")
                     self.flush()
                     self._flush_barrier.clear()
 
-        # Final flush before thread exits
-        logger.debug(f"Emitter thread stopping for {self.format_def.name}, final flush")
         self.flush()
-        logger.debug(f"Emitter thread stopped for {self.format_def.name}")
+        win_logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
     def _flush_unlocked(self) -> None:
-        """Sort events chronologically, assign RecordIDs, render, and write.
-
-        1. Sort buffered dicts by TimeCreated
-        2. Assign per-computer EventRecordIDs in sorted order
-           (counters persist across flushes for continuity)
-        3. Render each event to XML via Jinja2 template
-        4. Write to disk via parent class machinery
-        """
+        """Sort events, assign RecordIDs, render, and write to per-host files."""
         if not self._event_dicts:
             return
 
-        # Sort by timestamp (datetime objects sort naturally)
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
-            if isinstance(ts, datetime):
-                return ts
-            return ts  # string timestamps sort lexicographically (ISO 8601)
+            return ts if isinstance(ts, datetime) else ts
 
         self._event_dicts.sort(key=_sort_key)
 
         # Assign per-computer EventRecordIDs in sorted order
         for event in self._event_dicts:
             computer = event.get("Computer", "")
-            # Strip FQDN for counter key (bare hostname)
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
-                # System-role-aware offset: DCs have much higher event volumes
-                # Use deterministic seed (not Python's randomized hash)
                 rng = random.Random(f"erid_{counter_key}")
                 key_lower = counter_key.lower()
                 if 'dc' in key_lower:
@@ -499,26 +511,48 @@ class WindowsEventEmitter(LogEmitter):
                     self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
                 else:
                     self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
-            # Realistic gaps: other event channels and filtered events create
-            # non-sequential record IDs in real Windows Security logs
             gap_rng = random.Random(f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}")
             if gap_rng.random() < 0.15:
-                # 15% chance of small gap (1-8 missing events from other channels)
                 self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
             elif gap_rng.random() < 0.03:
-                # 3% chance of larger gap (log rotation, batch system events)
                 self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
             else:
                 self._record_id_counters[counter_key] += 1
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
-        # Render to XML strings and transfer to parent's string buffer
+        # Render and route to per-host writers
         for event in self._event_dicts:
             rendered = self._render_event(event)
-            self.buffer.append(rendered)
-            self.event_count += 1
+            host_fqdn = event.get("Computer", "")
+            self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
 
-        # Delegate actual file writing to parent
-        super()._flush_unlocked()
+    def flush(self) -> None:
+        """Flush dict buffer then all host writers."""
+        with self._file_lock:
+            self._flush_unlocked()
+        with self._host_writers_lock:
+            for writer in self._host_writers.values():
+                writer.flush()
+
+    def close(self) -> None:
+        """Close emitter — flush and write XML footers for each host file."""
+        if self.threaded:
+            self.stop_thread()
+        else:
+            self.flush()
+        # Write XML footer for each host file that has events
+        footer = self.format_def.output.footer_template or ""
+        for writer in self._host_writers.values():
+            writer.flush()
+            if footer and writer.event_count > 0:
+                writer.write_footer(footer)
+
+    @property
+    def event_count(self) -> int:
+        return sum(w.event_count for w in self._host_writers.values())
+
+    @event_count.setter
+    def event_count(self, value: int) -> None:
+        pass

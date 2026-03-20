@@ -87,6 +87,7 @@ class BashHistoryEmitter(LogEmitter):
             'timestamp': event.timestamp,
             'username': event.auth.username if event.auth else 'unknown',
             'hostname': event.host.hostname if event.host else 'unknown',
+            'host_fqdn': (event.host.fqdn or event.host.hostname) if event.host else 'unknown',
             'command': event.shell.command if event.shell else '',
             'exit_code': event.shell.exit_code if event.shell else 0,
         }
@@ -106,17 +107,17 @@ class BashHistoryEmitter(LogEmitter):
         self._buffer_size = buffer_size
         super().__init__(format_def, output_path, buffer_size, threaded)
 
-    def _get_writer(self, username: str, hostname: str) -> _SingleHistoryWriter:
-        key = (username, hostname)
+    def _get_writer(self, username: str, host_fqdn: str) -> _SingleHistoryWriter:
+        key = (username, host_fqdn)
         writer = self._writers.get(key)
         if writer is not None:
             return writer
         with self._writers_lock:
-            # Double-check after acquiring lock
             writer = self._writers.get(key)
             if writer is not None:
                 return writer
-            path = self._base_dir / hostname / f"{username}.bash_history"
+            # Nest under host FQDN dir: <base>/<fqdn>/bash_history/<user>.bash_history
+            path = self._base_dir / host_fqdn / "bash_history" / f"{username}.bash_history"
             writer = _SingleHistoryWriter(path, self._template, self._buffer_size)
             self._writers[key] = writer
             logger.debug(f"Created bash_history writer: {path}")
@@ -136,8 +137,8 @@ class BashHistoryEmitter(LogEmitter):
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         username = event_data.get('username', 'unknown')
-        hostname = event_data.get('hostname', 'unknown')
-        writer = self._get_writer(username, hostname)
+        host_fqdn = event_data.get('host_fqdn', event_data.get('hostname', 'unknown'))
+        writer = self._get_writer(username, host_fqdn)
         writer.write(event_data)
 
     def _run(self) -> None:

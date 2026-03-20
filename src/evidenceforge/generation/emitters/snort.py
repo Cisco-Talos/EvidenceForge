@@ -4,22 +4,18 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class SnortEmitter(LogEmitter):
-    """Emitter for Snort/Suricata fast alert format."""
+class SnortEmitter(SensorMultiplexEmitter):
+    """Emitter for Snort/Suricata fast alert format.
 
+    Per-sensor directory routing: each IDS sensor gets its own alert file.
+    """
+
+    _log_filename = "snort_alert.log"
+    _flat_filename = "snort_alert.log"
     _supported_types: set[str] = set()
-
-    def emit_event(self, event_data: dict[str, Any]) -> None:
-        """Route to threaded or non-threaded path."""
-        if self.threaded:
-            self._emit_threaded(event_data)
-        else:
-            rendered = self._render_event(event_data)
-            if rendered is not None:
-                self._buffer_event(rendered)
 
     def _render_event(self, event_data: dict[str, Any]) -> str | None:
         """Render Snort/Suricata alert to fast alert format.
@@ -27,15 +23,10 @@ class SnortEmitter(LogEmitter):
         Returns None if the event lacks required IDS alert fields (sid, message,
         classification), which means it's a plain connection event that should
         not generate an IDS alert.
-
-        Format: <timestamp> [**] [<sid>:1:1] <message> [**] [Classification: <class>] [Priority: <pri>] {<proto>} <src_ip>:<src_port> -> <dst_ip>:<dst_port>
         """
-        # Skip events that lack IDS-specific fields — normal network connections
-        # routed here by network_visibility should not produce alerts
         if not event_data.get('sid') and not event_data.get('message'):
             return None
 
-        # Map Zeek field names to Snort field names as fallbacks
         proto = event_data.get('protocol') or event_data.get('proto')
 
         context = {
@@ -51,6 +42,5 @@ class SnortEmitter(LogEmitter):
             'message': event_data.get('message'),
         }
 
-        # Render template
         rendered = self._template.render(**context)
         return rendered.strip()

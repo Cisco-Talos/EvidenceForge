@@ -6,11 +6,17 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
-class SyslogEmitter(LogEmitter):
-    """Emitter for Linux syslog format."""
+class SyslogEmitter(HostMultiplexEmitter):
+    """Emitter for Linux syslog format.
+
+    Per-host FQDN directory routing: each Linux host gets its own syslog.log.
+    """
+
+    _log_filename = "syslog.log"
+    _flat_filename = "syslog.log"
 
     _supported_types: set[str] = {"logon", "logoff", "failed_logon", "system_process_create", "ssh_session"}
 
@@ -37,117 +43,96 @@ class SyslogEmitter(LogEmitter):
             )
         renderer(event)
 
-    def _session_pid(self, logon_id: str) -> int:
-        """Derive a stable sshd PID from a session's logon ID.
+    def _get_host_fqdn(self, event: SecurityEvent) -> str:
+        if event.host:
+            return event.host.fqdn or event.host.hostname
+        return ''
 
-        Ensures the same session produces the same PID across logon/logoff events.
-        """
-        return 1000 + (hash(logon_id) % 59000)  # Range 1000-59999
+    def _session_pid(self, logon_id: str) -> int:
+        """Derive a stable sshd PID from a session's logon ID."""
+        return 1000 + (hash(logon_id) % 59000)
 
     def _render_logon(self, event: SecurityEvent) -> None:
-        """Render syslog authentication message for successful logon."""
         rng = random.Random()
         auth = event.auth
         event_data = {
             'timestamp': event.timestamp,
             'hostname': event.host.hostname,
-            'facility': 10,  # authpriv
-            'severity': 6,   # info
+            'facility': 10, 'severity': 6,
             'app_name': 'sshd',
             'pid': self._session_pid(auth.logon_id),
             'message': (
                 f'Accepted password for {auth.username} from {auth.source_ip} '
                 f'port {rng.randint(49152, 65535)}'
             ),
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
     def _render_logoff(self, event: SecurityEvent) -> None:
-        """Render syslog session closed message."""
         auth = event.auth
         event_data = {
             'timestamp': event.timestamp,
             'hostname': event.host.hostname,
-            'facility': 10,  # authpriv
-            'severity': 6,   # info
+            'facility': 10, 'severity': 6,
             'app_name': 'sshd',
             'pid': self._session_pid(auth.logon_id),
             'message': f'session closed for user {auth.username}',
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
-        """Render syslog 'Failed password' message."""
         rng = random.Random()
         auth = event.auth
         event_data = {
             'timestamp': event.timestamp,
             'hostname': event.host.hostname,
-            'facility': 10,  # authpriv
-            'severity': 4,   # warning
+            'facility': 10, 'severity': 4,
             'app_name': 'sshd',
             'pid': self._session_pid(auth.logon_id) if auth.logon_id else rng.randint(5000, 60000),
             'message': (
                 f'Failed password for {auth.username} from {auth.source_ip} '
                 f'port {rng.randint(49152, 65535)} ssh2'
             ),
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
     def _render_system_process(self, event: SecurityEvent) -> None:
-        """Render syslog message for system/daemon process start."""
         proc = event.process
         app_name = proc.image.split('/')[-1]
-        facility = 9 if 'cron' in proc.command_line.lower() else 3  # cron or daemon
+        facility = 9 if 'cron' in proc.command_line.lower() else 3
         event_data = {
             'timestamp': event.timestamp,
             'hostname': event.host.hostname,
             'app_name': app_name,
             'pid': proc.pid,
-            'facility': facility,
-            'severity': 6,
+            'facility': facility, 'severity': 6,
             'message': f'{app_name}[{proc.pid}]: started: {proc.command_line}',
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
     def _render_ssh_session(self, event: SecurityEvent) -> None:
-        """Render syslog auth message for SSH session establishment."""
         rng = random.Random()
         auth = event.auth
         net = event.network
         event_data = {
             'timestamp': event.timestamp,
             'hostname': event.host.hostname,
-            'facility': 10,  # authpriv
-            'severity': 6,   # info
+            'facility': 10, 'severity': 6,
             'app_name': 'sshd',
             'pid': rng.randint(5000, 60000),
             'message': (
                 f'Accepted password for {auth.username} from {net.src_ip} '
                 f'port {net.src_port} ssh2'
             ),
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
-    def emit_event(self, event_data: dict[str, Any]) -> None:
-        """Route to threaded or non-threaded path."""
-        if self.threaded:
-            self._emit_threaded(event_data)
-        else:
-            rendered = self._render_event(event_data)
-            self._buffer_event(rendered)
-
-    def flush(self) -> None:
-        """Flush with chronological sorting (syslog is append-only/ordered)."""
-        with self._file_lock:
-            self.buffer.sort()  # ISO timestamp prefix → lexicographic sort works
-            self._flush_unlocked()
-
     def _render_event(self, event_data: dict[str, Any]) -> str:
-        """Render syslog event to text format.
-
-        Format: <timestamp> <hostname> <app>[<pid>]: <message>
-        """
         context = {
             'timestamp': event_data.get('timestamp'),
             'hostname': event_data.get('hostname'),
@@ -157,7 +142,5 @@ class SyslogEmitter(LogEmitter):
             'pid': event_data.get('pid'),
             'message': event_data.get('message')
         }
-
-        # Render template
         rendered = self._template.render(**context)
         return rendered.strip()

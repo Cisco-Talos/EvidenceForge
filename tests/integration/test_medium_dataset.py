@@ -38,16 +38,21 @@ def generated_output(medium_scenario):
         engine.generate()
         duration = (datetime.now() - start).total_seconds()
 
-        # Collect output info
+        # Collect output info (scan recursively for per-host/per-sensor subdirs)
+        # Aggregate sizes for same-named files across subdirectories
         output_dir = Path(tmpdir)
         files = {}
-        for f in output_dir.iterdir():
+        for f in output_dir.rglob("*"):
             if f.is_file():
-                files[f.name] = {
-                    "path": f,
-                    "size": f.stat().st_size,
-                    "content": f.read_text() if f.stat().st_size < 100_000_000 else None,
-                }
+                if f.name in files:
+                    # Aggregate: keep the larger file (or sum sizes)
+                    files[f.name]["size"] += f.stat().st_size
+                else:
+                    files[f.name] = {
+                        "path": f,
+                        "size": f.stat().st_size,
+                        "content": f.read_text() if f.stat().st_size < 100_000_000 else None,
+                    }
 
         yield {
             "dir": output_dir,

@@ -182,12 +182,15 @@ class TestParallelGeneration:
             engine.generate()
 
             # Verify both log files exist
-            assert (Path(tmpdir) / "windows_event_security.xml").exists()
-            assert (Path(tmpdir) / "zeek_conn.json").exists()
+            # Files may be in per-host/per-sensor subdirectories
+            win_files = list(Path(tmpdir).rglob("windows_event_security.xml"))
+            zeek_files = list(Path(tmpdir).rglob("*.json"))
+            assert len(win_files) > 0, "No Windows event files found"
+            assert len(zeek_files) > 0, "No Zeek files found"
 
             # Parse and verify events were generated
-            windows_events = parse_windows_log(Path(tmpdir) / "windows_event_security.xml")
-            zeek_events = parse_zeek_log(Path(tmpdir) / "zeek_conn.json")
+            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
+            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
 
             # Check Windows events exist
             windows_timestamps = [e['TimeCreated'] for e in windows_events if 'TimeCreated' in e]
@@ -207,7 +210,7 @@ class TestParallelGeneration:
             engine.generate()
 
             # Extract cross-references
-            windows_events = parse_windows_log(Path(tmpdir) / "windows_event_security.xml")
+            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
 
             # Verify LogonID uniqueness (only in logon events; logoff events reuse the same ID)
             logon_ids = [e.get('TargetLogonId') for e in windows_events
@@ -229,7 +232,7 @@ class TestParallelGeneration:
                     f"Duplicate PIDs found on {system}!"
 
             # Verify Zeek UID uniqueness
-            zeek_events = parse_zeek_log(Path(tmpdir) / "zeek_conn.json")
+            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
             uids = [e['uid'] for e in zeek_events]
             assert len(uids) > 0
             assert len(uids) == len(set(uids)), "Duplicate Zeek UIDs found!"
@@ -243,8 +246,8 @@ class TestParallelGeneration:
             engine.generate()
 
             # Parse both log files (will raise exception if corrupted)
-            windows_events = parse_windows_log(Path(tmpdir) / "windows_event_security.xml")
-            zeek_events = parse_zeek_log(Path(tmpdir) / "zeek_conn.json")
+            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
+            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
 
             # Verify events parsed successfully
             assert len(windows_events) > 0, "No Windows events generated"
@@ -288,8 +291,10 @@ class TestParallelGeneration:
             ground_truth_file = Path(tmpdir) / "GROUND_TRUTH.md"
             assert ground_truth_file.exists()
 
-            # Parse logs
-            windows_events = parse_windows_log(Path(tmpdir) / "windows_event_security.xml")
+            # Parse logs from all host directories
+            windows_events = []
+            for xml_file in Path(tmpdir).rglob("windows_event_security.xml"):
+                windows_events.extend(parse_windows_log(xml_file))
 
             # Verify storyline event present in logs
             # Look for logon event around 9:30 AM
@@ -322,15 +327,18 @@ class TestParallelGeneration:
             duration = (end_time - start_time).total_seconds()
 
             # Verify generation completed
-            assert (Path(tmpdir) / "windows_event_security.xml").exists()
-            assert (Path(tmpdir) / "zeek_conn.json").exists()
+            # Files may be in per-host/per-sensor subdirectories
+            win_files = list(Path(tmpdir).rglob("windows_event_security.xml"))
+            zeek_files = list(Path(tmpdir).rglob("*.json"))
+            assert len(win_files) > 0, "No Windows event files found"
+            assert len(zeek_files) > 0, "No Zeek files found"
 
             # Verify generation time is reasonable (< 30 seconds for this small scenario)
             assert duration < 30, f"Generation took too long: {duration:.2f}s"
 
             # Verify events were generated
-            windows_events = parse_windows_log(Path(tmpdir) / "windows_event_security.xml")
-            zeek_events = parse_zeek_log(Path(tmpdir) / "zeek_conn.json")
+            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
+            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
 
             # With 10 users, 2 hours, low intensity: events distributed across 7 formats
             assert len(windows_events) > 10, "Too few Windows events generated"

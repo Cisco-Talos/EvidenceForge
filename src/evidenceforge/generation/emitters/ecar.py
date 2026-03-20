@@ -8,11 +8,17 @@ from datetime import datetime
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
-class EcarEmitter(LogEmitter):
-    """Emitter for eCAR (extended Cyber Analytics Repository) format."""
+class EcarEmitter(HostMultiplexEmitter):
+    """Emitter for eCAR (extended Cyber Analytics Repository) format.
+
+    Per-host FQDN directory routing: each host gets its own ecar.json.
+    """
+
+    _log_filename = "ecar.json"
+    _flat_filename = "ecar.json"
 
     _supported_types: set[str] = {
         "logon", "logoff", "failed_logon",
@@ -41,6 +47,12 @@ class EcarEmitter(LogEmitter):
             )
         renderer(event)
 
+    def _get_host_fqdn(self, event: SecurityEvent) -> str:
+        """Extract host FQDN for per-host routing."""
+        if event.host:
+            return event.host.fqdn or event.host.hostname
+        return ''
+
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event."""
         event_data = {
@@ -50,6 +62,7 @@ class EcarEmitter(LogEmitter):
             'action': 'LOGIN',
             'principal': event.auth.username,
             'src_ip': event.auth.source_ip,
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
@@ -61,6 +74,7 @@ class EcarEmitter(LogEmitter):
             'object': 'USER_SESSION',
             'action': 'LOGOUT',
             'principal': event.auth.username,
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
@@ -74,6 +88,7 @@ class EcarEmitter(LogEmitter):
             'principal': event.auth.username,
             'src_ip': event.auth.source_ip,
             'failure_reason': 'bad_password',
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
@@ -90,6 +105,7 @@ class EcarEmitter(LogEmitter):
             'principal': proc.username,
             'image_path': proc.image,
             'command_line': proc.command_line,
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
 
@@ -104,16 +120,9 @@ class EcarEmitter(LogEmitter):
             'pid': proc.pid,
             'principal': proc.username,
             'image_path': proc.image,
+            '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
-
-    def emit_event(self, event_data: dict[str, Any]) -> None:
-        """Route to threaded or non-threaded path."""
-        if self.threaded:
-            self._emit_threaded(event_data)
-        else:
-            rendered = self._render_event(event_data)
-            self._buffer_event(rendered)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render eCAR event to JSON format (NDJSON - one event per line).
