@@ -30,7 +30,8 @@ TIME_TOLERANCE = timedelta(seconds=120)
 
 # Keyword map for activity-to-event-type matching (mirrors generation/engine.py)
 ACTIVITY_KEYWORDS: dict[str, list[str]] = {
-    "logon": ["logon", "log in", "login", "authenticate", "sign in", "exploit"],
+    "logon": ["logon", "log in", "login", "authenticate", "sign in", "exploit",
+              "ssh", "rdp", "remote", "pivot", "credential"],
     "logoff": ["logoff", "log off", "logout", "sign out"],
     "process": [
         "execute", "run", "launch", "start", "spawn",
@@ -41,6 +42,7 @@ ACTIVITY_KEYWORDS: dict[str, list[str]] = {
     "connection": [
         "connect", "access", "download", "upload",
         "communicate", "c2", "exfiltrate",
+        "ssh", "rdp", "remote", "pivot",
     ],
 }
 

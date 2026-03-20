@@ -860,6 +860,16 @@ class GenerationEngine:
                 else:
                     activities.append(activity_type)
 
+        # Ensure user has a session before any process activity
+        # If no active session, prepend a logon event before the first activity
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        if not sessions and activities:
+            logon_time = event_time - timedelta(seconds=rng.uniform(1.0, 5.0))
+            self.state_manager.set_current_time(logon_time)
+            self.activity_generator.execute_baseline_activity(
+                user=user, system=system, time=logon_time, activity_type='logon'
+            )
+
         # Execute with per-activity jitter (0-55s offset within the timeslot)
         for activity_type in activities:
             jitter = timedelta(seconds=rng.randint(0, 55))
