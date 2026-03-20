@@ -1299,7 +1299,8 @@ class ActivityGenerator:
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # eCAR FLOW still via helper (not format-filtered by visibility)
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port, protocol=proto)
+        flow_hostname = REVERSE_DNS.get(src_ip, src_ip)
+        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, flow_hostname, src_port=src_port, protocol=proto)
 
         return uid
 

@@ -1709,8 +1709,9 @@ class GenerationEngine:
 
             for slot_base in [0, 900, 1800, 2700]:  # Every 15 minutes
                 # Moderate jitter: cron fires on schedule but system load adds
-                # a few seconds of variance (enough to break perfect intervals)
-                offset = slot_base + host_seed + rng.gauss(0, 12) + rng.uniform(0, 5)
+                # a few seconds of variance (enough to break perfect intervals
+                # while keeping CV < 0.3 for ~900s intervals)
+                offset = slot_base + host_seed + rng.gauss(0, 8) + rng.uniform(0, 3)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
