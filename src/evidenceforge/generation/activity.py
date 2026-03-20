@@ -1198,7 +1198,14 @@ class ActivityGenerator:
         elif proto == 'udp':
             # DNS connections with responses must not be S0 (no-response)
             if service == 'dns' and resp_bytes and resp_bytes > 0:
-                conn_state, history = 'SF', 'Dd'
+                # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
+                dns_roll = rng.random()
+                if dns_roll < 0.05:
+                    conn_state, history = 'SF', 'DDd'   # Retransmitted query
+                elif dns_roll < 0.07:
+                    conn_state, history = 'SF', 'Ddd'   # Multi-packet response
+                else:
+                    conn_state, history = 'SF', 'Dd'
             else:
                 entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
                 conn_state, _, history = entry
@@ -1215,7 +1222,10 @@ class ActivityGenerator:
             if conn_state in ('S0', 'REJ'):
                 duration = None
                 resp_bytes = 0
-                if conn_state == 'REJ':
+                # S0 = SYN only, no handshake completed — orig_bytes is just the SYN packet
+                if conn_state == 'S0':
+                    orig_bytes = rng.choice([0, 40, 44, 48, 60])
+                elif conn_state == 'REJ':
                     orig_bytes = orig_bytes if orig_bytes else 0
             elif conn_state in ('RSTO', 'RSTR'):
                 if duration is not None:
@@ -1789,9 +1799,13 @@ class ActivityGenerator:
                 # Pick a source IP from another system for network logons
                 source_ip = None
                 if logon_type == 3 and hasattr(self, '_all_system_ips'):
-                    other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
-                    if other_ips:
-                        source_ip = rng.choice(other_ips)
+                    # ~30% of Type 3 logons are local services authenticating to themselves
+                    if rng.random() < 0.30:
+                        source_ip = rng.choice([system.ip, '127.0.0.1'])
+                    else:
+                        other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
+                        if other_ips:
+                            source_ip = rng.choice(other_ips)
                 self.generate_logon(user, system, time, logon_type=logon_type,
                                     source_ip=source_ip if source_ip else system.ip)
                 # Don't create a session — these are background auth events

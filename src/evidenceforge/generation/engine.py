@@ -1708,8 +1708,9 @@ class GenerationEngine:
                 task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
 
             for slot_base in [0, 900, 1800, 2700]:  # Every 15 minutes
-                # Small jitter (±5s) around fixed schedule
-                offset = slot_base + host_seed + rng.gauss(0, 5)
+                # Realistic jitter: cron fires within the minute, but actual
+                # execution depends on system load, prior job completion, I/O wait
+                offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 15)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
