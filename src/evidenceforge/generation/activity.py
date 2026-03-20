@@ -1868,6 +1868,28 @@ class ActivityGenerator:
                 pid = self.generate_process(user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid)
                 self._record_user_process(system, user, pid, process_name)
 
+                # Generate network connections for processes that connect to remote services
+                exe_lower = process_name.rsplit('\\', 1)[-1].lower()
+                if exe_lower == 'sqlcmd.exe' and activity_type == 'process_query':
+                    # Extract server from command line (-S flag)
+                    db_port = 1433
+                    db_ip = '127.0.0.1'  # Default localhost
+                    if '-S ' in command_line:
+                        server = command_line.split('-S ')[1].split()[0]
+                        # Resolve server name to IP if possible
+                        db_ip = REVERSE_DNS.get(server) or next(
+                            (ip for name, ip in REVERSE_DNS.items() if server.lower() in name.lower()),
+                            '10.0.2.50'  # Default DB server IP
+                        )
+                    conn_time = time + timedelta(milliseconds=rng.randint(50, 200))
+                    self.generate_connection(
+                        src_ip=system.ip, dst_ip=db_ip, time=conn_time,
+                        dst_port=db_port, proto='tcp', service='mssql',
+                        duration=rng.uniform(0.5, 5.0),
+                        orig_bytes=rng.randint(200, 2000),
+                        resp_bytes=rng.randint(500, 50000),
+                    )
+
             elif os_category == 'linux' and activity_type in PROCESS_TEMPLATES_LINUX:
                 # Phase 5.6: Per-persona app pool for Linux user diversity
                 pool = PROCESS_TEMPLATES_LINUX[activity_type]
