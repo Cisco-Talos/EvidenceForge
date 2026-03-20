@@ -66,13 +66,17 @@ class EventDispatcher:
             visible_formats = self.visibility_engine.get_log_formats_for_connection(
                 event.network.src_ip, event.network.dst_ip
             )
-            # Annotate event with sensor hostnames for per-sensor routing
+            # Annotate event with per-format sensor hostname mapping
+            # Each format only gets sensors that actually produce it
             sensors = self.visibility_engine.get_observing_sensors(
                 event.network.src_ip, event.network.dst_ip
             )
-            event._observing_sensor_hostnames = [
-                s.hostname or s.name for s in sensors
-            ]
+            format_to_sensors: dict[str, list[str]] = {}
+            for sensor in sensors:
+                hostname = sensor.hostname or sensor.name
+                for fmt in sensor.log_formats:
+                    format_to_sensors.setdefault(fmt, []).append(hostname)
+            event._sensor_hostnames_by_format = format_to_sensors
 
         matched = []
         for format_name, emitter in self.emitters.items():

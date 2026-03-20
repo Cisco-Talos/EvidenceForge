@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekX509Emitter(ZeekMultiplexEmitter):
+class ZeekX509Emitter(SensorMultiplexEmitter):
     """Emitter for Zeek x509.log format (NDJSON).
 
     Generates X.509 certificate logs. No conn UID — keyed by fingerprint.

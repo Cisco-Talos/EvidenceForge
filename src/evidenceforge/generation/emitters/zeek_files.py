@@ -3,10 +3,10 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekFilesEmitter(ZeekMultiplexEmitter):
+class ZeekFilesEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek files.log format (NDJSON).
 
     Generates file transfer metadata logs. Requires both NetworkContext and
@@ -47,7 +47,7 @@ class ZeekFilesEmitter(ZeekMultiplexEmitter):
             'missing_bytes': ft.missing_bytes,
             'overflow_bytes': ft.overflow_bytes,
             'timedout': ft.timedout,
-            '_sensor_hostnames': event._observing_sensor_hostnames,
+            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 

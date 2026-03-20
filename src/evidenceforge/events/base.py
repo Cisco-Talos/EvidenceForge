@@ -61,7 +61,8 @@ class SecurityEvent:
     ntp: NtpContext | None = None
 
     # Sensor routing metadata (not a context — set by dispatcher)
-    _observing_sensor_hostnames: list[str] = field(default_factory=list)
+    # Maps format_name → list of sensor hostnames that produce that format
+    _sensor_hostnames_by_format: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

@@ -3,10 +3,10 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekNtpEmitter(ZeekMultiplexEmitter):
+class ZeekNtpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek ntp.log format (NDJSON).
 
     Generates NTP protocol logs. Shares conn.log UID via NetworkContext.
@@ -46,7 +46,7 @@ class ZeekNtpEmitter(ZeekMultiplexEmitter):
             'rec_time': ntp.rec_ts,
             'xmt_time': ntp.xmt_ts,
             'num_exts': ntp.num_exts,
-            '_sensor_hostnames': event._observing_sensor_hostnames,
+            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 

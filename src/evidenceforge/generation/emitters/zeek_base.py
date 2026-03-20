@@ -1,6 +1,6 @@
-"""Base class for Zeek emitters with per-sensor directory multiplexing.
+"""Base class for network sensor emitters with per-sensor directory multiplexing.
 
-Zeek sensors each get their own output directory. This base class follows
+Network sensors each get their own output directory. This base class follows
 the BashHistoryEmitter multiplexing pattern: a single emitter instance per
 format, with internal routing to per-sensor subdirectories.
 
@@ -64,8 +64,8 @@ class _SingleZeekWriter:
         self.buffer.clear()
 
 
-class ZeekMultiplexEmitter(LogEmitter):
-    """Base class for Zeek emitters with per-sensor directory routing.
+class SensorMultiplexEmitter(LogEmitter):
+    """Base class for network sensor emitters with per-sensor directory routing.
 
     Subclasses implement:
     - _render_event(): Convert event data dict to NDJSON string

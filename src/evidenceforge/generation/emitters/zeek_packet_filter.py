@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekPacketFilterEmitter(ZeekMultiplexEmitter):
+class ZeekPacketFilterEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek packet_filter.log format (NDJSON).
 
     Generates sensor packet filter state logs.

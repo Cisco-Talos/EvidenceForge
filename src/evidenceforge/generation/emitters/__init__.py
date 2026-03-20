@@ -3,7 +3,7 @@
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
@@ -26,7 +26,7 @@ __all__ = [
     "LogEmitter",
     "WindowsEventEmitter",
     "ZeekEmitter",
-    "ZeekMultiplexEmitter",
+    "SensorMultiplexEmitter",
     "ZeekDnsEmitter",
     "ZeekHttpEmitter",
     "ZeekSslEmitter",

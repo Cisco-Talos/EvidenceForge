@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekDnsEmitter(ZeekMultiplexEmitter):
+class ZeekDnsEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek dns.log format (NDJSON).
 
     Generates Zeek DNS query/response logs. Each record represents a DNS

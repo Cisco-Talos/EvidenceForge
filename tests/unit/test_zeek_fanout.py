@@ -46,7 +46,7 @@ class TestSslFanOut:
                     server_name='www.example.com',
                     resumed=False, established=True, ssl_history='CsiI',
                 ),
-                _observing_sensor_hostnames=['s1'],
+                _sensor_hostnames_by_format={'zeek_conn': ['s1'], 'zeek_ssl': ['s1'], 'zeek_http': ['s1'], 'zeek_files': ['s1']},
             )
 
             # Simulate dispatcher fan-out
@@ -109,7 +109,7 @@ class TestHttpFilesFanOut:
                     is_orig=False, missing_bytes=0, overflow_bytes=0,
                     timedout=False,
                 ),
-                _observing_sensor_hostnames=['s1'],
+                _sensor_hostnames_by_format={'zeek_conn': ['s1'], 'zeek_ssl': ['s1'], 'zeek_http': ['s1'], 'zeek_files': ['s1']},
             )
 
             for emitter in [conn_emitter, http_emitter, files_emitter]:
@@ -181,7 +181,7 @@ class TestMultiSensorFanOut:
                     conn_state='SF', ip_proto=6,
                 ),
                 ssl=SslContext(version='TLSv13', cipher='TLS_AES_256_GCM_SHA384'),
-                _observing_sensor_hostnames=['fw01', 'fw02'],
+                _sensor_hostnames_by_format={'zeek_conn': ['fw01', 'fw02'], 'zeek_ssl': ['fw01', 'fw02']},
             )
 
             conn_emitter.emit(event)

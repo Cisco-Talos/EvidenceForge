@@ -5,10 +5,10 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekEmitter(ZeekMultiplexEmitter):
+class ZeekEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek conn.log format (JSON).
 
     Generates Zeek connection logs in JSON format (one JSON object per line).
@@ -48,7 +48,7 @@ class ZeekEmitter(ZeekMultiplexEmitter):
             'resp_pkts': net.resp_pkts,
             'resp_ip_bytes': net.resp_ip_bytes,
             'ip_proto': net.ip_proto,
-            '_sensor_hostnames': event._observing_sensor_hostnames,
+            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 

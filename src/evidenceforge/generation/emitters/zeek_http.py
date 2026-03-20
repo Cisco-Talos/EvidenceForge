@@ -3,10 +3,10 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekHttpEmitter(ZeekMultiplexEmitter):
+class ZeekHttpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek http.log format (NDJSON).
 
     Generates HTTP request/response logs. Requires both NetworkContext and HttpContext.
@@ -48,7 +48,7 @@ class ZeekHttpEmitter(ZeekMultiplexEmitter):
             'referrer': http.referrer or None,
             'resp_fuids': http.resp_fuids if http.resp_fuids else None,
             'resp_mime_types': http.resp_mime_types if http.resp_mime_types else None,
-            '_sensor_hostnames': event._observing_sensor_hostnames,
+            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 

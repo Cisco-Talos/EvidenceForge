@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekOcspEmitter(ZeekMultiplexEmitter):
+class ZeekOcspEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek ocsp.log format (NDJSON).
 
     Generates OCSP certificate status response logs.

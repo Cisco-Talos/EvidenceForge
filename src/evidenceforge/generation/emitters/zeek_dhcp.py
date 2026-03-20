@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekDhcpEmitter(ZeekMultiplexEmitter):
+class ZeekDhcpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek dhcp.log format (NDJSON).
 
     Generates DHCP transaction logs. Uses dispatch_raw since DHCP has

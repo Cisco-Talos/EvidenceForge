@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekWeirdEmitter(ZeekMultiplexEmitter):
+class ZeekWeirdEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek weird.log format (NDJSON).
 
     Generates network anomaly/weird records. Uses dispatch_raw since

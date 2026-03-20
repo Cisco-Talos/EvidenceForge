@@ -3,10 +3,10 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.emitters.zeek_base import ZeekMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
-class ZeekSslEmitter(ZeekMultiplexEmitter):
+class ZeekSslEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek ssl.log format (NDJSON).
 
     Generates SSL/TLS handshake logs. Requires both NetworkContext and SslContext.
@@ -40,7 +40,7 @@ class ZeekSslEmitter(ZeekMultiplexEmitter):
             'resumed': ssl.resumed,
             'established': ssl.established,
             'ssl_history': ssl.ssl_history or None,
-            '_sensor_hostnames': event._observing_sensor_hostnames,
+            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 
