@@ -235,14 +235,16 @@ PERSONA_APP_INDICES_LINUX = {
 # Phase 6.3: Expanded from 7 to 20+ patterns for realism
 TCP_CONN_STATE_DISTRIBUTION = [
     # Normal completions (SF) — various data exchange patterns
-    ('SF', 54, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
-    ('SF', 10, 'ShADaDadfF'),    # Multiple data exchanges before FIN
-    ('SF', 5, 'ShADadTtFf'),     # Normal with retransmissions (T=orig retx, t=resp retx)
-    ('SF', 4, 'ShADadfFa'),      # FIN-ACK with trailing ACK
-    ('SF', 3, 'ShADaDaDadfF'),   # Bulk transfer (many data rounds)
-    ('SF', 2, 'ShADadFf'),       # Originator FIN first (client closes)
-    ('SF', 2, 'ShADadfF'),       # Responder FIN first (server closes)
-    ('SF', 1, 'ShADadTFf'),      # Retransmit then FIN
+    ('SF', 27, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
+    ('SF', 14, 'ShADaDadfF'),    # Multiple data exchanges before FIN
+    ('SF', 8, 'ShADadTtFf'),     # Normal with retransmissions (T=orig retx, t=resp retx)
+    ('SF', 7, 'ShADadfFa'),      # FIN-ACK with trailing ACK
+    ('SF', 6, 'ShADaDaDadfF'),   # Bulk transfer (many data rounds)
+    ('SF', 5, 'ShADadFf'),       # Originator FIN first (client closes)
+    ('SF', 5, 'ShADaDadfFa'),    # Multi-exchange with trailing ACK
+    ('SF', 4, 'ShADadTFf'),      # Retransmit then FIN
+    ('SF', 3, 'ShADaDadFf'),     # Multi data then client closes
+    ('SF', 2, 'ShADaDaTtdfF'),   # Multi data with retransmissions
     # Connection attempts (S0)
     ('S0', 3, 'S'),              # Single SYN, no reply
     ('S0', 2, 'S'),              # SYN retransmit (Zeek deduplicates to single 'S')
@@ -1114,8 +1116,8 @@ class ActivityGenerator:
         if proto == 'icmp':
             conn_state = 'OTH'
             history = '-'
-            src_port = 8   # Echo request type
-            dst_port = 0   # Echo reply type
+            src_port = 0   # ICMP has no ports; Zeek emits 0
+            dst_port = 0
         elif proto == 'udp':
             entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
             conn_state, _, history = entry
@@ -1526,12 +1528,19 @@ class ActivityGenerator:
                 query = parts[1] if len(parts) > 1 else hostname
                 answers = f'10 mail.{query}'
 
-            # Phase 6.0: varied TTLs (not just round numbers)
-            ttl = rng.choice([30, 60, 120, 247, 300, 598, 1800, 3600, 7200, 86400])
+            # Phase 6.0: varied TTLs with cache-aging jitter for realism
+            base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600, 7200, 86400])
+            # Simulate cache aging: subtract 0-50% of the original TTL
+            ttl = max(1, base_ttl - rng.randint(0, base_ttl // 2))
 
             # Match TTLs count to answers count for multi-answer responses
             num_answers = answers.count(', ') + 1 if isinstance(answers, str) and ', ' in answers else 1
-            ttls_str = ', '.join([str(ttl)] * num_answers)
+            # Each answer can have slightly different remaining TTL
+            ttls = []
+            for _ in range(num_answers):
+                jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
+                ttls.append(str(jittered))
+            ttls_str = ', '.join(ttls)
 
             # This lookup precedes an actual connection, so always NOERROR
             self.dispatcher.dispatch_raw(RawLogEntry(

