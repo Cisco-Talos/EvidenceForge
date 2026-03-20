@@ -1099,6 +1099,11 @@ class ActivityGenerator:
 
         ip_proto = 6 if proto == 'tcp' else 17 if proto == 'udp' else 1
 
+        # Port-based service correction (Zeek detects service from payload, not scenario labels)
+        _PORT_SERVICE = {80: 'http', 443: 'https', 22: 'ssh', 53: 'dns', 25: 'smtp', 587: 'smtp', 88: 'kerberos', 389: 'ldap', 445: 'smb'}
+        if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
+            service = _PORT_SERVICE[dst_port]
+
         # Phase 2: Build SecurityEvent with NetworkContext
         event = SecurityEvent(
             timestamp=time,
@@ -1124,7 +1129,7 @@ class ActivityGenerator:
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # eCAR FLOW still via helper (not format-filtered by visibility)
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port)
+        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port, protocol=proto)
 
         return uid
 
@@ -2054,7 +2059,7 @@ class ActivityGenerator:
             return
         if src_port == 0:
             src_port = _get_rng().randint(49152, 65535)
-        if dst_port in (53, 123):
+        if protocol not in ('udp', 'icmp') and dst_port in (53, 123):
             protocol = 'udp'
         self.dispatcher.dispatch_raw(RawLogEntry(
             timestamp=time, target_emitter='ecar',
