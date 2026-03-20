@@ -1093,11 +1093,12 @@ class GenerationEngine:
             # Default attacker IPs: realistic hosting/VPN ranges (not RFC 5737)
             _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
             source_ip = details.get('source_ip', random.choice(_attacker_ips))
+            logon_type = details.get('logon_type', 3)
             logon_id = self.activity_generator.generate_logon(
                 user=actor,
                 system=system,
                 time=time,
-                logon_type=3,  # Network logon for attacks
+                logon_type=logon_type,
                 source_ip=source_ip
             )
             malicious_event['logon_id'] = logon_id
@@ -1167,6 +1168,12 @@ class GenerationEngine:
                       or details.get('dst_port') == 22
                       or details.get('service') == 'ssh')
 
+            # Detect RDP from activity keywords or MITRE technique
+            is_rdp = ('rdp' in activity.lower()
+                      or details.get('technique', '').startswith('T1021.001')
+                      or details.get('dst_port') == 3389
+                      or details.get('logon_type') == 10)
+
             # Default C2 IPs: realistic cloud hosting ranges (not RFC 5737)
             _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88', '64.227.38.102', '108.61.13.174']
             if is_ssh:
@@ -1174,13 +1181,21 @@ class GenerationEngine:
                 dst_ip = system.ip
                 dst_port = 22
                 service = 'ssh'
+            elif is_rdp:
+                # RDP: target is the storyline system, source from details
+                dst_ip = system.ip
+                dst_port = 3389
+                service = 'rdp'
             else:
                 dst_ip = details.get('dst_ip', random.choice(_c2_ips))
                 dst_port = details.get('dst_port', 443)
                 service = details.get('service', 'ssl')
 
+            # For lateral movement (SSH/RDP), the source is the attacker's previous system
+            source_ip = details.get('source_ip', system.ip)
+
             # Validate destination is different from source
-            if dst_ip == system.ip and not is_ssh:
+            if dst_ip == system.ip and not is_ssh and not is_rdp:
                 logger.warning(
                     f"Skipping storyline connection: dst_ip {dst_ip} matches system IP {system.ip}. "
                     f"Adjusting to external IP."
@@ -1194,22 +1209,32 @@ class GenerationEngine:
                 uid = self.activity_generator.generate_ssh_session(
                     user=actor, target_system=target, time=time, source_ip=source_ip,
                 )
+            elif is_rdp:
+                # RDP: generate network connection from source to target system
+                uid = self.activity_generator.generate_connection(
+                    src_ip=source_ip, dst_ip=dst_ip, time=time,
+                    dst_port=3389, service='rdp',
+                    duration=random.uniform(60.0, 3600.0),
+                    orig_bytes=random.randint(50000, 500000),
+                    resp_bytes=random.randint(100000, 2000000),
+                    emit_dns=False,  # RDP typically uses IP directly
+                )
             elif dst_port == 22:
                 target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), None)
                 if target:
                     uid = self.activity_generator.generate_ssh_session(
-                        user=actor, target_system=target, time=time, source_ip=system.ip,
+                        user=actor, target_system=target, time=time, source_ip=source_ip,
                     )
                 else:
                     uid = self.activity_generator.generate_connection(
-                        src_ip=system.ip, dst_ip=dst_ip, time=time,
+                        src_ip=source_ip, dst_ip=dst_ip, time=time,
                         dst_port=22, service='ssh', duration=random.uniform(30.0, 1800.0),
                         orig_bytes=random.randint(2000, 50000), resp_bytes=random.randint(5000, 200000),
                         emit_dns=True,
                     )
             else:
                 uid = self.activity_generator.generate_connection(
-                    src_ip=system.ip, dst_ip=dst_ip, time=time,
+                    src_ip=source_ip, dst_ip=dst_ip, time=time,
                     dst_port=dst_port, service=service,
                     duration=random.uniform(1.0, 30.0),
                     orig_bytes=random.randint(1000, 10000),

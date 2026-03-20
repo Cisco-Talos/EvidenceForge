@@ -1162,6 +1162,154 @@
   - Fix: add per-user login cooldown or deduplicate consecutive LOGINs
   - Files: `activity.py` (`execute_baseline_activity`)
 
+### 6.8 Improvement Loop 3 Findings (2026-03-20, healthcare-supply-chain)
+
+**Source:** 4-iteration automated improvement loop with 4-expert blind panel on `healthcare-supply-chain` scenario.
+**Branch:** `improve/healthcare-supply-chain` (4 commits)
+**Eval scores:** Baseline 82/100 → Final 83/100 (Acceptance: FAIL → PASS)
+
+#### Resolved in improvement loop 3:
+- [x] **Zeek ts normalization only handled zeek_conn** (eval bug, Iter 1)
+  - All zeek_* formats now normalize epoch float ts for validation
+  - Files: `evaluation/dimensions/record_fidelity.py`
+- [x] **Zeek array fields typed as string instead of list** (eval bug, Iter 1)
+  - Added LIST field type; updated zeek_dns (answers, TTLs) and zeek_http (resp_fuids, resp_mime_types)
+  - Files: `formats/format_def.py`, `formats/validator.py`, `formats/definitions/zeek_dns.yaml`, `zeek_http.yaml`
+- [x] **PORT validator rejected port 0 (ICMP)** (eval bug, Iter 1)
+  - PORT now accepts 0-65535 instead of 1-65535
+  - Files: `formats/validator.py`
+- [x] **Syslog parser failed on kernel messages** (eval bug, Iter 1)
+  - Parser now handles `kernel:` without `[pid]` brackets
+  - Files: `evaluation/parsers/syslog.py`
+- [x] **Syslog facility/severity required but not in BSD format** (eval bug, Iter 1)
+  - Made optional in format definition
+  - Files: `formats/definitions/syslog.yaml`
+- [x] **SYSTEM accounts caused causal ordering failures** (eval bug, Iter 2)
+  - Excluded SYSTEM/LOCAL SERVICE/NETWORK SERVICE/machine accounts from causal pair checks
+  - Files: `evaluation/dimensions/temporal.py`, `evaluation/rules/causal_pairs.yaml`
+- [x] **Bash history discovery missed per-host FQDN layout** (eval bug, Iter 2)
+  - discover_log_files now searches `<host_fqdn>/bash_history/` subdirectories
+  - Files: `evaluation/parsers/__init__.py`
+- [x] **Storyline Linux commands didn't generate bash_history** (generator bug, Iter 3)
+  - Storyline events with `details.command` on Linux hosts now emit bash_history entries
+  - Also generate eCAR PROCESS/CREATE with correct Linux binary path
+  - Files: `generation/engine.py`, `generation/activity.py`
+- [x] **Bash history parser didn't handle .bash_history extension** (eval bug, Iter 3)
+  - Parser now handles both `.history` and `.bash_history` extensions, and per-host FQDN path layout
+  - Files: `evaluation/parsers/bash_history.py`
+- [x] **FQDN hostname matching in signal integrity eval** (eval bug, Iter 3)
+  - _host_matches now handles FQDN prefix matching (WEB-01.corp.local matches WEB-01)
+  - Files: `evaluation/dimensions/signal_integrity.py`
+- [x] **Eval ACTIVITY_KEYWORDS missing SSH/RDP/pivot** (eval bug, Iter 4)
+  - Added ssh, rdp, pivot, credential to logon and connection keyword lists
+  - Files: `evaluation/dimensions/signal_integrity.py`
+- [x] **Process activity keywords too narrow** (eval+generator, Iter 3)
+  - Added search, read, enumerate, dump, query, list, archive, compress, delete, remove, clean
+  - Files: `evaluation/dimensions/signal_integrity.py`, `generation/engine.py`
+- [x] **Logon-before-process causal ordering violations** (generator bug, Iter 4)
+  - Ensure user has active session before first process activity in each timeslot
+  - Files: `generation/engine.py`
+
+#### Remaining tells from expert panel (not yet addressed):
+
+**P0 — Critical (Threat Hunter):**
+- [ ] **No RDP network traffic for storyline lateral movement**
+  - Storyline RDP from WS-RAD-01 → EMR-DB-01 produces no Zeek conn.log port 3389 entry
+  - Root cause: storyline `connection` event for RDP doesn't generate Zeek traffic to server segment
+  - Fix: ensure storyline connection events with logon_type 10 also emit Zeek conn on port 3389
+  - Files: `engine.py` (`_execute_storyline_event` connection handler)
+- [ ] **No exfiltration network traffic from EMR-DB-01 to C2**
+  - Storyline exfiltration over HTTPS from EMR-DB-01 → 91.219.236.180:443 missing from Zeek
+  - Root cause: storyline connection on server segment not routed through dmz-zeek sensor
+  - Fix: ensure storyline connections are emitted through correct sensors based on system segment
+  - Files: `engine.py` (storyline connection emission + network visibility)
+- [ ] **Orphaned process trees — malicious parent PIDs don't exist**
+  - powershell.exe ppid=4552 but PID 4552 never created in logs
+  - Root cause: storyline process parent selection references PIDs not yet emitted
+  - Fix: ensure storyline process parents are emitted before children
+  - Files: `engine.py` (`_execute_storyline_event` process handler)
+
+**P0 — Critical (Windows DFIR):**
+- [ ] **DLL file as NewProcessName in 4688 event**
+  - `spoolsv.dll` used as process_name; Windows requires executable (.exe)
+  - Fix: scenario should use `rundll32.exe` as process_name, DLL in command_line only
+  - Files: scenario YAML (authoring issue, not generator bug)
+
+**P0 — Critical (Linux Admin):**
+- [ ] **Windows PowerShell process recorded on Linux Ubuntu host**
+  - eCAR shows `powershell.exe` with Windows path on WEB-PORTAL-01 (Ubuntu)
+  - Root cause: storyline process handler falls through to Windows defaults for Linux hosts
+  - Fix: use Linux binary paths for eCAR PROCESS/CREATE on Linux storyline events
+  - Files: `engine.py` (`_execute_storyline_event` process handler)
+
+**P1 — Significant (Threat Hunter):**
+- [ ] **No LogonType 10 (RDP) events for lateral movement**
+  - Storyline RDP logon generates wrong logon type (type 3 or 5 instead of 10)
+  - Fix: use logon_type from scenario `details.logon_type` field
+  - Files: `engine.py` (`_execute_storyline_event` logon handler)
+- [ ] **Ground Truth UIDs don't match actual Zeek UIDs**
+  - Some UIDs in GROUND_TRUTH.md reference connections that don't exist in Zeek
+  - Root cause: ground truth records UIDs before network visibility filtering
+  - Files: `ground_truth.py`
+- [ ] **Bare IP as SSL server_name for C2**
+  - Real APT uses domain fronting or DGA domains, not bare IPs in SNI
+  - Fix: scenario authoring should use realistic domains for C2
+- [ ] **No FILE CREATE events for staged data files**
+  - sqlcmd exports CSV but no eCAR FILE/CREATE event emitted
+  - Fix: emit FILE/CREATE when storyline involves file creation
+  - Files: `engine.py` (`_execute_storyline_event`)
+
+**P1 — Significant (Network Engineer):**
+- [ ] **REJ connections with 19-25 orig_pkts but "Sr" history**
+  - Impossible: 25 packets with single SYN attempt; needs retransmission flags
+  - Fix: when conn_state=REJ and orig_pkts>5, add retransmission history ('h' flags)
+  - Files: `activity.py` (`generate_connection`)
+
+**P1 — Significant (Windows DFIR):**
+- [ ] **schtasks.exe as ParentProcessName for cmd.exe**
+  - Scheduled task execution should show parent as svchost.exe -k Schedule
+  - Fix: task execution should use svchost.exe as parent, not schtasks.exe
+  - Files: `engine.py` (storyline process parent selection)
+
+**P1 — Significant (Linux Admin):**
+- [ ] **Duplicated program[pid] in syslog messages**
+  - `apt-check[1254]: apt-check[1254]: started:` — double prefix
+  - Fix: remove duplicate program[pid] from message body
+  - Files: `engine.py` (syslog message generation)
+- [ ] **apt-check on CentOS host (FILE-SRV-01)**
+  - CentOS uses yum/dnf, not apt; apt-check is Ubuntu/Debian-specific
+  - Fix: distro-aware scheduled task names (dnf-automatic for RHEL/CentOS)
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [ ] **Per-host syslog extremely sparse (24-25 lines per host)**
+  - Real servers generate hundreds+ entries per hour
+  - Known volume issue; overlaps with D3 Volume Adequacy
+
+**P2 — Moderate:**
+- [ ] **OTH/"Cc" Zeek conn_state over-represented** (Network Engineer)
+  - 1.2% of connections; expected <0.3% in enterprise
+  - Files: `activity.py` (TCP_CONN_STATE_DISTRIBUTION)
+- [ ] **DNS TTL distribution too uniform** (Network Engineer)
+  - Should cluster around standard values (300/600/3600/86400)
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **HTTP connections without preceding DNS queries** (Network Engineer)
+  - 95%+ of external HTTP should have DNS within prior 60s
+  - Known issue; overlaps with Phase 6.3 P2 findings
+- [ ] **TLSv13 ratio too low for 2024 timeframe** (Network Engineer)
+  - Should be 60-70% TLSv13 for 2024; current mix is TLSv12-heavy
+  - Files: `generation/emitters/zeek_ssl.py`
+- [ ] **No SSH session lifecycle messages in syslog** (Linux Admin)
+  - Missing pam_unix session opened, systemd-logind New session, session closed
+  - Files: `emitters/syslog.py`
+- [ ] **Limited eCAR object diversity on Linux** (Linux Admin)
+  - Only PROCESS + USER_SESSION; missing FILE, NETWORK, DNS_QUERY
+  - Files: `activity.py` (Linux eCAR emission)
+- [ ] **explorer.exe parent for RDP sessions** (Threat Hunter)
+  - Should be svchost → rdpclip → explorer chain
+  - Files: `activity.py` (`_select_parent_pid`)
+- [ ] **All Linux processes share same ppid** (Linux Admin)
+  - No sshd → bash → commands process tree for interactive sessions
+  - Files: `engine.py` (storyline process creation)
+
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
 
 ---
