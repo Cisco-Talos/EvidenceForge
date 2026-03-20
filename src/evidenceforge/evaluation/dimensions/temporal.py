@@ -405,12 +405,22 @@ class TemporalRealismScorer(DimensionScorer):
                             idx_key = f"{idx_key}|{extra_val}"
                         before_index[idx_key].append(rec)
 
+            # Accounts that are always active (SYSTEM, machine accounts) don't need
+            # a preceding logon — they run from boot, not via interactive logon.
+            exclude_accounts = rule.get("exclude_accounts", [])
+
             # Check each "after" record for a matching "before"
             for rec in after_records:
                 if rec.timestamp is None:
                     continue
                 if not self._condition_matches(after_cond, rec.fields):
                     continue
+
+                # Skip built-in/machine accounts from causal checks
+                if exclude_accounts:
+                    subject = rec.fields.get("SubjectUserName", "") or rec.fields.get("principal", "")
+                    if any(subject.upper() == ea.upper() or subject.endswith("$") for ea in exclude_accounts):
+                        continue
                 if after_field:
                     key_val = rec.fields.get(after_field)
                     if not key_val:

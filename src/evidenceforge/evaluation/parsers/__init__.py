@@ -75,14 +75,25 @@ def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
         elif child.is_dir():
             if child.name == "bash_history":
                 # Special case: bash_history has its own discovery
-                files = list(child.rglob("*.history"))
+                files = list(child.rglob("*.history")) + list(child.rglob("*.bash_history"))
                 if files:
                     result["bash_history"] = files
             else:
-                # Per-sensor subdirectory (e.g., zeek-fw01/)
+                # Per-host FQDN or per-sensor subdirectory
                 for subfile in child.iterdir():
                     if subfile.is_file():
                         candidates.append(subfile)
+                    elif subfile.is_dir():
+                        if subfile.name == "bash_history":
+                            # Bash history nested in per-host dir
+                            files = list(subfile.rglob("*.bash_history"))
+                            if files:
+                                result.setdefault("bash_history", []).extend(files)
+                        else:
+                            # Deeper subdirectory (e.g., per-sensor logs)
+                            for deepfile in subfile.iterdir():
+                                if deepfile.is_file():
+                                    candidates.append(deepfile)
 
     for format_name, parser_cls in _PARSER_CLASSES.items():
         if format_name == "bash_history":

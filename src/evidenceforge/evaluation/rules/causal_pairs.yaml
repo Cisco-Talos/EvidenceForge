@@ -15,6 +15,7 @@ pairs:
     match_fields:
       before: TargetLogonId
       after: SubjectLogonId
+    exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"]
 
   - name: "Logon before logoff"
     before:
@@ -44,6 +45,7 @@ pairs:
       before: principal
       after: principal
     extra_match: hostname
+    exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "root"]
 
   - name: "SSH accept before bash commands"
     before:

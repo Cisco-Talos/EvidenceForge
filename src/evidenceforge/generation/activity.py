@@ -1920,8 +1920,10 @@ class ActivityGenerator:
             # Get or create session for this user
             sessions = self.state_manager.get_sessions_for_user(user.username)
             if not sessions:
-                # No active session - create one first
-                logon_id = self.generate_logon(user, system, time)
+                # No active session - create logon slightly before the process
+                # to maintain causal ordering (logon must precede process creation)
+                logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
+                logon_id = self.generate_logon(user, system, logon_time)
             else:
                 logon_id = sessions[0].logon_id  # Use first active session
 
