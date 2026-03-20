@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** Phase 7 - Canonical Event Model ✅ COMPLETE (7.1-7.4); Phase 6 ongoing (44 original + 16 new from improvement loop, 46 resolved)
+**Status:** Phase 7 - Canonical Event Model ✅ COMPLETE (7.1-7.4); Phase 6 ongoing (44 original + 16 new from loop 1 + 11 new from loop 2, 60 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-19 (Phase 7 complete: all emission through EventDispatcher, 761 tests passing)
+**Last Updated:** 2026-03-20 (Improvement Loop 2: 14 root-cause fixes on arch-firm-ssh-bruteforce, 8 iterations, 801 tests passing)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -816,15 +816,17 @@
 - [ ] **Vary filenames in eCAR file operations** (Assessment #36)
   - Cycles through 5 generic filenames: spreadsheet.xlsx, presentation.pptx, notes.txt, etc.
   - Files: `activity.py` (_ECAR_FILE_PATHS_WIN, _ECAR_FILE_PATHS_LINUX)
-- [ ] **Decrement DNS TTLs for cached responses** (Assessment #37)
-  - Always round values; cached responses should show decremented TTLs
+- [x] **Decrement DNS TTLs for cached responses** (Assessment #37, Improvement Loop 2 Iter 1+3)
+  - Cache-aging jitter applied: base_ttl - randint(0, base_ttl//2)
+  - External TTLs capped at 3600s, internal allow up to 86400s
   - Files: `activity.py` (`_emit_dns_lookup`)
 - [ ] **Fix 4625 event Version to 0** (Assessment #38)
   - Uses Version 2 instead of standard Version 0 for 4625
   - Files: `formats/definitions/windows_event_security.yaml`
-- [ ] **Vary command-line arguments** (Assessment #39)
-  - Same exact PowerShell/sqlcmd commands repeated dozens of times
-  - Files: `activity.py` (PROCESS_TEMPLATES)
+- [x] **Vary command-line arguments** (Assessment #39, Improvement Loop 2 Iter 2+6)
+  - Parameterized templates: 10+ SQL queries, 10+ PowerShell commands, 5+ WMIC queries
+  - Multi-pass replacement resolves nested placeholders (e.g., {db_name} inside {sql_query})
+  - Files: `activity.py` (PROCESS_TEMPLATES, _QUERY_PARAMS, _parameterize_command)
 - [ ] **Add PID interleaving for CRON** (Assessment #40, N6)
   - CRON PIDs too sequential (1660, 1661, 1662...); needs interleaving from other processes
   - Files: `engine.py` (syslog CRON generation)
@@ -1022,10 +1024,9 @@
   - Files: `activity.py` (`_emit_ecar_flow_event`)
 
 **P2 — Polish Issues:**
-- [ ] **Zeek duration has 16+ decimal places** (Expert Panel #EP10)
-  - Real Zeek uses microsecond precision (6 decimal places max)
-  - Fix: round duration to 6 decimal places
-  - Files: `activity.py` (`generate_connection`) or `emitters/zeek.py`
+- [x] **Zeek duration has 16+ decimal places** (Expert Panel #EP10, Improvement Loop 2 Iter 1)
+  - Duration and ts rounded to 6 decimal places in Zeek emitter JSON compaction
+  - Files: `emitters/zeek.py`
 - [ ] **Mechanically regular Kerberos ticket timing** (Expert Panel #EP11)
   - TGT/TGS at even ~7-10min intervals; real Kerberos is bursty around user activity
   - Fix: cluster Kerberos around user activity windows, add jitter
@@ -1046,16 +1047,120 @@
   - Real captures have some packet loss; ~1-5% of long connections should have missed_bytes > 0
   - Fix: probabilistic missed_bytes for long-duration connections
   - Files: `activity.py` (`generate_connection`)
-- [ ] **Round `.0` timestamps on SSH/ICMP Zeek connections** (Expert Panel #EP16)
-  - Storyline/system connections land on exact seconds; real pcap has fractional precision
-  - Fix: add microsecond jitter to all Zeek timestamps
-  - Files: `engine.py` (storyline/system traffic timestamp generation)
+- [x] **Round `.0` timestamps on SSH/ICMP Zeek connections** (Expert Panel #EP16, Improvement Loop 2 Iter 3)
+  - Added subsecond jitter (rng.random()) to ICMP ping timestamps in engine.py
+  - Files: `engine.py` (ICMP timestamp generation)
 
 **P3 — Nitpicks:**
 - [ ] **No 4778/4779 (RDP reconnect/disconnect) events** (Expert Panel #EP17)
   - LogonType 10 (RDP) events present but no corresponding session events
   - Fix: emit 4778/4779 pairs for RDP logons
   - Files: `activity.py` or `engine.py`
+
+### 6.7 Improvement Loop 2 Findings (2026-03-20, arch-firm-ssh-bruteforce)
+
+**Source:** 8-iteration automated improvement loop with 4-expert blind panel on `arch-firm-ssh-bruteforce` scenario.
+**Branch:** `improve/arch-firm-ssh-bruteforce` (8 commits)
+**Eval scores:** Baseline 79.8/100 → Peak 81.3/100 (D4 Temporal: 68.3→77.9)
+
+#### Resolved in improvement loop 2:
+- [x] **ICMP connections emit TCP/UDP port 8** (P0, Iter 1)
+  - ICMP has no ports; Zeek should emit 0. Changed src_port=8 → 0
+  - Files: `activity.py` (`generate_connection`)
+- [x] **TCP history "ShADadfF" dominates 54% of connections** (P0, Iter 1)
+  - Rebalanced to 27% with 12 distinct patterns (was 8)
+  - Files: `activity.py` (TCP_CONN_STATE_DISTRIBUTION)
+- [x] **Empty Zeek UIDs in DNS logs when connection filtered** (P0, Iter 2)
+  - generate_connection returns "" for filtered connections; DNS entry got empty UID
+  - Fix: generate standalone UID when connection is skipped
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [x] **GUI apps spawned from powershell.exe** (P1, Iter 2)
+  - Added _WINDOWS_GUI_APPS set; GUI apps always get explorer.exe as parent
+  - Files: `activity.py` (`_select_parent_pid`)
+- [x] **EventRecordIDs perfectly sequential (no gaps)** (P1, Iter 2)
+  - Added probabilistic gaps: 15% chance of 2-8 gap, 3% chance of 20-200 gap
+  - Files: `emitters/windows.py` (`_flush_unlocked`)
+- [x] **DNS conn_state S0 contradicts successful DNS answers** (P0, Iter 3)
+  - Forced SF/Dd for DNS queries with responses (resp_bytes > 0)
+  - Files: `activity.py` (`generate_connection`)
+- [x] **systemd-logind PID changes every message** (P0, Iter 3)
+  - Key mismatch: 'systemd_logind' → 'logind'; added snapd/timesyncd PIDs
+  - Files: `engine.py` (syslog generation, `_seed_linux_process_tree`)
+- [x] **Bash history timestamps go backwards** (P0, Iter 3)
+  - Sort buffer by timestamp before flush
+  - Files: `emitters/bash_history.py` (`_sort_by_timestamp`)
+- [x] **TCP S0 connections with multi-KB orig_bytes** (P0, Iter 4)
+  - S0 = SYN only; capped orig_bytes to 0-60 bytes
+  - Files: `activity.py` (`generate_connection`)
+- [x] **All 582 DNS queries exactly 1:1 packet count** (P1, Iter 4)
+  - Added 5% retransmissions (DDd), 2% multi-packet responses (Ddd)
+  - Files: `activity.py` (`generate_connection`)
+- [x] **Syslog "login" process for SSH auth** (P0, Iter 5)
+  - Always use 'sshd' app_name (was 'login' for non-Type-3 logons)
+  - Files: `emitters/syslog.py`
+- [x] **sshd PID inconsistent between accept and close** (P1, Iter 5)
+  - Derive stable PID from logon_id via `_session_pid()` helper
+  - Files: `emitters/syslog.py`
+- [x] **eCAR FLOW hostname uses IP instead of hostname** (P0, Iter 7)
+  - Use REVERSE_DNS lookup for flow hostname instead of raw src_ip
+  - Files: `activity.py` (`generate_connection`)
+- [x] **SQL commands without corresponding network flows** (P1, Iter 8)
+  - sqlcmd.exe now generates TCP/1433 connection to target DB server
+  - Files: `activity.py` (`execute_baseline_activity`)
+
+#### Remaining tells (not yet addressed):
+
+**Architecture-Level (requires significant changes):**
+- [ ] **Volume Adequacy 0/100 — noise:signal ratio ~730:1 vs 5000:1 target**
+  - Need ~7x more baseline events per hour for "medium" intensity
+  - Root cause: baseline intensity multiplier too low, or target ratio too high
+  - Fix: increase events/user/hour or adjust eval target for small scenarios
+  - Files: `engine.py` (`_calculate_events_for_hour`), `evaluation/dimensions/noise_realism.py`
+- [ ] **Storyline Trace Coverage stuck at 50% (14/28 expected format-traces)**
+  - Eval expects each storyline event to produce traces in multiple formats
+  - Root cause: some events only produce traces in 1 format instead of expected 2+
+  - Fix: ensure storyline events emit to all applicable formats (Windows + eCAR + Zeek)
+  - Files: `engine.py` (storyline execution), `evaluation/dimensions/cross_source.py`
+- [ ] **Parsability stuck at ~95% (5% records fail structure validation)**
+  - Some generated records have fields that don't match format definition expectations
+  - Fix: audit format definitions against generated output to find mismatches
+  - Files: `formats/definitions/*.yaml`, `evaluation/dimensions/record_fidelity.py`
+
+**P1 — Expert-Level Tells:**
+- [ ] **Explorer.exe PID static across multiple login sessions**
+  - Same ppid (e.g., 3564) used for all processes across 8-hour window with multiple logon/logoff cycles
+  - Real Windows creates new explorer.exe instance per interactive logon session
+  - Fix: create new explorer.exe PID on each interactive logon (type 2, 10, 11)
+  - Files: `engine.py` (`_seed_system_process_trees`), `activity.py` (`generate_logon`)
+- [ ] **Logon IpPort always 0 for Type 3 network logons**
+  - 98% of 4624 events show IpPort=0; should have real ephemeral port (49152-65535) for Type 3
+  - Fix: pass actual source port from network connection to logon event
+  - Files: `emitters/windows.py` (`_render_logon`), `activity.py`
+- [ ] **IPv6-mapped IPv4 (::ffff:) only in Kerberos 4769, not in 4624 Type 3**
+  - Inconsistent IP format between event types; should be uniform within environment
+  - Fix: use consistent IP format (either always plain IPv4 or always ::ffff:)
+  - Files: `emitters/windows.py` (`_render_logon`, `_render_kerberos_service`)
+
+**P2 — Polish Issues:**
+- [ ] **No SSH protocol negotiation messages in syslog**
+  - Real sshd logs show connection initiation, protocol version, key exchange before auth
+  - Fix: emit sshd protocol negotiation messages before "Accepted password" line
+  - Files: `emitters/syslog.py` (`_render_ssh_session`)
+- [ ] **Limited syslog program variety (9 programs vs 30+ real)**
+  - Missing: apache2/nginx errors, php-fpm, mysql, postfix, fail2ban, unattended-upgrades
+  - Fix: add application-specific log messages for services declared in scenario
+  - Files: `engine.py` (syslog generation)
+- [ ] **Bash history still too sparse for SSH session duration**
+  - SSH sessions lasting 40+ minutes show only 6 commands in bash history
+  - Root cause: bash commands only generated from baseline process activities, not from
+    interactive session simulation proportional to session duration
+  - Fix: generate commands proportional to SSH session length
+  - Files: `activity.py` (`generate_bash_command`), `engine.py`
+- [ ] **eCAR LOGIN events too frequent (rapid-fire from same user)**
+  - Multiple LOGIN events within seconds from different source IPs for same user
+  - Root cause: every baseline activity burst creates a new session if none active
+  - Fix: add per-user login cooldown or deduplicate consecutive LOGINs
+  - Files: `activity.py` (`execute_baseline_activity`)
 
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
 
