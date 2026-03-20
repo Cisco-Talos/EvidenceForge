@@ -263,4 +263,5 @@ class TestParserDiscovery:
     def test_all_parsers_registered(self):
         from evidenceforge.evaluation.parsers import _PARSER_CLASSES
 
-        assert len(_PARSER_CLASSES) == 7
+        # 7 original + 12 new Zeek parsers (dns was already counted, but was missing from imports)
+        assert len(_PARSER_CLASSES) == 19

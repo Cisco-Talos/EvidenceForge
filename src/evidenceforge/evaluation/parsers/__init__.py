@@ -60,26 +60,37 @@ def get_parser(format_name: str) -> LogParser:
 def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
     """Discover log files in an output directory and map to format parsers.
 
+    Scans both top-level files and per-sensor subdirectories (e.g., zeek-fw01/).
+
     Returns:
         Dict mapping format_name to list of file paths.
     """
     result: dict[str, list[Path]] = {}
 
-    for format_name, parser_cls in _PARSER_CLASSES.items():
-        parser = parser_cls()
-        # Check for files the parser can handle
-        if format_name == "bash_history":
-            # Special case: directory structure
-            bash_dir = output_dir / "bash_history"
-            if bash_dir.is_dir():
-                files = list(bash_dir.rglob("*.history"))
+    # Collect all candidate files: top-level + one level of subdirectories
+    candidates: list[Path] = []
+    for child in output_dir.iterdir():
+        if child.is_file():
+            candidates.append(child)
+        elif child.is_dir():
+            if child.name == "bash_history":
+                # Special case: bash_history has its own discovery
+                files = list(child.rglob("*.history"))
                 if files:
-                    result[format_name] = files
-        else:
-            # Standard single-file formats
-            for child in output_dir.iterdir():
-                if child.is_file() and parser.can_parse(child):
-                    result.setdefault(format_name, []).append(child)
+                    result["bash_history"] = files
+            else:
+                # Per-sensor subdirectory (e.g., zeek-fw01/)
+                for subfile in child.iterdir():
+                    if subfile.is_file():
+                        candidates.append(subfile)
+
+    for format_name, parser_cls in _PARSER_CLASSES.items():
+        if format_name == "bash_history":
+            continue  # Already handled above
+        parser = parser_cls()
+        for candidate in candidates:
+            if parser.can_parse(candidate):
+                result.setdefault(format_name, []).append(candidate)
 
     return result
 
@@ -87,6 +98,18 @@ def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
 # Import parsers to trigger registration
 from evidenceforge.evaluation.parsers.windows import WindowsEventParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek import ZeekConnParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_dns import ZeekDnsParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_http import ZeekHttpParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_files import ZeekFilesParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_dhcp import ZeekDhcpParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_ntp import ZeekNtpParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_weird import ZeekWeirdParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_x509 import ZeekX509Parser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_ocsp import ZeekOcspParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_pe import ZeekPeParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_packet_filter import ZeekPacketFilterParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_reporter import ZeekReporterParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
