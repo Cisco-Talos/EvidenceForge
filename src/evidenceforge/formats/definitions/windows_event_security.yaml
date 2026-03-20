@@ -577,6 +577,15 @@ variants:
       - name: IpPort
         type: integer
         required: false
+      - name: CertIssuerName
+        type: string
+        required: false
+      - name: CertSerialNumber
+        type: string
+        required: false
+      - name: CertThumbprint
+        type: string
+        required: false
 
   # EventID 4769: A Kerberos service ticket was requested
   - name: kerberos_service_ticket
@@ -610,6 +619,12 @@ variants:
       - name: Status
         type: hex_string
         required: true
+      - name: LogonGuid
+        type: string
+        required: false
+      - name: TransmittedServices
+        type: string
+        required: false
 
   # EventID 4776: The computer attempted to validate the credentials
   - name: ntlm_validation
