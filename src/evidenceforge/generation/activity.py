@@ -266,11 +266,20 @@ _QUERY_PARAMS_LINUX = {
 
 
 def _parameterize_command(rng, command_line: str) -> str:
-    """Replace {placeholders} in command lines with random realistic values."""
-    for key, values in _QUERY_PARAMS.items():
-        placeholder = '{' + key + '}'
-        while placeholder in command_line:
-            command_line = command_line.replace(placeholder, rng.choice(values), 1)
+    """Replace {placeholders} in command lines with random realistic values.
+
+    Runs multiple passes since expanding one placeholder (e.g., {sql_query})
+    may introduce new placeholders (e.g., {db_name} inside the query text).
+    """
+    for _pass in range(3):  # Max 3 passes to resolve nested placeholders
+        changed = False
+        for key, values in _QUERY_PARAMS.items():
+            placeholder = '{' + key + '}'
+            while placeholder in command_line:
+                command_line = command_line.replace(placeholder, rng.choice(values), 1)
+                changed = True
+        if not changed:
+            break
     return command_line
 
 
@@ -1389,10 +1398,22 @@ class ActivityGenerator:
 
         # Select command based on activity type
         commands = {
-            'process_code': ['vim script.py', 'nano config.conf', 'code .'],
-            'process_build': ['make', 'gcc -o output source.c', 'npm run build'],
-            'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz'],
-            'default': ['ls -la', 'ps aux', 'top', 'df -h']
+            'process_code': ['vim script.py', 'nano config.conf', 'code .', 'git status',
+                             'git diff', 'python3 -m pytest', 'cat README.md'],
+            'process_build': ['make', 'gcc -o output source.c', 'npm run build',
+                              'docker build -t app .', 'cargo build --release'],
+            'connection_web': ['curl https://example.com', 'wget https://github.com/repo/file.tar.gz',
+                               'curl -I https://api.example.com/health'],
+            'process_user_apps': ['ls -la', 'cd /var/www/html', 'tail -f /var/log/syslog',
+                                  'grep -r "error" /var/log/', 'systemctl status apache2',
+                                  'free -m', 'uptime', 'cat /etc/hostname',
+                                  'netstat -tlnp', 'du -sh /var/log/*', 'w',
+                                  'journalctl -u apache2 --since "1 hour ago"',
+                                  'htop', 'ss -tulnp', 'ip addr show'],
+            'default': ['ls -la', 'ps aux', 'top', 'df -h', 'whoami', 'pwd',
+                        'cat /etc/os-release', 'uptime', 'free -m', 'w',
+                        'tail -20 /var/log/syslog', 'history', 'date',
+                        'ls /tmp', 'mount | grep -v tmpfs']
         }
 
         command_list = commands.get(activity_type, commands['default'])

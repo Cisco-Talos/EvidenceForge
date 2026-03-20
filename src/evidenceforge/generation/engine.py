@@ -1982,7 +1982,7 @@ class GenerationEngine:
                     ))
                 elif source_roll < 0.50:
                     # kernel — no PID, includes uptime counter
-                    if is_dmz and rng.random() < 0.5:
+                    if is_dmz and rng.random() < 0.85:
                         # UFW BLOCK messages on DMZ servers
                         src_ip = f'{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}'
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
