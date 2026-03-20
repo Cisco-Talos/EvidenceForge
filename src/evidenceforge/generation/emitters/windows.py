@@ -499,7 +499,17 @@ class WindowsEventEmitter(LogEmitter):
                     self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
                 else:
                     self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
-            self._record_id_counters[counter_key] += 1
+            # Realistic gaps: other event channels and filtered events create
+            # non-sequential record IDs in real Windows Security logs
+            gap_rng = random.Random(f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}")
+            if gap_rng.random() < 0.15:
+                # 15% chance of small gap (1-8 missing events from other channels)
+                self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
+            elif gap_rng.random() < 0.03:
+                # 3% chance of larger gap (log rotation, batch system events)
+                self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
+            else:
+                self._record_id_counters[counter_key] += 1
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
         # Render to XML strings and transfer to parent's string buffer

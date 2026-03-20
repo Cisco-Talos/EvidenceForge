@@ -127,8 +127,12 @@ PROCESS_TEMPLATES = {
         ('C:\\Program Files\\nodejs\\node.exe', 'node.exe scripts/build.js'),
     ],
     'process_query': [
-        ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S localhost -Q "SELECT * FROM users"'),
-        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "Get-EventLog -LogName Security -Newest 100"'),
+        ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S {db_server} -Q "{sql_query}"'),
+        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "{ps_command}"'),
+        ('C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\sqlcmd.exe', 'sqlcmd.exe -S {db_server} -d {db_name} -Q "{sql_query}"'),
+        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -ExecutionPolicy Bypass -File {ps_script}'),
+        ('C:\\Windows\\System32\\wbem\\WMIC.exe', 'WMIC.exe {wmic_query}'),
+        ('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe -Command "{ps_command}"'),
     ],
     'process_user_apps': [
         ('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'chrome.exe --type=renderer --enable-features=NetworkService'),
@@ -196,6 +200,79 @@ PROCESS_TEMPLATES_LINUX = {
         ('/usr/sbin/atd', '/usr/sbin/atd -f'),
     ],
 }
+
+# Parameterized command-line value pools for process_query variety
+_QUERY_PARAMS = {
+    'db_server': ['localhost', 'DB-SRV-01', 'sqlprod01', '10.0.2.50', 'SQLEXPRESS'],
+    'db_name': ['master', 'inventory', 'analytics', 'hr_records', 'webapp_prod', 'reporting'],
+    'sql_query': [
+        'SELECT TOP 100 * FROM dbo.Users ORDER BY LastLogin DESC',
+        'SELECT COUNT(*) FROM dbo.Orders WHERE OrderDate > GETDATE()-7',
+        'SELECT name, status FROM sys.databases',
+        'EXEC sp_who2',
+        'SELECT @@VERSION',
+        'SELECT * FROM INFORMATION_SCHEMA.TABLES',
+        'SELECT TOP 50 * FROM dbo.AuditLog ORDER BY EventTime DESC',
+        'BACKUP DATABASE {db_name} TO DISK = N\'D:\\Backups\\{db_name}.bak\'',
+        'SELECT name, recovery_model_desc FROM sys.databases',
+        'DBCC CHECKDB ({db_name}) WITH NO_INFOMSGS',
+    ],
+    'ps_command': [
+        'Get-EventLog -LogName Security -Newest 100',
+        'Get-Process | Sort-Object CPU -Descending | Select-Object -First 20',
+        'Get-Service | Where-Object {{$_.Status -eq \\"Running\\"}}',
+        'Get-ADUser -Filter * -Properties LastLogonDate | Sort LastLogonDate',
+        'Get-WinEvent -FilterHashtable @{{LogName=\\"System\\";Level=2}} -MaxEvents 50',
+        'Test-NetConnection -ComputerName DC-01 -Port 389',
+        'Get-ChildItem -Path C:\\Shares -Recurse | Measure-Object -Property Length -Sum',
+        'Get-DnsServerZone | Format-Table -AutoSize',
+        'Invoke-Command -ComputerName FILE-SRV-01 -ScriptBlock {{Get-Disk}}',
+        'Get-ScheduledTask | Where-Object {{$_.State -ne \\"Disabled\\"}}',
+    ],
+    'ps_script': [
+        'C:\\Scripts\\backup-check.ps1',
+        'C:\\Scripts\\health-report.ps1',
+        'C:\\Scripts\\disk-usage.ps1',
+        'C:\\Scripts\\user-audit.ps1',
+        'C:\\Admin\\update-inventory.ps1',
+    ],
+    'wmic_query': [
+        'os get Caption,Version,OSArchitecture /format:list',
+        'diskdrive get Size,Model,Status /format:list',
+        'service where "State=\'Running\'" get Name,ProcessId /format:csv',
+        'process where "WorkingSetSize>100000000" get Name,ProcessId,WorkingSetSize',
+        'cpu get LoadPercentage,NumberOfCores /format:list',
+    ],
+}
+
+_QUERY_PARAMS_LINUX = {
+    'mysql_db': ['wordpress', 'inventory', 'analytics', 'appdb', 'logging'],
+    'mysql_query': [
+        'SELECT COUNT(*) FROM sessions WHERE active=1',
+        'SHOW PROCESSLIST',
+        'SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema=\'{db}\'',
+        'SHOW DATABASES',
+        'SELECT * FROM wp_users LIMIT 10',
+    ],
+    'psql_db': ['postgres', 'appdata', 'metrics', 'warehouse'],
+    'redis_cmd': [
+        'redis-cli INFO memory',
+        'redis-cli DBSIZE',
+        'redis-cli GET session:active_count',
+        'redis-cli KEYS "cache:*" | head -20',
+        'redis-cli MONITOR',
+    ],
+}
+
+
+def _parameterize_command(rng, command_line: str) -> str:
+    """Replace {placeholders} in command lines with random realistic values."""
+    for key, values in _QUERY_PARAMS.items():
+        placeholder = '{' + key + '}'
+        while placeholder in command_line:
+            command_line = command_line.replace(placeholder, rng.choice(values), 1)
+    return command_line
+
 
 # Per-persona process type weights (Phase 5.1)
 # Maps persona name to relative probability of each process template category
@@ -1452,6 +1529,10 @@ class ActivityGenerator:
             resp_bytes=rng.randint(80, 400),
             src_port=src_port,
         )
+        # If connection was filtered (e.g. same-host DNS), generate standalone UID
+        if not dns_uid:
+            from evidenceforge.utils.ids import generate_zeek_uid
+            dns_uid = generate_zeek_uid("C")
 
         # Emit Zeek dns.log record
         if 'zeek_dns' in self.dispatcher.emitters:
@@ -1577,6 +1658,9 @@ class ActivityGenerator:
                     orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
                     src_port=nx_src_port,
                 )
+                if not nx_uid:
+                    from evidenceforge.utils.ids import generate_zeek_uid
+                    nx_uid = generate_zeek_uid("C")
                 self.dispatcher.dispatch_raw(RawLogEntry(
                     timestamp=nx_time, target_emitter='zeek_dns',
                     data={'ts': nx_time, 'uid': nx_uid,
@@ -1728,10 +1812,13 @@ class ActivityGenerator:
                     persona_key = (user.persona or 'default').lower()
                     indices = PERSONA_APP_INDICES.get(persona_key, PERSONA_APP_INDICES['default'])
                     pool = [pool[i] for i in indices if i < len(pool)]
-                process_name, command_line = _get_rng().choice(pool)
+                rng = _get_rng()
+                process_name, command_line = rng.choice(pool)
                 # Phase 5.1: Substitute username placeholder in paths
                 process_name = process_name.replace('{username}', user.username)
                 command_line = command_line.replace('{username}', user.username)
+                # Parameterize command templates (process_query variety)
+                command_line = _parameterize_command(rng, command_line)
                 parent_pid = self._select_parent_pid(system, user, process_name)
                 pid = self.generate_process(user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid)
                 self._record_user_process(system, user, pid, process_name)
@@ -2079,6 +2166,13 @@ class ActivityGenerator:
         'cmd.exe', 'powershell.exe', 'pwsh.exe', 'WindowsTerminal.exe',
         'outlook.exe', 'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',
     }
+    # GUI apps that users launch from Start Menu / desktop — always parent=explorer.exe
+    _WINDOWS_GUI_APPS = {
+        'outlook.exe', 'winword.exe', 'excel.exe', 'powerpnt.exe',
+        'chrome.exe', 'firefox.exe', 'msedge.exe', 'iexplore.exe',
+        'teams.exe', 'onedrive.exe', 'acrobat.exe', '7zfm.exe',
+        'notepad++.exe', 'idea64.exe', 'sublime_text.exe', 'code.exe',
+    }
     _LINUX_SHELLS = {'/bin/bash', '/bin/zsh', '/bin/sh', '/usr/bin/bash', '/usr/bin/zsh'}
 
     def _is_pid_alive(self, system: System, pid: int) -> bool:
@@ -2089,7 +2183,8 @@ class ActivityGenerator:
         """Select a realistic parent PID based on process type and history.
 
         Builds process trees with depth by tracking recent user processes.
-        Windows user processes typically spawn from explorer.exe or shells.
+        Windows GUI apps always spawn from explorer.exe.
+        CLI/script processes can spawn from shells.
         Linux user processes typically spawn from login shells.
 
         Only returns PIDs that are still alive in the state manager.
@@ -2110,13 +2205,17 @@ class ActivityGenerator:
             if exe_name in self._WINDOWS_SHELLS:
                 return sys_pids.get('explorer', 4)
 
-            # Check for a running shell in history that could be parent
+            # GUI apps always spawn from explorer.exe (user launches via Start Menu/desktop)
+            if exe_name in self._WINDOWS_GUI_APPS:
+                return sys_pids.get('explorer', 4)
+
+            # CLI/script processes: check for a running shell as parent
             shells = [(pid, name) for pid, name in alive_history
                       if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SHELLS]
             if shells and rng.random() < 0.6:
                 return shells[-1][0]
 
-            # Check for a browser/app that could spawn this process
+            # Check for a browser/app that could spawn this process (e.g. download+run)
             spawners = [(pid, name) for pid, name in alive_history
                         if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SPAWNERS]
             if spawners and rng.random() < 0.3:
