@@ -98,6 +98,25 @@ class WindowsEventEmitter(LogEmitter):
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
+            # Admin/service/machine accounts get full privilege set
+            is_admin = (auth.username.endswith('$')
+                        or auth.username in ('SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE')
+                        or auth.logon_type == 5)
+            if is_admin:
+                privs = (
+                    'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
+                    'SeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
+                    'SeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\t'
+                    'SeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
+                    'SeDelegateSessionUserImpersonatePrivilege'
+                )
+            else:
+                # Regular user with occasional elevation (e.g., UAC prompt)
+                privs = (
+                    'SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t'
+                    'SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t'
+                    'SeTimeZonePrivilege'
+                )
             priv_data = {
                 'EventID': 4672,
                 'TimeCreated': event.timestamp,
@@ -110,13 +129,7 @@ class WindowsEventEmitter(LogEmitter):
                 'SubjectUserName': auth.username,
                 'SubjectDomainName': host.netbios_domain,
                 'SubjectLogonId': auth.logon_id,
-                'PrivilegeList': (
-                    'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
-                    'SeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
-                    'SeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\t'
-                    'SeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
-                    'SeDelegateSessionUserImpersonatePrivilege'
-                ),
+                'PrivilegeList': privs,
             }
             self.emit_event(priv_data)
 
@@ -476,8 +489,16 @@ class WindowsEventEmitter(LogEmitter):
             # Strip FQDN for counter key (bare hostname)
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
-                # Initialize with deterministic offset from hostname hash
-                self._record_id_counters[counter_key] = (hash(counter_key) % 40000) + 1000
+                # System-role-aware offset: DCs have much higher event volumes
+                # Use deterministic seed (not Python's randomized hash)
+                rng = random.Random(f"erid_{counter_key}")
+                key_lower = counter_key.lower()
+                if 'dc' in key_lower:
+                    self._record_id_counters[counter_key] = rng.randint(5_000_000, 15_000_000)
+                elif any(x in key_lower for x in ('srv', 'server', 'web', 'file', 'db', 'mail', 'exch')):
+                    self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
+                else:
+                    self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
             self._record_id_counters[counter_key] += 1
             event["EventRecordID"] = self._record_id_counters[counter_key]
 

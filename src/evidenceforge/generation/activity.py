@@ -782,7 +782,7 @@ class ActivityGenerator:
                 logon_type=logon_type,
                 auth_package=auth_pkg.get('AuthenticationPackageName', 'Negotiate'),
                 source_ip=source_ip,
-                elevated=_get_rng().random() < 0.15,
+                elevated=self._should_elevate(user),
                 logon_process=auth_pkg.get('LogonProcessName', ''),
                 lm_package=auth_pkg.get('LmPackageName', '-'),
                 logon_guid=auth_pkg.get('LogonGuid', '{00000000-0000-0000-0000-000000000000}'),
@@ -1199,6 +1199,79 @@ class ActivityGenerator:
         # eCAR FLOW still via helper (not format-filtered by visibility)
         self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, src_ip, src_port=src_port, protocol=proto)
 
+        return uid
+
+    def generate_ssh_session(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+    ) -> str:
+        """Generate an SSH session as a compound event (Zeek conn + syslog auth + eCAR).
+
+        Builds a single SecurityEvent with Auth+Host+Network contexts and dispatches
+        to all matching emitters. Each emitter renders its format-specific view:
+        - SyslogEmitter: "Accepted password for user from ip port N ssh2"
+        - ZeekEmitter: conn.log record with service=ssh, port 22
+        - EcarEmitter: USER_SESSION/LOGIN event
+
+        Args:
+            user: User initiating the SSH connection
+            target_system: Target Linux system
+            time: Connection timestamp
+            source_ip: Source IP of the SSH client
+
+        Returns:
+            Zeek UID for the connection
+        """
+        from evidenceforge.events.contexts import NetworkContext
+
+        rng = _get_rng()
+        src_port = rng.randint(49152, 65535)
+        duration = rng.uniform(30.0, 3600.0)
+        orig_bytes = rng.randint(2000, 50000)
+        resp_bytes = rng.randint(5000, 200000)
+
+        # Allocate connection in StateManager
+        conn_id = self.state_manager.open_connection(
+            src_ip=source_ip, src_port=src_port,
+            dst_ip=target_system.ip, dst_port=22, protocol='tcp'
+        )
+        uid = self.state_manager.get_zeek_uid(conn_id)
+        self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
+
+        # Emit DNS for SSH target
+        self._emit_dns_lookup(source_ip, target_system.ip, time)
+
+        # Build compound SSH session event
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="ssh_session",
+            host=self._build_host_context(target_system),
+            auth=AuthContext(
+                username=user.username,
+                source_ip=source_ip,
+                source_port=src_port,
+            ),
+            network=NetworkContext(
+                src_ip=source_ip, src_port=src_port,
+                dst_ip=target_system.ip, dst_port=22,
+                protocol='tcp', service='ssh',
+                zeek_uid=uid, conn_id=conn_id,
+                duration=duration,
+                orig_bytes=orig_bytes, resp_bytes=resp_bytes,
+                conn_state='SF', history='ShADadfF',
+                orig_pkts=max(4, orig_bytes // 1460 + 1),
+                resp_pkts=max(4, resp_bytes // 1460 + 1),
+                local_orig=_is_private_ip(source_ip),
+                local_resp=_is_private_ip(target_system.ip),
+                ip_proto=6,
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
+        logger.debug(f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})")
         return uid
 
     def generate_bash_command(
@@ -1895,6 +1968,29 @@ class ActivityGenerator:
         'LOCAL SERVICE': 'S-1-5-19',
         'NETWORK SERVICE': 'S-1-5-20',
     }
+
+    # Personas that represent admin/operator roles (get elevated privileges)
+    _ADMIN_PERSONAS = {'sysadmin', 'security_analyst', 'help_desk'}
+
+    def _should_elevate(self, user: User) -> bool:
+        """Determine if a logon should generate 4672 (Special Privileges).
+
+        Role-based: admins ~80%, machine accounts always, regular users ~5%.
+        """
+        rng = _get_rng()
+        username = user.username
+        # Machine accounts always elevated
+        if username.endswith('$'):
+            return True
+        # System service accounts always elevated
+        if username in ('SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE'):
+            return True
+        # Admin personas: ~80% elevated
+        persona = getattr(user, 'persona', None)
+        if persona and str(persona) in self._ADMIN_PERSONAS:
+            return rng.random() < 0.80
+        # Regular users: ~5% (occasional admin task)
+        return rng.random() < 0.05
 
     def _select_auth_package(self, logon_type: int) -> dict[str, str]:
         """Select auth package, LogonProcessName, and LogonGuid based on logon type.
