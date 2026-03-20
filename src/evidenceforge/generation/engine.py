@@ -1533,6 +1533,8 @@ class GenerationEngine:
 
         pids['agetty1'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty1 linux', 'root')
         pids['agetty2'] = _c(pids['systemd'], '/sbin/agetty', '/sbin/agetty --noclear tty2 linux', 'root')
+        pids['snapd'] = _c(pids['systemd'], '/usr/lib/snapd/snapd', '/usr/lib/snapd/snapd', 'root')
+        pids['timesyncd'] = _c(pids['systemd'], '/usr/lib/systemd/systemd-timesyncd', '/usr/lib/systemd/systemd-timesyncd', 'systemd-timesync')
 
         # User login shell (sshd forks per-session sshd, then bash)
         pids['bash'] = _c(pids['sshd'], '/bin/bash', '-bash', 'root')
@@ -1736,7 +1738,7 @@ class GenerationEngine:
                            s.type.lower() in ('server', 'domain_controller')][:5]
                 if targets:
                     target_ip = rng.choice(targets)
-                    offset = rng.randint(0, 3599)
+                    offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
@@ -2008,7 +2010,7 @@ class GenerationEngine:
                     action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
                     self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
                         'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'systemd-logind', 'pid': sys_pids.get('systemd_logind', rng.randint(400, 800)),
+                        'app_name': 'systemd-logind', 'pid': sys_pids.get('logind', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
                         'message': action},
                     ))

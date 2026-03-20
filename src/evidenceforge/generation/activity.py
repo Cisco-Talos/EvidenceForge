@@ -1196,8 +1196,12 @@ class ActivityGenerator:
             src_port = 0   # ICMP has no ports; Zeek emits 0
             dst_port = 0
         elif proto == 'udp':
-            entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
-            conn_state, _, history = entry
+            # DNS connections with responses must not be S0 (no-response)
+            if service == 'dns' and resp_bytes and resp_bytes > 0:
+                conn_state, history = 'SF', 'Dd'
+            else:
+                entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
+                conn_state, _, history = entry
             if conn_state == 'S0':
                 duration = None
                 resp_bytes = 0
@@ -1610,7 +1614,12 @@ class ActivityGenerator:
                 answers = f'10 mail.{query}'
 
             # Phase 6.0: varied TTLs with cache-aging jitter for realism
-            base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600, 7200, 86400])
+            # External services use short TTLs (CDN/cloud load balancing)
+            # Internal services use longer TTLs (stable infrastructure)
+            if is_internal:
+                base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+            else:
+                base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
             # Simulate cache aging: subtract 0-50% of the original TTL
             ttl = max(1, base_ttl - rng.randint(0, base_ttl // 2))
 
