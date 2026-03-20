@@ -29,6 +29,7 @@ class TestFieldType:
             "hex_string",
             "sid",
             "enum",
+            "list",
         }
         actual_types = {ft.value for ft in FieldType}
         assert actual_types == expected_types

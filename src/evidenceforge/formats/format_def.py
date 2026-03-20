@@ -23,6 +23,7 @@ class FieldType(str, Enum):
     HEX_STRING = "hex_string"  # "0xABCD1234"
     SID = "sid"  # Windows SID
     ENUM = "enum"  # One of allowed_values
+    LIST = "list"  # JSON array (e.g., Zeek answers, TTLs)
 
 
 class FieldConstraint(BaseModel):

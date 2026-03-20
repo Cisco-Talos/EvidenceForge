@@ -259,11 +259,14 @@ class RecordFidelityScorer(DimensionScorer):
         """
         normalized = dict(fields)
 
-        # Zeek ts field: epoch float string -> datetime (validator expects timestamp type)
-        if format_name == "zeek_conn" and "ts" in normalized:
+        # Zeek ts field: epoch float -> datetime (validator expects timestamp type)
+        # All Zeek log types use the same epoch float ts format
+        if format_name.startswith("zeek_") and "ts" in normalized:
             ts = normalized["ts"]
             if parsed_timestamp is not None:
                 normalized["ts"] = parsed_timestamp
+            elif isinstance(ts, (int, float)):
+                normalized["ts"] = ts
             elif isinstance(ts, str):
                 try:
                     normalized["ts"] = float(ts)

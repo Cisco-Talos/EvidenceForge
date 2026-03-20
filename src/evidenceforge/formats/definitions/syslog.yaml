@@ -16,16 +16,16 @@ fields:
 
   - name: facility
     type: integer
-    required: true
-    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv)"
+    required: false
+    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv). Not present in BSD format text."
     constraints:
       min_value: 0
       max_value: 23
 
   - name: severity
     type: integer
-    required: true
-    description: "Syslog severity (6=info, 5=notice, 4=warning)"
+    required: false
+    description: "Syslog severity (6=info, 5=notice, 4=warning). Not present in BSD format text."
     constraints:
       min_value: 0
       max_value: 7

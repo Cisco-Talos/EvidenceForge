@@ -164,11 +164,16 @@ class TestValidateFieldType:
         result = validate_field_type("field", 65535, FieldType.PORT)
         assert result.valid is True
 
+    def test_port_zero_valid(self):
+        """Test port 0 is valid (used by ICMP in Zeek)."""
+        result = validate_field_type("field", 0, FieldType.PORT)
+        assert result.valid is True
+
     def test_port_below_min(self):
         """Test port below minimum."""
-        result = validate_field_type("field", 0, FieldType.PORT)
+        result = validate_field_type("field", -1, FieldType.PORT)
         assert result.valid is False
-        assert "1-65535" in result.errors[0]
+        assert "0-65535" in result.errors[0]
 
     def test_port_above_max(self):
         """Test port above maximum."""

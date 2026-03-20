@@ -121,14 +121,14 @@ fields:
     description: "DNS header reserved bits (Z field), typically 0"
 
   - name: answers
-    type: string
+    type: list
     required: false
-    description: "Answer records (rendered as JSON array of strings by template)"
+    description: "Answer records (JSON array of strings)"
 
   - name: TTLs
-    type: string
+    type: list
     required: false
-    description: "Answer TTLs (rendered as JSON array of floats by template)"
+    description: "Answer TTLs (JSON array of floats)"
 
   - name: rejected
     type: boolean

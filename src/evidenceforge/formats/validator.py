@@ -75,8 +75,10 @@ def validate_field_type(
             )
 
     elif field_type == FieldType.TIMESTAMP:
-        # Accept datetime objects or ISO 8601 strings
-        if isinstance(field_value, str):
+        # Accept datetime objects, ISO 8601 strings, or epoch floats/ints (Zeek)
+        if isinstance(field_value, (int, float)) and not isinstance(field_value, bool):
+            pass  # Epoch timestamp — valid
+        elif isinstance(field_value, str):
             try:
                 datetime.fromisoformat(field_value.replace("Z", "+00:00"))
             except ValueError:
@@ -98,8 +100,8 @@ def validate_field_type(
     elif field_type == FieldType.PORT:
         if not isinstance(field_value, int) or isinstance(field_value, bool):
             result.add_error(field_name, "Port must be integer")
-        elif not (1 <= field_value <= 65535):
-            result.add_error(field_name, f"Port must be 1-65535, got {field_value}")
+        elif not (0 <= field_value <= 65535):
+            result.add_error(field_name, f"Port must be 0-65535, got {field_value}")
 
     elif field_type == FieldType.HEX_STRING:
         if not isinstance(field_value, str):
@@ -112,6 +114,12 @@ def validate_field_type(
             result.add_error(field_name, "SID must be string")
         elif not re.match(r"^S-\d+-\d+(-\d+)*$", field_value):
             result.add_error(field_name, f"Invalid SID format: {field_value}")
+
+    elif field_type == FieldType.LIST:
+        if not isinstance(field_value, list):
+            result.add_error(
+                field_name, f"Expected list, got {type(field_value).__name__}"
+            )
 
     elif field_type == FieldType.ENUM:
         # Enum validation requires constraints.allowed_values

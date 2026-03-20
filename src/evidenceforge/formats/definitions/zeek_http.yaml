@@ -97,14 +97,14 @@ fields:
     description: "Referer header"
 
   - name: resp_fuids
-    type: string
+    type: list
     required: false
-    description: "Response file UIDs (rendered as JSON array)"
+    description: "Response file UIDs (JSON array)"
 
   - name: resp_mime_types
-    type: string
+    type: list
     required: false
-    description: "Response MIME types (rendered as JSON array)"
+    description: "Response MIME types (JSON array)"
 
 output:
   format: json
