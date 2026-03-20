@@ -1593,7 +1593,7 @@ class GenerationEngine:
 
             # Kerberos: domain-joined Windows machines → DC, 4-8 per hour
             if 'kerberos-client' in services and os_cat == 'windows' and dc_targets:
-                num_krb = rng.randint(4, 8)
+                num_krb = rng.randint(1, 3)
                 base_interval = 3600 / (num_krb + 1)
                 for i in range(num_krb):
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
