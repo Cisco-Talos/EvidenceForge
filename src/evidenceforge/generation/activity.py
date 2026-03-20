@@ -515,31 +515,93 @@ def _generate_internal_hostname(rng, ip: str) -> str:
     return f"{prefix}-{suffix}.corp.local"
 
 
+def _detect_ip_provider(ip: str) -> str:
+    """Detect the cloud/CDN provider for an IP based on first-octet ranges."""
+    first = int(ip.split('.')[0])
+    if first in (172, 142, 209, 74, 108):
+        return 'google'
+    if first in (140, 185) and ip.startswith('140.82.'):
+        return 'github'
+    if first in (151,):
+        return 'fastly'
+    if first in (23,):
+        return 'akamai'
+    if first in (52, 54, 3, 18, 44, 34):
+        return 'aws'
+    if first in (13, 20, 40, 204) and not ip.startswith('13.108.'):
+        return 'microsoft'
+    if first in (104,) and ip.startswith('104.16.') or ip.startswith('104.18.') or ip.startswith('104.21.') or ip.startswith('104.26.'):
+        return 'cloudflare'
+    return 'generic'
+
+
 def _generate_random_hostname(rng, ip: str) -> str:
-    """Generate a plausible hostname for a random CDN/cloud IP.
+    """Generate a provider-aware hostname matching the IP's cloud/CDN provider.
 
-    Uses realistic hostname formats that match actual CDN/cloud naming conventions.
+    Ensures the hostname pattern is coherent with the IP range — no Google
+    hostnames for AWS IPs or vice versa.
     """
-    # Generate realistic CloudFront distribution IDs (alphanumeric hashes)
-    cf_chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-    cf_id = ''.join(rng.choices(cf_chars, k=13))
-
-    # Realistic EC2 reverse DNS format: ec2-{octets}.{region}.compute.amazonaws.com
     octets = ip.split('.')
-    regions = ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-southeast-1']
+    provider = _detect_ip_provider(ip)
 
-    # Realistic googleusercontent rDNS: 4 hyphenated octets
-    gc_octets = f"{rng.randint(1,255)}-{rng.randint(1,255)}-{rng.randint(1,255)}-{rng.randint(1,255)}"
+    if provider == 'google':
+        return rng.choice([
+            f"{'-'.join(octets)}.bc.googleusercontent.com",
+            f"lax17s{rng.randint(10,99)}-in-f{octets[3]}.1e100.net",
+        ])
+    elif provider == 'aws':
+        regions = ['us-east-1', 'us-west-2', 'eu-west-1']
+        cf_chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+        return rng.choice([
+            f"ec2-{'-'.join(octets)}.{rng.choice(regions)}.compute.amazonaws.com",
+            f"d{''.join(rng.choices(cf_chars, k=13))}.cloudfront.net",
+            f"server-{'-'.join(octets)}.iad89.r.cloudfront.net",
+        ])
+    elif provider == 'akamai':
+        return f"a{'-'.join(octets)}.deploy.static.akamaitechnologies.com"
+    elif provider == 'cloudflare':
+        return f"{'-'.join(octets)}.cdn.cloudflare.net"
+    elif provider == 'github':
+        return f"lb-{'-'.join(octets)}-iad.github.com"
+    elif provider == 'fastly':
+        return f"{'-'.join(octets)}.{'fastly' if rng.random() < 0.5 else 'global.ssl.fastly'}.net"
+    elif provider == 'microsoft':
+        return f"{'-'.join(octets)}.microsoft.com"
+    else:
+        return f"host-{'-'.join(octets)}.cdn-provider.net"
 
-    templates = [
-        f"d{cf_id}.cloudfront.net",
-        f"e{rng.randint(10000, 99999)}.dscb.akamaiedge.net",
-        f"ec2-{'-'.join(octets)}.{rng.choice(regions)}.compute.amazonaws.com",
-        f"{rng.choice(regions)}-elb-{rng.randint(1,50)}.{rng.choice(regions)}.elb.amazonaws.com",
-        f"{gc_octets}.bc.googleusercontent.com",
-        f"a{rng.randint(100, 999)}.dscg.akamaiedge.net",
-    ]
-    return rng.choice(templates)
+
+def _generate_rdns_name(rng, ip: str) -> str:
+    """Generate a realistic reverse DNS name for an IP (for PTR query answers).
+
+    rDNS names differ from forward hostnames — they typically embed the IP
+    octets and use provider-specific naming conventions.
+    """
+    octets = ip.split('.')
+    provider = _detect_ip_provider(ip)
+
+    if provider == 'google':
+        # Google rDNS: {region}s{NN}-in-f{last_octet}.1e100.net
+        regions = ['lax17', 'sfo07', 'dfw25', 'iad30', 'ord37']
+        return f"{rng.choice(regions)}s{rng.randint(10,99)}-in-f{octets[3]}.1e100.net"
+    elif provider == 'aws':
+        regions = ['us-east-1', 'us-west-2', 'eu-west-1']
+        return rng.choice([
+            f"ec2-{'-'.join(octets)}.{rng.choice(regions)}.compute.amazonaws.com",
+            f"server-{'-'.join(octets)}.iad89.r.cloudfront.net",
+        ])
+    elif provider == 'akamai':
+        return f"a{octets[1]}-{octets[2]}-{octets[3]}.deploy.static.akamaitechnologies.com"
+    elif provider == 'cloudflare':
+        return f"{'-'.join(octets)}.cdn.cloudflare.net"
+    elif provider == 'github':
+        return f"lb-{'-'.join(octets)}-iad.github.com"
+    elif provider == 'fastly':
+        return f"{'-'.join(octets)}.fastly.net"
+    elif provider == 'microsoft':
+        return f"msnbot-{'-'.join(octets)}.search.msn.com"
+    else:
+        return f"{'-'.join(octets)}.generic-host.net"
 
 
 def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]:
@@ -986,6 +1048,7 @@ class ActivityGenerator:
         orig_bytes: Optional[int] = None,
         resp_bytes: Optional[int] = None,
         src_port: Optional[int] = None,
+        emit_dns: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1004,11 +1067,16 @@ class ActivityGenerator:
             orig_bytes: Bytes sent by originator
             resp_bytes: Bytes sent by responder
             src_port: Source port (auto-assigned ephemeral if None)
+            emit_dns: If True, emit a DNS lookup for dst_ip before the connection
 
         Returns:
             Zeek UID (18-character string)
         """
         from evidenceforge.events.contexts import NetworkContext
+
+        # Emit DNS lookup before connection if requested (ensures DNS evidence exists)
+        if emit_dns and proto == 'tcp' and dst_port not in (53,):
+            self._emit_dns_lookup(src_ip, dst_ip, time)
 
         # Validate connection would be observable by network sensors
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
@@ -1357,11 +1425,14 @@ class ActivityGenerator:
                 query = hostname
                 answers = _IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))
             elif qtype_roll < 0.93:
-                # PTR record: reversed IP → hostname
+                # PTR record: reversed IP → rDNS name (not forward hostname)
                 qtype, qtype_name = 12, 'PTR'
                 octets = dst_ip.split('.')
                 query = '.'.join(reversed(octets)) + '.in-addr.arpa'
-                answers = hostname
+                if _is_private_ip(dst_ip):
+                    answers = hostname  # Internal PTR can match forward name
+                else:
+                    answers = _generate_rdns_name(rng, dst_ip)
             elif qtype_roll < 0.98:
                 # SRV record: AD service discovery
                 qtype, qtype_name = 33, 'SRV'
@@ -1648,9 +1719,6 @@ class ActivityGenerator:
                 service = None
                 dst_port = 443
 
-            # Phase 5.3: Emit DNS lookup before TCP connection
-            self._emit_dns_lookup(system.ip, dst_ip, time)
-
             # Generate realistic traffic sizes
             orig_bytes = rng.randint(500, 5000)
             resp_bytes = rng.randint(1000, 50000)
@@ -1662,6 +1730,7 @@ class ActivityGenerator:
                 time=time,
                 dst_port=dst_port,
                 service=service,
+                emit_dns=True,
                 duration=duration,
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes
