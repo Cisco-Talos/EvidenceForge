@@ -321,7 +321,7 @@ PERSONA_APP_INDICES_LINUX = {
 # Phase 6.3: Expanded from 7 to 20+ patterns for realism
 TCP_CONN_STATE_DISTRIBUTION = [
     # Normal completions (SF) — various data exchange patterns
-    ('SF', 27, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
+    ('SF', 28, 'ShADadfF'),      # Standard: SYN→SYN-ACK→data→FIN
     ('SF', 14, 'ShADaDadfF'),    # Multiple data exchanges before FIN
     ('SF', 8, 'ShADadTtFf'),     # Normal with retransmissions (T=orig retx, t=resp retx)
     ('SF', 7, 'ShADadfFa'),      # FIN-ACK with trailing ACK
@@ -347,9 +347,8 @@ TCP_CONN_STATE_DISTRIBUTION = [
     # Reset by responder (RSTR)
     ('RSTR', 1, 'ShADadR'),      # Data exchange then responder RST
     ('RSTR', 1, 'ShAdR'),        # Partial data then responder RST
-    # Midstream (OTH)
+    # Midstream (OTH) — rare in enterprise (<0.3%), only from partial captures
     ('OTH', 1, 'Cc'),            # Midstream traffic (no SYN/SYN-ACK seen)
-    ('OTH', 1, 'DdA'),           # Midstream data
 ]
 
 # Zeek UDP connection state distribution
@@ -1235,7 +1234,8 @@ class ActivityGenerator:
                 if conn_state == 'S0':
                     orig_bytes = rng.choice([0, 40, 44, 48, 60])
                 elif conn_state == 'REJ':
-                    orig_bytes = orig_bytes if orig_bytes else 0
+                    # REJ = SYN then RST; orig_bytes is just the SYN packet(s)
+                    orig_bytes = rng.choice([0, 40, 44, 48])
             elif conn_state in ('RSTO', 'RSTR'):
                 if duration is not None:
                     duration = duration * rng.uniform(0.1, 0.5)

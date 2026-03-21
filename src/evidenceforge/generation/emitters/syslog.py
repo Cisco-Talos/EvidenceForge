@@ -109,7 +109,7 @@ class SyslogEmitter(HostMultiplexEmitter):
             'app_name': app_name,
             'pid': proc.pid,
             'facility': facility, 'severity': 6,
-            'message': f'{app_name}[{proc.pid}]: started: {proc.command_line}',
+            'message': f'started: {proc.command_line}',
             '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)

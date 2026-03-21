@@ -1802,11 +1802,20 @@ class GenerationEngine:
                 ]
                 task_name, task_cmd = win_tasks[hash(system.hostname) % len(win_tasks)]
             else:
-                linux_tasks = [
-                    ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
-                    ('/usr/bin/apt-get', '/usr/bin/apt-get -qq update'),
-                    ('/usr/lib/update-notifier/apt-check', '/usr/lib/update-notifier/apt-check --human-readable'),
-                ]
+                os_str = (system.os or '').lower()
+                is_rhel_task = any(d in os_str for d in ('centos', 'rhel', 'red hat', 'rocky', 'alma'))
+                if is_rhel_task:
+                    linux_tasks = [
+                        ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
+                        ('/usr/bin/dnf', '/usr/bin/dnf -y makecache --timer'),
+                        ('/usr/bin/needs-restarting', '/usr/bin/needs-restarting -r'),
+                    ]
+                else:
+                    linux_tasks = [
+                        ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
+                        ('/usr/bin/apt-get', '/usr/bin/apt-get -qq update'),
+                        ('/usr/lib/update-notifier/apt-check', '/usr/lib/update-notifier/apt-check --human-readable'),
+                    ]
                 task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
 
             for slot_base in [0, 900, 1800, 2700]:  # Every 15 minutes
