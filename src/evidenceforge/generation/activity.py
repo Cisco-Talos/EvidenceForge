@@ -1269,6 +1269,11 @@ class ActivityGenerator:
 
         ip_proto = 6 if proto == 'tcp' else 17 if proto == 'udp' else 1
 
+        # Probabilistic missed_bytes for long TCP connections (~3% chance, more for bulk transfers)
+        missed_bytes = 0
+        if proto == 'tcp' and duration and duration > 10.0 and rng.random() < 0.03:
+            missed_bytes = rng.randint(500, 50000)
+
         # Port-based service correction (Zeek detects service from payload, not scenario labels)
         _PORT_SERVICE = {80: 'http', 443: 'ssl', 22: 'ssh', 53: 'dns', 25: 'smtp', 587: 'smtp', 88: 'kerberos', 389: 'ldap', 445: 'smb'}
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
@@ -1291,6 +1296,7 @@ class ActivityGenerator:
                 local_orig=_is_private_ip(src_ip),
                 local_resp=_is_private_ip(dst_ip),
                 ip_proto=ip_proto,
+                missed_bytes=missed_bytes,
             ),
         )
 
