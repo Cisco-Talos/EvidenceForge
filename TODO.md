@@ -827,19 +827,19 @@
   - Parameterized templates: 10+ SQL queries, 10+ PowerShell commands, 5+ WMIC queries
   - Multi-pass replacement resolves nested placeholders (e.g., {db_name} inside {sql_query})
   - Files: `activity.py` (PROCESS_TEMPLATES, _QUERY_PARAMS, _parameterize_command)
-- [ ] **Add PID interleaving for CRON** (Assessment #40, N6)
+- [x] **Add PID interleaving for CRON** (Assessment #40, N6, fixed: Gaussian jitter + per-host deterministic offsets)
   - CRON PIDs too sequential (1660, 1661, 1662...); needs interleaving from other processes
   - Files: `engine.py` (syslog CRON generation)
-- [ ] **Include resp_ip_bytes: 0 on zero-packet records** (Assessment #41)
+- [x] **Include resp_ip_bytes: 0 on zero-packet records** (Assessment #41, fixed: properly handled in generate_connection)
   - Some records missing resp_ip_bytes instead of having it set to 0
   - Files: `activity.py` (`generate_connection`)
-- [ ] **Multiple answers for popular DNS domains** (Assessment #42)
+- [x] **Multiple answers for popular DNS domains** (Assessment #42, fixed: 40% multi-answer for CDN/clouds)
   - Every query returns single answer; CDN domains return multiple A records
   - Files: `activity.py` (`_emit_dns_lookup`)
 - [x] **Add `<Events>` root XML wrapper** (Assessment #43, Improvement Loop Iter 2)
   - XML declaration + `<Events>` root + `</Events>` footer via header/footer templates
   - Files: `emitters/base.py`, `formats/format_def.py`, `formats/definitions/windows_event_security.yaml`
-- [ ] **Set AA flag for internal DNS** (Assessment #44)
+- [x] **Set AA flag for internal DNS** (Assessment #44, fixed: `'AA': is_internal` in _emit_dns_lookup)
   - Internal zone queries (corp.local) show AA: false; should be authoritative
   - Files: `activity.py` (`_emit_dns_lookup`)
 
@@ -901,40 +901,40 @@
 #### Remaining tells (not yet addressed):
 
 **P0 — Instant Giveaways:**
-- [ ] **RFC 5737 documentation IP (203.0.113.50) for exfiltration target**
+- [x] **RFC 5737 documentation IP (203.0.113.50) for exfiltration target** (fixed: real cloud IPs in `_attacker_ips`/`_c2_ips`)
   - TEST-NET-3 range instantly recognizable; also has `local_resp: true`
   - Fix: use realistic cloud storage IPs; fix `_is_private_ip()` for exfil destinations
   - Files: `activity.py` (storyline connection handling), scenario YAML
-- [ ] **No DNS resolution for exfiltration/storyline targets**
+- [x] **No DNS resolution for exfiltration/storyline targets** (fixed: `emit_dns=True` in storyline connections)
   - Connections to 203.0.113.50 (pCloud) have no corresponding DNS queries
   - Fix: emit DNS lookup before each storyline network connection
   - Files: `engine.py` (storyline execution), `activity.py`
-- [ ] **Kernel uptime counters non-monotonic in syslog**
+- [x] **Kernel uptime counters non-monotonic in syslog** (fixed: `_kernel_boot_uptimes` per-host monotonic tracking)
   - Values jump randomly (1061731 → 516344 → 460933) instead of increasing
   - Fix: track per-host uptime state in StateManager, increment monotonically
   - Files: `engine.py` (syslog generation), `state_manager.py`
-- [ ] **EventRecordID timestamps go backward within same computer**
+- [x] **EventRecordID timestamps go backward within same computer** (fixed: sort-before-assign in windows.py)
   - Higher RecordID has earlier timestamp (events shuffled then sequentially numbered)
   - Fix: sort events by timestamp before assigning EventRecordIDs per computer
   - Files: `emitters/windows.py` or `engine.py` (event ordering)
-- [ ] **No SSH/RDP connections in Zeek despite syslog SSH sessions**
+- [x] **No SSH/RDP connections in Zeek despite syslog SSH sessions** (fixed: `generate_ssh_session()` emits port 22 Zeek conn)
   - Syslog shows active sshd but conn.log has zero port 22/3389 traffic
   - Fix: generate Zeek conn.log entries for SSH connections to Linux hosts
   - Files: `engine.py` (`_generate_system_traffic`)
 
 **P1 — Expert-Level Tells:**
-- [ ] **No LogonType 5 (Service) events**
+- [x] **No LogonType 5 (Service) events** (fixed: 2-5/hr on servers, 1-2 on workstations in _generate_system_traffic)
   - Zero events; real Windows servers constantly generate type 5 for services
   - Fix: emit 4624 type 5 for service accounts (svc*, $-suffix) in system traffic
   - Files: `engine.py` (`_generate_system_traffic`), `activity.py`
-- [ ] **No ANONYMOUS LOGON (S-1-5-7) events**
+- [x] **No ANONYMOUS LOGON (S-1-5-7) events** (fixed: S-1-5-7 generated 1-3/hr on servers/DCs)
   - Real environments have frequent anonymous logons from network discovery
   - Fix: emit periodic 4624 type 3 with ANONYMOUS LOGON on servers/DCs
   - Files: `engine.py` (`_generate_system_traffic`)
-- [ ] **LmPackageName always "-" even for NTLM authentications**
+- [x] **LmPackageName always "-" even for NTLM authentications** (fixed: "NTLM V2" when auth package is NTLM)
   - Should be "NTLM V2" when AuthenticationPackageName is "NTLM"
   - Files: `activity.py` (`generate_logon`, `generate_failed_logon`)
-- [ ] **Zeek history "SS" is invalid**
+- [x] **Zeek history "SS" is invalid** (fixed: removed from TCP_CONN_STATE_DISTRIBUTION)
   - Repeated SYN is still "S" in real Zeek; "SS" never appears
   - Fix: remove "SS" from `_TCP_CONN_ENTRIES` history patterns
   - Files: `activity.py` (`_TCP_CONN_ENTRIES`)
@@ -946,28 +946,28 @@
   - TGTs expire every ~10 hours; 3-day window should have renewals
   - Fix: emit 4770 events periodically on DCs
   - Files: `activity.py` (new `generate_kerberos_renewal`), `engine.py`
-- [ ] **4672 Special Privileges ratio too low** (9% vs expected ~30%+)
+- [x] **4672 Special Privileges ratio too low** (fixed: role-based — admins ~80%, machine always, users ~5%)
   - Every admin/service/machine account logon should generate paired 4672
   - Fix: emit 4672 for machine accounts, service accounts, admin logons
   - Files: `activity.py` (`generate_logon`, `generate_machine_account_logon`)
 
 **P2 — Polish Issues:**
-- [ ] **Events grouped by computer, not chronologically interleaved**
+- [x] **Events grouped by computer, not chronologically interleaved** (fixed: windows.py sorts globally by timestamp before RecordID assignment)
   - Windows XML has all EXEC-WS-01 events, then all EXEC-WS-02, etc.
   - Fix: sort events globally by timestamp before writing
   - Files: `emitters/windows.py` or `engine.py`
-- [ ] **Syslog only from 2 hosts** (DMZ-WEB-01, SRV-LOG-01)
+- [x] **Syslog only from 2 hosts** (fixed: all Linux systems generate syslog in _generate_system_traffic loop)
   - 118-system environment should have more syslog sources
   - Fix: emit syslog for all Linux systems, or add forwarding from Windows
   - Files: `engine.py` (syslog target selection)
 - [ ] **No TXT DNS queries** (SPF/DKIM/DMARC checks)
   - Fix: add periodic TXT lookups for email-related domains
   - Files: `activity.py` (`_emit_dns_lookup`)
-- [ ] **Audit serial numbers non-monotonic in syslog**
+- [x] **Audit serial numbers non-monotonic in syslog** (fixed: per-host monotonic `_audit_serials` dict)
   - Jump erratically instead of incrementing per boot
   - Fix: track per-host audit serial in StateManager
   - Files: `engine.py`, `state_manager.py`
-- [ ] **DNS-then-service paired pattern too uniform**
+- [x] **DNS-then-service paired pattern too uniform** (fixed: DNS caching with TTL-based skip logic)
   - Every connection preceded by DNS with 10-50ms gap; needs caching, concurrency
   - Fix: skip DNS for cached domains, add temporal jitter
   - Files: `activity.py` (`_emit_dns_lookup`)
@@ -985,41 +985,41 @@
 #### New findings (not previously tracked):
 
 **P0 — Instant Giveaways:**
-- [ ] **Fabricated PTR records return forward lookup names** (Expert Panel #EP1)
+- [x] **Fabricated PTR records return forward lookup names** (Expert Panel #EP1, fixed: `_generate_rdns_name()` with provider-specific patterns)
   - `140.82.121.4.in-addr.arpa` → `api.github.com`; real rDNS is `lb-140-82-121-4-iad.github.com`
   - Fix: use realistic rDNS patterns (CDN edge names, cloud instance names)
   - Files: `activity.py` (REVERSE_DNS map, `_emit_dns_lookup`)
-- [ ] **Cross-provider DNS: Google hostnames resolve to AWS IPs** (Expert Panel #EP2)
+- [x] **Cross-provider DNS: Google hostnames resolve to AWS IPs** (Expert Panel #EP2, fixed: `_detect_ip_provider()` + same-provider siblings)
   - `105-10-37-226.bc.googleusercontent.com` → `54.230.26.104` (CloudFront IP)
   - Fix: ensure generated hostname provider matches the IP provider
   - Files: `activity.py` (`_generate_random_hostname`)
-- [ ] **`service:"https"` on port 80 connections** (Expert Panel #EP3)
+- [x] **`service:"https"` on port 80 connections** (Expert Panel #EP3, fixed: `_PORT_SERVICE` override dict)
   - Generator applies scenario service label; Zeek would detect HTTP on port 80
   - Fix: port-based service override (80→http, 443→https, 22→ssh)
   - Files: `activity.py` (`generate_connection` or `execute_baseline_activity`)
 
 **P1 — Expert-Level Tells:**
-- [ ] **Every user gets SeDebugPrivilege on 4672** (Expert Panel #EP4)
+- [x] **Every user gets SeDebugPrivilege on 4672** (Expert Panel #EP4, fixed: persona-aware — admins get full set, regular users limited)
   - 4672 privilege list is identical for all users; only admins should have SeDebugPrivilege
   - Fix: persona-aware privilege lists (admin vs standard user)
   - Files: `emitters/windows.py` (`_render_logon` 4672 section)
-- [ ] **No Zeek http.log, ssl.log, or files.log** (Expert Panel #EP5)
+- [x] **No Zeek http.log, ssl.log, or files.log** (Expert Panel #EP5, fixed: zeek_http.py, zeek_ssl.py, zeek_files.py implemented)
   - Only conn.log + dns.log implemented; analysts expect protocol-specific logs
   - Fix: implement http.log and ssl.log emitters (major feature)
   - Files: new emitters needed
-- [ ] **No syslog auth.log entries for storyline SSH lateral movement** (Expert Panel #EP6)
+- [x] **No syslog auth.log entries for storyline SSH lateral movement** (Expert Panel #EP6, fixed: generate_ssh_session dispatches to SyslogEmitter)
   - SSH to WEB-01/FILES-01 visible in Zeek but no corresponding syslog auth messages
   - Fix: emit syslog auth entries for storyline SSH connections
   - Files: `engine.py` (storyline execution), `activity.py`
-- [ ] **SYSTEM process (mimikatz) with explorer.exe parent** (Expert Panel #EP7)
+- [x] **SYSTEM process (mimikatz) with explorer.exe parent** (Expert Panel #EP7, fixed: context-aware _select_parent_pid)
   - Credential dump as SYSTEM should have implant/cmd.exe parent, not explorer
   - Fix: storyline processes use correct parent chain from attack sequence
   - Files: `engine.py` (storyline process creation parent selection)
-- [ ] **DC EventRecordID offset too low** (~11K) (Expert Panel #EP8)
+- [x] **DC EventRecordID offset too low** (~11K) (Expert Panel #EP8, fixed: DC 5M-15M, servers 50K-550K, workstations 5K-55K)
   - Production DCs have 100K+ events; starting at 11K implies fresh install
   - Fix: increase DC initial offset to 50K-200K range
   - Files: `emitters/windows.py` (RecordID counter initialization)
-- [ ] **eCAR ICMP flows use `protocol:"tcp"` instead of `"icmp"`** (Expert Panel #EP9)
+- [x] **eCAR ICMP flows use `protocol:"tcp"` instead of `"icmp"`** (Expert Panel #EP9, fixed: ICMP protocol correctly preserved)
   - ICMP has no ports; eCAR should use protocol:"icmp" or omit ICMP FLOWs
   - Files: `activity.py` (`_emit_ecar_flow_event`)
 
@@ -1027,7 +1027,7 @@
 - [x] **Zeek duration has 16+ decimal places** (Expert Panel #EP10, Improvement Loop 2 Iter 1)
   - Duration and ts rounded to 6 decimal places in Zeek emitter JSON compaction
   - Files: `emitters/zeek.py`
-- [ ] **Mechanically regular Kerberos ticket timing** (Expert Panel #EP11)
+- [x] **Mechanically regular Kerberos ticket timing** (Expert Panel #EP11, fixed: Gaussian jitter ±15% of base interval)
   - TGT/TGS at even ~7-10min intervals; real Kerberos is bursty around user activity
   - Fix: cluster Kerberos around user activity windows, add jitter
   - Files: `engine.py` (`_generate_system_traffic` Kerberos section)
@@ -1043,7 +1043,7 @@
   - Blocked SYN packets should appear as S0/REJ in Zeek if sensor is on same segment
   - Fix: emit corresponding Zeek conn records for UFW-blocked connections
   - Files: `engine.py` (syslog UFW generation)
-- [ ] **Zeek `missed_bytes` always 0** (Expert Panel #EP15)
+- [x] **Zeek `missed_bytes` always 0** (Expert Panel #EP15, fixed: commit 7cdfe1c, 3% probabilistic for long TCP)
   - Real captures have some packet loss; ~1-5% of long connections should have missed_bytes > 0
   - Fix: probabilistic missed_bytes for long-duration connections
   - Files: `activity.py` (`generate_connection`)
@@ -1132,7 +1132,7 @@
   - Real Windows creates new explorer.exe instance per interactive logon session
   - Fix: create new explorer.exe PID on each interactive logon (type 2, 10, 11)
   - Files: `engine.py` (`_seed_system_process_trees`), `activity.py` (`generate_logon`)
-- [ ] **Logon IpPort always 0 for Type 3 network logons**
+- [x] **Logon IpPort always 0 for Type 3 network logons** (fixed: windows.py generates 49152-65535 for Type 3)
   - 98% of 4624 events show IpPort=0; should have real ephemeral port (49152-65535) for Type 3
   - Fix: pass actual source port from network connection to logon event
   - Files: `emitters/windows.py` (`_render_logon`), `activity.py`
@@ -1213,17 +1213,17 @@
 #### Remaining tells from expert panel (not yet addressed):
 
 **P0 — Critical (Threat Hunter):**
-- [ ] **No RDP network traffic for storyline lateral movement**
+- [x] **No RDP network traffic for storyline lateral movement** (fixed: commit bbfb144, RDP detection + port 3389 conn)
   - Storyline RDP from WS-RAD-01 → EMR-DB-01 produces no Zeek conn.log port 3389 entry
   - Root cause: storyline `connection` event for RDP doesn't generate Zeek traffic to server segment
   - Fix: ensure storyline connection events with logon_type 10 also emit Zeek conn on port 3389
   - Files: `engine.py` (`_execute_storyline_event` connection handler)
-- [ ] **No exfiltration network traffic from EMR-DB-01 to C2**
+- [x] **No exfiltration network traffic from EMR-DB-01 to C2** (fixed: commit bbfb144, network visibility routing)
   - Storyline exfiltration over HTTPS from EMR-DB-01 → 91.219.236.180:443 missing from Zeek
   - Root cause: storyline connection on server segment not routed through dmz-zeek sensor
   - Fix: ensure storyline connections are emitted through correct sensors based on system segment
   - Files: `engine.py` (storyline connection emission + network visibility)
-- [ ] **Orphaned process trees — malicious parent PIDs don't exist**
+- [x] **Orphaned process trees — malicious parent PIDs don't exist** (fixed: `_is_pid_alive()` + `_last_storyline_pid` chain)
   - powershell.exe ppid=4552 but PID 4552 never created in logs
   - Root cause: storyline process parent selection references PIDs not yet emitted
   - Fix: ensure storyline process parents are emitted before children
@@ -1236,7 +1236,7 @@
   - Files: scenario YAML (authoring issue, not generator bug)
 
 **P0 — Critical (Linux Admin):**
-- [ ] **Windows PowerShell process recorded on Linux Ubuntu host**
+- [x] **Windows PowerShell process recorded on Linux Ubuntu host** (fixed: OS detection at engine.py:1120 routes to Linux paths)
   - eCAR shows `powershell.exe` with Windows path on WEB-PORTAL-01 (Ubuntu)
   - Root cause: storyline process handler falls through to Windows defaults for Linux hosts
   - Fix: use Linux binary paths for eCAR PROCESS/CREATE on Linux storyline events
@@ -1297,7 +1297,7 @@
 - [ ] **TLSv13 ratio too low for 2024 timeframe** (Network Engineer)
   - Should be 60-70% TLSv13 for 2024; current mix is TLSv12-heavy
   - Files: `generation/emitters/zeek_ssl.py`
-- [ ] **No SSH session lifecycle messages in syslog** (Linux Admin)
+- [x] **No SSH session lifecycle messages in syslog** (Linux Admin, fixed: commit ecd033e, `_render_ssh_session()` emits 3 lifecycle messages)
   - Missing pam_unix session opened, systemd-logind New session, session closed
   - Files: `emitters/syslog.py`
 - [ ] **Limited eCAR object diversity on Linux** (Linux Admin)
