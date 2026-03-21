@@ -1,6 +1,7 @@
 """Syslog emitter for Linux system logs."""
 
 import random
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -118,19 +119,51 @@ class SyslogEmitter(HostMultiplexEmitter):
         rng = random.Random()
         auth = event.auth
         net = event.network
-        event_data = {
+        sshd_pid = self._session_pid(auth.logon_id or str(hash(f"{auth.username}{event.timestamp}")))
+        host_fqdn = self._get_host_fqdn(event)
+        hostname = event.host.hostname
+        session_id = rng.randint(100, 99999)
+
+        # 1. sshd: Accepted password
+        self.emit_event({
             'timestamp': event.timestamp,
-            'hostname': event.host.hostname,
+            'hostname': hostname,
             'facility': 10, 'severity': 6,
             'app_name': 'sshd',
-            'pid': rng.randint(5000, 60000),
+            'pid': sshd_pid,
             'message': (
                 f'Accepted password for {auth.username} from {net.src_ip} '
                 f'port {net.src_port} ssh2'
             ),
-            '_host_fqdn': self._get_host_fqdn(event),
-        }
-        self.emit_event(event_data)
+            '_host_fqdn': host_fqdn,
+        })
+
+        # 2. sshd: pam_unix session opened
+        ts_pam = event.timestamp + timedelta(microseconds=rng.randint(1000, 50000))
+        self.emit_event({
+            'timestamp': ts_pam,
+            'hostname': hostname,
+            'facility': 10, 'severity': 6,
+            'app_name': 'sshd',
+            'pid': sshd_pid,
+            'message': (
+                f'pam_unix(sshd:session): session opened for user {auth.username}'
+                f' by (uid=0)'
+            ),
+            '_host_fqdn': host_fqdn,
+        })
+
+        # 3. systemd-logind: New session
+        ts_logind = ts_pam + timedelta(microseconds=rng.randint(1000, 30000))
+        self.emit_event({
+            'timestamp': ts_logind,
+            'hostname': hostname,
+            'facility': 10, 'severity': 6,
+            'app_name': 'systemd-logind',
+            'pid': self._session_pid('logind'),
+            'message': f'New session {session_id} of user {auth.username}.',
+            '_host_fqdn': host_fqdn,
+        })
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         context = {
