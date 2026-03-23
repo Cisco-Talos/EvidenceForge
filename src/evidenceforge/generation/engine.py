@@ -1125,15 +1125,15 @@ class GenerationEngine:
 
             # Linux command events: emit bash_history + eCAR for commands
             from evidenceforge.generation.activity import _get_os_category
-            linux_command = details.get('command')
             os_category = _get_os_category(system.os)
+            linux_command = details.get('command') or (details.get('command_line') if os_category == 'linux' else None)
             if linux_command and os_category == 'linux':
                 # Emit bash history entry
                 self.activity_generator.generate_bash_command(
                     actor, system, time, linux_command
                 )
                 # Also generate eCAR PROCESS/CREATE for the command
-                cmd_binary = linux_command.split()[0] if linux_command.strip() else '/bin/bash'
+                cmd_binary = details.get('process_name', linux_command.split()[0] if linux_command.strip() else '/bin/bash')
                 process_name = cmd_binary
                 command_line = linux_command
             else:
