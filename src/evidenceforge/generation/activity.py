@@ -2409,6 +2409,98 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_rdp_session(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_system: Optional['System'] = None,
+    ) -> str:
+        """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
+
+        Compound event ensuring network and host evidence are always paired.
+        Returns Zeek UID.
+        """
+        rng = _get_rng()
+
+        # 1. Network connection (Zeek conn.log port 3389)
+        uid = self.generate_connection(
+            src_ip=source_ip, dst_ip=target_system.ip, time=time,
+            dst_port=3389, service='rdp',
+            duration=rng.uniform(60.0, 3600.0),
+            orig_bytes=rng.randint(50000, 500000),
+            resp_bytes=rng.randint(100000, 2000000),
+            emit_dns=False,
+            source_system=source_system,
+        )
+
+        # 2. Host logon on target (4624 type 10 + 4672 if elevated)
+        logon_time = time + timedelta(milliseconds=rng.randint(50, 200))
+        self.generate_logon(
+            user=user,
+            system=target_system,
+            time=logon_time,
+            logon_type=10,
+            source_ip=source_ip,
+        )
+
+        return uid
+
+    def generate_service_logon(
+        self,
+        system: System,
+        time: datetime,
+        service_account: str = 'SYSTEM',
+    ) -> str:
+        """Generate a service logon (type 5) for system accounts.
+
+        Unlike generate_logon(), does not require a User object.
+        Emits 4624 (type 5) + 4672 (special privileges) via normal pipeline.
+        Each call gets a unique LogonID (real Windows allocates new sessions for service restarts).
+        """
+        _ACCOUNT_SIDS = {
+            'SYSTEM': 'S-1-5-18',
+            'LOCAL SERVICE': 'S-1-5-19',
+            'NETWORK SERVICE': 'S-1-5-20',
+        }
+
+        sid = _ACCOUNT_SIDS.get(service_account, 'S-1-5-18')
+        # Allocate unique LogonID via StateManager (same as regular logons)
+        logon_id = self.state_manager.create_session(
+            username=service_account,
+            system=system.hostname,
+            logon_type=5,
+            source_ip='-',
+        )
+        host = self._build_host_context(system)
+        reporting_pid = self._get_system_pid(system.hostname, 'lsass', 0x2e0)
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logon",
+            host=host,
+            auth=AuthContext(
+                username=service_account,
+                user_sid=sid,
+                logon_id=logon_id,
+                logon_type=5,
+                auth_package='Negotiate',
+                source_ip='-',
+                elevated=True,
+                logon_process='Advapi',
+                lm_package='-',
+                logon_guid='{00000000-0000-0000-0000-000000000000}',
+                subject_sid='S-1-5-18',
+                subject_username=system.hostname + '$',
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+        return logon_id
+
     def generate_kerberos_preauth_failed(
         self,
         username: str,
@@ -2915,7 +3007,7 @@ class ActivityGenerator:
         proc = self.state_manager.get_process(hostname, parent_pid)
         if proc:
             return proc.image
-        return r'C:\Windows\System32\services.exe'
+        return '-'
 
     def _get_session_explorer_pid(self, system: System, user: User) -> int | None:
         """Get the explorer.exe PID for the user's active interactive session.

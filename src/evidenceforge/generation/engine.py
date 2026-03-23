@@ -1256,14 +1256,11 @@ class GenerationEngine:
                     user=actor, target_system=target, time=time, source_ip=source_ip,
                 )
             elif is_rdp:
-                # RDP: generate network connection from source to target system
-                uid = self.activity_generator.generate_connection(
-                    src_ip=source_ip, dst_ip=dst_ip, time=time,
-                    dst_port=3389, service='rdp',
-                    duration=random.uniform(60.0, 3600.0),
-                    orig_bytes=random.randint(50000, 500000),
-                    resp_bytes=random.randint(100000, 2000000),
-                    emit_dns=False,  # RDP typically uses IP directly
+                # RDP: compound event (Zeek conn + 4624 type 10 + eCAR on target)
+                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), system)
+                uid = self.activity_generator.generate_rdp_session(
+                    user=actor, target_system=target,
+                    time=time, source_ip=source_ip,
                 )
             elif dst_port == 22:
                 target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), None)
@@ -2029,6 +2026,7 @@ class GenerationEngine:
             computer_fqdn = f"{system.hostname}.{ad_domain}"
 
             # LogonType 5 (Service): 2-5 per hour on servers, 1-2 on workstations
+            # Uses generate_service_logon() which emits 4624 + 4672 via normal pipeline
             sys_type_svc = (system.type or 'workstation').lower()
             num_svc = rng.randint(2, 5) if sys_type_svc != 'workstation' else rng.randint(1, 2)
             for _ in range(num_svc):
@@ -2036,27 +2034,9 @@ class GenerationEngine:
                 ts = current_hour + timedelta(seconds=offset)
                 svc_accounts = ['SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE']
                 svc_user = rng.choice(svc_accounts)
-                svc_sid = {'SYSTEM': 'S-1-5-18', 'LOCAL SERVICE': 'S-1-5-19',
-                           'NETWORK SERVICE': 'S-1-5-20'}[svc_user]
-                svc_domain = 'NT AUTHORITY'
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=ts, target_emitter='windows_event_security',
-                    data={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
-                          'Channel': 'Security', 'Level': 0,
-                          'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
-                          'SubjectUserSid': 'S-1-5-18', 'SubjectUserName': system.hostname + '$',
-                          'SubjectDomainName': netbios, 'SubjectLogonId': '0x3e7',
-                          'TargetUserSid': svc_sid, 'TargetUserName': svc_user,
-                          'TargetDomainName': svc_domain,
-                          'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
-                          'LogonType': 5, 'LogonProcessName': 'Advapi',
-                          'AuthenticationPackageName': 'Negotiate', 'LmPackageName': '-',
-                          'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-                          'WorkstationName': '-',
-                          'ProcessId': f'0x{rng.choice([0x1f4, 0x2c8, 0x340]):x}',
-                          'ProcessName': r'C:\Windows\System32\services.exe',
-                          'IpAddress': '-', 'IpPort': 0},
-                ))
+                self.activity_generator.generate_service_logon(
+                    system=system, time=ts, service_account=svc_user,
+                )
 
             # ANONYMOUS LOGON: 1-3 per hour on servers/DCs (network discovery, null sessions)
             if sys_type_svc in ('server', 'domain_controller'):
