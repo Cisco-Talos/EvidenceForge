@@ -2182,6 +2182,39 @@ class ActivityGenerator:
 
         self.dispatcher.dispatch(event)
 
+    def generate_kerberos_tgt_renewal(
+        self,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        domain: str = '',
+    ) -> None:
+        """Generate Kerberos TGT renewal event (4770) on the DC."""
+        from evidenceforge.events.contexts import KerberosContext
+
+        domain = domain or getattr(self, '_netbios_domain', 'CORP')
+        rng = _get_rng()
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="kerberos_tgt_renewal",
+            host=self._build_dc_host_context(dc_hostname),
+            kerberos=KerberosContext(
+                target_username=username,
+                target_domain=domain,
+                target_sid=self._get_sid(username),
+                service_name='krbtgt',
+                service_sid=self._get_sid('krbtgt'),
+                ticket_options='0x2',
+                encryption_type='0x12',
+                source_ip=f'::ffff:{source_ip}',
+                source_port=rng.randint(49152, 65535),
+            ),
+        )
+
+        self.dispatcher.dispatch(event)
+
     def generate_kerberos_service_ticket(
         self,
         username: str,

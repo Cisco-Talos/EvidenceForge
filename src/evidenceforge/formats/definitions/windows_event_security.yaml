@@ -10,7 +10,7 @@ fields:
     required: true
     description: "Windows Event ID"
     constraints:
-      allowed_values: [4624, 4625, 4634, 4648, 4672, 4688, 4689, 4768, 4769, 4776, 5156]
+      allowed_values: [4624, 4625, 4634, 4648, 4672, 4688, 4689, 4768, 4769, 4770, 4776, 5156]
 
   - name: TimeCreated
     type: timestamp
@@ -704,7 +704,7 @@ output:
         <EventID>{{ EventID }}</EventID>
         <Version>{{ 2 if EventID in [4688, 4625] else 1 if EventID == 4624 else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ {4624: 12544, 4625: 12546, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4768: 14339, 4769: 14337, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
+        <Task>{{ {4624: 12544, 4625: 12546, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4768: 14339, 4769: 14337, 4770: 14339, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
         <Opcode>0</Opcode>
         <Keywords>0x8020000000000000</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
@@ -844,6 +844,15 @@ output:
         <Data Name="Status">{{ Status }}</Data>
         <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
         <Data Name="TransmittedServices">{{ TransmittedServices | default('-') }}</Data>
+        {% elif EventID == 4770 %}
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="ServiceName">{{ ServiceName }}</Data>
+        <Data Name="ServiceSid">{{ ServiceSid }}</Data>
+        <Data Name="TicketOptions">{{ TicketOptions }}</Data>
+        <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
         {% elif EventID == 4776 %}
         <Data Name="PackageName">{{ PackageName }}</Data>
         <Data Name="LogonAccount">{{ LogonAccount }}</Data>

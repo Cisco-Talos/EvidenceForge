@@ -1813,6 +1813,51 @@ class GenerationEngine:
                         resp_bytes=rng.randint(500, 10000),
                     )
 
+            # HTTPS background traffic: Windows Update, CRL checks, telemetry
+            # This ensures HTTPS is the dominant protocol (matching real enterprises)
+            if os_cat == 'windows':
+                _bg_https_ips = [
+                    '23.196.25.38',   # download.windowsupdate.com
+                    '13.107.4.50',    # settings-win.data.microsoft.com
+                    '93.184.220.29',  # ocsp.digicert.com
+                    '23.45.101.50',   # ctldl.windowsupdate.com
+                    '52.114.128.40',  # teams telemetry
+                    '204.79.197.200', # www.bing.com
+                ]
+                num_https = rng.randint(8, 20)
+                for i in range(num_https):
+                    offset = rng.randint(0, 3599) + rng.random()
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=rng.choice(_bg_https_ips),
+                        time=ts,
+                        dst_port=443, proto='tcp', service='ssl',
+                        duration=rng.uniform(0.1, 5.0),
+                        orig_bytes=rng.randint(200, 5000),
+                        resp_bytes=rng.randint(500, 50000),
+                        emit_dns=True,
+                    )
+            elif os_cat == 'linux':
+                # Linux servers: package repos, API calls
+                _linux_https_ips = ['91.189.91.39', '185.125.190.39', '151.101.0.204']
+                num_https = rng.randint(3, 10)
+                for i in range(num_https):
+                    offset = rng.randint(0, 3599) + rng.random()
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=rng.choice(_linux_https_ips),
+                        time=ts,
+                        dst_port=443, proto='tcp', service='ssl',
+                        duration=rng.uniform(0.1, 3.0),
+                        orig_bytes=rng.randint(200, 3000),
+                        resp_bytes=rng.randint(500, 30000),
+                        emit_dns=True,
+                    )
+
             # Database: app servers + some workstations → DB servers from scenario
             db_servers = self._infra_ips.get('db_servers', [])
             if db_servers and system.ip not in [d['ip'] for d in db_servers]:
@@ -2085,6 +2130,31 @@ class GenerationEngine:
                                 time=ts,
                             )
 
+        # 4770 TGT Renewal: TGTs expire every ~10 hours; emit renewals for
+        # long-running sessions. Track per-user last TGT time.
+        if not hasattr(self, '_last_tgt_time'):
+            self._last_tgt_time: dict[str, datetime] = {}
+        if dc_ips and dc_hostnames:
+            renewal_interval = timedelta(hours=rng.uniform(8.0, 12.0))
+            for client in windows_clients:
+                username = f"{client.hostname}$"
+                last_tgt = self._last_tgt_time.get(username)
+                if last_tgt and (current_hour - last_tgt) >= renewal_interval:
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    dc_idx = rng.randint(0, len(dc_hostnames) - 1)
+                    self.activity_generator.generate_kerberos_tgt_renewal(
+                        username=username,
+                        source_ip=client.ip,
+                        dc_hostname=dc_hostnames[dc_idx],
+                        time=ts,
+                    )
+                    self._last_tgt_time[username] = ts
+                elif last_tgt is None:
+                    # Record first TGT time (from the cycles above)
+                    self._last_tgt_time[username] = current_hour
+
         # Phase 6.0: Linux syslog diversity — generate daemon messages
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
@@ -2095,7 +2165,7 @@ class GenerationEngine:
             sys_type = (system.type or 'server').lower()
             # Role-dependent volume: DMZ/web servers are noisier
             is_dmz = 'dmz' in system.hostname.lower() or 'web' in system.hostname.lower()
-            num_events = rng.randint(30, 80) if is_dmz else rng.randint(12, 30)
+            num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             # Kernel uptime: monotonically increasing (seconds since boot)
             scenario_start = self.scenario.time_window.start

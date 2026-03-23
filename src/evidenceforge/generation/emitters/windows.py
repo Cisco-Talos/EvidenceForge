@@ -36,7 +36,8 @@ class WindowsEventEmitter(LogEmitter):
     _supported_types: set[str] = {
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
-        "machine_logon", "kerberos_tgt", "kerberos_service", "ntlm_validation",
+        "machine_logon", "kerberos_tgt", "kerberos_tgt_renewal", "kerberos_service",
+        "ntlm_validation",
     }
 
     @staticmethod
@@ -67,6 +68,7 @@ class WindowsEventEmitter(LogEmitter):
             "system_process_create": self._render_system_process_create,
             "machine_logon": self._render_machine_logon,
             "kerberos_tgt": self._render_kerberos_tgt,
+            "kerberos_tgt_renewal": self._render_kerberos_tgt_renewal,
             "kerberos_service": self._render_kerberos_service,
             "ntlm_validation": self._render_ntlm_validation,
         }.get(event.event_type)
@@ -388,6 +390,31 @@ class WindowsEventEmitter(LogEmitter):
             'IpAddress': krb.source_ip,
             'IpPort': krb.source_port,
             'Status': krb.ticket_status,
+        }
+        self.emit_event(event_data)
+
+    def _render_kerberos_tgt_renewal(self, event: SecurityEvent) -> None:
+        """Render Windows 4770 (Kerberos TGT renewal)."""
+        rng = random.Random()
+        krb = event.kerberos
+        host = event.host
+
+        event_data = {
+            'EventID': 4770,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': krb.target_username,
+            'TargetDomainName': krb.target_domain,
+            'ServiceName': krb.service_name,
+            'ServiceSid': krb.service_sid,
+            'TicketOptions': krb.ticket_options,
+            'TicketEncryptionType': krb.encryption_type,
+            'IpAddress': krb.source_ip,
+            'IpPort': krb.source_port,
         }
         self.emit_event(event_data)
 
