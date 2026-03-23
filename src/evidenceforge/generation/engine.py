@@ -306,6 +306,10 @@ class GenerationEngine:
             sid_registry=sid_registry,
             dispatcher=self.dispatcher,
         )
+        # Build IP→System lookup for HostContext resolution on connection events
+        self.activity_generator._ip_to_system = {
+            s.ip: s for s in self.scenario.environment.systems
+        }
         logger.info("Initialized activity generator")
 
         # Set initial state manager time
@@ -1901,6 +1905,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(40, 120),
                         resp_bytes=rng.randint(80, 512),
+                        source_system=system,
                     )
 
             # NTP sync: 0-1 per hour, anchored to per-system offset
@@ -1920,6 +1925,7 @@ class GenerationEngine:
                     duration=rng.uniform(0.01, 0.1),
                     orig_bytes=48,
                     resp_bytes=48,
+                    source_system=system,
                 )
 
             # SMB browsing: 1-3 per hour (Windows workstations only), evenly spaced
@@ -1947,6 +1953,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.1, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=rng.randint(500, 5000),
+                        source_system=system,
                     )
 
             # Kerberos: domain-joined Windows machines → DC, 4-8 per hour
@@ -1964,6 +1971,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(200, 1500),
                         resp_bytes=rng.randint(200, 2000),
+                        source_system=system,
                     )
 
             # LDAP: domain-joined Windows machines → DC, 2-5 per hour
@@ -1981,6 +1989,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.01, 0.5),
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
+                        source_system=system,
                     )
 
             # HTTPS background traffic: Windows Update, CRL checks, telemetry
@@ -2008,6 +2017,7 @@ class GenerationEngine:
                         orig_bytes=rng.randint(200, 5000),
                         resp_bytes=rng.randint(500, 50000),
                         emit_dns=True,
+                        source_system=system,
                     )
             elif os_cat == 'linux':
                 # Linux servers: package repos, API calls
@@ -2026,6 +2036,7 @@ class GenerationEngine:
                         orig_bytes=rng.randint(200, 3000),
                         resp_bytes=rng.randint(500, 30000),
                         emit_dns=True,
+                        source_system=system,
                     )
 
             # Database: app servers + some workstations → DB servers from scenario
@@ -2047,6 +2058,7 @@ class GenerationEngine:
                             duration=rng.uniform(0.01, 2.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
+                            source_system=system,
                         )
 
             # Scheduled tasks: periodic at fixed intervals with small jitter.
@@ -2121,6 +2133,7 @@ class GenerationEngine:
                         dst_port=0, proto='icmp',
                         duration=rng.uniform(0.0001, 0.005),
                         orig_bytes=64, resp_bytes=64,
+                        source_system=system,
                     )
 
             # SSH: connections to Linux servers, 1-3 per hour from other systems
@@ -2141,6 +2154,7 @@ class GenerationEngine:
                             duration=rng.uniform(30.0, 3600.0),
                             orig_bytes=rng.randint(2000, 50000),
                             resp_bytes=rng.randint(5000, 200000),
+                            source_system=system,
                         )
 
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
@@ -2411,6 +2425,7 @@ class GenerationEngine:
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
+                        source_system=system,
                     )
                     msgs = [
                         f'Received disconnect from {ip} port {port}:11: disconnected by user',
@@ -2483,4 +2498,5 @@ class GenerationEngine:
                     duration=rng.uniform(0.0005, 0.005),
                     orig_bytes=64,
                     resp_bytes=64,
+                    source_system=system,
                 )

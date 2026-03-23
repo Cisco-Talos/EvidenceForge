@@ -24,6 +24,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
         "ssh_session",
+        "connection",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -40,6 +41,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
+            "connection": self._render_connection,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -120,6 +122,25 @@ class EcarEmitter(HostMultiplexEmitter):
             'pid': proc.pid,
             'principal': proc.username,
             'image_path': proc.image,
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_connection(self, event: SecurityEvent) -> None:
+        """Render eCAR FLOW/CONNECT event from canonical NetworkContext."""
+        net = event.network
+        hostname = event.host.hostname if event.host else net.src_ip
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': hostname,
+            'object': 'FLOW',
+            'action': 'CONNECT',
+            'pid': net.initiating_pid,
+            'src_ip': net.src_ip,
+            'src_port': net.src_port,
+            'dst_ip': net.dst_ip,
+            'dst_port': net.dst_port,
+            'protocol': net.protocol,
             '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)

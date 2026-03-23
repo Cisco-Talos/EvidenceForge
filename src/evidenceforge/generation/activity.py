@@ -807,6 +807,9 @@ class ActivityGenerator:
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
 
+        # IP→System lookup for HostContext resolution on connection events
+        self._ip_to_system: dict[str, Any] = {}
+
         # Process tree tracking: recent user processes per (hostname, username)
         # Used by _select_parent_pid() for realistic parent-child relationships
         self._user_process_history: dict[tuple[str, str], list[tuple[int, str]]] = {}
@@ -1347,10 +1350,18 @@ class ActivityGenerator:
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
             service = _PORT_SERVICE[dst_port]
 
-        # Phase 2: Build SecurityEvent with NetworkContext
+        # Phase 2: Build SecurityEvent with NetworkContext + HostContext
+        # Resolve source system for HostContext (needed by eCAR emitter for hostname/routing)
+        host_ctx = None
+        if source_system:
+            host_ctx = self._build_host_context(source_system)
+        elif hasattr(self, '_ip_to_system') and src_ip in self._ip_to_system:
+            host_ctx = self._build_host_context(self._ip_to_system[src_ip])
+
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
+            host=host_ctx,
             network=NetworkContext(
                 src_ip=src_ip, src_port=src_port,
                 dst_ip=dst_ip, dst_port=dst_port,
@@ -1480,10 +1491,6 @@ class ActivityGenerator:
                 dst_ip=dst_ip, dst_port=dst_port,
                 protocol=proto, pid=pid if pid > 0 else 4,
             )
-
-        # eCAR FLOW still via helper (not format-filtered by visibility)
-        flow_hostname = REVERSE_DNS.get(src_ip, src_ip)
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, flow_hostname, pid=pid, src_port=src_port, protocol=proto)
 
         return uid
 
@@ -3182,25 +3189,8 @@ class ActivityGenerator:
                   'registry_key': key, 'registry_value': value},
         ))
 
-    def _emit_ecar_flow_event(
-        self, src_ip: str, dst_ip: str, dst_port: int,
-        time: datetime, hostname: str, pid: int = -1,
-        src_port: int = 0, protocol: str = 'tcp',
-    ) -> None:
-        """Emit eCAR FLOW/CONNECT event via dispatch_raw."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        if src_port == 0:
-            src_port = _get_rng().randint(49152, 65535)
-        if protocol not in ('udp', 'icmp') and dst_port in (53, 123):
-            protocol = 'udp'
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': hostname, 'object': 'FLOW',
-                  'action': 'CONNECT', 'pid': pid, 'src_ip': src_ip,
-                  'src_port': src_port, 'dst_ip': dst_ip, 'dst_port': dst_port,
-                  'protocol': protocol},
-        ))
+    # _emit_ecar_flow_event removed in Phase 8.1 — eCAR FLOW now dispatched
+    # via SecurityEvent "connection" type through the canonical event model
 
     def _emit_ecar_module_event(
         self, system: System, time: datetime, pid: int, username: str,

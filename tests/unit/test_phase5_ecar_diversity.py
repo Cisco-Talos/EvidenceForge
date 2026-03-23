@@ -77,19 +77,24 @@ class TestEcarRegistryEvent:
 
 
 class TestEcarFlowEvent:
-    def test_emits_flow_event(self, activity_gen, timestamp, mock_emitters):
-        activity_gen._emit_ecar_flow_event(
-            '10.0.10.1', '93.184.216.34', 443,
-            timestamp, 'WKS-01', pid=1234
+    def test_ecar_receives_connection_events(self, activity_gen, state_manager, timestamp, mock_emitters):
+        """eCAR FLOW events are now dispatched via SecurityEvent canonical path (Phase 8.1)."""
+        state_manager.set_current_time(timestamp)
+        # generate_connection dispatches SecurityEvent with event_type="connection"
+        # EcarEmitter.can_handle() returns True for "connection" and renders FLOW
+        activity_gen.generate_connection(
+            src_ip='10.0.10.1', dst_ip='93.184.216.34',
+            time=timestamp, dst_port=443, proto='tcp', service='ssl',
+            duration=1.0, orig_bytes=500, resp_bytes=1000,
         )
 
-        assert mock_emitters['ecar'].emit_raw.called
-        event_data = mock_emitters['ecar'].emit_raw.call_args[0][0]
-        assert event_data['object'] == 'FLOW'
-        assert event_data['action'] == 'CONNECT'
-        assert event_data['src_ip'] == '10.0.10.1'
-        assert event_data['dst_ip'] == '93.184.216.34'
-        assert event_data['dst_port'] == 443
+        # eCAR emitter should have received the event via emit() (canonical path)
+        assert mock_emitters['ecar'].emit.called
+        event = mock_emitters['ecar'].emit.call_args[0][0]
+        assert event.event_type == 'connection'
+        assert event.network.src_ip == '10.0.10.1'
+        assert event.network.dst_ip == '93.184.216.34'
+        assert event.network.dst_port == 443
 
 
 class TestEcarModuleEvent:
