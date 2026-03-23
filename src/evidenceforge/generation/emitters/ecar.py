@@ -124,6 +124,16 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         self.emit_event(event_data)
 
+    def _dispatch(self, event_data: dict[str, Any]) -> None:
+        """Route event to both per-host and centralized writers."""
+        rendered = self._render_event(event_data)
+        host_fqdn = event_data.pop('_host_fqdn', '')
+        # Always write to the centralized flat file
+        self.emit_to_host(rendered, '')
+        # Also write to per-host file if we have a host FQDN
+        if host_fqdn:
+            self.emit_to_host(rendered, host_fqdn)
+
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render eCAR event to JSON format (NDJSON - one event per line).
 

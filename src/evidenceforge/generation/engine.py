@@ -1148,10 +1148,17 @@ class GenerationEngine:
                     self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
                 )
 
-            # Use previous storyline process as parent (attack chain continuity)
+            # Determine parent for attack process.
+            # Only chain to previous storyline pid if on the same system (same attack phase).
+            # Otherwise, start a new chain from the user's shell (explorer→cmd/powershell).
             last_pid = getattr(self, '_last_storyline_pid', None)
-            if last_pid and self.activity_generator._is_pid_alive(system, last_pid):
-                parent_pid = last_pid
+            last_system = getattr(self, '_last_storyline_system', None)
+            if (last_pid
+                    and last_system == system.hostname
+                    and self.activity_generator._is_pid_alive(system, last_pid)):
+                # Same system: use a common shell parent instead of chaining
+                # net.exe doesn't spawn net.exe; both are spawned from cmd/explorer
+                parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
             else:
                 parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
             pid = self.activity_generator.generate_process(
@@ -1166,6 +1173,7 @@ class GenerationEngine:
             self.activity_generator._record_user_process(system, actor, pid, process_name)
 
             self._last_storyline_pid = pid  # Track for parent chain continuity
+            self._last_storyline_system = system.hostname
             malicious_event['process_name'] = process_name
             malicious_event['command_line'] = command_line
             malicious_event['pid'] = pid
@@ -1206,6 +1214,10 @@ class GenerationEngine:
                     process_name=process_name,
                     process_pid=pid,
                 )
+
+            # Emit supplementary Windows events based on command-line patterns
+            if os_category == 'windows':
+                self._emit_supplementary_events(actor, system, time, command_line, pid, logon_id)
 
         elif event_type == 'connection':
             # Detect SSH from activity keywords or MITRE technique
@@ -1314,6 +1326,110 @@ class GenerationEngine:
                 )
 
         return malicious_event
+
+    def _emit_supplementary_events(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        command_line: str,
+        pid: int,
+        logon_id: str,
+    ) -> None:
+        """Emit supplementary Windows events based on command-line patterns.
+
+        Detects administrative commands (net user, net group, schtasks, sc create,
+        wevtutil cl) and emits corresponding high-level audit events (4720, 4726,
+        4728, 4697, 4698, 1102) that Windows would generate alongside the 4688.
+        """
+        import re
+        cmd_lower = command_line.lower()
+
+        # Find the DC for account management events
+        dc = next(
+            (s for s in self.scenario.environment.systems if s.type == 'domain_controller'),
+            system,
+        )
+
+        delay_s = random.uniform(0.1, 0.5)
+
+        # net user <name> /add /domain → 4720 (account created)
+        match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', cmd_lower)
+        if match:
+            target_name = match.group(1)
+            # Extract original case from command_line
+            orig_match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', command_line, re.IGNORECASE)
+            if orig_match:
+                target_name = orig_match.group(1)
+            fake_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            self.activity_generator.generate_account_created(
+                actor=actor, system=dc,
+                time=time + timedelta(seconds=delay_s),
+                target_username=target_name,
+                target_sid=fake_sid,
+            )
+
+        # net user <name> /delete /domain → 4726 (account deleted)
+        match = re.search(r'net\s+user\s+(\S+)\s+/delete', cmd_lower)
+        if match:
+            orig_match = re.search(r'net\s+user\s+(\S+)\s+/delete', command_line, re.IGNORECASE)
+            target_name = orig_match.group(1) if orig_match else match.group(1)
+            fake_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            self.activity_generator.generate_account_deleted(
+                actor=actor, system=dc,
+                time=time + timedelta(seconds=delay_s),
+                target_username=target_name,
+                target_sid=fake_sid,
+            )
+
+        # net group "<GroupName>" <user> /add /domain → 4728 (global group member added)
+        match = re.search(r'net\s+group\s+"?([^"]+)"?\s+(\S+)\s+/add', command_line, re.IGNORECASE)
+        if match:
+            group_name = match.group(1)
+            member_name = match.group(2)
+            group_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-512" if 'admin' in group_name.lower() else f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            member_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            self.activity_generator.generate_group_membership_change(
+                actor=actor, system=dc,
+                time=time + timedelta(seconds=delay_s),
+                action='add', scope='global',
+                group_name=group_name, group_sid=group_sid,
+                member_username=member_name, member_sid=member_sid,
+            )
+
+        # schtasks /Create ... /TN "<TaskName>" → 4698 (scheduled task created)
+        match = re.search(r'schtasks\s+/create\b.*?/tn\s+"?([^"]+)"?', command_line, re.IGNORECASE)
+        if match:
+            task_name = match.group(1)
+            # Extract /TR value for task content
+            tr_match = re.search(r'/tr\s+"?([^"]+)"?', command_line, re.IGNORECASE)
+            task_action = tr_match.group(1) if tr_match else ''
+            self.activity_generator.generate_scheduled_task(
+                user=actor, system=system,
+                time=time + timedelta(seconds=delay_s),
+                task_name=task_name,
+                action='created',
+                task_content=f'<Actions><Exec><Command>{task_action}</Command></Exec></Actions>',
+            )
+
+        # sc create <ServiceName> binPath= "<path>" → 4697 (service installed)
+        match = re.search(r'sc\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?', command_line, re.IGNORECASE)
+        if match:
+            svc_name = match.group(1)
+            svc_path = match.group(2)
+            self.activity_generator.generate_service_installed(
+                user=actor, system=system,
+                time=time + timedelta(seconds=delay_s),
+                service_name=svc_name,
+                service_file_name=svc_path,
+            )
+
+        # wevtutil cl Security → 1102 (log cleared)
+        if 'wevtutil' in cmd_lower and 'cl' in cmd_lower:
+            self.activity_generator.generate_log_cleared(
+                user=actor, system=system,
+                time=time + timedelta(seconds=delay_s),
+            )
 
     @staticmethod
     def _extract_output_file(command_line: str, os_category: str) -> str | None:
