@@ -26,6 +26,9 @@ class ActiveSession:
         logon_type: Windows logon type (2=interactive, 3=network, 10=remote, etc.)
         start_time: When the session started
         source_ip: Source IP address for the logon
+        explorer_pid: PID of explorer.exe instance for this interactive session
+        process_tree_root: Root PID for this session's process tree
+        last_activity_time: Last baseline activity timestamp (for login cooldown)
     """
 
     logon_id: str
@@ -34,6 +37,9 @@ class ActiveSession:
     logon_type: int
     start_time: datetime
     source_ip: str
+    explorer_pid: int | None = None
+    process_tree_root: int | None = None
+    last_activity_time: datetime | None = None
 
 
 @dataclass

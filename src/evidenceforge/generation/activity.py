@@ -884,6 +884,30 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
+        # Phase 4: Create per-session explorer.exe for interactive logons
+        if logon_type in (2, 10, 11):
+            session = self.state_manager.get_session(logon_id)
+            if session is not None:
+                os_cat = _get_os_category(system.os)
+                if os_cat == 'windows':
+                    sys_pids = getattr(self, '_system_pids', {}).get(system.hostname, {})
+                    # Find a valid parent: userinit, winlogon, or any seeded system PID
+                    parent_pid = None
+                    for candidate in ('userinit', 'winlogon', 'explorer', 'services'):
+                        pid = sys_pids.get(candidate)
+                        if pid and self.state_manager.get_process(system.hostname, pid):
+                            parent_pid = pid
+                            break
+                    if parent_pid is not None:
+                        explorer_pid = self.state_manager.create_process(
+                            system.hostname, parent_pid,
+                            r'C:\Windows\explorer.exe', 'explorer.exe',
+                            user.username, 'Medium'
+                        )
+                        session.explorer_pid = explorer_pid
+                        session.process_tree_root = explorer_pid
+                session.last_activity_time = time
+
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
 
@@ -976,6 +1000,11 @@ class ActivityGenerator:
             logon_id: LogonID from the logon event
             logon_type: Logon type for the session being ended
         """
+        # Terminate session-specific explorer.exe before ending session
+        session = self.state_manager.get_session(logon_id)
+        if session and session.explorer_pid is not None:
+            self.state_manager.end_process(session.system, session.explorer_pid)
+
         # Build SecurityEvent (StateManager.apply() handles end_session)
         event = SecurityEvent(
             timestamp=time,
@@ -1928,15 +1957,20 @@ class ActivityGenerator:
 
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
-            # Get or create session for this user
+            # Get or create session for this user (with login cooldown)
             sessions = self.state_manager.get_sessions_for_user(user.username)
-            if not sessions:
-                # No active session - create logon slightly before the process
-                # to maintain causal ordering (logon must precede process creation)
+            active_session = next(
+                (s for s in sessions if s.system == system.hostname), None
+            ) if sessions else None
+
+            if active_session:
+                logon_id = active_session.logon_id
+                active_session.last_activity_time = time
+            else:
+                # No active session on this system — create logon slightly before
+                # the process to maintain causal ordering
                 logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
                 logon_id = self.generate_logon(user, system, logon_time)
-            else:
-                logon_id = sessions[0].logon_id  # Use first active session
 
             # Phase 2.10: OS-aware process template selection
             os_category = _get_os_category(system.os)
@@ -2336,6 +2370,18 @@ class ActivityGenerator:
         """Check if a PID is still running in state manager."""
         return self.state_manager.get_process(system.hostname, pid) is not None
 
+    def _get_session_explorer_pid(self, system: System, user: User) -> int | None:
+        """Get the explorer.exe PID for the user's active interactive session.
+
+        Returns None if no interactive session exists or explorer PID not set.
+        """
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        for session in sessions:
+            if session.system == system.hostname and session.explorer_pid is not None:
+                if self._is_pid_alive(system, session.explorer_pid):
+                    return session.explorer_pid
+        return None
+
     def _select_parent_pid(self, system: System, user: User, process_name: str) -> int:
         """Select a realistic parent PID based on process type and history.
 
@@ -2358,13 +2404,17 @@ class ActivityGenerator:
         if os_cat == 'windows':
             exe_name = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
 
+            # Prefer session-specific explorer PID over system-wide default
+            session_explorer = self._get_session_explorer_pid(system, user)
+            explorer_pid = session_explorer or sys_pids.get('explorer', 4)
+
             # Shells and terminals spawn from explorer.exe
             if exe_name in self._WINDOWS_SHELLS:
-                return sys_pids.get('explorer', 4)
+                return explorer_pid
 
             # GUI apps always spawn from explorer.exe (user launches via Start Menu/desktop)
             if exe_name in self._WINDOWS_GUI_APPS:
-                return sys_pids.get('explorer', 4)
+                return explorer_pid
 
             # CLI/script processes: check for a running shell as parent
             shells = [(pid, name) for pid, name in alive_history
@@ -2378,8 +2428,8 @@ class ActivityGenerator:
             if spawners and rng.random() < 0.3:
                 return spawners[-1][0]
 
-            # Default: explorer.exe
-            return sys_pids.get('explorer', 4)
+            # Default: session-specific or system-wide explorer.exe
+            return explorer_pid
         else:
             # Linux: most user commands spawn from a shell
             shells = [(pid, name) for pid, name in alive_history

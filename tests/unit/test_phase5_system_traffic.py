@@ -354,9 +354,11 @@ class TestParentPidSelection:
         )
 
         proc = state_manager.get_process(win_system.hostname, pid)
-        explorer_pid = pids['explorer']
-        assert proc.parent_pid == explorer_pid, (
-            f"User process parent should be explorer ({explorer_pid}), not {proc.parent_pid}"
+        # Parent should be an explorer.exe PID (session-specific or system-seeded)
+        parent_proc = state_manager.get_process(win_system.hostname, proc.parent_pid)
+        assert parent_proc is not None, f"Parent PID {proc.parent_pid} not found in state"
+        assert 'explorer.exe' in parent_proc.image.lower(), (
+            f"User process parent should be explorer, got {parent_proc.image} (PID {proc.parent_pid})"
         )
 
     def test_linux_process_gets_bash_parent(self, state_manager, mock_emitters, linux_system):
