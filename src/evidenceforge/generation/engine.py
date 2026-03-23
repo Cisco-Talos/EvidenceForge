@@ -2356,7 +2356,7 @@ class GenerationEngine:
                         'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.'},
                     ))
                 elif source_roll < 0.35:
-                    # CRON — uppercase, (user) CMD (command)
+                    # CRON — dispatched via SecurityEvent for syslog + eCAR correlation
                     cron_cmds = [
                         ('root', 'test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )'),
                         ('root', 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'),
@@ -2364,26 +2364,35 @@ class GenerationEngine:
                         ('www-data', '/usr/bin/php /var/www/html/cron.php'),
                     ]
                     user, cmd = rng.choice(cron_cmds)
-                    cron_pid = self.state_manager.create_process(
-                        system.hostname, sys_pids.get('cron', 0),
-                        '/usr/sbin/cron', f'CRON[{user}]', user, 'System')
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'CRON', 'pid': cron_pid,
-                        'facility': 9, 'severity': 6,
-                        'message': f'({user}) CMD ({cmd})'},
-                    ))
+                    self.activity_generator.generate_system_process(
+                        system=system, time=ts,
+                        process_name='/usr/sbin/cron',
+                        command_line=cmd,
+                        parent_pid=sys_pids.get('cron', 0),
+                        username=user,
+                    )
                 elif source_roll < 0.50:
                     # kernel — no PID, includes uptime counter
                     if is_dmz and rng.random() < 0.85:
-                        # UFW BLOCK messages on DMZ servers
+                        # UFW BLOCK messages on DMZ servers — dual emission:
+                        # 1. Syslog kernel format (RawLogEntry)
+                        # 2. Zeek conn with conn_state=REJ (SecurityEvent via generate_connection)
                         src_ip = f'{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}'
+                        spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
                         msg = (f'[{uptime}.{rng.randint(100000,999999)}] [UFW BLOCK] '
                                f'IN=ens160 OUT= SRC={src_ip} DST={system.ip} '
                                f'LEN={rng.randint(40,60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40,255)} '
-                               f'ID={rng.randint(1,65535)} PROTO=TCP SPT={rng.randint(1024,65535)} DPT={dpt} '
+                               f'ID={rng.randint(1,65535)} PROTO=TCP SPT={spt} DPT={dpt} '
                                f'WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0')
+                        # Emit Zeek conn record for blocked connection (REJ = SYN then RST)
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip, dst_ip=system.ip, time=ts,
+                            dst_port=dpt, proto='tcp',
+                            conn_state='REJ',
+                            src_port=spt,
+                            source_system=system,
+                        )
                     else:
                         # AppArmor or audit messages — monotonic serial per host
                         self._audit_serials[system.hostname] = self._audit_serials.get(system.hostname, 1000) + rng.randint(1, 5)

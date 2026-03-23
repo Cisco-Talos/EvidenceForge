@@ -1219,6 +1219,7 @@ class ActivityGenerator:
         emit_dns: bool = False,
         pid: int = -1,
         source_system: Optional['System'] = None,
+        conn_state: Optional[str] = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1281,7 +1282,14 @@ class ActivityGenerator:
         # Protocol-aware connection state selection
         rng = _get_rng()
 
-        if proto == 'icmp':
+        # If caller provides explicit conn_state (e.g., UFW BLOCK → REJ), skip probabilistic selection
+        if conn_state is not None:
+            history = {'REJ': 'Sr', 'S0': 'S', 'SF': 'ShADadfF', 'OTH': 'Cc'}.get(conn_state, 'ShADadfF')
+            if conn_state in ('S0', 'REJ'):
+                duration = None
+                resp_bytes = 0
+                orig_bytes = rng.choice([0, 40, 44, 48])
+        elif proto == 'icmp':
             conn_state = 'OTH'
             history = '-'
             src_port = 0   # ICMP has no ports; Zeek emits 0
