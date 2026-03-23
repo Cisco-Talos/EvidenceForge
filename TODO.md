@@ -1310,6 +1310,80 @@
   - No sshd → bash → commands process tree for interactive sessions
   - Files: `engine.py` (storyline process creation)
 
+### 6.9 Improvement Loop 4 Findings (2026-03-23, healthcare-supply-chain)
+
+**Source:** 4-expert blind panel (threat hunter, Windows DFIR, Linux/network admin, detection engineer) on `healthcare-supply-chain` scenario post-P1 fixes.
+**Branch:** `improve/healthcare-supply-chain`
+**Eval scores:** Baseline 82/100 → Iter 1: 82/100 (Acceptance: PASS)
+
+#### Resolved in improvement loop 4 (iter 1):
+- [x] **Missing RDP LogonType 10 on EMR-DB-01** (Threat Hunter P0, Detection Eng P0)
+  - RDP/SSH keywords now also trigger 'logon' event type in storyline keyword matching
+  - Files: `engine.py` (`_match_activity_to_events`)
+- [x] **60.9% of SSL connections use IP addresses as SNI** (Linux/Network P0)
+  - server_name now falls back to `_generate_random_hostname()` instead of bare IP
+  - Files: `activity.py` (ssl context in `generate_connection`)
+- [x] **Missing 4634 logoff on servers/DCs** (Windows DFIR P1)
+  - Type 3/5 network logons now generate paired 4634 logoff after 1-60s delay
+  - Files: `activity.py` (`execute_baseline_activity`)
+
+#### Remaining tells from expert panel (not yet addressed):
+
+**P0 — Critical (Linux/Network Admin):**
+- [ ] **Per-host syslog has only 1-3 programs** (FILE-SRV-01 only has `dnf`, MAIL-01 only has `apt-check`)
+  - Real servers have 30-60+ programs; single-program hosts are instant synthetic tell
+  - Root cause: `_generate_system_traffic` syslog section uses global message templates, not per-host service-aware templates
+  - Fix: generate syslog messages from services declared in scenario (e.g., web server → nginx, mail → postfix)
+  - Files: `engine.py` (syslog generation section)
+
+**P1 — Significant (Windows DFIR):**
+- [ ] **Missing 4672 (special privileges) on DC-01**
+  - DC has 0 privilege assignment events despite 168+ successful logons
+  - Root cause: system traffic service/anonymous logons emit via dispatch_raw without 4672 pairing
+  - Fix: emit 4672 for privileged principals (machine accounts, service accounts) in system traffic
+  - Files: `engine.py` (`_generate_system_traffic` service logon section)
+- [ ] **Low 4689:4688 process termination ratio** (57% vs 80-90% expected)
+  - Short-lived processes (cmd.exe, wmic.exe) should generate 4689 quickly after 4688
+  - Files: `engine.py` or `activity.py` (process termination probability)
+
+**P1 — Significant (Detection Engineer):**
+- [ ] **Missing eCAR USER_SESSION events on server-side of RDP lateral movement**
+  - EMR-DB-01 has NO USER_SESSION events for james.whitfield RDP session
+  - Root cause: storyline logon generates Windows 4624 but eCAR LOGIN not emitted for storyline logons on target systems
+  - Files: `engine.py` (`_execute_storyline_event` logon handler)
+- [ ] **Inconsistent Zeek sensor coverage for SSH pivot**
+  - SSH from EMR-DB-01 → WEB-PORTAL-01 only in zeek-dmz-01, not zeek-core-01
+  - Root cause: network visibility engine routes based on segment; SSH between server segments may only be visible to one sensor
+  - This may be CORRECT behavior depending on sensor placement; needs scenario review
+
+**P1 — Significant (Linux/Network Admin):**
+- [ ] **Only 1-2 RDP connections in Zeek over 6 hours**
+  - Healthcare IT admins use RDP constantly; expect 20-50+ sessions
+  - Root cause: baseline activity doesn't generate background RDP connections for admin users
+  - Fix: add RDP background traffic in `_generate_system_traffic` for IT admin workstations
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [ ] **No SSL certificate subject/issuer data in Zeek ssl.log**
+  - Modern Zeek captures full cert chains; 100% missing cert data is unrealistic
+  - Root cause: `SslContext` doesn't include subject/issuer fields; zeek_ssl emitter doesn't render them
+  - Files: `events/contexts.py` (SslContext), `emitters/zeek_ssl.py`
+- [ ] **Logrotate runs every 15 minutes** (should be daily at ~6:25am)
+  - Root cause: scheduled tasks fire every 15-min slot; logrotate should only fire once per day
+  - Files: `engine.py` (scheduled task selection logic)
+
+**P2 — Moderate:**
+- [ ] **Only 4 User-Agents across HTTP requests** (need 10-15 for 5 workstations)
+  - Files: `activity.py` (HTTP context User-Agent pool)
+- [ ] **100% HTTP 200 status codes** (need 301/302/404/500 mix)
+  - Files: `activity.py` (HTTP context status code selection)
+- [ ] **Only 52 SMB connections over 6 hours** (need 200-400 for Windows file server)
+  - Root cause: SMB traffic only 1-3/hr per system; needs increase for file-server-heavy environments
+  - Files: `engine.py` (`_generate_system_traffic` SMB section)
+- [ ] **60 DNS UIDs (7%) missing from conn.log**
+  - Root cause: DNS queries emitted via `_emit_dns_lookup` may generate standalone UIDs not in conn.log
+  - Files: `activity.py` (`_emit_dns_lookup`)
+- [ ] **EventRecordID gaps too regular** (need more irregular gap sizes 5-20)
+  - Files: `emitters/windows.py` (gap generation in `_flush_unlocked`)
+
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
 
 ---
