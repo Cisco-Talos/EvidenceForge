@@ -1353,20 +1353,30 @@ class GenerationEngine:
 
         delay_s = random.uniform(0.1, 0.5)
 
+        # Helper: get domain SID prefix from existing SID registry
+        def _domain_sid_prefix() -> str:
+            for sid in self.activity_generator.sid_registry.values():
+                if sid.startswith('S-1-5-21-') and sid.count('-') == 7:
+                    return '-'.join(sid.split('-')[:7])
+            return f'S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}'
+
+        def _make_sid(rid: int | None = None) -> str:
+            prefix = _domain_sid_prefix()
+            if rid is None:
+                rid = random.randint(1100, 9999)
+            return f'{prefix}-{rid}'
+
         # net user <name> /add /domain → 4720 (account created)
         match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', cmd_lower)
         if match:
-            target_name = match.group(1)
-            # Extract original case from command_line
             orig_match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', command_line, re.IGNORECASE)
-            if orig_match:
-                target_name = orig_match.group(1)
-            fake_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            target_name = orig_match.group(1) if orig_match else match.group(1)
+            target_sid = _make_sid()
             self.activity_generator.generate_account_created(
                 actor=actor, system=dc,
                 time=time + timedelta(seconds=delay_s),
                 target_username=target_name,
-                target_sid=fake_sid,
+                target_sid=target_sid,
             )
 
         # net user <name> /delete /domain → 4726 (account deleted)
@@ -1374,12 +1384,12 @@ class GenerationEngine:
         if match:
             orig_match = re.search(r'net\s+user\s+(\S+)\s+/delete', command_line, re.IGNORECASE)
             target_name = orig_match.group(1) if orig_match else match.group(1)
-            fake_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            target_sid = _make_sid()
             self.activity_generator.generate_account_deleted(
                 actor=actor, system=dc,
                 time=time + timedelta(seconds=delay_s),
                 target_username=target_name,
-                target_sid=fake_sid,
+                target_sid=target_sid,
             )
 
         # net group "<GroupName>" <user> /add /domain → 4728 (global group member added)
@@ -1387,8 +1397,10 @@ class GenerationEngine:
         if match:
             group_name = match.group(1)
             member_name = match.group(2)
-            group_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-512" if 'admin' in group_name.lower() else f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
-            member_sid = f"S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(1100,9999)}"
+            # Domain Admins = RID 512
+            group_rid = 512 if 'admin' in group_name.lower() else random.randint(1100, 9999)
+            group_sid = _make_sid(group_rid)
+            member_sid = _make_sid()
             self.activity_generator.generate_group_membership_change(
                 actor=actor, system=dc,
                 time=time + timedelta(seconds=delay_s),

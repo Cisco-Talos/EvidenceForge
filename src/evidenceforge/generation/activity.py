@@ -1408,9 +1408,18 @@ class ActivityGenerator:
             host = REVERSE_DNS.get(dst_ip, dst_ip)
             if dst_port not in (80, 443):
                 host = f'{host}:{dst_port}'
-            _URIS = ['/', '/index.html', '/api/v1/status', '/favicon.ico', '/robots.txt',
-                      '/assets/main.css', '/assets/app.js', '/images/logo.png']
-            uri = rng.choice(_URIS)
+            _URI_MIME_MAP = {
+                '/': 'text/html',
+                '/index.html': 'text/html',
+                '/api/v1/status': 'application/json',
+                '/favicon.ico': 'image/x-icon',
+                '/robots.txt': 'text/plain',
+                '/assets/main.css': 'text/css',
+                '/assets/app.js': 'application/javascript',
+                '/images/logo.png': 'image/png',
+            }
+            uri = rng.choice(list(_URI_MIME_MAP.keys()))
+            mime_type = _URI_MIME_MAP[uri]
             status_code, status_msg = _get_http_status(dst_ip, uri)
             resp_body_len = resp_bytes or rng.randint(200, 50000)
             if status_code in (301, 302):
@@ -1427,6 +1436,7 @@ class ActivityGenerator:
                 response_body_len=resp_body_len,
                 status_code=status_code,
                 status_msg=status_msg,
+                resp_mime_types=[mime_type] if status_code == 200 else [],
                 tags=[],
             )
             # Probabilistic file transfer for HTTP responses with content
@@ -1434,14 +1444,12 @@ class ActivityGenerator:
                 from evidenceforge.events.contexts import FileTransferContext
                 from evidenceforge.utils.ids import generate_zeek_uid
                 fuid = generate_zeek_uid('F')
-                _MIME_TYPES = ['text/html', 'text/plain', 'application/javascript',
-                               'text/css', 'image/png', 'image/jpeg', 'application/json']
                 event.file_transfer = FileTransferContext(
                     fuid=fuid,
                     source='HTTP',
                     depth=0,
                     analyzers=[],
-                    mime_type=rng.choice(_MIME_TYPES),
+                    mime_type=mime_type,
                     duration=rng.uniform(0.0, 0.01),
                     local_orig=_is_private_ip(dst_ip),
                     is_orig=False,
