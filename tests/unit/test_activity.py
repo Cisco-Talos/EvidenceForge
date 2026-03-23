@@ -355,11 +355,11 @@ class TestActivityGenerator:
 
         activity_gen.execute_baseline_activity(test_user, test_system, timestamp, 'logon')
 
-        # Both logon and failed_logon dispatched via SecurityEvent
+        # Logon (and possibly logoff for Type 3) dispatched via SecurityEvent
         emitter = mock_emitters['windows_event_security']
         assert emitter.emit.called
-        event = emitter.emit.call_args[0][0]
-        assert event.event_type in ("logon", "failed_logon")
+        first_event = emitter.emit.call_args_list[0][0][0]
+        assert first_event.event_type in ("logon", "failed_logon")
 
     def test_execute_baseline_activity_process_creates_session(self, activity_gen, test_user, test_system, state_manager, mock_emitters):
         """execute_baseline_activity should create session before process if needed."""

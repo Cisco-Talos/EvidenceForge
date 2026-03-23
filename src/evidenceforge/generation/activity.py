@@ -1335,7 +1335,10 @@ class ActivityGenerator:
         rng = _get_rng()
         if service == 'ssl' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import SslContext
-            server_name = REVERSE_DNS.get(dst_ip, dst_ip)
+            server_name = REVERSE_DNS.get(dst_ip)
+            if not server_name:
+                # Generate a plausible hostname for IPs not in REVERSE_DNS
+                server_name = _generate_random_hostname(rng, dst_ip)
             _TLS_CIPHERS = [
                 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
                 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
@@ -1947,9 +1950,12 @@ class ActivityGenerator:
                         other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
                         if other_ips:
                             source_ip = rng.choice(other_ips)
-                self.generate_logon(user, system, time, logon_type=logon_type,
+                logon_id = self.generate_logon(user, system, time, logon_type=logon_type,
                                     source_ip=source_ip if source_ip else system.ip)
-                # Don't create a session — these are background auth events
+                # Type 3/5 are short-lived — generate paired logoff after brief delay
+                logoff_delay = _get_rng().uniform(1.0, 60.0)
+                logoff_time = time + timedelta(seconds=logoff_delay)
+                self.generate_logoff(user, system, logoff_time, logon_id, logon_type)
                 return
 
             # Interactive logon types (2, 7, 10, 11) — create sessions

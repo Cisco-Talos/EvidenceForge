@@ -1042,7 +1042,7 @@ class GenerationEngine:
         """
         # Keyword mapping for Phase 1
         keywords = {
-            'logon': ['logon', 'log in', 'login', 'authenticate', 'sign in'],
+            'logon': ['logon', 'log in', 'login', 'authenticate', 'sign in', 'rdp', 'ssh'],
             'logoff': ['logoff', 'log off', 'logout', 'sign out'],
             'process': ['execute', 'run', 'launch', 'start', 'spawn', 'powershell', 'cmd', 'command', 'search', 'read', 'enumerate', 'dump', 'query', 'list', 'archive', 'compress', 'delete', 'remove', 'clean'],
             'connection': ['connect', 'access', 'download', 'upload', 'communicate', 'c2', 'exfiltrate', 'ssh', 'rdp', 'remote'],
