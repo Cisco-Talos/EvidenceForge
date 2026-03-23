@@ -2360,6 +2360,370 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_kerberos_preauth_failed(
+        self,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        status: str = '0x18',
+    ) -> None:
+        """Generate Kerberos pre-authentication failed event (4771) on DC."""
+        rng = _get_rng()
+        dc_host = self._build_dc_host_context(dc_hostname)
+        reporting_pid = self._get_system_pid(dc_hostname, "lsass", 0x2e0)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="kerberos_preauth_failed",
+            host=dc_host,
+            kerberos=KerberosContext(
+                target_username=username,
+                target_domain=dc_host.netbios_domain,
+                target_sid=self._get_sid(username),
+                service_name='krbtgt',
+                ticket_options='0x40810010',
+                ticket_status=status,
+                pre_auth_type=0,
+                source_ip=f'::ffff:{source_ip}' if ':' not in source_ip else source_ip,
+                source_port=rng.randint(49152, 65535),
+                reporting_pid=reporting_pid,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_log_cleared(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> None:
+        """Generate security log cleared event (1102) on target system."""
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="log_cleared",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                subject_sid=self._get_sid(user.username),
+                subject_username=user.username,
+                subject_domain=self._build_host_context(system).netbios_domain,
+                subject_logon_id='0x3e7',
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_service_installed(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        service_name: str,
+        service_file_name: str,
+        service_type: str = '0x10',
+        service_start_type: str = '2',
+        service_account: str = 'LocalSystem',
+    ) -> None:
+        """Generate service installed event (4697) on target system."""
+        from evidenceforge.events.contexts import ServiceContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="service_installed",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                subject_sid=self._get_sid(user.username),
+                subject_username=user.username,
+                subject_domain=self._build_host_context(system).netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            service=ServiceContext(
+                service_name=service_name,
+                service_file_name=service_file_name,
+                service_type=service_type,
+                service_start_type=service_start_type,
+                service_account=service_account,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_scheduled_task(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        task_name: str,
+        action: str = 'created',
+        task_content: str = '',
+    ) -> None:
+        """Generate scheduled task event (4698/4699/4700/4701) on target system."""
+        from evidenceforge.events.contexts import ScheduledTaskContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type=f"scheduled_task_{action}",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                subject_sid=self._get_sid(user.username),
+                subject_username=user.username,
+                subject_domain=self._build_host_context(system).netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            scheduled_task=ScheduledTaskContext(
+                task_name=task_name,
+                task_content=task_content,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_group_membership_change(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        action: str,
+        scope: str,
+        group_name: str,
+        group_sid: str,
+        member_username: str,
+        member_sid: str,
+    ) -> None:
+        """Generate group membership change event on DC.
+
+        Args:
+            action: "add" or "remove"
+            scope: "global", "local", or "universal"
+        """
+        from evidenceforge.events.contexts import GroupMembershipContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        host = self._build_host_context(system)
+        event_type = f"group_member_{'added' if action == 'add' else 'removed'}_{scope}"
+        event = SecurityEvent(
+            timestamp=time,
+            event_type=event_type,
+            host=host,
+            auth=AuthContext(
+                username=actor.username,
+                subject_sid=self._get_sid(actor.username),
+                subject_username=actor.username,
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            group_membership=GroupMembershipContext(
+                member_name='-',
+                member_sid=member_sid,
+                group_name=group_name,
+                group_domain=host.netbios_domain,
+                group_sid=group_sid,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_account_created(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        target_username: str,
+        target_sid: str,
+    ) -> None:
+        """Generate user account created event (4720) on DC."""
+        from evidenceforge.events.contexts import AccountManagementContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        host = self._build_host_context(system)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="account_created",
+            host=host,
+            auth=AuthContext(
+                username=actor.username,
+                subject_sid=self._get_sid(actor.username),
+                subject_username=actor.username,
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            account_management=AccountManagementContext(
+                target_username=target_username,
+                target_domain=host.netbios_domain,
+                target_sid=target_sid,
+                sam_account_name=target_username,
+                password_last_set='%%1794',
+                new_uac_value='0x15',
+                user_account_control='\n\t\t\t%%2080\n\t\t\t%%2082\n\t\t\t%%2084',
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_account_deleted(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        target_username: str,
+        target_sid: str,
+    ) -> None:
+        """Generate user account deleted event (4726) on DC."""
+        from evidenceforge.events.contexts import AccountManagementContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        host = self._build_host_context(system)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="account_deleted",
+            host=host,
+            auth=AuthContext(
+                username=actor.username,
+                subject_sid=self._get_sid(actor.username),
+                subject_username=actor.username,
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            account_management=AccountManagementContext(
+                target_username=target_username,
+                target_domain=host.netbios_domain,
+                target_sid=target_sid,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_password_reset(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        target_username: str,
+        target_sid: str,
+    ) -> None:
+        """Generate password reset event (4724) on DC."""
+        from evidenceforge.events.contexts import AccountManagementContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        host = self._build_host_context(system)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="password_reset",
+            host=host,
+            auth=AuthContext(
+                username=actor.username,
+                subject_sid=self._get_sid(actor.username),
+                subject_username=actor.username,
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            account_management=AccountManagementContext(
+                target_username=target_username,
+                target_domain=host.netbios_domain,
+                target_sid=target_sid,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_password_change(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> None:
+        """Generate password change event (4723) on DC."""
+        from evidenceforge.events.contexts import AccountManagementContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        host = self._build_host_context(system)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="password_change",
+            host=host,
+            auth=AuthContext(
+                username=user.username,
+                subject_sid=self._get_sid(user.username),
+                subject_username=user.username,
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            account_management=AccountManagementContext(
+                target_username=user.username,
+                target_domain=host.netbios_domain,
+                target_sid=self._get_sid(user.username),
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_create_remote_thread(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        source_pid: int,
+        source_image: str,
+        target_pid: int,
+        target_image: str,
+    ) -> None:
+        """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="create_remote_thread",
+            host=self._build_host_context(system),
+            process=ProcessContext(
+                pid=source_pid,
+                parent_pid=0,
+                image=source_image,
+                command_line='',
+                username=user.username,
+            ),
+            auth=AuthContext(
+                username=user.username,
+                target_server=target_image,
+                source_port=target_pid,  # Pack target PID into source_port for emitter
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_account_changed(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        target_username: str,
+        target_sid: str,
+    ) -> None:
+        """Generate user account changed event (4738) on DC."""
+        from evidenceforge.events.contexts import AccountManagementContext
+
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        host = self._build_host_context(system)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="account_changed",
+            host=host,
+            auth=AuthContext(
+                username=actor.username,
+                subject_sid=self._get_sid(actor.username),
+                subject_username=actor.username,
+                subject_domain=host.netbios_domain,
+                subject_logon_id='0x3e7',
+                reporting_pid=reporting_pid,
+            ),
+            account_management=AccountManagementContext(
+                target_username=target_username,
+                target_domain=host.netbios_domain,
+                target_sid=target_sid,
+                sam_account_name=target_username,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
     def _get_next_event_record_id(self, hostname: str = '') -> int:
         """Get next EventRecordID for a specific computer (thread-safe).
 

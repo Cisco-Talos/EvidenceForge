@@ -20,6 +20,7 @@ from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 from evidenceforge.generation.emitters.snort import SnortEmitter
+from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.web import WebEmitter
 
 __all__ = [
@@ -43,5 +44,6 @@ __all__ = [
     "SyslogEmitter",
     "BashHistoryEmitter",
     "SnortEmitter",
+    "SysmonEventEmitter",
     "WebEmitter",
 ]

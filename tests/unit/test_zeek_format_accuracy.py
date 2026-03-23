@@ -557,7 +557,7 @@ class TestSampleDataFieldValidation:
         assert isinstance(data["location"], str)
 
     def test_all_formats_load(self):
-        """All 19 format YAMLs load successfully."""
+        """All format YAMLs load successfully."""
         from evidenceforge.formats import load_all_formats
         formats = load_all_formats()
-        assert len(formats) == 19
+        assert len(formats) == 20

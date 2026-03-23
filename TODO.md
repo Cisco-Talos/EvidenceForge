@@ -2,7 +2,7 @@
 
 **Status:** Phase 7 - Canonical Event Model ✅ COMPLETE (7.1-7.4); Phase 6 ongoing (44 original + 16 new from loop 1 + 11 new from loop 2, 60 resolved)
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-20 (Improvement Loop 2: 14 root-cause fixes on arch-firm-ssh-bruteforce, 8 iterations, 801 tests passing)
+**Last Updated:** 2026-03-23 (Improvement Loop 5: 4-expert panel on healthcare-supply-chain, eval 80/100)
 **Target MVP Completion:** 7-10 weeks from start
 
 **Recent Completions:**
@@ -737,7 +737,13 @@
   - Added 4768/4769 (Kerberos TGT/service tickets), 4776 (NTLM validation)
   - Added 5156 (WFP connection allowed), 4648 (explicit creds) — YAML templates + generation functions
   - Updated eval distribution profiles, co-occurrence rules, and WINDOWS_VARIANT_MAP
-  - Future: 5140/5145 (share access), 4720-4740 (account management), 4103/4104 (PowerShell)
+  - Added 4771 (Kerberos pre-auth failed), 1102 (log cleared), 4697 (service installed)
+  - Added 4698/4699/4700/4701 (scheduled tasks), 4728/4729/4732/4733/4756/4757 (group membership)
+  - Added 4720/4723/4724/4726/4738 (account management)
+  - Added Sysmon Event 1 (ProcessCreate with hashes) and Event 8 (CreateRemoteThread)
+  - New SysmonEventEmitter + windows_event_sysmon.yaml format definition
+  - Total: 30 Security event IDs + 2 Sysmon event IDs
+  - Future: 5140/5145 (share access), 4103/4104 (PowerShell), 4778/4779 (RDP session)
 - [x] **Add machine account ($) activity** (Assessment #7)
   - `generate_machine_account_logon()` emits 4624 type 3 with HOSTNAME$ on DC
   - 2-6 machine account auth cycles per Windows system per hour in `_generate_system_traffic()`
@@ -820,9 +826,12 @@
   - Cache-aging jitter applied: base_ttl - randint(0, base_ttl//2)
   - External TTLs capped at 3600s, internal allow up to 86400s
   - Files: `activity.py` (`_emit_dns_lookup`)
-- [ ] **Fix 4625 event Version to 0** (Assessment #38)
-  - Uses Version 2 instead of standard Version 0 for 4625
-  - Files: `formats/definitions/windows_event_security.yaml`
+- [x] **Fix 4625 event Version to 0** (Assessment #38, fixed in EVTX format accuracy pass)
+  - Changed from Version 2 to Version 0; also fixed 4624 Version 1→2, 5156 Version 0→1
+  - Fixed Keywords (Audit Failure for 4625/failed Kerberos), Task ID 4625 12546→12544
+  - Fixed field names: LinkedLogonId→TargetLinkedLogonId, 4776 LogonAccount→TargetUserName
+  - Fixed 4672 privilege order, timestamp precision 3→6 decimals, Execution ProcessID for auth events
+  - Files: `formats/definitions/windows_event_security.yaml`, `emitters/windows.py`
 - [x] **Vary command-line arguments** (Assessment #39, Improvement Loop 2 Iter 2+6)
   - Parameterized templates: 10+ SQL queries, 10+ PowerShell commands, 5+ WMIC queries
   - Multi-pass replacement resolves nested placeholders (e.g., {db_name} inside {sql_query})
@@ -1385,6 +1394,119 @@
   - Files: `emitters/windows.py` (gap generation in `_flush_unlocked`)
 
 **Phase 6 Milestone:** Expert panel re-review finds no P0 instant giveaways. P1 findings reduced by 50%+. Eval score ≥ 90.
+
+### 6.10 Improvement Loop 5 Findings (2026-03-23, healthcare-supply-chain)
+
+**Source:** 4-expert blind panel (threat hunter, Windows DFIR, Linux/network admin, detection engineer) on `healthcare-supply-chain` scenario after EVTX format accuracy pass + 20 new event types.
+**Eval scores:** 80/100 (was 83/100 in loop 4). Acceptance: FAIL (Causal Ordering 98.7% < 99%).
+
+#### Issues introduced by recent changes:
+- [ ] **4769 TargetUserName double-realm format** (DFIR P1)
+  - `EMR-DB-01$@LAKEVIEW-MED@LAKEVIEW-MED` instead of `EMR-DB-01$@LAKEVIEW-MED.LOCAL`
+  - Bug in `_render_kerberos_service()`: formats as `f"{krb.target_username}@{krb.target_domain.upper()}"` but `target_domain` is already the NetBIOS name, and `target_username` may already include `@DOMAIN`
+  - Fix: check if `@` already present; use DNS domain name not NetBIOS name for realm
+  - Files: `emitters/windows.py` (`_render_kerberos_service`)
+- [ ] **4648 SubjectLogonId is SYSTEM (0x3e7) for domain user** (DFIR P1)
+  - Explicit credentials event for james.whitfield uses hardcoded `0x3e7` instead of user's actual session LogonId
+  - Fix: look up active session for the user and use their logon_id
+  - Files: `activity.py` (`generate_explicit_credentials`), `engine.py` (4648 emission)
+
+#### New P0 findings:
+- [ ] **TLS version/cipher suite mismatch** (Network P0, Threat Hunter P0)
+  - TLSv12 paired with TLS 1.3-only ciphers (`TLS_AES_256_GCM_SHA384`) and TLSv13 paired with TLS 1.2-only ciphers (`TLS_ECDHE_RSA_WITH_*`). 141+ connections affected.
+  - Fix: TLS 1.3 ciphers are `TLS_AES_*` and `TLS_CHACHA20_*` only; TLS 1.2 uses `TLS_ECDHE_*_WITH_*`
+  - Files: `activity.py` (`generate_connection` SSL context)
+- [ ] **services.exe PID changes within single boot session** (DFIR P0)
+  - services.exe is a singleton; PID must be constant between reboots. Currently gets different PIDs across different process creation events.
+  - Fix: seed services.exe PID once per host in `_seed_system_process_trees` and always use that PID
+  - Files: `engine.py` (`_seed_system_process_trees`), `activity.py`
+- [ ] **No 4672 (Special Privileges) on Domain Controller** (DFIR P0, Detection Eng)
+  - DC-01 has zero 4672 events despite hundreds of admin/SYSTEM/machine account logons
+  - Root cause: system traffic service/anonymous logons emit via dispatch_raw without 4672 pairing
+  - Fix: emit 4672 for privileged principals in system traffic (overlaps with 6.9 finding)
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [ ] **Centralized syslog timestamps not chronologically sorted** (Network P0)
+  - syslog.log has timestamps jumping randomly within each hour; real syslog is monotonically ordered
+  - Root cause: per-host syslog entries are interleaved randomly instead of merged by timestamp
+  - Fix: sort centralized syslog by timestamp before writing, or merge per-host streams in order
+  - Files: `emitters/syslog.py` (centralized file flush ordering)
+- [ ] **100% HTTP 200 status codes** (Network P0)
+  - All HTTP responses are 200 OK; no 301/302 redirects (especially for HTTP→HTTPS), no 304/404
+  - Already tracked in 6.9 P2 but upgraded to P0 by network expert
+  - Files: `activity.py` (HTTP context status code selection)
+- [ ] **User-Agent OS mismatch with source hosts** (Network P0)
+  - Windows workstations send Linux and macOS User-Agent strings randomly
+  - Fix: select User-Agent matching the host's OS category
+  - Files: `activity.py` (HTTP context User-Agent selection)
+- [ ] **RDP lateral movement completely invisible** (Detection Eng P0, Threat Hunter P1)
+  - No LogonType 10 on EMR-DB-01, no port 3389 in Zeek, no eCAR USER_SESSION on target
+  - Root cause: storyline RDP connection may not generate corresponding logon event on target system
+  - Fix: ensure RDP storyline connections also emit 4624 type 10 + eCAR LOGIN on target
+  - Files: `engine.py` (`_execute_storyline_event`)
+
+#### New P1 findings:
+- [ ] **No DC Kerberos events for compromised user (james.whitfield)** (Threat Hunter P1, Detection Eng P0)
+  - DC has 4768/4769 for machine accounts but zero for the stolen domain user credentials
+  - Fix: storyline logon events should also emit Kerberos TGT/TGS on DC for domain user auth
+  - Files: `engine.py` (`_execute_storyline_event` logon handler)
+- [ ] **EMR-DB-01 LogonID discontinuity — process chain orphaned from logon** (Threat Hunter P1)
+  - Processes on EMR-DB-01 use LogonID `0x46695257` but no 4624 creates that ID; the RDP logon uses `0xab4320a7`
+  - Fix: ensure storyline processes use the LogonID from the storyline logon event
+  - Files: `engine.py` (`_execute_storyline_event` process handler)
+- [ ] **KeyLength always 0 for NTLM logons** (DFIR P1)
+  - Should be 128 when `AuthenticationPackageName` is NTLM and `LmPackageName` is `NTLM V2`
+  - Files: `emitters/windows.py` (`_render_logon`, `_render_machine_logon`)
+- [ ] **No LSASS access events (4656/4663) for credential dumping** (Detection Eng P0)
+  - Process creation for rundll32 DumpCreds exists but no Object Access audit events
+  - Note: 4656/4663 are not yet implemented event types; would need new emitters
+  - Files: new event types needed
+- [ ] **No eCAR FILE events on attack hosts** (Detection Eng P1)
+  - WS-RAD-01 and EMR-DB-01 have zero FILE object events for DLL drop, CSV staging, ZIP creation
+  - Fix: emit eCAR FILE/CREATE for storyline file operations
+  - Files: `engine.py` (`_execute_storyline_event`)
+- [ ] **DNS queries use corp.local instead of scenario domain (lakeview-med.local)** (Network P1)
+  - SRV queries target `dc-01.corp.local` not `dc-01.lakeview-med.local`; internal hostnames wrong
+  - Fix: use scenario's `environment.domain` for all internal DNS queries
+  - Files: `activity.py` (`_emit_dns_lookup`, AD SRV queries)
+- [ ] **SSL SNI values are fabricated reverse-DNS/cdn-provider.net names** (Network P1, Threat Hunter P2)
+  - Clients should send real hostnames (archive.ubuntu.com, etc.) not reverse-DNS patterns
+  - Overlaps with 6.6 EP2 finding but still present
+  - Files: `activity.py` (SSL context server_name generation)
+- [ ] **Process tree has no RadView parent for supply chain attack** (Threat Hunter P1, Detection Eng P3)
+  - Malicious PowerShell parented to explorer.exe instead of trojanized RadView application
+  - Root cause: scenario authoring issue — initial access process not emitted
+  - Fix: scenario or engine should emit the initial access application process
+  - Files: `engine.py` (storyline process parent chain)
+- [ ] **Credential dump chain implausible** (Threat Hunter P1, Detection Eng P1)
+  - schtasks→cmd→net.exe→net.exe→rundll32 DumpCreds chain makes no sense
+  - Root cause: `_last_storyline_pid` chains ALL storyline events linearly regardless of semantic grouping
+  - Fix: reset parent chain for new attack phases (recon vs cred dump vs exfil)
+  - Files: `engine.py` (`_execute_storyline_event` parent PID selection)
+- [ ] **MAIL-01/FILE-SRV-01 have web app cron instead of service-appropriate logs** (Network P1)
+  - All Linux servers show identical PHP cron + MySQL apparmor regardless of declared role
+  - Fix: generate syslog messages from services declared in scenario
+  - Overlaps with 6.9 finding about per-host syslog diversity
+  - Files: `engine.py` (syslog generation)
+
+#### New P2 findings:
+- [ ] **HTTP MIME type mismatches with URI** (Network P1)
+  - `/images/logo.png` returns `text/css`; `/robots.txt` returns `image/png`
+  - Fix: derive MIME type from URI extension or use consistent defaults
+  - Files: `activity.py` (HTTP context resp_mime_types)
+- [ ] **Exfiltration Zeek connections show 0 bytes transferred** (Detection Eng P2, Threat Hunter)
+  - Ground truth exfil UIDs show `conn_state:"S0"`, `orig_bytes:0` — data never transferred
+  - Fix: storyline exfil connections need realistic byte counts
+  - Files: `engine.py` (`_execute_storyline_event` connection handler)
+- [ ] **No 4698 (Scheduled Task Created) for schtasks.exe /Create** (Detection Eng P2)
+  - 4688 process creation exists but no corresponding 4698 event
+  - Note: 4698 emitter now exists but engine doesn't emit it for storyline schtasks
+  - Files: `engine.py` (`_execute_storyline_event` process handler)
+- [ ] **No port 135 (RPC/EPMAP) traffic in Zeek** (Network P2)
+  - Ubiquitous in Windows AD environments; complete absence notable
+  - Files: `engine.py` (`_generate_system_traffic`)
+- [ ] **Dual SSH syslog entries with mismatched PIDs/ports** (Threat Hunter P2)
+  - Two `Accepted password` lines at same timestamp, different PIDs and ports
+  - Files: `emitters/syslog.py` or `activity.py` (SSH session generation)
 
 ---
 

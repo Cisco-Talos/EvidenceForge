@@ -34,6 +34,7 @@ from evidenceforge.generation.emitters import (
     SyslogEmitter,
     BashHistoryEmitter,
     SnortEmitter,
+    SysmonEventEmitter,
     WebEmitter,
 )
 from evidenceforge.events.base import RawLogEntry
@@ -212,6 +213,7 @@ class GenerationEngine:
         # Map format names to emitter classes
         emitter_classes = {
             'windows_event_security': WindowsEventEmitter,
+            'windows_event_sysmon': SysmonEventEmitter,
             'zeek_conn': ZeekEmitter,
             'zeek_dns': ZeekDnsEmitter,
             'zeek_http': ZeekHttpEmitter,

@@ -428,6 +428,339 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "2024-01-15T10:30:45.123456Z" in content  # 6 decimal places
 
+    def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
+        """Test emitting 4771 (Kerberos pre-auth failed)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4771,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "Keywords": "0x8010000000000000",
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetSid": "S-1-5-21-123-456-789-1001",
+            "ServiceName": "krbtgt",
+            "TicketOptions": "0x40810010",
+            "Status": "0x18",
+            "PreAuthType": 0,
+            "IpAddress": "::ffff:10.0.0.50",
+            "IpPort": 55961,
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4771</EventID>" in content
+        assert "<Keywords>0x8010000000000000</Keywords>" in content
+        assert "<Task>14339</Task>" in content
+        assert '<Data Name="Status">0x18</Data>' in content
+
+    def test_emit_log_cleared(self, format_def, temp_output):
+        """Test emitting 1102 (security log cleared) with UserData structure."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 1102,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 4,
+            "Keywords": "0x4020000000000000",
+            "ExecutionProcessID": 820,
+            "ExecutionThreadID": 608,
+            "SubjectUserSid": "S-1-5-21-123-456-789-1001",
+            "SubjectUserName": "admin01",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>1102</EventID>" in content
+        assert "<Keywords>0x4020000000000000</Keywords>" in content
+        assert "<Level>4</Level>" in content
+        assert "Microsoft-Windows-Eventlog" in content
+        assert "LogFileCleared" in content
+        assert "UserData" in content
+        assert "EventData" not in content or content.count("EventData") == 0
+
+    def test_emit_service_installed(self, format_def, temp_output):
+        """Test emitting 4697 (service installed)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4697,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "SYSTEM",
+            "SubjectDomainName": "NT AUTHORITY",
+            "SubjectLogonId": "0x3e7",
+            "ServiceName": "EvilSvc",
+            "ServiceFileName": r"C:\Windows\Temp\evil.exe -d",
+            "ServiceType": "0x10",
+            "ServiceStartType": "2",
+            "ServiceAccount": "LocalSystem",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4697</EventID>" in content
+        assert "<Task>12289</Task>" in content
+        assert '<Data Name="ServiceName">EvilSvc</Data>' in content
+        assert '<Data Name="ServiceFileName">' in content
+
+    def test_emit_scheduled_task_created(self, format_def, temp_output):
+        """Test emitting 4698 (scheduled task created)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4698,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "admin01",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "TaskName": r"\MaliciousTask",
+            "TaskContent": "&lt;Task&gt;content&lt;/Task&gt;",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4698</EventID>" in content
+        assert "<Task>12804</Task>" in content
+        assert '<Data Name="TaskName">\\MaliciousTask</Data>' in content
+        assert '<Data Name="TaskContent">' in content
+
+    def test_emit_scheduled_task_deleted(self, format_def, temp_output):
+        """Test emitting 4699 (scheduled task deleted)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4699,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "admin01",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "TaskName": r"\MaliciousTask",
+            "TaskContent": "",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4699</EventID>" in content
+
+    def test_emit_group_member_added_global(self, format_def, temp_output):
+        """Test emitting 4728 (member added to global group)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4728,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "MemberName": "-",
+            "MemberSid": "S-1-5-21-123-456-789-1001",
+            "TargetUserName": "Domain Admins",
+            "TargetDomainName": "CORP",
+            "TargetSid": "S-1-5-21-123-456-789-512",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "PrivilegeList": "-",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4728</EventID>" in content
+        assert "<Task>13826</Task>" in content
+        assert '<Data Name="MemberSid">S-1-5-21-123-456-789-1001</Data>' in content
+        assert '<Data Name="TargetUserName">Domain Admins</Data>' in content
+
+    def test_emit_group_member_removed_local(self, format_def, temp_output):
+        """Test emitting 4733 (member removed from local group)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4733,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "MemberName": "-",
+            "MemberSid": "S-1-5-21-123-456-789-1001",
+            "TargetUserName": "Administrators",
+            "TargetDomainName": "Builtin",
+            "TargetSid": "S-1-5-32-544",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "PrivilegeList": "-",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4733</EventID>" in content
+
+    def test_emit_group_member_added_universal(self, format_def, temp_output):
+        """Test emitting 4756 (member added to universal group)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4756,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "MemberName": "-",
+            "MemberSid": "S-1-5-21-123-456-789-1001",
+            "TargetUserName": "Enterprise Admins",
+            "TargetDomainName": "CORP",
+            "TargetSid": "S-1-5-21-123-456-789-519",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "PrivilegeList": "-",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4756</EventID>" in content
+
+    def test_emit_account_created(self, format_def, temp_output):
+        """Test emitting 4720 (user account created) with full fields."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4720,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "backdoor01",
+            "TargetDomainName": "CORP",
+            "TargetSid": "S-1-5-21-123-456-789-9999",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "SamAccountName": "backdoor01",
+            "OldUacValue": "0x0",
+            "NewUacValue": "0x15",
+            "PasswordLastSet": "%%1794",
+            "PrimaryGroupId": "513",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4720</EventID>" in content
+        assert "<Task>13824</Task>" in content
+        assert '<Data Name="TargetUserName">backdoor01</Data>' in content
+        assert '<Data Name="SamAccountName">backdoor01</Data>' in content
+        assert '<Data Name="NewUacValue">0x15</Data>' in content
+
+    def test_emit_password_reset(self, format_def, temp_output):
+        """Test emitting 4724 (password reset)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4724,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetSid": "S-1-5-21-123-456-789-1001",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4724</EventID>" in content
+        assert "PrivilegeList" not in content  # 4724 has no PrivilegeList
+
+    def test_emit_account_deleted(self, format_def, temp_output):
+        """Test emitting 4726 (user account deleted)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4726,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "backdoor01",
+            "TargetDomainName": "CORP",
+            "TargetSid": "S-1-5-21-123-456-789-9999",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "PrivilegeList": "-",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4726</EventID>" in content
+        assert '<Data Name="PrivilegeList">-</Data>' in content
+
+    def test_emit_account_changed(self, format_def, temp_output):
+        """Test emitting 4738 (user account changed) with Dummy field."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4738,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetSid": "S-1-5-21-123-456-789-1001",
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "SamAccountName": "jsmith",
+            "OldUacValue": "0x10",
+            "NewUacValue": "0x10",
+            "PasswordLastSet": "-",
+            "PrimaryGroupId": "513",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4738</EventID>" in content
+        assert '<Data Name="Dummy">-</Data>' in content  # 4738 unique Dummy field
+
 
 class TestZeekEmitter:
     """Tests for Zeek conn.log emitter."""

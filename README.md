@@ -8,13 +8,14 @@ EvidenceForge creates multi-format security log datasets from YAML scenario defi
 
 Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what happened, when, and where — making the datasets immediately usable for threat hunting training.
 
-- **7 log formats** — Windows Event, Zeek, eCAR, syslog, bash history, Snort, web access
+- **20+ log formats** — Windows Security (30 event IDs), Sysmon, 13 Zeek log types, eCAR, syslog, bash history, Snort, web access
 - **Cross-log consistency** — Shared LogonIDs, PIDs, timestamps, and UIDs across all formats
-- **OS-aware generation** — Windows systems produce Windows Event logs; Linux systems produce syslog + bash history
+- **OS-aware generation** — Windows systems produce Windows Event + Sysmon logs; Linux systems produce syslog + bash history
 - **Network visibility modeling** — Define sensor placement (SPAN/TAP), direction, and monitored segments to control which connections appear in network logs
 - **Ground truth documentation** — Every attack scenario generates a GROUND_TRUTH.md with narrative, timeline, and IOCs
 - **Parallel generation** — Threaded emitters write all formats simultaneously with temporal consistency
 - **Scenario validation** — Cross-reference checking, uniqueness constraints, and network topology validation
+- **Data quality evaluation** — 5-dimension scoring framework (23 sub-scores) with acceptance criteria
 - **Multi-timezone support** — Pattern-based timezone overrides per system hostname
 
 ## Quick Start
@@ -30,27 +31,31 @@ uv run eforge generate tests/fixtures/scenarios/attack.yaml -o ./output
 uv run eforge generate tests/fixtures/scenarios/retail-store-ftp-attack.yaml -o ./output
 ```
 
-Output includes:
-- `windows_event_security.xml` — Windows Event logs (4624 logon, 4634 logoff, 4688 process creation)
-- `zeek_conn.json` — Zeek connection logs (NDJSON)
+Output is organized per-host and per-sensor:
+- `<host.domain>/windows_event_security.xml` — Windows Security events (30 event IDs: logon, process, Kerberos, account management, etc.)
+- `<host.domain>/windows_event_sysmon.xml` — Sysmon events (process creation with hashes, remote thread injection)
+- `<sensor>/conn.json`, `dns.json`, `ssl.json`, `http.json`, ... — Zeek network logs (13 log types, NDJSON)
 - `ecar.json` — eCAR EDR/XDR telemetry (NDJSON)
-- `syslog.log` — Linux syslog (RFC 5424 authentication logs)
-- `bash_history.log` — Bash command history
+- `syslog.log` — Linux syslog (BSD format authentication and system logs)
+- `<host.domain>/bash_history/<user>.bash_history` — Per-user bash command history
 - `snort_alert.log` — Snort/Suricata IDS alerts
-- `web_access.log` — W3C web access logs
+- `web_access.log` — Apache/Nginx combined access logs
 - `GROUND_TRUTH.md` — Attack narrative, timeline, and IOCs
 
 ## Supported Log Formats
 
 | Format | Category | Description |
 |--------|----------|-------------|
-| Windows Event Security | Host | Logon (4624), logoff (4634), process creation (4688) |
-| Zeek conn.log | Network | Connection metadata in NDJSON |
-| eCAR | Host | MITRE CAR-based EDR/XDR telemetry (process, file, flow, registry) |
-| Syslog | Host | Linux authentication logs (RFC 5424) |
-| Bash History | Host | Timestamped command history |
+| Windows Security Events | Host | 30 event IDs: authentication (4624/4625/4634/4648/4672), process (4688/4689), Kerberos (4768/4769/4770/4771/4776), persistence (4697/4698-4701), account mgmt (4720/4723/4724/4726/4738), group membership (4728/4729/4732/4733/4756/4757), firewall (5156), defense evasion (1102) |
+| Windows Sysmon | Host | Process creation with hashes (Event 1), remote thread injection (Event 8) |
+| Zeek (13 log types) | Network | conn, dns, http, ssl, files, x509, dhcp, ntp, weird, pe, ocsp, packet_filter, reporter |
+| eCAR | Host | MITRE CAR-based EDR/XDR telemetry (PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION) |
+| Syslog | Host | Linux authentication and system logs (BSD format) |
+| Bash History | Host | Per-user timestamped command history |
 | Snort Alert | Network | IDS alert format (fast alert) |
 | Web Access | Network | Apache/Nginx combined log format |
+
+See [Evidence Formats Reference](docs/EVIDENCE_FORMATS.md) for detailed field documentation, output paths, and known limitations.
 
 ## Key Features
 
@@ -166,7 +171,7 @@ uv run pytest tests/unit/test_network_visibility.py -v
 - Pydantic v2 for schema validation
 - Jinja2 for log format templates
 - Typer + Rich for CLI
-- pytest (505+ tests)
+- pytest (930+ tests)
 
 ### Architecture
 
@@ -182,6 +187,7 @@ src/evidenceforge/
 
 ## Documentation
 
+- [Evidence Formats Reference](docs/EVIDENCE_FORMATS.md) — All log types, output paths, field details, and known limitations
 - [Scenario Reference](docs/scenario-reference.md) — Complete YAML schema documentation
 - [PRD](docs/PRD.md) — Product requirements and specifications
 - [Research Report](docs/synthetic-log-generation-research.md) — Analysis of existing tools

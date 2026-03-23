@@ -10,7 +10,7 @@ fields:
     required: true
     description: "Windows Event ID"
     constraints:
-      allowed_values: [4624, 4625, 4634, 4648, 4672, 4688, 4689, 4768, 4769, 4770, 4776, 5156]
+      allowed_values: [1102, 4624, 4625, 4634, 4648, 4672, 4688, 4689, 4697, 4698, 4699, 4700, 4701, 4720, 4723, 4724, 4726, 4728, 4729, 4732, 4733, 4738, 4756, 4757, 4768, 4769, 4770, 4771, 4776, 5156]
 
   - name: TimeCreated
     type: timestamp
@@ -686,6 +686,283 @@ variants:
         type: integer
         required: false
 
+  # EventID 4771: Kerberos pre-authentication failed
+  - name: kerberos_preauth_failed
+    event_id: "4771"
+    description: "Kerberos pre-authentication failed"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: ServiceName
+        type: string
+        required: true
+      - name: TicketOptions
+        type: hex_string
+        required: true
+      - name: Status
+        type: hex_string
+        required: true
+      - name: PreAuthType
+        type: integer
+        required: false
+      - name: IpAddress
+        type: string
+        required: true
+      - name: IpPort
+        type: integer
+        required: false
+
+  # EventID 1102: Security log cleared
+  - name: log_cleared
+    event_id: "1102"
+    description: "Security audit log was cleared"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+
+  # EventID 4697: A service was installed in the system
+  - name: service_installed
+    event_id: "4697"
+    description: "Service installed in the system"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+      - name: ServiceName
+        type: string
+        required: true
+      - name: ServiceFileName
+        type: string
+        required: true
+      - name: ServiceType
+        type: string
+        required: false
+      - name: ServiceStartType
+        type: string
+        required: false
+      - name: ServiceAccount
+        type: string
+        required: false
+
+  # EventID 4698/4699/4700/4701: Scheduled task events
+  - name: scheduled_task
+    event_id: "4698"
+    description: "Scheduled task created/deleted/enabled/disabled"
+    fields:
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+      - name: TaskName
+        type: string
+        required: true
+      - name: TaskContent
+        type: string
+        required: false
+
+  # EventID 4728/4729/4732/4733/4756/4757: Group membership changes
+  - name: group_membership_change
+    event_id: "4728"
+    description: "Member added/removed from security group"
+    fields:
+      - name: MemberName
+        type: string
+        required: false
+      - name: MemberSid
+        type: sid
+        required: true
+      - name: TargetUserName
+        type: string
+        required: true
+        description: "Group name"
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+      - name: PrivilegeList
+        type: string
+        required: false
+
+  # EventID 4720: User account created
+  - name: account_created
+    event_id: "4720"
+    description: "A user account was created"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+
+  # EventID 4723: Password change attempt
+  - name: password_change
+    event_id: "4723"
+    description: "An attempt was made to change an account password"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+
+  # EventID 4724: Password reset attempt
+  - name: password_reset
+    event_id: "4724"
+    description: "An attempt was made to reset an account password"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+
+  # EventID 4726: User account deleted
+  - name: account_deleted
+    event_id: "4726"
+    description: "A user account was deleted"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+
+  # EventID 4738: User account changed
+  - name: account_changed
+    event_id: "4738"
+    description: "A user account was changed"
+    fields:
+      - name: TargetUserName
+        type: string
+        required: true
+      - name: TargetDomainName
+        type: string
+        required: true
+      - name: TargetSid
+        type: sid
+        required: true
+      - name: SubjectUserSid
+        type: sid
+        required: true
+      - name: SubjectUserName
+        type: string
+        required: true
+      - name: SubjectDomainName
+        type: string
+        required: true
+      - name: SubjectLogonId
+        type: hex_string
+        required: true
+
 # Output template in Windows Event Log XML format
 output:
   format: xml
@@ -700,11 +977,15 @@ output:
   template: |
     <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
       <System>
+        {% if EventID == 1102 %}
+        <Provider Name="Microsoft-Windows-Eventlog" Guid="{fc65ddd8-d6ef-4962-83d5-6e5cfe9ce148}"/>
+        {% else %}
         <Provider Name="Microsoft-Windows-Security-Auditing" Guid="{54849625-5478-4994-a5ba-3e3b0328c30d}"/>
+        {% endif %}
         <EventID>{{ EventID }}</EventID>
         <Version>{{ 2 if EventID in [4688, 4624] else 1 if EventID == 5156 else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ {4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4768: 14339, 4769: 14337, 4770: 14339, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
+        <Task>{{ {1102: 104, 4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4697: 12289, 4698: 12804, 4699: 12804, 4700: 12804, 4701: 12804, 4720: 13824, 4723: 13824, 4724: 13824, 4726: 13824, 4728: 13826, 4729: 13826, 4732: 13826, 4733: 13826, 4738: 13824, 4756: 13826, 4757: 13826, 4768: 14339, 4769: 14337, 4770: 14339, 4771: 14339, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
         <Opcode>0</Opcode>
         <Keywords>{{ Keywords | default('0x8020000000000000') }}</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
@@ -715,6 +996,14 @@ output:
         <Computer>{{ Computer }}</Computer>
         <Security/>
       </System>
+      {% if EventID == 1102 %}
+      <UserData><LogFileCleared xmlns="http://manifests.microsoft.com/win/2004/08/windows/eventlog"><SubjectUserSid>{{ SubjectUserSid }}</SubjectUserSid>
+      <SubjectUserName>{{ SubjectUserName }}</SubjectUserName>
+      <SubjectDomainName>{{ SubjectDomainName }}</SubjectDomainName>
+      <SubjectLogonId>{{ SubjectLogonId }}</SubjectLogonId>
+      </LogFileCleared>
+      </UserData>
+      {% else %}
       <EventData>
         {% if EventID == 4624 %}
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
@@ -858,6 +1147,87 @@ output:
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
         <Data Name="Workstation">{{ Workstation }}</Data>
         <Data Name="Status">{{ Status }}</Data>
+        {% elif EventID == 4771 %}
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetSid">{{ TargetSid }}</Data>
+        <Data Name="ServiceName">{{ ServiceName }}</Data>
+        <Data Name="TicketOptions">{{ TicketOptions }}</Data>
+        <Data Name="Status">{{ Status }}</Data>
+        <Data Name="PreAuthType">{{ PreAuthType | default(0) }}</Data>
+        <Data Name="IpAddress">{{ IpAddress }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="CertIssuerName">{{ CertIssuerName | default('') }}</Data>
+        <Data Name="CertSerialNumber">{{ CertSerialNumber | default('') }}</Data>
+        <Data Name="CertThumbprint">{{ CertThumbprint | default('') }}</Data>
+        {% elif EventID == 4697 %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="ServiceName">{{ ServiceName }}</Data>
+        <Data Name="ServiceFileName">{{ ServiceFileName }}</Data>
+        <Data Name="ServiceType">{{ ServiceType | default('0x10') }}</Data>
+        <Data Name="ServiceStartType">{{ ServiceStartType | default('2') }}</Data>
+        <Data Name="ServiceAccount">{{ ServiceAccount | default('LocalSystem') }}</Data>
+        {% elif EventID in [4698, 4699, 4700, 4701] %}
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="TaskName">{{ TaskName }}</Data>
+        <Data Name="TaskContent">{{ TaskContent | default('') }}</Data>
+        {% elif EventID in [4728, 4729, 4732, 4733, 4756, 4757] %}
+        <Data Name="MemberName">{{ MemberName | default('-') }}</Data>
+        <Data Name="MemberSid">{{ MemberSid }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetSid">{{ TargetSid }}</Data>
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="PrivilegeList">{{ PrivilegeList | default('-') }}</Data>
+        {% elif EventID in [4720, 4738] %}
+        {% if EventID == 4738 %}
+        <Data Name="Dummy">-</Data>
+        {% endif %}
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetSid">{{ TargetSid }}</Data>
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        <Data Name="PrivilegeList">{{ PrivilegeList | default('-') }}</Data>
+        <Data Name="SamAccountName">{{ SamAccountName | default('-') }}</Data>
+        <Data Name="DisplayName">{{ DisplayName | default('-') }}</Data>
+        <Data Name="UserPrincipalName">{{ UserPrincipalName | default('-') }}</Data>
+        <Data Name="HomeDirectory">{{ HomeDirectory | default('-') }}</Data>
+        <Data Name="HomePath">{{ HomePath | default('-') }}</Data>
+        <Data Name="ScriptPath">{{ ScriptPath | default('-') }}</Data>
+        <Data Name="ProfilePath">{{ ProfilePath | default('-') }}</Data>
+        <Data Name="UserWorkstations">{{ UserWorkstations | default('-') }}</Data>
+        <Data Name="PasswordLastSet">{{ PasswordLastSet | default('-') }}</Data>
+        <Data Name="AccountExpires">{{ AccountExpires | default('-') }}</Data>
+        <Data Name="PrimaryGroupId">{{ PrimaryGroupId | default('513') }}</Data>
+        <Data Name="AllowedToDelegateTo">{{ AllowedToDelegateTo | default('-') }}</Data>
+        <Data Name="OldUacValue">{{ OldUacValue | default('0x0') }}</Data>
+        <Data Name="NewUacValue">{{ NewUacValue | default('0x15') }}</Data>
+        <Data Name="UserAccountControl">{{ UserAccountControl | default('-') }}</Data>
+        <Data Name="UserParameters">{{ UserParameters | default('-') }}</Data>
+        <Data Name="SidHistory">{{ SidHistory | default('-') }}</Data>
+        <Data Name="LogonHours">{{ LogonHours | default('-') }}</Data>
+        {% elif EventID in [4723, 4724, 4726] %}
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetSid">{{ TargetSid }}</Data>
+        <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
+        <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
+        <Data Name="SubjectDomainName">{{ SubjectDomainName }}</Data>
+        <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
+        {% if EventID in [4723, 4726] %}
+        <Data Name="PrivilegeList">{{ PrivilegeList | default('-') }}</Data>
+        {% endif %}
         {% elif EventID == 5156 %}
         <Data Name="ProcessID">{{ ProcessID }}</Data>
         <Data Name="Application">{{ Application }}</Data>
@@ -874,6 +1244,7 @@ output:
         <Data Name="RemoteMachineID">{{ RemoteMachineID | default('S-1-0-0') }}</Data>
         {% endif %}
       </EventData>
+      {% endif %}
     </Event>
 
 # Cross-field validators using JSON Logic

@@ -155,6 +155,53 @@ class KerberosContext:
 
 
 @dataclass(slots=True)
+class ServiceContext:
+    """Windows service installation details (4697)."""
+
+    service_name: str
+    service_file_name: str  # Full command line / binary path
+    service_type: str = "0x10"  # 0x10=Own Process, 0x20=Share Process
+    service_start_type: str = "2"  # 2=Auto, 3=Manual, 4=Disabled
+    service_account: str = "LocalSystem"
+
+
+@dataclass(slots=True)
+class ScheduledTaskContext:
+    """Windows scheduled task details (4698/4699/4700/4701)."""
+
+    task_name: str  # e.g., "\MyTask"
+    task_content: str = ""  # XML task definition (HTML-escaped in output)
+
+
+@dataclass(slots=True)
+class GroupMembershipContext:
+    """Windows group membership change details (4728/4729/4732/4733/4756/4757)."""
+
+    member_name: str = "-"  # DN format or "-"
+    member_sid: str = ""
+    group_name: str = ""  # TargetUserName (the group)
+    group_domain: str = ""  # TargetDomainName
+    group_sid: str = ""  # TargetSid
+
+
+@dataclass(slots=True)
+class AccountManagementContext:
+    """Windows account management details (4720/4723/4724/4726/4738)."""
+
+    target_username: str = ""
+    target_domain: str = ""
+    target_sid: str = ""
+    sam_account_name: str = ""
+    display_name: str = "-"
+    user_principal_name: str = "-"
+    old_uac_value: str = "0x0"
+    new_uac_value: str = "0x15"
+    user_account_control: str = "-"
+    password_last_set: str = "-"
+    primary_group_id: str = "513"
+
+
+@dataclass(slots=True)
 class ShellContext:
     """Shell command execution details (bash_history)."""
 

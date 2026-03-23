@@ -1,0 +1,207 @@
+name: windows_event_sysmon
+version: "1.0"
+description: "Windows Sysmon Event Log format (XML output)"
+category: host
+
+# Base fields common to all Sysmon Event Log entries
+fields:
+  - name: EventID
+    type: integer
+    required: true
+    description: "Sysmon Event ID"
+    constraints:
+      allowed_values: [1, 8]
+
+  - name: TimeCreated
+    type: timestamp
+    required: true
+    description: "Event creation timestamp"
+
+  - name: Computer
+    type: string
+    required: true
+    description: "Computer name where event was generated"
+
+  - name: Channel
+    type: string
+    required: true
+    description: "Event log channel"
+    default: "Microsoft-Windows-Sysmon/Operational"
+
+  - name: Level
+    type: integer
+    required: true
+    description: "Event level (4=Information)"
+    default: 4
+
+  - name: EventRecordID
+    type: integer
+    required: true
+    description: "Sequential event record ID"
+
+  - name: ExecutionProcessID
+    type: integer
+    required: true
+    description: "Process ID of Sysmon service"
+
+  - name: ExecutionThreadID
+    type: integer
+    required: true
+    description: "Thread ID of Sysmon service"
+
+# Sysmon event variants
+variants:
+  # Sysmon EventID 1: Process Create
+  - name: sysmon_process_create
+    event_id: "1"
+    description: "Sysmon process creation with hashes and metadata"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: CommandLine
+        type: string
+        required: true
+      - name: User
+        type: string
+        required: true
+      - name: LogonGuid
+        type: string
+        required: false
+      - name: LogonId
+        type: string
+        required: false
+      - name: IntegrityLevel
+        type: string
+        required: false
+      - name: Hashes
+        type: string
+        required: false
+      - name: ParentProcessGuid
+        type: string
+        required: false
+      - name: ParentProcessId
+        type: integer
+        required: false
+      - name: ParentImage
+        type: string
+        required: false
+      - name: ParentCommandLine
+        type: string
+        required: false
+
+  # Sysmon EventID 8: CreateRemoteThread
+  - name: sysmon_create_remote_thread
+    event_id: "8"
+    description: "Remote thread creation (process injection indicator)"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: SourceProcessGuid
+        type: string
+        required: true
+      - name: SourceProcessId
+        type: integer
+        required: true
+      - name: SourceImage
+        type: string
+        required: true
+      - name: TargetProcessGuid
+        type: string
+        required: true
+      - name: TargetProcessId
+        type: integer
+        required: true
+      - name: TargetImage
+        type: string
+        required: true
+      - name: NewThreadId
+        type: integer
+        required: true
+      - name: StartAddress
+        type: string
+        required: true
+
+# Output template in Sysmon Event Log XML format
+output:
+  format: xml
+  file_extension: ".xml"
+  encoding: "utf-8"
+  header_template: |
+    <?xml version="1.0" encoding="utf-8"?>
+    <Events>
+  footer_template: "</Events>"
+  template: |
+    <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+      <System>
+        <Provider Name="Microsoft-Windows-Sysmon" Guid="{5770385f-c22a-43e0-bf4c-06f5698ffbd9}"/>
+        <EventID>{{ EventID }}</EventID>
+        <Version>{{ 5 if EventID == 1 else 2 }}</Version>
+        <Level>4</Level>
+        <Task>{{ EventID }}</Task>
+        <Opcode>0</Opcode>
+        <Keywords>0x8000000000000000</Keywords>
+        <TimeCreated SystemTime="{{ TimeCreated }}"/>
+        <EventRecordID>{{ EventRecordID }}</EventRecordID>
+        <Correlation/>
+        <Execution ProcessID="{{ ExecutionProcessID }}" ThreadID="{{ ExecutionThreadID }}"/>
+        <Channel>Microsoft-Windows-Sysmon/Operational</Channel>
+        <Computer>{{ Computer }}</Computer>
+        <Security UserID="S-1-5-18"/>
+      </System>
+      <EventData>
+        {% if EventID == 1 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="FileVersion">{{ FileVersion | default('-') }}</Data>
+        <Data Name="Description">{{ Description | default('-') }}</Data>
+        <Data Name="Product">{{ Product | default('-') }}</Data>
+        <Data Name="Company">{{ Company | default('-') }}</Data>
+        <Data Name="OriginalFileName">{{ OriginalFileName | default('-') }}</Data>
+        <Data Name="CommandLine">{{ CommandLine }}</Data>
+        <Data Name="CurrentDirectory">{{ CurrentDirectory | default('C:\\Windows\\system32\\') }}</Data>
+        <Data Name="User">{{ User }}</Data>
+        <Data Name="LogonGuid">{{ LogonGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="LogonId">{{ LogonId | default('0x3e7') }}</Data>
+        <Data Name="TerminalSessionId">{{ TerminalSessionId | default(0) }}</Data>
+        <Data Name="IntegrityLevel">{{ IntegrityLevel | default('Medium') }}</Data>
+        <Data Name="Hashes">{{ Hashes | default('') }}</Data>
+        <Data Name="ParentProcessGuid">{{ ParentProcessGuid | default('{00000000-0000-0000-0000-000000000000}') }}</Data>
+        <Data Name="ParentProcessId">{{ ParentProcessId | default(0) }}</Data>
+        <Data Name="ParentImage">{{ ParentImage | default('-') }}</Data>
+        <Data Name="ParentCommandLine">{{ ParentCommandLine | default('-') }}</Data>
+        {% elif EventID == 8 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="SourceProcessGuid">{{ SourceProcessGuid }}</Data>
+        <Data Name="SourceProcessId">{{ SourceProcessId }}</Data>
+        <Data Name="SourceImage">{{ SourceImage }}</Data>
+        <Data Name="TargetProcessGuid">{{ TargetProcessGuid }}</Data>
+        <Data Name="TargetProcessId">{{ TargetProcessId }}</Data>
+        <Data Name="TargetImage">{{ TargetImage }}</Data>
+        <Data Name="NewThreadId">{{ NewThreadId }}</Data>
+        <Data Name="StartAddress">{{ StartAddress }}</Data>
+        <Data Name="StartModule">{{ StartModule | default('') }}</Data>
+        <Data Name="StartFunction">{{ StartFunction | default('') }}</Data>
+        {% endif %}
+      </EventData>
+    </Event>

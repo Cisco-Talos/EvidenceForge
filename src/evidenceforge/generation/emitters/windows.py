@@ -37,7 +37,16 @@ class WindowsEventEmitter(LogEmitter):
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
         "machine_logon", "kerberos_tgt", "kerberos_tgt_renewal", "kerberos_service",
+        "kerberos_preauth_failed",
         "ntlm_validation", "explicit_credentials", "wfp_connection",
+        "log_cleared", "service_installed",
+        "scheduled_task_created", "scheduled_task_deleted",
+        "scheduled_task_enabled", "scheduled_task_disabled",
+        "group_member_added_global", "group_member_removed_global",
+        "group_member_added_local", "group_member_removed_local",
+        "group_member_added_universal", "group_member_removed_universal",
+        "account_created", "account_deleted", "account_changed",
+        "password_change", "password_reset",
     }
 
     @staticmethod
@@ -73,6 +82,24 @@ class WindowsEventEmitter(LogEmitter):
             "ntlm_validation": self._render_ntlm_validation,
             "explicit_credentials": self._render_explicit_credentials,
             "wfp_connection": self._render_wfp_connection,
+            "kerberos_preauth_failed": self._render_kerberos_preauth_failed,
+            "log_cleared": self._render_log_cleared,
+            "service_installed": self._render_service_installed,
+            "scheduled_task_created": self._render_scheduled_task,
+            "scheduled_task_deleted": self._render_scheduled_task,
+            "scheduled_task_enabled": self._render_scheduled_task,
+            "scheduled_task_disabled": self._render_scheduled_task,
+            "group_member_added_global": self._render_group_membership_change,
+            "group_member_removed_global": self._render_group_membership_change,
+            "group_member_added_local": self._render_group_membership_change,
+            "group_member_removed_local": self._render_group_membership_change,
+            "group_member_added_universal": self._render_group_membership_change,
+            "group_member_removed_universal": self._render_group_membership_change,
+            "account_created": self._render_account_created,
+            "account_deleted": self._render_account_deleted,
+            "account_changed": self._render_account_changed,
+            "password_change": self._render_password_change,
+            "password_reset": self._render_password_reset,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -541,6 +568,240 @@ class WindowsEventEmitter(LogEmitter):
         if path and len(path) > 2 and path[1] == ':':
             return f'\\device\\harddiskvolume1\\{path[3:]}'.lower()
         return path.lower()
+
+    # --- Phase 1: Kerberos Pre-Auth Failed (4771) ---
+
+    def _render_kerberos_preauth_failed(self, event: SecurityEvent) -> None:
+        """Render Windows 4771 (Kerberos pre-authentication failed)."""
+        rng = random.Random()
+        krb = event.kerberos
+        host = event.host
+
+        event_data = {
+            'EventID': 4771,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'Keywords': '0x8010000000000000',  # Always Audit Failure
+            'ExecutionProcessID': krb.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 500),
+            'TargetUserName': krb.target_username,
+            'TargetSid': krb.target_sid,
+            'ServiceName': krb.service_name,
+            'TicketOptions': krb.ticket_options,
+            'Status': krb.ticket_status,
+            'PreAuthType': krb.pre_auth_type,
+            'IpAddress': krb.source_ip,
+            'IpPort': krb.source_port,
+        }
+        self.emit_event(event_data)
+
+    # --- Phase 2: Security Log Cleared (1102) ---
+
+    def _render_log_cleared(self, event: SecurityEvent) -> None:
+        """Render Windows 1102 (security log cleared)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 1102,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 4,
+            'Keywords': '0x4020000000000000',
+            'ExecutionProcessID': rng.randint(600, 1400),
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+        }
+        self.emit_event(event_data)
+
+    # --- Phase 3: Service Installed (4697) ---
+
+    def _render_service_installed(self, event: SecurityEvent) -> None:
+        """Render Windows 4697 (service installed in the system)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        svc = event.service
+
+        event_data = {
+            'EventID': 4697,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': auth.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'ServiceName': svc.service_name,
+            'ServiceFileName': svc.service_file_name,
+            'ServiceType': svc.service_type,
+            'ServiceStartType': svc.service_start_type,
+            'ServiceAccount': svc.service_account,
+        }
+        self.emit_event(event_data)
+
+    # --- Phase 4: Scheduled Tasks (4698/4699/4700/4701) ---
+
+    _SCHEDULED_TASK_EVENT_IDS = {
+        "scheduled_task_created": 4698,
+        "scheduled_task_deleted": 4699,
+        "scheduled_task_enabled": 4700,
+        "scheduled_task_disabled": 4701,
+    }
+
+    def _render_scheduled_task(self, event: SecurityEvent) -> None:
+        """Render Windows 4698/4699/4700/4701 (scheduled task operations)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        task = event.scheduled_task
+
+        event_data = {
+            'EventID': self._SCHEDULED_TASK_EVENT_IDS[event.event_type],
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': auth.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'TaskName': task.task_name,
+            'TaskContent': task.task_content,
+        }
+        self.emit_event(event_data)
+
+    # --- Phase 5: Group Membership Changes (4728/4729/4732/4733/4756/4757) ---
+
+    _GROUP_MEMBERSHIP_EVENT_IDS = {
+        "group_member_added_global": 4728,
+        "group_member_removed_global": 4729,
+        "group_member_added_local": 4732,
+        "group_member_removed_local": 4733,
+        "group_member_added_universal": 4756,
+        "group_member_removed_universal": 4757,
+    }
+
+    def _render_group_membership_change(self, event: SecurityEvent) -> None:
+        """Render Windows 4728/4729/4732/4733/4756/4757 (group membership change)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        grp = event.group_membership
+
+        event_data = {
+            'EventID': self._GROUP_MEMBERSHIP_EVENT_IDS[event.event_type],
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': auth.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'MemberName': grp.member_name,
+            'MemberSid': grp.member_sid,
+            'TargetUserName': grp.group_name,
+            'TargetDomainName': grp.group_domain,
+            'TargetSid': grp.group_sid,
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'PrivilegeList': '-',
+        }
+        self.emit_event(event_data)
+
+    # --- Phase 6: Account Management (4720/4723/4724/4726/4738) ---
+
+    def _render_account_created(self, event: SecurityEvent) -> None:
+        """Render Windows 4720 (user account created)."""
+        self._render_account_full(event, 4720)
+
+    def _render_account_changed(self, event: SecurityEvent) -> None:
+        """Render Windows 4738 (user account changed)."""
+        self._render_account_full(event, 4738)
+
+    def _render_account_full(self, event: SecurityEvent, event_id: int) -> None:
+        """Render 4720/4738 with full account property fields."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        acct = event.account_management
+
+        event_data = {
+            'EventID': event_id,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': auth.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'TargetUserName': acct.target_username,
+            'TargetDomainName': acct.target_domain or host.netbios_domain,
+            'TargetSid': acct.target_sid,
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'SamAccountName': acct.sam_account_name or acct.target_username,
+            'OldUacValue': acct.old_uac_value,
+            'NewUacValue': acct.new_uac_value,
+            'UserAccountControl': acct.user_account_control,
+            'PasswordLastSet': acct.password_last_set,
+            'PrimaryGroupId': acct.primary_group_id,
+        }
+        self.emit_event(event_data)
+
+    def _render_account_deleted(self, event: SecurityEvent) -> None:
+        """Render Windows 4726 (user account deleted)."""
+        self._render_account_simple(event, 4726, include_privs=True)
+
+    def _render_password_reset(self, event: SecurityEvent) -> None:
+        """Render Windows 4724 (password reset attempt)."""
+        self._render_account_simple(event, 4724, include_privs=False)
+
+    def _render_password_change(self, event: SecurityEvent) -> None:
+        """Render Windows 4723 (password change attempt)."""
+        self._render_account_simple(event, 4723, include_privs=True)
+
+    def _render_account_simple(self, event: SecurityEvent, event_id: int,
+                               include_privs: bool) -> None:
+        """Render 4723/4724/4726 with minimal account fields."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+        acct = event.account_management
+
+        event_data = {
+            'EventID': event_id,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': auth.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'TargetUserName': acct.target_username,
+            'TargetDomainName': acct.target_domain or host.netbios_domain,
+            'TargetSid': acct.target_sid,
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+        }
+        if include_privs:
+            event_data['PrivilegeList'] = '-'
+        self.emit_event(event_data)
 
     def __init__(
         self,

@@ -11,11 +11,13 @@ from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.contexts import (
+    AccountManagementContext,
     AuthContext,
     DhcpContext,
     DnsContext,
     FileContext,
     FileTransferContext,
+    GroupMembershipContext,
     HostContext,
     HttpContext,
     IdsContext,
@@ -24,6 +26,8 @@ from evidenceforge.events.contexts import (
     NtpContext,
     ProcessContext,
     RegistryContext,
+    ScheduledTaskContext,
+    ServiceContext,
     ShellContext,
     SslContext,
     X509Context,
@@ -51,6 +55,10 @@ class SecurityEvent:
     ids: IdsContext | None = None
     kerberos: KerberosContext | None = None
     shell: ShellContext | None = None
+    service: ServiceContext | None = None
+    scheduled_task: ScheduledTaskContext | None = None
+    group_membership: GroupMembershipContext | None = None
+    account_management: AccountManagementContext | None = None
 
     # Zeek protocol-layer contexts (Phase: Zeek expansion)
     ssl: SslContext | None = None
