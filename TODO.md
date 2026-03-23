@@ -807,10 +807,10 @@
 - [x] **Fix eCAR DNS FLOW protocol to UDP** (Assessment #33, Improvement Loop Iter 2)
   - eCAR now uses `"udp"` for DNS (port 53) and NTP (port 123) connections
   - Files: `activity.py` (`_emit_ecar_flow_event`)
-- [ ] **Add process attribution to eCAR FLOWs** (Assessment #34)
+- [x] **Add process attribution to eCAR FLOWs** (Assessment #34, fixed: pid threaded through generate_connection → _emit_ecar_flow_event)
   - `pid: -1` on all FLOW events; real EDR tracks socket-to-process mapping
   - Files: `activity.py` (`_emit_ecar_flow_event`)
-- [ ] **Reduce eCAR LOGIN frequency** (Assessment #35)
+- [x] **Reduce eCAR LOGIN frequency** (Assessment #35, fixed: session reuse + last_activity_time cooldown on ActiveSession)
   - LOGIN events paired with every activity burst; users generate new LOGIN every 1-2 seconds
   - Files: `activity.py` (`execute_baseline_activity`)
 - [ ] **Vary filenames in eCAR file operations** (Assessment #36)
@@ -938,11 +938,11 @@
   - Repeated SYN is still "S" in real Zeek; "SS" never appears
   - Fix: remove "SS" from `_TCP_CONN_ENTRIES` history patterns
   - Files: `activity.py` (`_TCP_CONN_ENTRIES`)
-- [ ] **Service distribution unrealistic** (too much Kerberos/LDAP, too little HTTPS)
+- [x] **Service distribution unrealistic** (fixed: 8-20 HTTPS/hr per Windows, 3-10 per Linux in _generate_system_traffic)
   - Real enterprises have HTTPS as dominant protocol
   - Fix: increase baseline HTTPS connections, reduce Kerberos frequency
   - Files: `engine.py` (`_generate_system_traffic`)
-- [ ] **No 4770 TGT Renewal events**
+- [x] **No 4770 TGT Renewal events** (fixed: generate_kerberos_tgt_renewal + per-user TGT time tracking)
   - TGTs expire every ~10 hours; 3-day window should have renewals
   - Fix: emit 4770 events periodically on DCs
   - Files: `activity.py` (new `generate_kerberos_renewal`), `engine.py`
@@ -971,7 +971,7 @@
   - Every connection preceded by DNS with 10-50ms gap; needs caching, concurrency
   - Fix: skip DNS for cached domains, add temporal jitter
   - Files: `activity.py` (`_emit_dns_lookup`)
-- [ ] **Ground truth mislabels file servers as "C2 Servers"**
+- [x] **Ground truth mislabels file servers as "C2 Servers"** (fixed: ipaddress.is_private check → "Internal Server" vs "C2 Server")
   - Internal SMB servers listed under "C2 Server" IOC category
   - Fix: use correct labels in ground truth generation
   - Files: `ground_truth.py`
@@ -1127,7 +1127,7 @@
   - Files: `formats/definitions/*.yaml`, `evaluation/dimensions/record_fidelity.py`
 
 **P1 — Expert-Level Tells:**
-- [ ] **Explorer.exe PID static across multiple login sessions**
+- [x] **Explorer.exe PID static across multiple login sessions** (fixed: per-session explorer.exe on ActiveSession)
   - Same ppid (e.g., 3564) used for all processes across 8-hour window with multiple logon/logoff cycles
   - Real Windows creates new explorer.exe instance per interactive logon session
   - Fix: create new explorer.exe PID on each interactive logon (type 2, 10, 11)
@@ -1136,7 +1136,7 @@
   - 98% of 4624 events show IpPort=0; should have real ephemeral port (49152-65535) for Type 3
   - Fix: pass actual source port from network connection to logon event
   - Files: `emitters/windows.py` (`_render_logon`), `activity.py`
-- [ ] **IPv6-mapped IPv4 (::ffff:) only in Kerberos 4769, not in 4624 Type 3**
+- [x] **IPv6-mapped IPv4 (::ffff:) only in Kerberos 4769, not in 4624 Type 3** (fixed: _ipv6_mapped() helper on all IpAddress fields)
   - Inconsistent IP format between event types; should be uniform within environment
   - Fix: use consistent IP format (either always plain IPv4 or always ::ffff:)
   - Files: `emitters/windows.py` (`_render_logon`, `_render_kerberos_service`)
@@ -1156,7 +1156,7 @@
     interactive session simulation proportional to session duration
   - Fix: generate commands proportional to SSH session length
   - Files: `activity.py` (`generate_bash_command`), `engine.py`
-- [ ] **eCAR LOGIN events too frequent (rapid-fire from same user)**
+- [x] **eCAR LOGIN events too frequent (rapid-fire from same user)** (fixed: session reuse on same system + last_activity_time tracking)
   - Multiple LOGIN events within seconds from different source IPs for same user
   - Root cause: every baseline activity burst creates a new session if none active
   - Fix: add per-user login cooldown or deduplicate consecutive LOGINs
@@ -1243,18 +1243,18 @@
   - Files: `engine.py` (`_execute_storyline_event` process handler)
 
 **P1 — Significant (Threat Hunter):**
-- [ ] **No LogonType 10 (RDP) events for lateral movement**
+- [x] **No LogonType 10 (RDP) events for lateral movement** (fixed: auto-detect RDP from T1021.001/activity keywords)
   - Storyline RDP logon generates wrong logon type (type 3 or 5 instead of 10)
   - Fix: use logon_type from scenario `details.logon_type` field
   - Files: `engine.py` (`_execute_storyline_event` logon handler)
-- [ ] **Ground Truth UIDs don't match actual Zeek UIDs**
+- [x] **Ground Truth UIDs don't match actual Zeek UIDs** (fixed: filtered connections show "(filtered by sensor placement)")
   - Some UIDs in GROUND_TRUTH.md reference connections that don't exist in Zeek
   - Root cause: ground truth records UIDs before network visibility filtering
   - Files: `ground_truth.py`
 - [x] **Bare IP as SSL server_name for C2** (acknowledged: scenario authoring issue, not generator bug)
   - Real APT uses domain fronting or DGA domains, not bare IPs in SNI
   - Fix: scenario authoring should use realistic domains for C2
-- [ ] **No FILE CREATE events for staged data files**
+- [x] **No FILE CREATE events for staged data files** (fixed: _extract_output_file parses command lines for file indicators)
   - sqlcmd exports CSV but no eCAR FILE/CREATE event emitted
   - Fix: emit FILE/CREATE when storyline involves file creation
   - Files: `engine.py` (`_execute_storyline_event`)
@@ -1266,7 +1266,7 @@
   - Files: `activity.py` (`generate_connection`)
 
 **P1 — Significant (Windows DFIR):**
-- [ ] **schtasks.exe as ParentProcessName for cmd.exe**
+- [x] **schtasks.exe as ParentProcessName for cmd.exe** (fixed: _lookup_parent_image queries StateManager dynamically)
   - Scheduled task execution should show parent as svchost.exe -k Schedule
   - Fix: task execution should use svchost.exe as parent, not schtasks.exe
   - Files: `engine.py` (storyline process parent selection)
@@ -1280,7 +1280,7 @@
   - CentOS uses yum/dnf, not apt; apt-check is Ubuntu/Debian-specific
   - Fix: distro-aware scheduled task names (dnf-automatic for RHEL/CentOS)
   - Files: `engine.py` (`_generate_system_traffic`)
-- [ ] **Per-host syslog extremely sparse (24-25 lines per host)**
+- [x] **Per-host syslog extremely sparse (24-25 lines per host)** (fixed: 50-120 regular, 100-300 DMZ events/hr)
   - Real servers generate hundreds+ entries per hour
   - Known volume issue; overlaps with D3 Volume Adequacy
 
