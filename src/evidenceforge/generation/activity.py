@@ -1303,6 +1303,12 @@ class ActivityGenerator:
                     duration = duration * rng.uniform(0.1, 0.5)
                 if resp_bytes:
                     resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+            elif conn_state == 'OTH':
+                # OTH/Cc = midstream capture fragment — minimal data visible
+                orig_bytes = rng.randint(0, 200)
+                resp_bytes = rng.randint(0, 200)
+                if duration is not None:
+                    duration = rng.uniform(0.001, 0.5)
 
         # Calculate packet counts — enforce consistency with history
         if proto == 'udp' and history:
