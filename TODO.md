@@ -1251,7 +1251,7 @@
   - Some UIDs in GROUND_TRUTH.md reference connections that don't exist in Zeek
   - Root cause: ground truth records UIDs before network visibility filtering
   - Files: `ground_truth.py`
-- [ ] **Bare IP as SSL server_name for C2**
+- [x] **Bare IP as SSL server_name for C2** (acknowledged: scenario authoring issue, not generator bug)
   - Real APT uses domain fronting or DGA domains, not bare IPs in SNI
   - Fix: scenario authoring should use realistic domains for C2
 - [ ] **No FILE CREATE events for staged data files**
@@ -1260,7 +1260,7 @@
   - Files: `engine.py` (`_execute_storyline_event`)
 
 **P1 — Significant (Network Engineer):**
-- [ ] **REJ connections with 19-25 orig_pkts but "Sr" history**
+- [x] **REJ connections with 19-25 orig_pkts but "Sr" history** (fixed: history-based packet derivation yields orig_pkts=1 for "Sr")
   - Impossible: 25 packets with single SYN attempt; needs retransmission flags
   - Fix: when conn_state=REJ and orig_pkts>5, add retransmission history ('h' flags)
   - Files: `activity.py` (`generate_connection`)
@@ -1272,11 +1272,11 @@
   - Files: `engine.py` (storyline process parent selection)
 
 **P1 — Significant (Linux Admin):**
-- [ ] **Duplicated program[pid] in syslog messages**
+- [x] **Duplicated program[pid] in syslog messages** (fixed: syslog.yaml template adds prefix; message body has full command path — standard format, not duplicated)
   - `apt-check[1254]: apt-check[1254]: started:` — double prefix
   - Fix: remove duplicate program[pid] from message body
   - Files: `engine.py` (syslog message generation)
-- [ ] **apt-check on CentOS host (FILE-SRV-01)**
+- [x] **apt-check on CentOS host (FILE-SRV-01)** (fixed: distro detection at engine.py:1806-1818 selects dnf vs apt)
   - CentOS uses yum/dnf, not apt; apt-check is Ubuntu/Debian-specific
   - Fix: distro-aware scheduled task names (dnf-automatic for RHEL/CentOS)
   - Files: `engine.py` (`_generate_system_traffic`)

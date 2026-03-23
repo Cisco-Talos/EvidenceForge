@@ -39,6 +39,15 @@ class WindowsEventEmitter(LogEmitter):
         "machine_logon", "kerberos_tgt", "kerberos_service", "ntlm_validation",
     }
 
+    @staticmethod
+    def _ipv6_mapped(ip: str | None) -> str:
+        """Format IPv4 as ::ffff:-mapped for Windows event consistency."""
+        if not ip:
+            return '-'
+        if ':' in ip:
+            return ip  # Already IPv6
+        return f'::ffff:{ip}'
+
     def can_handle(self, event: SecurityEvent) -> bool:
         """Windows emitter handles events on Windows hosts."""
         return (
@@ -93,7 +102,7 @@ class WindowsEventEmitter(LogEmitter):
             'WorkstationName': host.hostname,
             'ProcessId': f'0x{auth.reporting_pid:x}' if auth.reporting_pid else '0x2e0',
             'ProcessName': r'C:\Windows\System32\lsass.exe',
-            'IpAddress': auth.source_ip,
+            'IpAddress': self._ipv6_mapped(auth.source_ip),
             'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
             'LogonProcessName': auth.logon_process,
             'AuthenticationPackageName': auth.auth_package,
@@ -186,7 +195,7 @@ class WindowsEventEmitter(LogEmitter):
             'SubStatus': auth.failure_substatus,
             'FailureReason': auth.failure_reason,
             'LogonType': auth.logon_type,
-            'IpAddress': auth.source_ip,
+            'IpAddress': self._ipv6_mapped(auth.source_ip),
             'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
         }
         self.emit_event(event_data)
@@ -316,7 +325,7 @@ class WindowsEventEmitter(LogEmitter):
             'KeyLength': 0,
             'ProcessId': '0x0',
             'ProcessName': '-',
-            'IpAddress': auth.source_ip,
+            'IpAddress': self._ipv6_mapped(auth.source_ip),
             'IpPort': str(rng.randint(49152, 65535)),
             'ImpersonationLevel': '%%1833',
             'RestrictedAdminMode': '-',

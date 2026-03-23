@@ -4,6 +4,7 @@ This module generates GROUND_TRUTH.md files that document malicious activities,
 timelines, and indicators of compromise (IOCs) for threat hunting training.
 """
 
+import ipaddress
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -189,12 +190,24 @@ class GroundTruthGenerator:
                     iocs['processes'].add(event['process_name'])
                 if 'command_line' in event:
                     iocs['processes'].add(f"`{event['command_line']}`")
+                if 'output_file' in event:
+                    iocs['files'].add(event['output_file'])
 
             elif event['type'] == 'connection':
                 if 'dst_ip' in event:
                     dst_ip = event['dst_ip']
                     dst_port = event.get('dst_port', '')
-                    iocs['network'].add(f"{dst_ip}:{dst_port} (C2 Server)" if dst_port else f"{dst_ip} (C2 Server)")
+                    # Classify destination: internal server vs external C2
+                    try:
+                        is_internal = ipaddress.ip_address(dst_ip).is_private
+                    except (ValueError, TypeError):
+                        is_internal = False
+                    label = 'Internal Server' if is_internal else 'C2 Server'
+                    iocs['network'].add(f"{dst_ip}:{dst_port} ({label})" if dst_port else f"{dst_ip} ({label})")
+                    # Include Zeek UID if available and not filtered
+                    uid = event.get('uid', '')
+                    if uid and uid != '(filtered by sensor placement)':
+                        iocs['network'].add(f"Zeek UID: {uid}")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

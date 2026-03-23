@@ -73,7 +73,7 @@ class TestGroundTruthGenerator:
                 'system': 'TEST-01',
                 'activity': 'Connect to C2 server',
                 'type': 'connection',
-                'dst_ip': '198.51.100.10',
+                'dst_ip': '159.65.43.201',
                 'dst_port': 443,
                 'uid': 'C12345'
             }
@@ -140,7 +140,7 @@ class TestGroundTruthGenerator:
                 'actor': 'attacker',
                 'system': 'TEST-01',
                 'type': 'connection',
-                'dst_ip': '198.51.100.10',
+                'dst_ip': '159.65.43.201',
                 'dst_port': 443
             },
             {
@@ -218,7 +218,7 @@ class TestGroundTruthGenerator:
         """_format_event_details() should format connection events."""
         event = {
             'type': 'connection',
-            'dst_ip': '198.51.100.10',
+            'dst_ip': '159.65.43.201',
             'dst_port': 443,
             'uid': 'C12345'
         }
@@ -226,7 +226,7 @@ class TestGroundTruthGenerator:
 
         details = generator._format_event_details(event)
 
-        assert "Connection to 198.51.100.10:443" in details
+        assert "Connection to 159.65.43.201:443" in details
         assert "UID: C12345" in details
 
     def test_format_event_details_unknown_type(self, minimal_scenario, malicious_events):
@@ -252,7 +252,7 @@ class TestGroundTruthGenerator:
             {
                 'actor': 'attacker',
                 'type': 'connection',
-                'dst_ip': '198.51.100.10',
+                'dst_ip': '159.65.43.201',
                 'dst_port': 443
             }
         ]
@@ -262,7 +262,7 @@ class TestGroundTruthGenerator:
 
         assert 'network' in iocs
         assert '203.0.113.50 (Attacker IP)' in iocs['network']
-        assert '198.51.100.10:443 (C2 Server)' in iocs['network']
+        assert '159.65.43.201:443 (C2 Server)' in iocs['network']
 
     def test_extract_iocs_processes(self, minimal_scenario):
         """_extract_iocs() should extract process IOCs."""
@@ -347,14 +347,14 @@ class TestGroundTruthGenerator:
     def test_format_iocs_network_section(self, minimal_scenario, malicious_events):
         """_format_iocs() should format network IOC section."""
         iocs = {
-            'network': {'198.51.100.10:443 (C2 Server)', '203.0.113.50 (Attacker IP)'}
+            'network': {'159.65.43.201:443 (C2 Server)', '203.0.113.50 (Attacker IP)'}
         }
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         formatted = generator._format_iocs(iocs)
 
         assert "### Network IOCs" in formatted
-        assert "- 198.51.100.10:443 (C2 Server)" in formatted
+        assert "- 159.65.43.201:443 (C2 Server)" in formatted
         assert "- 203.0.113.50 (Attacker IP)" in formatted
 
     def test_format_iocs_process_section(self, minimal_scenario, malicious_events):
@@ -429,7 +429,7 @@ class TestGroundTruthGenerator:
             {
                 'actor': 'attacker',
                 'type': 'connection',
-                'dst_ip': '198.51.100.10'
+                'dst_ip': '159.65.43.201'
                 # No dst_port
             }
         ]
@@ -438,7 +438,7 @@ class TestGroundTruthGenerator:
         iocs = generator._extract_iocs()
 
         assert 'network' in iocs
-        assert '198.51.100.10 (C2 Server)' in iocs['network']
+        assert '159.65.43.201 (C2 Server)' in iocs['network']
 
     def test_format_event_details_missing_fields(self, minimal_scenario, malicious_events):
         """_format_event_details() should handle missing optional fields."""

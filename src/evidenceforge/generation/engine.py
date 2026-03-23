@@ -1093,7 +1093,14 @@ class GenerationEngine:
             # Default attacker IPs: realistic hosting/VPN ranges (not RFC 5737)
             _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
             source_ip = details.get('source_ip', random.choice(_attacker_ips))
-            logon_type = details.get('logon_type', 3)
+            # Auto-detect logon type from technique/activity keywords
+            is_rdp_logon = ('rdp' in activity.lower()
+                            or details.get('technique', '').startswith('T1021.001')
+                            or details.get('dst_port') == 3389)
+            is_ssh_logon = ('ssh' in activity.lower()
+                            or details.get('technique', '').startswith('T1021.004'))
+            default_logon_type = 10 if is_rdp_logon else 3
+            logon_type = details.get('logon_type', default_logon_type)
             logon_id = self.activity_generator.generate_logon(
                 user=actor,
                 system=system,
@@ -1160,6 +1167,24 @@ class GenerationEngine:
             malicious_event['process_name'] = process_name
             malicious_event['command_line'] = command_line
             malicious_event['pid'] = pid
+
+            # Emit FILE/CREATE for output files referenced in command line
+            output_file = self._extract_output_file(command_line, os_category)
+            if output_file:
+                file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
+                from evidenceforge.events.base import RawLogEntry
+                self.dispatcher.dispatch_raw(RawLogEntry(
+                    timestamp=file_time, target_emitter='ecar',
+                    data={
+                        'timestamp': file_time,
+                        'hostname': system.hostname,
+                        'object': 'FILE', 'action': 'CREATE',
+                        'file_name': output_file,
+                        'pid': pid,
+                        'principal': actor.username,
+                    },
+                ))
+                malicious_event['output_file'] = output_file
 
         elif event_type == 'connection':
             # Detect SSH from activity keywords or MITRE technique
@@ -1244,9 +1269,31 @@ class GenerationEngine:
 
             malicious_event['dst_ip'] = dst_ip
             malicious_event['dst_port'] = dst_port
-            malicious_event['uid'] = uid
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
 
         return malicious_event
+
+    @staticmethod
+    def _extract_output_file(command_line: str, os_category: str) -> str | None:
+        """Extract output file path from a command line string.
+
+        Detects common output file patterns in PowerShell, cmd, and Linux commands.
+        Returns the file path if found, None otherwise.
+        """
+        import re
+        patterns = [
+            r'Export-Csv\s+[\'"]?([^\s\'">;]+)',       # PowerShell Export-Csv
+            r'-OutFile\s+[\'"]?([^\s\'">;]+)',          # PowerShell -OutFile
+            r'Out-File\s+[\'"]?([^\s\'">;]+)',          # PowerShell Out-File
+            r'>\s*[\'"]?([^\s\'">;]+)',                 # Shell redirect >
+            r'-o\s+[\'"]?([^\s\'">;]+)',                # Common -o flag
+            r'--output[= ]\s*[\'"]?([^\s\'">;]+)',      # --output flag
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, command_line, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return None
 
     def _find_user(self, username: str) -> Optional[User]:
         """Find user by username.
