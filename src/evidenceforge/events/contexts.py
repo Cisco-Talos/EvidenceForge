@@ -92,6 +92,7 @@ class NetworkContext:
     local_resp: bool = False
     ip_proto: int = 6  # TCP=6, UDP=17, ICMP=1
     missed_bytes: int = 0
+    initiating_pid: int = -1  # PID of process that opened this connection (-1 = unknown)
 
 
 @dataclass(slots=True)

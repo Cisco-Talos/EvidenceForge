@@ -1165,6 +1165,7 @@ class ActivityGenerator:
         resp_bytes: Optional[int] = None,
         src_port: Optional[int] = None,
         emit_dns: bool = False,
+        pid: int = -1,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1326,6 +1327,7 @@ class ActivityGenerator:
                 local_resp=_is_private_ip(dst_ip),
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
+                initiating_pid=pid,
             ),
         )
 
@@ -1408,7 +1410,7 @@ class ActivityGenerator:
 
         # eCAR FLOW still via helper (not format-filtered by visibility)
         flow_hostname = REVERSE_DNS.get(src_ip, src_ip)
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, flow_hostname, src_port=src_port, protocol=proto)
+        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, flow_hostname, pid=pid, src_port=src_port, protocol=proto)
 
         return uid
 
@@ -1606,7 +1608,7 @@ class ActivityGenerator:
                 username=username,
                 integrity_level='System',
                 logon_id=logon_id,
-                parent_image=r'C:\Windows\System32\services.exe',
+                parent_image=self._lookup_parent_image(system.hostname, parent_pid),
                 token_elevation='%%1936',
                 mandatory_label='S-1-16-16384',
             ),
@@ -2369,6 +2371,13 @@ class ActivityGenerator:
     def _is_pid_alive(self, system: System, pid: int) -> bool:
         """Check if a PID is still running in state manager."""
         return self.state_manager.get_process(system.hostname, pid) is not None
+
+    def _lookup_parent_image(self, hostname: str, parent_pid: int) -> str:
+        """Look up parent process image from StateManager, with fallback."""
+        proc = self.state_manager.get_process(hostname, parent_pid)
+        if proc:
+            return proc.image
+        return r'C:\Windows\System32\services.exe'
 
     def _get_session_explorer_pid(self, system: System, user: User) -> int | None:
         """Get the explorer.exe PID for the user's active interactive session.
