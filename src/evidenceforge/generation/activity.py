@@ -14,7 +14,7 @@ from threading import local, get_ident, Lock
 from typing import Optional
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
-from evidenceforge.events.contexts import AuthContext, HostContext
+from evidenceforge.events.contexts import AuthContext, FileContext, HostContext, RegistryContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -1124,17 +1124,35 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Phase 5.2: Probabilistic eCAR object diversity (via dispatch_raw)
+        # Phase 8.2: Probabilistic eCAR object diversity via canonical SecurityEvent
         rng = _get_rng()
         os_category = _get_os_category(system.os)
-        if 'ecar' in self.dispatcher.emitters:
-            if rng.random() < 0.40:
-                action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
-                self._emit_ecar_file_event(system, time, pid, action, user.username)
-            if os_category == 'windows' and rng.random() < 0.30:
-                self._emit_ecar_module_event(system, time, pid, user.username)
-            if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
-                self._emit_ecar_registry_event(system, time, pid, user.username)
+        host_ctx = self._build_host_context(system)
+        auth_ctx = AuthContext(username=user.username)
+        if rng.random() < 0.40:
+            action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
+            pool = self._ECAR_FILE_PATHS_WIN if os_category == 'windows' else self._ECAR_FILE_PATHS_LINUX
+            path = rng.choice(pool).replace('{user}', user.username).replace('{rand}', f'{rng.randint(10000, 99999)}')
+            event_type = {'CREATE': 'file_create', 'MODIFY': 'file_modify', 'DELETE': 'file_delete'}[action]
+            self.dispatcher.dispatch(SecurityEvent(
+                timestamp=time, event_type=event_type,
+                host=host_ctx, auth=auth_ctx,
+                file=FileContext(path=path, action=action.lower(), pid=pid),
+            ))
+        if os_category == 'windows' and rng.random() < 0.30:
+            dll_path = rng.choice(self._ECAR_DLL_POOL)
+            self.dispatcher.dispatch(SecurityEvent(
+                timestamp=time, event_type='module_load',
+                host=host_ctx, auth=auth_ctx,
+                file=FileContext(path=dll_path, action='load', pid=pid),
+            ))
+        if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
+            key, value = rng.choice(self._ECAR_REGISTRY_KEYS)
+            self.dispatcher.dispatch(SecurityEvent(
+                timestamp=time, event_type='registry_modify',
+                host=host_ctx, auth=auth_ctx,
+                registry=RegistryContext(key=key, value=value, action='modify', pid=pid),
+            ))
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
@@ -3158,49 +3176,11 @@ class ActivityGenerator:
         'C:\\Windows\\System32\\gdi32.dll',
     ]
 
-    def _emit_ecar_file_event(
-        self, system: System, time: datetime, pid: int,
-        action: str, username: str,
-    ) -> None:
-        """Emit eCAR FILE event via dispatch_raw (CREATE, MODIFY, or DELETE)."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        rng = _get_rng()
-        os_cat = _get_os_category(system.os)
-        pool = self._ECAR_FILE_PATHS_WIN if os_cat == 'windows' else self._ECAR_FILE_PATHS_LINUX
-        path = rng.choice(pool).replace('{user}', username).replace('{rand}', f'{rng.randint(10000, 99999)}')
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': system.hostname, 'object': 'FILE',
-                  'action': action, 'pid': pid, 'principal': username, 'file_path': path},
-        ))
-
-    def _emit_ecar_registry_event(
-        self, system: System, time: datetime, pid: int, username: str,
-    ) -> None:
-        """Emit eCAR REGISTRY/MODIFY event via dispatch_raw (Windows only)."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        key, value = _get_rng().choice(self._ECAR_REGISTRY_KEYS)
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': system.hostname, 'object': 'REGISTRY',
-                  'action': 'MODIFY', 'pid': pid, 'principal': username,
-                  'registry_key': key, 'registry_value': value},
-        ))
+    # _emit_ecar_file_event and _emit_ecar_registry_event removed in Phase 8.2
+    # FILE/REGISTRY events now dispatched via SecurityEvent canonical model
 
     # _emit_ecar_flow_event removed in Phase 8.1 — eCAR FLOW now dispatched
     # via SecurityEvent "connection" type through the canonical event model
 
-    def _emit_ecar_module_event(
-        self, system: System, time: datetime, pid: int, username: str,
-    ) -> None:
-        """Emit eCAR MODULE/LOAD event via dispatch_raw (DLL load, Windows only)."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        dll_path = _get_rng().choice(self._ECAR_DLL_POOL)
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': system.hostname, 'object': 'MODULE',
-                  'action': 'LOAD', 'pid': pid, 'principal': username, 'file_path': dll_path},
-        ))
+    # _emit_ecar_module_event removed in Phase 8.2
+    # MODULE events now dispatched via SecurityEvent canonical model

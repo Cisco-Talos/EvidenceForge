@@ -25,6 +25,9 @@ class EcarEmitter(HostMultiplexEmitter):
         "process_create", "process_terminate", "system_process_create",
         "ssh_session",
         "connection",
+        "file_create", "file_modify", "file_delete",
+        "registry_modify",
+        "module_load",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -42,6 +45,11 @@ class EcarEmitter(HostMultiplexEmitter):
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
             "connection": self._render_connection,
+            "file_create": self._render_file_event,
+            "file_modify": self._render_file_event,
+            "file_delete": self._render_file_event,
+            "registry_modify": self._render_registry_event,
+            "module_load": self._render_module_event,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -122,6 +130,50 @@ class EcarEmitter(HostMultiplexEmitter):
             'pid': proc.pid,
             'principal': proc.username,
             'image_path': proc.image,
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_file_event(self, event: SecurityEvent) -> None:
+        """Render eCAR FILE event from canonical FileContext."""
+        action_map = {"file_create": "CREATE", "file_modify": "MODIFY", "file_delete": "DELETE"}
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'FILE',
+            'action': action_map.get(event.event_type, 'CREATE'),
+            'pid': event.file.pid if event.file else -1,
+            'principal': event.auth.username if event.auth else '',
+            'file_path': event.file.path if event.file else '',
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_registry_event(self, event: SecurityEvent) -> None:
+        """Render eCAR REGISTRY event from canonical RegistryContext."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'REGISTRY',
+            'action': 'MODIFY',
+            'pid': event.registry.pid if event.registry else -1,
+            'principal': event.auth.username if event.auth else '',
+            'registry_key': event.registry.key if event.registry else '',
+            'registry_value': event.registry.value if event.registry else '',
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_module_event(self, event: SecurityEvent) -> None:
+        """Render eCAR MODULE/LOAD event from canonical FileContext."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'MODULE',
+            'action': 'LOAD',
+            'pid': event.file.pid if event.file else -1,
+            'principal': event.auth.username if event.auth else '',
+            'file_path': event.file.path if event.file else '',
             '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)

@@ -1186,17 +1186,14 @@ class GenerationEngine:
             output_file = self._extract_output_file(command_line, os_category)
             if output_file:
                 file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
-                from evidenceforge.events.base import RawLogEntry
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=file_time, target_emitter='ecar',
-                    data={
-                        'timestamp': file_time,
-                        'hostname': system.hostname,
-                        'object': 'FILE', 'action': 'CREATE',
-                        'file_name': output_file,
-                        'pid': pid,
-                        'principal': actor.username,
-                    },
+                from evidenceforge.events.base import SecurityEvent as SE
+                from evidenceforge.events.contexts import FileContext, AuthContext as AC
+                host_ctx = self.activity_generator._build_host_context(system)
+                self.dispatcher.dispatch(SE(
+                    timestamp=file_time, event_type='file_create',
+                    host=host_ctx,
+                    auth=AC(username=actor.username),
+                    file=FileContext(path=output_file, action='create', pid=pid),
                 ))
                 malicious_event['output_file'] = output_file
 
