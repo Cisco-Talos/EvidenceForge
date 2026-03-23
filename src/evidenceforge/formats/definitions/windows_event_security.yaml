@@ -194,7 +194,7 @@ variants:
         required: false
         description: "Elevated token indicator (Yes/No)"
 
-      - name: LinkedLogonId
+      - name: TargetLinkedLogonId
         type: hex_string
         required: false
         description: "Linked logon ID for split-token logons"
@@ -635,10 +635,10 @@ variants:
         type: string
         required: true
         description: "Always MICROSOFT_AUTHENTICATION_PACKAGE_V1_0"
-      - name: LogonAccount
+      - name: TargetUserName
         type: string
         required: true
-      - name: SourceWorkstation
+      - name: Workstation
         type: string
         required: true
       - name: Status
@@ -702,11 +702,11 @@ output:
       <System>
         <Provider Name="Microsoft-Windows-Security-Auditing" Guid="{54849625-5478-4994-a5ba-3e3b0328c30d}"/>
         <EventID>{{ EventID }}</EventID>
-        <Version>{{ 2 if EventID in [4688, 4625] else 1 if EventID == 4624 else 0 }}</Version>
+        <Version>{{ 2 if EventID in [4688, 4624] else 1 if EventID == 5156 else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ {4624: 12544, 4625: 12546, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4768: 14339, 4769: 14337, 4770: 14339, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
+        <Task>{{ {4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4768: 14339, 4769: 14337, 4770: 14339, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
         <Opcode>0</Opcode>
-        <Keywords>0x8020000000000000</Keywords>
+        <Keywords>{{ Keywords | default('0x8020000000000000') }}</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
         <EventRecordID>{{ EventRecordID }}</EventRecordID>
         <Correlation/>
@@ -743,7 +743,7 @@ output:
         <Data Name="TargetOutboundDomainName">{{ TargetOutboundDomainName | default('-') }}</Data>
         <Data Name="VirtualAccount">{{ VirtualAccount | default('%%1843') }}</Data>
         <Data Name="ElevatedToken">{{ ElevatedToken | default('%%1842') }}</Data>
-        <Data Name="LinkedLogonId">{{ LinkedLogonId | default('0x0') }}</Data>
+        <Data Name="TargetLinkedLogonId">{{ TargetLinkedLogonId | default('0x0') }}</Data>
         {% elif EventID == 4634 %}
         <Data Name="TargetUserSid">{{ TargetUserSid }}</Data>
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
@@ -855,8 +855,8 @@ output:
         <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
         {% elif EventID == 4776 %}
         <Data Name="PackageName">{{ PackageName }}</Data>
-        <Data Name="LogonAccount">{{ LogonAccount }}</Data>
-        <Data Name="SourceWorkstation">{{ SourceWorkstation }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="Workstation">{{ Workstation }}</Data>
         <Data Name="Status">{{ Status }}</Data>
         {% elif EventID == 5156 %}
         <Data Name="ProcessID">{{ ProcessID }}</Data>

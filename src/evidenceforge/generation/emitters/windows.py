@@ -37,7 +37,7 @@ class WindowsEventEmitter(LogEmitter):
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
         "machine_logon", "kerberos_tgt", "kerberos_tgt_renewal", "kerberos_service",
-        "ntlm_validation",
+        "ntlm_validation", "explicit_credentials", "wfp_connection",
     }
 
     @staticmethod
@@ -71,6 +71,8 @@ class WindowsEventEmitter(LogEmitter):
             "kerberos_tgt_renewal": self._render_kerberos_tgt_renewal,
             "kerberos_service": self._render_kerberos_service,
             "ntlm_validation": self._render_ntlm_validation,
+            "explicit_credentials": self._render_explicit_credentials,
+            "wfp_connection": self._render_wfp_connection,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -90,7 +92,7 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'ExecutionProcessID': auth.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
             'SubjectUserSid': auth.subject_sid,
             'SubjectUserName': auth.subject_username,
@@ -121,10 +123,10 @@ class WindowsEventEmitter(LogEmitter):
                         or auth.logon_type == 5)
             if is_admin:
                 privs = (
-                    'SeSecurityPrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
-                    'SeLoadDriverPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
-                    'SeRestorePrivilege\n\t\t\tSeDebugPrivilege\n\t\t\t'
-                    'SeSystemEnvironmentPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
+                    'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
+                    'SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
+                    'SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t'
+                    'SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
                     'SeDelegateSessionUserImpersonatePrivilege'
                 )
             else:
@@ -140,7 +142,7 @@ class WindowsEventEmitter(LogEmitter):
                 'Computer': host.fqdn,
                 'Channel': 'Security',
                 'Level': 0,
-                'ExecutionProcessID': 4,
+                'ExecutionProcessID': auth.reporting_pid or 600,
                 'ExecutionThreadID': rng.randint(100, 500),
                 'SubjectUserSid': auth.user_sid,
                 'SubjectUserName': auth.username,
@@ -162,7 +164,7 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'ExecutionProcessID': auth.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
             'TargetUserSid': auth.user_sid,
             'TargetUserName': auth.username,
@@ -184,7 +186,8 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'Keywords': '0x8010000000000000',  # Audit Failure
+            'ExecutionProcessID': auth.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 9999),
             'SubjectUserSid': auth.subject_sid,
             'SubjectUserName': auth.subject_username,
@@ -307,7 +310,7 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'ExecutionProcessID': auth.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
             'SubjectUserSid': auth.subject_sid,
             'SubjectUserName': auth.subject_username,
@@ -339,11 +342,36 @@ class WindowsEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
+        # 4672 special privileges for machine accounts
+        if auth.elevated:
+            priv_data = {
+                'EventID': 4672,
+                'TimeCreated': event.timestamp,
+                'Computer': host.fqdn,
+                'Channel': 'Security',
+                'Level': 0,
+                'ExecutionProcessID': auth.reporting_pid or 600,
+                'ExecutionThreadID': rng.randint(100, 500),
+                'SubjectUserSid': auth.user_sid,
+                'SubjectUserName': auth.username,
+                'SubjectDomainName': host.netbios_domain,
+                'SubjectLogonId': auth.logon_id,
+                'PrivilegeList': (
+                    'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
+                    'SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
+                    'SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t'
+                    'SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
+                    'SeDelegateSessionUserImpersonatePrivilege'
+                ),
+            }
+            self.emit_event(priv_data)
+
     def _render_kerberos_tgt(self, event: SecurityEvent) -> None:
         """Render Windows 4768 (Kerberos TGT request)."""
         rng = random.Random()
         krb = event.kerberos
         host = event.host
+        is_failure = krb.ticket_status != '0x0'
 
         event_data = {
             'EventID': 4768,
@@ -351,7 +379,8 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'Keywords': '0x8010000000000000' if is_failure else '0x8020000000000000',
+            'ExecutionProcessID': krb.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
             'TargetUserName': krb.target_username,
             'TargetDomainName': krb.target_domain,
@@ -372,6 +401,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         krb = event.kerberos
         host = event.host
+        is_failure = krb.ticket_status != '0x0'
 
         event_data = {
             'EventID': 4769,
@@ -379,9 +409,10 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'Keywords': '0x8010000000000000' if is_failure else '0x8020000000000000',
+            'ExecutionProcessID': krb.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': krb.target_username,
+            'TargetUserName': f"{krb.target_username}@{krb.target_domain.upper()}",
             'TargetDomainName': krb.target_domain,
             'ServiceName': krb.service_name,
             'ServiceSid': krb.service_sid,
@@ -405,7 +436,7 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'ExecutionProcessID': krb.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
             'TargetUserName': krb.target_username,
             'TargetDomainName': krb.target_domain,
@@ -430,14 +461,86 @@ class WindowsEventEmitter(LogEmitter):
             'Computer': host.fqdn,
             'Channel': 'Security',
             'Level': 0,
-            'ExecutionProcessID': 4,
+            'ExecutionProcessID': auth.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
             'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
-            'LogonAccount': auth.username,
-            'SourceWorkstation': auth.source_ip,  # workstation stored in source_ip
+            'TargetUserName': auth.username,
+            'Workstation': auth.source_ip,  # workstation stored in source_ip
             'Status': '0x0',
         }
         self.emit_event(event_data)
+
+    def _render_explicit_credentials(self, event: SecurityEvent) -> None:
+        """Render Windows 4648 (explicit credentials logon)."""
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        event_data = {
+            'EventID': 4648,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': auth.reporting_pid or 600,
+            'ExecutionThreadID': rng.randint(100, 9999),
+            'SubjectUserSid': auth.subject_sid,
+            'SubjectUserName': auth.subject_username,
+            'SubjectDomainName': auth.subject_domain,
+            'SubjectLogonId': auth.subject_logon_id,
+            'LogonGuid': auth.logon_guid or '{00000000-0000-0000-0000-000000000000}',
+            'TargetUserName': auth.username,
+            'TargetDomainName': host.netbios_domain,
+            'TargetLogonGuid': '{00000000-0000-0000-0000-000000000000}',
+            'TargetServerName': auth.target_server or 'localhost',
+            'TargetInfo': auth.target_server or 'localhost',
+            'ProcessId': f'0x{auth.reporting_pid:x}' if auth.reporting_pid else '0x0',
+            'ProcessName': auth.process_name or r'C:\Windows\System32\svchost.exe',
+            'IpAddress': auth.source_ip or '-',
+            'IpPort': auth.source_port or 0,
+        }
+        self.emit_event(event_data)
+
+    def _render_wfp_connection(self, event: SecurityEvent) -> None:
+        """Render Windows 5156 (WFP connection permitted)."""
+        rng = random.Random()
+        net = event.network
+        host = event.host
+        proc = event.process
+        is_outbound = net.src_ip == host.ip
+
+        event_data = {
+            'EventID': 5156,
+            'TimeCreated': event.timestamp,
+            'Computer': host.fqdn,
+            'Channel': 'Security',
+            'Level': 0,
+            'ExecutionProcessID': 4,
+            'ExecutionThreadID': rng.randint(50, 200),
+            'ProcessID': net.initiating_pid if net.initiating_pid > 0 else 4,
+            'Application': self._to_device_path(
+                proc.image if proc else r'C:\Windows\System32\svchost.exe'
+            ),
+            'Direction': '%%14593' if is_outbound else '%%14592',
+            'SourceAddress': net.src_ip,
+            'SourcePort': net.src_port,
+            'DestAddress': net.dst_ip,
+            'DestPort': net.dst_port,
+            'Protocol': net.ip_proto,
+            'FilterRTID': rng.randint(0, 70000),
+            'LayerName': '%%14611',
+            'LayerRTID': 48,
+            'RemoteUserID': 'S-1-0-0',
+            'RemoteMachineID': 'S-1-0-0',
+        }
+        self.emit_event(event_data)
+
+    @staticmethod
+    def _to_device_path(path: str) -> str:
+        """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
+        if path and len(path) > 2 and path[1] == ':':
+            return f'\\device\\harddiskvolume1\\{path[3:]}'.lower()
+        return path.lower()
 
     def __init__(
         self,
@@ -500,7 +603,7 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         return self._template.render(**event_data)
 
     def _run(self) -> None:

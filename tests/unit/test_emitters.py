@@ -59,11 +59,13 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "<EventID>4624</EventID>" in content
         assert "<TimeCreated" in content
-        assert "2024-01-15T10:30:45.123Z" in content
+        assert "2024-01-15T10:30:45.123456Z" in content
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
         assert '<Data Name="TargetDomainName">CORP</Data>' in content
         assert '<Data Name="LogonType">2</Data>' in content
+        assert "<Version>2</Version>" in content  # 4624 = Version 2
+        assert '<Data Name="TargetLinkedLogonId">' in content  # Not LinkedLogonId
 
         print(f"\n{'='*80}")
         print("WINDOWS EVENT LOG SAMPLE (4624 - Logon):")
@@ -100,7 +102,7 @@ class TestWindowsEventEmitter:
         # Read and verify content
         content = temp_output.read_text()
         assert "<EventID>4634</EventID>" in content
-        assert "2024-01-15T18:15:30.000Z" in content
+        assert "2024-01-15T18:15:30.000000Z" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
         print(f"\n{'='*80}")
@@ -213,6 +215,218 @@ class TestWindowsEventEmitter:
         assert "user0" in content
         assert "user1" in content
         assert "user2" in content
+
+
+    def test_failed_logon_keywords_and_task(self, format_def, temp_output):
+        """Test that 4625 uses Audit Failure keywords and correct task ID."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 4625,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "Keywords": "0x8010000000000000",
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "SYSTEM",
+            "SubjectDomainName": "NT AUTHORITY",
+            "SubjectLogonId": "0x3e7",
+            "TargetUserSid": "S-1-0-0",
+            "TargetUserName": "baduser",
+            "TargetDomainName": "CORP",
+            "Status": "0xc000006d",
+            "FailureReason": "%%2313",
+            "SubStatus": "0xc000006a",
+            "LogonType": 3,
+            "IpAddress": "10.0.0.50",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<Keywords>0x8010000000000000</Keywords>" in content  # Audit Failure
+        assert "<Task>12544</Task>" in content  # Logon category, not Account Lockout
+        assert "<Version>0</Version>" in content  # 4625 is always Version 0
+
+    def test_ntlm_field_names(self, format_def, temp_output):
+        """Test that 4776 uses correct field names (TargetUserName, Workstation)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 4776,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "PackageName": "MICROSOFT_AUTHENTICATION_PACKAGE_V1_0",
+            "TargetUserName": "jsmith",
+            "Workstation": "WKS-01",
+            "Status": "0x00000000",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="TargetUserName">jsmith</Data>' in content
+        assert '<Data Name="Workstation">WKS-01</Data>' in content
+        assert "LogonAccount" not in content
+        assert "SourceWorkstation" not in content
+
+    def test_privilege_order(self, format_def, temp_output):
+        """Test that 4672 privilege list matches standard Windows order."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        expected_privs = (
+            'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
+            'SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege'
+        )
+        event_data = {
+            "EventID": 4672,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "SubjectUserSid": "S-1-5-21-123-456-789-500",
+            "SubjectUserName": "Administrator",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7abc",
+            "PrivilegeList": expected_privs,
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        # Verify Security comes before Backup (standard Windows order)
+        sec_pos = content.index("SeSecurityPrivilege")
+        backup_pos = content.index("SeBackupPrivilege")
+        assert sec_pos < backup_pos
+
+    def test_emit_explicit_credentials_event(self, format_def, temp_output):
+        """Test emitting 4648 (explicit credentials)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 4648,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "WKS-01$",
+            "SubjectDomainName": "CORP",
+            "SubjectLogonId": "0x3e7",
+            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            "TargetUserName": "admin01",
+            "TargetDomainName": "CORP",
+            "TargetLogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            "TargetServerName": "fileserver01",
+            "TargetInfo": "fileserver01",
+            "ProcessId": "0x704",
+            "ProcessName": r"C:\Windows\System32\winlogon.exe",
+            "IpAddress": "10.0.0.50",
+            "IpPort": 0,
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>4648</EventID>" in content
+        assert "<Version>0</Version>" in content
+        assert "<Task>12544</Task>" in content
+        assert '<Data Name="TargetServerName">fileserver01</Data>' in content
+        assert '<Data Name="TargetInfo">fileserver01</Data>' in content
+        assert '<Data Name="TargetUserName">admin01</Data>' in content
+
+    def test_emit_wfp_outbound_connection(self, format_def, temp_output):
+        """Test emitting 5156 (WFP outbound connection)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 5156,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 56,
+            "ProcessID": 520,
+            "Application": r"\device\harddiskvolume1\windows\system32\lsass.exe",
+            "Direction": "%%14593",
+            "SourceAddress": "10.0.0.50",
+            "SourcePort": 49263,
+            "DestAddress": "10.0.0.10",
+            "DestPort": 88,
+            "Protocol": 6,
+            "FilterRTID": 0,
+            "LayerName": "%%14611",
+            "LayerRTID": 48,
+            "RemoteUserID": "S-1-0-0",
+            "RemoteMachineID": "S-1-0-0",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>5156</EventID>" in content
+        assert "<Version>1</Version>" in content
+        assert "<Task>12810</Task>" in content
+        assert '<Data Name="Direction">%%14593</Data>' in content  # Outbound
+        assert '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\lsass.exe</Data>' in content
+        assert '<Data Name="Protocol">6</Data>' in content
+
+    def test_device_path_conversion(self):
+        """Test _to_device_path helper converts Windows paths correctly."""
+        assert WindowsEventEmitter._to_device_path(
+            r"C:\Windows\System32\svchost.exe"
+        ) == r"\device\harddiskvolume1\windows\system32\svchost.exe"
+
+        assert WindowsEventEmitter._to_device_path(
+            r"D:\Program Files\app.exe"
+        ) == r"\device\harddiskvolume1\program files\app.exe"
+
+        # Already a device path — lowercase only
+        assert WindowsEventEmitter._to_device_path(
+            r"\device\harddiskvolume1\test.exe"
+        ) == r"\device\harddiskvolume1\test.exe"
+
+    def test_timestamp_microsecond_precision(self, format_def, temp_output):
+        """Test that timestamps have 6 decimal places (microsecond precision)."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 4634,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=timezone.utc),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+            "TargetUserSid": "S-1-5-21-123-456-789-1001",
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x3e7abc",
+            "LogonType": 2,
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "2024-01-15T10:30:45.123456Z" in content  # 6 decimal places
 
 
 class TestZeekEmitter:

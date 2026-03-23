@@ -1166,6 +1166,7 @@ class ActivityGenerator:
         src_port: Optional[int] = None,
         emit_dns: bool = False,
         pid: int = -1,
+        source_system: Optional['System'] = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1410,6 +1411,15 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
+
+        # Emit 5156 (WFP connection) on Windows source hosts
+        if source_system and _get_os_category(source_system.os) == 'windows':
+            self.generate_wfp_connection(
+                system=source_system, time=time,
+                src_ip=src_ip, src_port=src_port,
+                dst_ip=dst_ip, dst_port=dst_port,
+                protocol=proto, pid=pid if pid > 0 else 4,
+            )
 
         # eCAR FLOW still via helper (not format-filtered by visibility)
         flow_hostname = REVERSE_DNS.get(src_ip, src_ip)
@@ -2272,6 +2282,82 @@ class ActivityGenerator:
             ),
         )
 
+        self.dispatcher.dispatch(event)
+
+    def generate_explicit_credentials(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        target_username: str,
+        target_server: str,
+        process_name: str,
+        process_pid: int,
+        source_ip: str = '',
+        source_port: int = 0,
+    ) -> None:
+        """Generate explicit credentials event (4648) on source system.
+
+        Fires when a process uses RunAs, scheduled tasks, PsExec, WMIC,
+        or other explicit credential usage.
+        """
+        reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="explicit_credentials",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username=target_username,
+                user_sid=self._get_sid(target_username),
+                subject_sid=self._get_sid(user.username),
+                subject_username=user.username,
+                subject_domain=self._build_host_context(system).netbios_domain,
+                subject_logon_id='0x3e7',
+                logon_guid='{00000000-0000-0000-0000-000000000000}',
+                reporting_pid=reporting_pid,
+                target_server=target_server,
+                process_name=process_name,
+                source_ip=source_ip or '-',
+                source_port=source_port,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_wfp_connection(
+        self,
+        system: System,
+        time: datetime,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        protocol: str,
+        pid: int = 4,
+        application: str = r'C:\Windows\System32\svchost.exe',
+    ) -> None:
+        """Generate WFP connection permitted event (5156) on Windows host.
+
+        Records the Windows Filtering Platform firewall allow decision.
+        """
+        from evidenceforge.events.contexts import NetworkContext, ProcessContext
+
+        ip_proto = 6 if protocol == 'tcp' else 17 if protocol == 'udp' else 1
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="wfp_connection",
+            host=self._build_host_context(system),
+            network=NetworkContext(
+                src_ip=src_ip, src_port=src_port,
+                dst_ip=dst_ip, dst_port=dst_port,
+                protocol=protocol, ip_proto=ip_proto,
+                initiating_pid=pid,
+            ),
+            process=ProcessContext(
+                pid=pid, parent_pid=0,
+                image=application,
+                command_line='', username='',
+            ),
+        )
         self.dispatcher.dispatch(event)
 
     def _get_next_event_record_id(self, hostname: str = '') -> int:

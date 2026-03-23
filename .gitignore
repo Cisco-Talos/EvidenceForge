@@ -57,3 +57,6 @@ checkpoints/
 # Ignore any scenarios we might produce
 scenarios/
 
+
+# Sample data (reference only, not tracked)
+sample_data/

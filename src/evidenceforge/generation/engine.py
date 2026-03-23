@@ -1186,6 +1186,25 @@ class GenerationEngine:
                 ))
                 malicious_event['output_file'] = output_file
 
+            # Emit 4648 for processes using explicit credentials (PsExec, WMIC, runas, etc.)
+            _EXPLICIT_CRED_TOOLS = {'psexec', 'wmic', 'runas', 'schtasks', 'net.exe', 'net1.exe'}
+            proc_basename = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
+            technique = details.get('technique', '')
+            if (proc_basename in _EXPLICIT_CRED_TOOLS
+                    or technique.startswith('T1021')
+                    or technique.startswith('T1053')) and os_category == 'windows':
+                target_server = details.get('dst_ip', 'localhost')
+                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
+                self.activity_generator.generate_explicit_credentials(
+                    user=actor,
+                    system=system,
+                    time=cred_time,
+                    target_username=actor.username,
+                    target_server=target_server,
+                    process_name=process_name,
+                    process_pid=pid,
+                )
+
         elif event_type == 'connection':
             # Detect SSH from activity keywords or MITRE technique
             is_ssh = ('ssh' in activity.lower()
@@ -1270,6 +1289,30 @@ class GenerationEngine:
             malicious_event['dst_ip'] = dst_ip
             malicious_event['dst_port'] = dst_port
             malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+            # Emit 4648 (explicit credentials) for lateral movement to internal systems
+            from evidenceforge.generation.activity import _get_os_category as _os_cat
+            technique = details.get('technique', '')
+            is_lateral = (is_ssh or is_rdp
+                          or technique.startswith('T1021')
+                          or technique.startswith('T1053'))
+            if is_lateral and _os_cat(system.os) == 'windows':
+                target_host = next(
+                    (s for s in self.scenario.environment.systems if s.ip == dst_ip),
+                    None,
+                )
+                target_server_name = target_host.hostname if target_host else dst_ip
+                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
+                self.activity_generator.generate_explicit_credentials(
+                    user=actor,
+                    system=system,
+                    time=cred_time,
+                    target_username=actor.username,
+                    target_server=target_server_name,
+                    process_name=r'C:\Windows\System32\lsass.exe',
+                    process_pid=0,
+                    source_ip=source_ip,
+                )
 
         return malicious_event
 
