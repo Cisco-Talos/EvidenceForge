@@ -18,6 +18,7 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     _log_filename = "syslog.log"
     _flat_filename = "syslog.log"
+    _sort_flat_file = True
 
     _supported_types: set[str] = {"logon", "logoff", "failed_logon", "system_process_create", "ssh_session"}
 

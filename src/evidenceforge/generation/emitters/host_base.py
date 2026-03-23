@@ -24,13 +24,14 @@ logger = logging.getLogger(__name__)
 class _SingleHostWriter:
     """Writes log output for one host. Thread-safe via lock."""
 
-    def __init__(self, output_path: Path, buffer_size: int = 10000):
+    def __init__(self, output_path: Path, buffer_size: int = 10000, sort_on_flush: bool = False):
         self.output_path = output_path
         self.buffer: list[str] = []
         self.buffer_size = buffer_size
         self.event_count = 0
         self._lock = Lock()
         self._header_written = False
+        self._sort_on_flush = sort_on_flush
 
     def write(self, rendered: str) -> None:
         with self._lock:
@@ -57,6 +58,8 @@ class _SingleHostWriter:
     def _flush_unlocked(self) -> None:
         if not self.buffer:
             return
+        if self._sort_on_flush:
+            self.buffer.sort(key=lambda line: line[:15])
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
@@ -87,6 +90,7 @@ class HostMultiplexEmitter(LogEmitter):
     _log_filename: str = "output.log"
     _flat_filename: str = ""
     _supported_types: set[str] = set()
+    _sort_flat_file: bool = False
 
     def __init__(
         self,
@@ -119,7 +123,8 @@ class HostMultiplexEmitter(LogEmitter):
             else:
                 flat_name = self._flat_filename or self._log_filename
                 path = self._base_dir / flat_name
-            writer = _SingleHostWriter(path, self._buffer_size)
+            sort = self._sort_flat_file and not host_fqdn and not self._direct_file_mode
+            writer = _SingleHostWriter(path, self._buffer_size, sort_on_flush=sort)
             self._writers[host_fqdn] = writer
             logger.debug(f"Created host writer: {path}")
             return writer

@@ -587,7 +587,7 @@ def _generate_random_external_ip(rng) -> str:
     return f"{prefix[0]}.{prefix[1]}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
 
 
-def _generate_internal_hostname(rng, ip: str) -> str:
+def _generate_internal_hostname(rng, ip: str, domain: str = 'corp.local') -> str:
     """Generate a plausible internal hostname for RFC 1918 IPs.
 
     Deterministic based on IP so the same IP always gets the same hostname
@@ -599,7 +599,7 @@ def _generate_internal_hostname(rng, ip: str) -> str:
     ip_hash = hash(ip)
     prefix = prefixes[ip_hash % len(prefixes)]
     suffix = suffixes[(ip_hash >> 8) % len(suffixes)]
-    return f"{prefix}-{suffix}.corp.local"
+    return f"{prefix}-{suffix}.{domain}"
 
 
 def _detect_ip_provider(ip: str) -> str:
@@ -689,6 +689,37 @@ def _generate_rdns_name(rng, ip: str) -> str:
         return f"msnbot-{'-'.join(octets)}.search.msn.com"
     else:
         return f"{'-'.join(octets)}.generic-host.net"
+
+
+_HTTP_URI_STATUS_CACHE: dict[tuple[str, str], tuple[int, str]] = {}
+
+
+def _get_http_status(dst_ip: str, uri: str) -> tuple[int, str]:
+    """Get a deterministic HTTP status for a (dst_ip, uri) pair.
+
+    Same URI on same server always returns same status (baseline consistency).
+    Storyline code can bypass this by setting status_code directly on HttpContext.
+    """
+    key = (dst_ip, uri)
+    if key in _HTTP_URI_STATUS_CACHE:
+        return _HTTP_URI_STATUS_CACHE[key]
+    roll = random.Random(f"http_status:{dst_ip}:{uri}").random()
+    if roll < 0.04:
+        result = (404, 'Not Found')
+    elif roll < 0.06:
+        result = (403, 'Forbidden')
+    elif roll < 0.07:
+        result = (500, 'Internal Server Error')
+    elif roll < 0.17:
+        result = (301, 'Moved Permanently')
+    elif roll < 0.22:
+        result = (302, 'Found')
+    elif roll < 0.30:
+        result = (304, 'Not Modified')
+    else:
+        result = (200, 'OK')
+    _HTTP_URI_STATUS_CACHE[key] = result
+    return result
 
 
 def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]:
@@ -1340,10 +1371,12 @@ class ActivityGenerator:
             if not server_name:
                 # Generate a plausible hostname for IPs not in REVERSE_DNS
                 server_name = _generate_random_hostname(rng, dst_ip)
-            _TLS_CIPHERS = [
+            _TLS12_CIPHERS = [
                 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
                 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
                 'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+            ]
+            _TLS13_CIPHERS = [
                 'TLS_AES_128_GCM_SHA256',
                 'TLS_AES_256_GCM_SHA384',
                 'TLS_CHACHA20_POLY1305_SHA256',
@@ -1351,7 +1384,7 @@ class ActivityGenerator:
             tls_version = rng.choice(['TLSv12', 'TLSv12', 'TLSv12', 'TLSv13'])
             event.ssl = SslContext(
                 version=tls_version,
-                cipher=rng.choice(_TLS_CIPHERS),
+                cipher=rng.choice(_TLS13_CIPHERS if tls_version == 'TLSv13' else _TLS12_CIPHERS),
                 server_name=server_name,
                 resumed=rng.random() < 0.6,
                 established=True,
@@ -1359,28 +1392,41 @@ class ActivityGenerator:
             )
         elif service == 'http' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import HttpContext
-            _USER_AGENTS = [
+            _USER_AGENTS_WINDOWS = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
             ]
+            _USER_AGENTS_LINUX = [
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            ]
+            if source_system and _get_os_category(source_system.os) == 'linux':
+                ua = rng.choice(_USER_AGENTS_LINUX)
+            else:
+                ua = rng.choice(_USER_AGENTS_WINDOWS)
             host = REVERSE_DNS.get(dst_ip, dst_ip)
             if dst_port not in (80, 443):
                 host = f'{host}:{dst_port}'
             _URIS = ['/', '/index.html', '/api/v1/status', '/favicon.ico', '/robots.txt',
                       '/assets/main.css', '/assets/app.js', '/images/logo.png']
+            uri = rng.choice(_URIS)
+            status_code, status_msg = _get_http_status(dst_ip, uri)
             resp_body_len = resp_bytes or rng.randint(200, 50000)
+            if status_code in (301, 302):
+                resp_body_len = rng.randint(100, 300)
+            elif status_code == 304:
+                resp_body_len = 0
             event.http = HttpContext(
                 method='GET',
                 host=host,
-                uri=rng.choice(_URIS),
+                uri=uri,
                 version='1.1',
-                user_agent=rng.choice(_USER_AGENTS),
+                user_agent=ua,
                 request_body_len=0,
                 response_body_len=resp_body_len,
-                status_code=200,
-                status_msg='OK',
+                status_code=status_code,
+                status_msg=status_msg,
                 tags=[],
             )
             # Probabilistic file transfer for HTTP responses with content
@@ -1654,7 +1700,7 @@ class ActivityGenerator:
         hostname = REVERSE_DNS.get(dst_ip)
         if not hostname:
             if _is_private_ip(dst_ip):
-                hostname = _generate_internal_hostname(rng, dst_ip)
+                hostname = _generate_internal_hostname(rng, dst_ip, getattr(self, '_ad_domain', 'corp.local'))
             else:
                 hostname = _generate_random_hostname(rng, dst_ip)
 
@@ -1719,7 +1765,8 @@ class ActivityGenerator:
 
             # Determine query type, query string, and answer
             qtype_roll = rng.random()
-            is_internal = hostname.endswith('.corp.local') or hostname.endswith('.local')
+            ad_domain = getattr(self, '_ad_domain', 'corp.local')
+            is_internal = hostname.endswith(f'.{ad_domain}') or hostname.endswith('.local')
 
             if qtype_roll < 0.65:
                 # A record: hostname → IPv4
@@ -1757,7 +1804,7 @@ class ActivityGenerator:
             elif qtype_roll < 0.98:
                 # SRV record: AD service discovery
                 qtype, qtype_name = 33, 'SRV'
-                domain = 'corp.local'
+                domain = ad_domain
                 query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
                 dc_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
                 dc_ip = _get_rng().choice(dc_ips)
@@ -1813,11 +1860,11 @@ class ActivityGenerator:
             # (suffix search failure, WPAD probe, etc.) alongside the real lookup
             if rng.random() < 0.20:
                 nxdomain_queries = [
-                    f'{hostname}.corp.local',  # Suffix search failure
-                    'wpad.corp.local', 'wpad.local', 'wpad',
-                    'isatap.corp.local', 'isatap',
-                    '_ldap._tcp.Default-First-Site-Name._sites.corp.local',
-                    'oldserver.corp.local', 'printer01.corp.local',
+                    f'{hostname}.{ad_domain}',  # Suffix search failure
+                    f'wpad.{ad_domain}', 'wpad.local', 'wpad',
+                    f'isatap.{ad_domain}', 'isatap',
+                    f'_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}',
+                    f'oldserver.{ad_domain}', f'printer01.{ad_domain}',
                 ]
                 nx_query = rng.choice(nxdomain_queries)
                 nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
@@ -2302,6 +2349,8 @@ class ActivityGenerator:
         or other explicit credential usage.
         """
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2e0)
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        subject_logon_id = sessions[0].logon_id if sessions else '0x3e7'
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",
@@ -2312,7 +2361,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=subject_logon_id,
                 logon_guid='{00000000-0000-0000-0000-000000000000}',
                 reporting_pid=reporting_pid,
                 target_server=target_server,

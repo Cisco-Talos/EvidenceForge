@@ -138,6 +138,7 @@ class WindowsEventEmitter(LogEmitter):
             'LogonProcessName': auth.logon_process,
             'AuthenticationPackageName': auth.auth_package,
             'LmPackageName': auth.lm_package,
+            'KeyLength': 128 if auth.lm_package == 'NTLM V2' else 0,
             'LogonGuid': auth.logon_guid,
         }
         self.emit_event(event_data)
@@ -354,7 +355,7 @@ class WindowsEventEmitter(LogEmitter):
             'LogonGuid': auth.logon_guid,
             'TransmittedServices': '-',
             'LmPackageName': auth.lm_package,
-            'KeyLength': 0,
+            'KeyLength': 128 if auth.lm_package == 'NTLM V2' else 0,
             'ProcessId': '0x0',
             'ProcessName': '-',
             'IpAddress': self._ipv6_mapped(auth.source_ip),
@@ -439,7 +440,7 @@ class WindowsEventEmitter(LogEmitter):
             'Keywords': '0x8010000000000000' if is_failure else '0x8020000000000000',
             'ExecutionProcessID': krb.reporting_pid or 600,
             'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': f"{krb.target_username}@{krb.target_domain.upper()}",
+            'TargetUserName': krb.target_username if '@' in krb.target_username else f"{krb.target_username}@{krb.target_domain.upper()}",
             'TargetDomainName': krb.target_domain,
             'ServiceName': krb.service_name,
             'ServiceSid': krb.service_sid,
