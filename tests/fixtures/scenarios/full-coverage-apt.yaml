@@ -1,0 +1,462 @@
+version: "1.0"
+name: full-coverage-apt
+description: |
+  APT-style intrusion against a small law firm targeting privileged client data.
+  Covers the full MITRE ATT&CK kill chain: initial access via password spray,
+  reconnaissance, credential dumping, lateral movement (RDP + SSH), persistence
+  (scheduled tasks, service install), privilege escalation (group membership),
+  account manipulation, defense evasion (log clearing), collection, and exfiltration.
+  Designed to exercise all EvidenceForge log formats and maximum Windows/Sysmon Event IDs.
+
+environment:
+  description: "Small law firm with Windows/Linux mixed environment, DMZ web server, and Active Directory"
+  domain: "hartfield-law.local"
+
+  timezone:
+    default: "America/Chicago"
+
+  users:
+    # Partners & associates
+    - username: patricia.chen
+      full_name: "Patricia Chen"
+      email: "patricia.chen@hartfield-law.com"
+      persona: executive
+      primary_system: WS-PCHEN-01
+      groups: ["partners", "domain-admins"]
+      enabled: true
+
+    - username: david.okonkwo
+      full_name: "David Okonkwo"
+      email: "david.okonkwo@hartfield-law.com"
+      persona: analyst
+      primary_system: WS-DOKONKWO-01
+      groups: ["associates"]
+      enabled: true
+
+    - username: maria.santos
+      full_name: "Maria Santos"
+      email: "maria.santos@hartfield-law.com"
+      persona: analyst
+      primary_system: WS-MSANTOS-01
+      groups: ["associates"]
+      enabled: true
+
+    # IT administrator
+    - username: james.walker
+      full_name: "James Walker"
+      email: "james.walker@hartfield-law.com"
+      persona: sysadmin
+      primary_system: WS-JWALKER-01
+      groups: ["it-admins", "domain-admins"]
+      enabled: true
+
+    # Paralegal
+    - username: sarah.liu
+      full_name: "Sarah Liu"
+      email: "sarah.liu@hartfield-law.com"
+      persona: data_analyst
+      primary_system: WS-SLIU-01
+      groups: ["paralegals"]
+      enabled: true
+
+    # Receptionist
+    - username: kevin.mills
+      full_name: "Kevin Mills"
+      email: "kevin.mills@hartfield-law.com"
+      persona: receptionist
+      primary_system: WS-KMILLS-01
+      groups: ["reception"]
+      enabled: true
+
+    # External threat actor (compromises david.okonkwo)
+    - username: attacker
+      full_name: "External Threat Actor"
+      email: "attacker@external.invalid"
+      enabled: true
+
+  service_accounts:
+    - svc-backup
+    - svc-sqlreport
+
+  systems:
+    # Workstations
+    - hostname: WS-PCHEN-01
+      ip: "10.20.10.10"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: patricia.chen
+
+    - hostname: WS-DOKONKWO-01
+      ip: "10.20.10.11"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: david.okonkwo
+
+    - hostname: WS-MSANTOS-01
+      ip: "10.20.10.12"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: maria.santos
+
+    - hostname: WS-JWALKER-01
+      ip: "10.20.10.13"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: james.walker
+
+    - hostname: WS-SLIU-01
+      ip: "10.20.10.14"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: sarah.liu
+
+    - hostname: WS-KMILLS-01
+      ip: "10.20.10.15"
+      os: "Windows 10 Enterprise"
+      type: workstation
+      assigned_user: kevin.mills
+
+    # Domain Controller
+    - hostname: DC-01
+      ip: "10.20.30.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+
+    # File server (Windows)
+    - hostname: FILE-SRV-01
+      ip: "10.20.30.11"
+      os: "Windows Server 2019"
+      type: server
+      services: ["smb", "dns-client"]
+
+    # SQL database server (Windows)
+    - hostname: SQL-SRV-01
+      ip: "10.20.30.12"
+      os: "Windows Server 2019"
+      type: server
+      services: ["mssql", "dns-client"]
+
+    # Web server (Linux, DMZ)
+    - hostname: WEB-01
+      ip: "10.20.40.10"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["nginx", "php-fpm"]
+
+    # Mail relay (Linux)
+    - hostname: MAIL-01
+      ip: "10.20.30.13"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["postfix", "dovecot"]
+
+  network:
+    segments:
+      - name: workstations
+        cidr: "10.20.10.0/24"
+      - name: servers
+        cidr: "10.20.30.0/24"
+      - name: dmz
+        cidr: "10.20.40.0/24"
+
+    sensors:
+      - name: zeek-core
+        type: network
+        placement: span
+        monitoring_segments: [workstations, servers]
+        direction: bidirectional
+        log_formats: [zeek_conn, zeek_dns, zeek_http, zeek_ssl, zeek_files]
+
+      - name: zeek-dmz
+        type: network
+        placement: tap
+        monitoring_segments: [dmz, servers]
+        direction: bidirectional
+        log_formats: [zeek_conn, zeek_dns, zeek_http, zeek_ssl, zeek_files]
+
+      - name: perimeter-ids
+        type: ids
+        placement: tap
+        monitoring_segments: [dmz]
+        direction: inbound
+        log_formats: [snort_alert]
+
+personas:
+  - name: executive
+    description: "Senior partner: email, document review, brief web research"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    typical_activities: [email, document_review, web_browsing]
+    application_usage: [outlook, word, chrome]
+    risk_profile: low
+
+  - name: analyst
+    description: "Associate attorney: heavy document work, legal research, email"
+    work_hours: "8:30am-7pm (lunch 12:30pm-1:30pm)"
+    typical_activities: [document_review, legal_research, email, database_query]
+    application_usage: [word, excel, westlaw, chrome]
+    risk_profile: low
+
+  - name: sysadmin
+    description: "IT administrator: server management, PowerShell, RDP, monitoring"
+    work_hours: "7:30am-4:30pm (lunch 12pm-12:30pm)"
+    typical_activities: [server_admin, scripting, monitoring, patching]
+    application_usage: [powershell, rdesktop, putty, chrome]
+    risk_profile: medium
+
+  - name: data_analyst
+    description: "Paralegal: database queries, spreadsheet analysis, document prep"
+    work_hours: "9am-5:30pm (lunch 12pm-1pm)"
+    typical_activities: [database_query, spreadsheet_analysis, document_review]
+    application_usage: [excel, ssms, word, chrome]
+    risk_profile: low
+
+  - name: receptionist
+    description: "Front desk: phone logs, scheduling, light email"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    typical_activities: [email, scheduling, data_entry]
+    application_usage: [outlook, chrome]
+    risk_profile: low
+
+time_window:
+  start: "2024-11-12T13:00:00Z"
+  duration: "6h"
+
+baseline_activity:
+  description: "Normal law firm business day activity"
+  intensity: medium
+  variation: medium
+
+storyline:
+  # --- Phase 1: Initial Access — Password spray against david.okonkwo ---
+  - time: "+30m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Failed logon attempt via password spray against david.okonkwo (wrong password)"
+    details:
+      source_ip: "185.220.101.34"
+      logon_type: 3
+
+  - time: "+31m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Failed logon attempt via password spray against david.okonkwo (account lockout threshold)"
+    details:
+      source_ip: "185.220.101.34"
+      logon_type: 3
+
+  - time: "+32m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Successful logon to david.okonkwo workstation with stolen credentials"
+    details:
+      source_ip: "185.220.101.34"
+      logon_type: 3
+
+  # --- Phase 2: Reconnaissance ---
+  - time: "+35m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Execute domain enumeration via net.exe to list domain users"
+    details:
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net user /domain"
+
+  - time: "+36m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Execute reconnaissance to enumerate domain groups"
+    details:
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net group \"Domain Admins\" /domain"
+
+  - time: "+37m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Execute network share enumeration"
+    details:
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net view \\\\FILE-SRV-01 /all"
+
+  # --- Phase 3: Credential Dumping (Sysmon Event 8: CreateRemoteThread) ---
+  - time: "+42m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Execute credential dumping tool targeting LSASS memory"
+    details:
+      process_name: "C:\\Windows\\Temp\\procdump64.exe"
+      command_line: "procdump64.exe -accepteula -ma lsass.exe C:\\Windows\\Temp\\lsass.dmp"
+
+  # --- Phase 4: Lateral Movement via RDP to IT admin workstation ---
+  - time: "+55m"
+    actor: attacker
+    system: WS-JWALKER-01
+    activity: "RDP lateral movement to IT admin workstation using james.walker credentials"
+    details:
+      source_ip: "10.20.10.11"
+      logon_type: 10
+
+  - time: "+57m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Logon with explicit credentials (RunAs) to access IT admin context"
+    details:
+      process_name: "C:\\Windows\\System32\\runas.exe"
+      command_line: "runas /user:HARTFIELD-LAW\\james.walker cmd.exe"
+
+  # --- Phase 5: Privilege Escalation — Add attacker-controlled account to Domain Admins ---
+  - time: "+1h5m"
+    actor: attacker
+    system: DC-01
+    activity: "Authenticate to domain controller with stolen admin credentials"
+    details:
+      source_ip: "10.20.10.13"
+      logon_type: 3
+
+  - time: "+1h7m"
+    actor: attacker
+    system: DC-01
+    activity: "Execute command to create backdoor domain account"
+    details:
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net user svc-audit P@ssw0rd2024! /add /domain"
+
+  - time: "+1h8m"
+    actor: attacker
+    system: DC-01
+    activity: "Execute command to add backdoor account to Domain Admins group"
+    details:
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net group \"Domain Admins\" svc-audit /add /domain"
+
+  # --- Phase 6: Persistence — Scheduled task + service install ---
+  - time: "+1h15m"
+    actor: attacker
+    system: WS-JWALKER-01
+    activity: "Execute schtasks to create persistence scheduled task"
+    details:
+      process_name: "C:\\Windows\\System32\\schtasks.exe"
+      command_line: "schtasks /Create /SC DAILY /TN \"\\Microsoft\\Windows\\Maintenance\\SystemHealthCheck\" /TR \"C:\\ProgramData\\updater.exe\" /RU SYSTEM /F"
+
+  - time: "+1h17m"
+    actor: attacker
+    system: WS-JWALKER-01
+    activity: "Execute sc.exe to install persistence service"
+    details:
+      process_name: "C:\\Windows\\System32\\sc.exe"
+      command_line: "sc create HealthMonitor binPath= \"C:\\ProgramData\\updater.exe\" start= auto DisplayName= \"System Health Monitor\""
+
+  # --- Phase 7: SSH lateral movement to Linux web server ---
+  - time: "+1h30m"
+    actor: attacker
+    system: WEB-01
+    activity: "SSH lateral movement to web server from IT admin workstation"
+    details:
+      source_ip: "10.20.10.13"
+      logon_type: 3
+
+  - time: "+1h33m"
+    actor: attacker
+    system: WEB-01
+    activity: "Execute reconnaissance commands on Linux web server"
+    details:
+      process_name: "/usr/bin/find"
+      command_line: "find /var/www -name '*.conf' -o -name '*.env' 2>/dev/null"
+
+  - time: "+1h35m"
+    actor: attacker
+    system: WEB-01
+    activity: "Execute command to archive web application database credentials"
+    details:
+      process_name: "/usr/bin/tar"
+      command_line: "tar czf /tmp/.backup.tar.gz /var/www/app/config/database.yml /var/www/app/.env"
+
+  # --- Phase 8: Collection from file server ---
+  - time: "+2h"
+    actor: attacker
+    system: FILE-SRV-01
+    activity: "Authenticate to file server to access privileged client data"
+    details:
+      source_ip: "10.20.10.13"
+      logon_type: 3
+
+  - time: "+2h5m"
+    actor: attacker
+    system: FILE-SRV-01
+    activity: "Execute search for privileged client documents"
+    details:
+      process_name: "C:\\Windows\\System32\\cmd.exe"
+      command_line: "cmd.exe /c dir /s /b \\\\FILE-SRV-01\\cases$\\*.docx \\\\FILE-SRV-01\\cases$\\*.pdf > C:\\Windows\\Temp\\filelist.txt"
+
+  - time: "+2h10m"
+    actor: attacker
+    system: FILE-SRV-01
+    activity: "Execute 7zip to archive collected client files for exfiltration"
+    details:
+      process_name: "C:\\Windows\\Temp\\7z.exe"
+      command_line: "7z.exe a -p\"infected\" C:\\Windows\\Temp\\docs.7z @C:\\Windows\\Temp\\filelist.txt"
+
+  # --- Phase 9: SQL server data query ---
+  - time: "+2h20m"
+    actor: attacker
+    system: SQL-SRV-01
+    activity: "Authenticate to SQL server for data collection"
+    details:
+      source_ip: "10.20.10.13"
+      logon_type: 3
+
+  - time: "+2h25m"
+    actor: attacker
+    system: SQL-SRV-01
+    activity: "Execute sqlcmd to query client billing records"
+    details:
+      process_name: "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\SQLCMD.EXE"
+      command_line: "sqlcmd -S SQL-SRV-01 -d ClientBilling -Q \"SELECT TOP 5000 client_id, name, ssn, case_number, billing_amount FROM dbo.ClientRecords\" -o C:\\Windows\\Temp\\billing.csv -s\",\" -W"
+
+  # --- Phase 10: C2 communication + exfiltration ---
+  - time: "+3h"
+    actor: attacker
+    system: WS-JWALKER-01
+    activity: "Connect to C2 server for command and control communication"
+    details:
+      dst_ip: "91.219.236.180"
+      dst_port: 443
+      service: "https"
+
+  - time: "+3h10m"
+    actor: attacker
+    system: WS-JWALKER-01
+    activity: "Exfiltrate archived client data to external cloud storage"
+    details:
+      dst_ip: "104.16.85.20"
+      dst_port: 443
+      service: "https"
+
+  # --- Phase 11: Defense evasion — clear logs ---
+  - time: "+3h20m"
+    actor: attacker
+    system: WS-DOKONKWO-01
+    activity: "Execute wevtutil to clear Windows Security event log"
+    details:
+      process_name: "C:\\Windows\\System32\\wevtutil.exe"
+      command_line: "wevtutil cl Security"
+
+  # --- Phase 12: Account cleanup ---
+  - time: "+3h25m"
+    actor: attacker
+    system: DC-01
+    activity: "Execute command to delete backdoor account and remove evidence"
+    details:
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net user svc-audit /delete /domain"
+
+output:
+  logs:
+    - format: windows_event_security
+    - format: zeek_conn
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: web_access
+  destination: "./output"
+  compression: false

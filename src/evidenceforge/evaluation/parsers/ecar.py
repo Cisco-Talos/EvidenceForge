@@ -36,6 +36,11 @@ class EcarParser(LogParser):
             properties = data.pop("properties", {})
             fields = {**data, **properties}
 
+            # Normalize "-" sentinel to absent for IP fields
+            for ip_field in ("src_ip", "dst_ip"):
+                if fields.get(ip_field) == "-":
+                    del fields[ip_field]
+
             # Parse timestamp_ms (milliseconds since epoch)
             ts_ms = data.get("timestamp_ms")
             if ts_ms is not None:

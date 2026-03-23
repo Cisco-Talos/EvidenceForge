@@ -298,6 +298,13 @@ class RecordFidelityScorer(DimensionScorer):
         if not condition:
             return True
         for key, expected in condition.items():
+            if key == "exclude":
+                # Exclude records matching any of the exclusion criteria
+                for ex_key, ex_val in expected.items():
+                    actual = fields.get(ex_key)
+                    if actual == ex_val or str(actual) == str(ex_val):
+                        return False
+                continue
             actual = fields.get(key)
             if actual != expected:
                 # Try string/int coercion

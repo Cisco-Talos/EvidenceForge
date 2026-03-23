@@ -537,6 +537,14 @@ variants:
       - name: NetworkPort
         type: integer
         required: false
+      - name: LogonGuid
+        type: string
+        required: false
+        description: "GUID to correlate with Kerberos authentication"
+      - name: TargetLogonGuid
+        type: string
+        required: false
+        description: "GUID for target logon correlation"
 
   # EventID 4768: A Kerberos authentication ticket (TGT) was requested
   - name: kerberos_tgt

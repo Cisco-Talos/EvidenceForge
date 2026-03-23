@@ -98,7 +98,8 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
                 if sub.sample_failures:
                     console.print(f"\n[bold]Sample failures ({sub.name}):[/bold]")
                     for f in sub.sample_failures[:5]:
-                        console.print(f"  {f}", style="dim")
+                        # Escape brackets to prevent Rich from interpreting them as markup
+                        console.print(f"  {f}", style="dim", highlight=False)
 
     console.print()
 
