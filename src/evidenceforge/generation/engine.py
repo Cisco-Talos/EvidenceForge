@@ -2515,3 +2515,77 @@ class GenerationEngine:
                     resp_bytes=64,
                     source_system=system,
                 )
+
+        # IDS false-positive alerts: 1-3 per hour from IDS sensors
+        if 'snort_alert' in self.emitters and self.scenario.environment.network:
+            _FP_SIGS = [
+                (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3),
+                (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3),
+                (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3),
+                (2210044, "SURICATA STREAM Packet with broken ack", "protocol-command-decode", 3),
+                (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3),
+                (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2),
+                (2019876, "ET INFO Packed Executable Download", "misc-activity", 2),
+                (2027865, "ET DNS Query to a .top domain", "potentially-bad-traffic", 2),
+            ]
+            from evidenceforge.events.dispatcher import expand_formats
+            for sensor in self.scenario.environment.network.sensors:
+                if 'snort_alert' not in expand_formats(sensor.log_formats):
+                    continue
+                sensor_host = sensor.hostname or sensor.name
+                num_alerts = rng.randint(1, 3)
+                for _ in range(num_alerts):
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    sig = rng.choice(_FP_SIGS)
+                    src_sys = rng.choice(systems)
+                    dst_sys = rng.choice(systems)
+                    if src_sys.ip == dst_sys.ip:
+                        continue
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='snort_alert', fields={
+                            'timestamp': ts, 'sid': sig[0], 'message': sig[1],
+                            'classification': sig[2], 'priority': sig[3],
+                            'protocol': rng.choice(['TCP', 'UDP', 'ICMP']),
+                            'src_ip': src_sys.ip, 'src_port': rng.randint(1024, 65535),
+                            'dst_ip': dst_sys.ip, 'dst_port': rng.choice([22, 80, 443, 53, 8080]),
+                            '_sensor_hostnames': [sensor_host],
+                        },
+                    )
+
+        # Web access logs: 10-30 requests per hour on systems with web services
+        if 'web_access' in self.emitters:
+            _WEB_PATHS = [
+                ('/', 'GET', 200), ('/index.html', 'GET', 200),
+                ('/api/v1/health', 'GET', 200), ('/favicon.ico', 'GET', 200),
+                ('/robots.txt', 'GET', 200), ('/assets/main.css', 'GET', 200),
+                ('/assets/app.js', 'GET', 200), ('/images/logo.png', 'GET', 200),
+                ('/wp-login.php', 'GET', 404), ('/admin', 'GET', 403),
+                ('/.env', 'GET', 403), ('/api/v1/data', 'POST', 200),
+                ('/phpmyadmin/', 'GET', 404), ('/xmlrpc.php', 'POST', 404),
+            ]
+            _WEB_UAS = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                'curl/7.88.1',
+                'python-requests/2.31.0',
+            ]
+            for sys_obj in systems:
+                if not any(p in svc.lower() for svc in (sys_obj.services or []) for p in ('http', 'iis', 'nginx', 'apache', 'web')):
+                    continue
+                num_reqs = rng.randint(10, 30)
+                other_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+                for _ in range(num_reqs):
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    path, method, status = rng.choice(_WEB_PATHS)
+                    client_ip = rng.choice(other_ips) if other_ips else '10.0.0.1'
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='web_access', system=sys_obj, fields={
+                            'timestamp': ts, 'client_ip': client_ip,
+                            'method': method, 'path': path,
+                            'protocol': 'HTTP/1.1', 'status_code': status,
+                            'bytes_sent': rng.randint(200, 50000) if status == 200 else rng.randint(100, 500),
+                            'referer': '-', 'user_agent': rng.choice(_WEB_UAS),
+                        },
+                    )

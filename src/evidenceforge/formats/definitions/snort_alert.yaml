@@ -64,4 +64,4 @@ output:
   file_extension: ".alert"
   encoding: utf-8
   template: |
-    {{ timestamp.strftime('%m/%d-%H:%M:%S.%f')[:-3] }} [**] [{{ sid }}:1:1] {{ message }} [**] [Classification: {{ classification }}] [Priority: {{ priority }}] {%raw%}{{{ protocol }}}{%endraw%} {{ src_ip }}{% if src_port %}:{{ src_port }}{% endif %} -> {{ dst_ip }}{% if dst_port %}:{{ dst_port }}{% endif %}
+    {{ timestamp.strftime('%m/%d-%H:%M:%S.%f')[:-3] }} [**] [{{ sid }}:1:1] {{ message }} [**] [Classification: {{ classification }}] [Priority: {{ priority }}] {{ '{' }}{{ protocol }}{{ '}' }} {{ src_ip }}{% if src_port %}:{{ src_port }}{% endif %} -> {{ dst_ip }}{% if dst_port %}:{{ dst_port }}{% endif %}

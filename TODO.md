@@ -1727,6 +1727,8 @@ storyline:
 
 ### Short-term (Post-MVP)
 - [ ] ~~Bedrock LLM client for semantic validation~~ → Handled by `/eforge validate` skill
+- [ ] **P0:** `snort_alert` typed event spec — let scenario authors declare which storyline connections trigger specific IDS signatures (sid, message, classification, priority)
+- [ ] **P1:** HTTP proxy server support — system type or service for forward proxies (Squid, Blue Coat, Zscaler) that log web_access with correct client→proxy→server IP routing
 - [ ] Checkpointing and resume for long-running generation
 - [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
