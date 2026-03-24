@@ -165,14 +165,14 @@ environment:
         placement: span
         monitoring_segments: [workstations, servers]
         direction: bidirectional
-        log_formats: [zeek_conn, zeek_dns, zeek_http, zeek_ssl, zeek_files]
+        log_formats: [zeek]
 
       - name: zeek-dmz
         type: network
         placement: tap
         monitoring_segments: [dmz, servers]
         direction: bidirectional
-        log_formats: [zeek_conn, zeek_dns, zeek_http, zeek_ssl, zeek_files]
+        log_formats: [zeek]
 
       - name: perimeter-ids
         type: ids
@@ -476,8 +476,8 @@ storyline:
 
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
+    - format: windows
+    - format: zeek
     - format: ecar
     - format: syslog
     - format: bash_history

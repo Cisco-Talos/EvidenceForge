@@ -55,7 +55,7 @@ def _scenario_with_storyline(storyline_yaml: list[dict]) -> Scenario:
             description="Normal activity", intensity="low", variation="low",
         ),
         storyline=[StorylineEvent(**e) for e in storyline_yaml],
-        output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        output=OutputSpec(logs=[{"format": "windows"}], destination="./out"),
     )
 
 

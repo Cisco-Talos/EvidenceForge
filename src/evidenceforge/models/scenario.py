@@ -466,7 +466,7 @@ class NetworkSensor(BaseModel):
         default="bidirectional", pattern="^(inbound|outbound|bidirectional)$"
     )
     placement: str = Field(default="span", pattern="^(span|tap)$")
-    log_formats: list[str] = Field(default_factory=lambda: ["zeek_conn"])
+    log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
     description: str = ""
 
 

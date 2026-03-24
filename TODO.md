@@ -1732,6 +1732,7 @@ storyline:
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
 - [ ] ~~Subjective realism evaluation (LLM-based)~~ → Handled by `/eforge evaluate` skill
 - [ ] Config file inheritance/templating
+- [ ] Subset sensor format support: allow excluding specific log types from a format group (e.g., `log_formats: [zeek, -zeek_dns]` for a Zeek sensor with DNS logging disabled)
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Network diagram ingestion: auto-infer sensor placement (span vs tap) from diagram topology

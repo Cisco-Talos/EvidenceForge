@@ -82,7 +82,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -133,7 +133,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -183,7 +183,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -240,7 +240,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -298,7 +298,7 @@ class TestScenarioValidator:
                 )
             ],
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -356,7 +356,7 @@ class TestScenarioValidator:
                 )
             ],
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -413,7 +413,7 @@ class TestScenarioValidator:
                 )
             ],
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -467,7 +467,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -522,7 +522,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -577,7 +577,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -633,7 +633,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -699,7 +699,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -755,7 +755,7 @@ class TestScenarioValidator:
                 variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows_event_security"}],
+                logs=[{"format": "windows"}],
                 destination="./output",
                 compression=False
             ),
@@ -803,7 +803,7 @@ class TestScenarioValidator:
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -837,7 +837,7 @@ class TestScenarioValidator:
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -875,7 +875,7 @@ class TestScenarioValidator:
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -919,7 +919,7 @@ class TestScenarioValidator:
                     events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -953,7 +953,7 @@ class TestScenarioValidator:
                     events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -988,7 +988,7 @@ class TestScenarioValidator:
                     events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -1023,7 +1023,7 @@ class TestScenarioValidator:
                     events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
         validator = ScenarioValidator(scenario)
@@ -1059,7 +1059,7 @@ class TestNetworkValidation:
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
     def test_valid_network_config(self):
@@ -1073,7 +1073,7 @@ class TestNetworkValidation:
                 sensors=[
                     NetworkSensor(type="network", name="tap",
                                   monitoring_segments=["workstations", "servers"],
-                                  log_formats=["zeek_conn"]),
+                                  log_formats=["zeek"]),
                 ],
             )
         )

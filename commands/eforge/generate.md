@@ -84,8 +84,12 @@ scenarios/<scenario-name>/
   ENVIRONMENT.md         ← created by /eforge scenario
   GROUND_TRUTH.md        ← generated (answer key)
   data/                  ← generated log files
-    windows_event_security.xml
-    zeek_conn.json
+    windows/
+      security.xml
+      sysmon.xml
+    zeek/
+      conn.json
+      dns.json
     ...
 ```
 
@@ -141,9 +145,8 @@ After reviewing output, you can suggest:
 
 | Format | Description | Generated For |
 |--------|-------------|---------------|
-| windows_event_security | Windows Security Event Logs (XML) — 30 event IDs | Windows systems |
-| windows_event_sysmon | Sysmon operational logs (XML) — Events 1, 8 | Windows systems |
-| zeek_conn | Zeek connection logs + dns/http/ssl/files/ntp (NDJSON) | Network connections via sensors |
+| windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 8) | Windows systems |
+| zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
 | ecar | eCAR EDR/XDR events (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
 | syslog | Linux syslog (BSD format) | Linux systems |
 | bash_history | Bash command history | Linux systems |

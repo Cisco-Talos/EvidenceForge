@@ -19,21 +19,32 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Formats subject to network visibility filtering
-_NETWORK_FORMATS = {
-    "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
-    "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
-    "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
-    "snort_alert",
+# Format groups: a single name that expands to multiple emitter-level formats.
+# Sensors and output.logs declare groups; the engine expands to individual emitters.
+FORMAT_GROUPS: dict[str, set[str]] = {
+    "zeek": {
+        "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
+        "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
+        "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
+    },
+    "windows": {
+        "windows_event_security", "windows_event_sysmon",
+    },
 }
 
-# Zeek sub-formats colocated with zeek_conn on the same sensor.
-# If zeek_conn is visible for a connection, these are too.
-_ZEEK_COLOCATED = {
-    "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
-    "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
-    "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
-}
+# Formats subject to network visibility filtering (expanded emitter names)
+_NETWORK_FORMATS = FORMAT_GROUPS["zeek"] | {"snort_alert"}
+
+
+def expand_formats(formats: list[str] | set[str]) -> set[str]:
+    """Expand format group names (e.g., 'zeek') to individual emitter names."""
+    expanded: set[str] = set()
+    for fmt in formats:
+        if fmt in FORMAT_GROUPS:
+            expanded.update(FORMAT_GROUPS[fmt])
+        else:
+            expanded.add(fmt)
+    return expanded
 
 
 class EventDispatcher:
@@ -88,21 +99,15 @@ class EventDispatcher:
                 event.network.src_ip, event.network.dst_ip
             )
             # Annotate event with per-format sensor hostname mapping
-            # Each format only gets sensors that actually produce it
             sensors = self.visibility_engine.get_observing_sensors(
                 event.network.src_ip, event.network.dst_ip
             )
             format_to_sensors: dict[str, list[str]] = {}
             for sensor in sensors:
                 hostname = sensor.hostname or sensor.name
-                for fmt in sensor.log_formats:
+                # Expand group names to individual emitter names
+                for fmt in expand_formats(sensor.log_formats):
                     format_to_sensors.setdefault(fmt, []).append(hostname)
-            # Zeek sub-formats inherit sensor hostnames from zeek_conn
-            conn_sensors = format_to_sensors.get("zeek_conn", [])
-            if conn_sensors:
-                for colocated in _ZEEK_COLOCATED:
-                    if colocated not in format_to_sensors:
-                        format_to_sensors[colocated] = conn_sensors
             event._sensor_hostnames_by_format = format_to_sensors
 
         matched = []
@@ -113,10 +118,8 @@ class EventDispatcher:
             if event.local_only and format_name in _NETWORK_FORMATS:
                 continue
             # Network visibility filter: only applies to network-format emitters
-            # Zeek sub-formats (dns, http, ssl, etc.) are colocated with zeek_conn
             if visible_formats is not None and format_name in _NETWORK_FORMATS:
                 if format_name not in visible_formats:
-                    if not (format_name in _ZEEK_COLOCATED and "zeek_conn" in visible_formats):
-                        continue
+                    continue
             matched.append(emitter)
         return matched

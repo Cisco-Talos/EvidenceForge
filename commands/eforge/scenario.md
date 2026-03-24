@@ -193,7 +193,7 @@ environment:
         monitoring_segments: [corporate_lan]
         direction: bidirectional  # bidirectional | inbound | outbound
         placement: span           # span (sees intra-segment) | tap (cross-segment only)
-        log_formats: [zeek_conn]
+        log_formats: [zeek]
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer
@@ -227,9 +227,9 @@ storyline:                        # The attack events to bury in the data
 
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
-    # Available: windows_event_security, zeek_conn, ecar, syslog,
+    - format: windows
+    - format: zeek
+    # Available: windows, zeek, ecar, syslog,
     #            bash_history, snort_alert, web_access
   destination: "./output"
   compression: false
@@ -459,7 +459,7 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 **Check each storyline event against these rules:**
 
 1. **Host log coverage** — The system where the event occurs must have at least one matching log format enabled in `output.logs`:
-   - Windows systems need `windows_event_security` (or `ecar`) for logon/process events
+   - Windows systems need `windows` (or `ecar`) for logon/process events
    - Linux systems need `syslog` and/or `bash_history` for authentication and command execution
    - If a system's OS doesn't match any enabled format, the event will produce no host-level traces
 

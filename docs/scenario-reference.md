@@ -327,14 +327,14 @@ This safety net catches common cases, but should not be relied upon as the prima
 ```yaml
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
+    - format: windows
+    - format: zeek
     - format: ecar
   destination: ./output
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows_event_security`, `zeek_conn`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`.
 
 ## Backward Compatibility
 

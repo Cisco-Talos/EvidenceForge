@@ -184,31 +184,10 @@ class GenerationEngine:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {self.output_dir}")
 
-        # Load format definitions and create emitters
-        # Phase 2.2: Added new formats (eCAR, syslog, bash_history, snort, web)
-        # Note: windows_event_security kept temporarily until Phase 2.10 when activity.py
-        # is updated to emit to eCAR instead
-        formats_to_generate = [
-            'windows_event_security',  # Phase 1 - Temporary (activity.py still uses this)
-            'zeek_conn',               # Phase 1 - Network visibility
-            'zeek_dns',                # Phase 5.3 - DNS query logging
-            'zeek_http',               # Zeek expansion - HTTP logging
-            'zeek_ssl',                # Zeek expansion - SSL/TLS logging
-            'zeek_files',              # Zeek expansion - File transfer logging
-            'zeek_dhcp',               # Zeek expansion - DHCP logging
-            'zeek_ntp',                # Zeek expansion - NTP logging
-            'zeek_weird',              # Zeek expansion - Anomaly logging
-            'zeek_x509',               # Zeek expansion - X.509 certificate logging
-            'zeek_ocsp',               # Zeek expansion - OCSP response logging
-            'zeek_pe',                 # Zeek expansion - PE analysis logging
-            'zeek_packet_filter',      # Zeek expansion - Packet filter state
-            'zeek_reporter',           # Zeek expansion - Sensor diagnostics
-            'ecar',                    # Phase 2.2 - Primary host EDR/XDR
-            'syslog',                  # Phase 2.2 - Linux native logs
-            'bash_history',            # Phase 2.2 - Command history
-            'snort_alert',             # Phase 2.2 - IDS alerts
-            'web_access'               # Phase 2.2 - Web logs
-        ]
+        # Derive formats from scenario output config, expanding group names
+        from evidenceforge.events.dispatcher import expand_formats
+        requested = {log["format"] for log in self.scenario.output.logs if "format" in log}
+        formats_to_generate = expand_formats(requested)
 
         # Map format names to emitter classes
         emitter_classes = {
@@ -234,20 +213,23 @@ class GenerationEngine:
             'web_access': WebEmitter,
         }
 
-        # Build per-format sensor hostname mapping for network sensors
+        # Build per-format sensor hostname mapping (expand group names)
         _sensor_hostnames_by_format: dict[str, list[str]] = {}
         if self.scenario.environment.network and self.scenario.environment.network.sensors:
             for s in self.scenario.environment.network.sensors:
                 hostname = s.hostname or s.name
-                for fmt in s.log_formats:
+                for fmt in expand_formats(s.log_formats):
                     _sensor_hostnames_by_format.setdefault(fmt, []).append(hostname)
 
         _ZEEK_FORMATS = {k for k in emitter_classes if k.startswith("zeek_")}
         # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
         _SENSOR_FORMATS = _ZEEK_FORMATS | {'snort_alert'}
-        _HOST_FORMATS = {'windows_event_security', 'ecar', 'syslog', 'bash_history'}
+        _HOST_FORMATS = {'windows_event_security', 'windows_event_sysmon', 'ecar', 'syslog', 'bash_history'}
 
-        for format_name in formats_to_generate:
+        for format_name in sorted(formats_to_generate):
+            if format_name not in emitter_classes:
+                logger.debug(f"No emitter class for format: {format_name}")
+                continue
             format_def = load_format(format_name)
 
             if format_name in _SENSOR_FORMATS:

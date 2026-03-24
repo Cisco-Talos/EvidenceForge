@@ -12,7 +12,7 @@ from evidenceforge.events import (
     ProcessContext,
     NetworkContext,
 )
-from evidenceforge.events.dispatcher import EventDispatcher, _NETWORK_FORMATS
+from evidenceforge.events.dispatcher import EventDispatcher, _NETWORK_FORMATS, FORMAT_GROUPS
 from evidenceforge.generation.state_manager import StateManager
 
 
@@ -81,8 +81,8 @@ class TestNetworkVisibilityFiltering:
         snort = _make_mock_emitter("snort_alert", handles=True)
 
         visibility = MagicMock()
-        # Only zeek_conn is visible, not snort_alert
-        visibility.get_log_formats_for_connection.return_value = {"zeek_conn"}
+        # Only zeek formats are visible, not snort_alert
+        visibility.get_log_formats_for_connection.return_value = FORMAT_GROUPS["zeek"]
 
         dispatcher = EventDispatcher(
             state_manager=sm,

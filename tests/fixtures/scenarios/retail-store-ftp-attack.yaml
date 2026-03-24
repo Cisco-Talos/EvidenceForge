@@ -254,7 +254,7 @@ environment:
         monitoring_segments: [pos_network, office_network, server_network]
         direction: bidirectional
         placement: span
-        log_formats: [zeek_conn]
+        log_formats: [zeek]
         description: "Core switch SPAN port - sees all traffic including intra-segment"
       - type: ids
         name: perimeter-ids
@@ -317,8 +317,8 @@ baseline_activity:
 
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
+    - format: windows
+    - format: zeek
   destination: "./output"
   compression: false
 

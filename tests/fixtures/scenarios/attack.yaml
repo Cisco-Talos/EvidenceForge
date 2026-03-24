@@ -127,7 +127,7 @@ storyline:
 
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
+    - format: windows
+    - format: zeek
   destination: "./output"
   compression: false
