@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # EventID -> variant name mapping for Windows Event Security
 WINDOWS_VARIANT_MAP = {
+    1102: "log_cleared",
     4624: "logon",
     4625: "failed_logon",
     4634: "logoff",
@@ -35,8 +36,22 @@ WINDOWS_VARIANT_MAP = {
     4672: "special_privileges",
     4688: "process_creation",
     4689: "process_termination",
+    4697: "service_installed",
+    4698: "scheduled_task",
+    4720: "account_created",
+    4723: "password_change",
+    4724: "password_reset",
+    4726: "account_deleted",
+    4728: "group_membership_change",
+    4729: "group_membership_change",
+    4732: "group_membership_change",
+    4733: "group_membership_change",
+    4738: "account_changed",
+    4756: "group_membership_change",
+    4757: "group_membership_change",
     4768: "kerberos_tgt",
     4769: "kerberos_service_ticket",
+    4771: "kerberos_preauth_failed",
     4776: "ntlm_validation",
     5156: "wfp_connection",
 }
@@ -102,16 +117,18 @@ class RecordFidelityScorer(DimensionScorer):
                 # Validate against format definition if available
                 if fmt_def is not None:
                     variant = self._get_variant(format_name, record)
+                    ctx = self._build_event_context(format_name, record, variant)
                     # Normalize fields for validation (e.g., epoch timestamps)
                     normalized = self._normalize_for_validation(
                         format_name, record.fields, record.timestamp
                     )
-                    result = validate_event(fmt_def, normalized, variant)
+                    result = validate_event(fmt_def, normalized, variant, event_context=ctx)
                     if result.valid:
                         passing += 1
                     elif len(failures) < 10:
+                        ctx_label = f" ({ctx})" if ctx else ""
                         failures.append(
-                            f"[{format_name}] {result.errors[0]}"
+                            f"[{format_name}{ctx_label}] {result.errors[0]}"
                         )
                 else:
                     # No format def — count as passing if parsed successfully
@@ -291,6 +308,29 @@ class RecordFidelityScorer(DimensionScorer):
             if isinstance(event_id, int):
                 return WINDOWS_VARIANT_MAP.get(event_id)
         return None
+
+    @staticmethod
+    def _build_event_context(
+        format_name: str, record: ParsedRecord, variant: str | None,
+    ) -> str:
+        """Build a human-readable context string for validator messages."""
+        if format_name in ("windows_event_security", "windows_event_sysmon"):
+            eid = record.fields.get("EventID", "?")
+            parts = [f"EventID {eid}"]
+            if variant:
+                parts.append(variant)
+            return ", ".join(parts)
+        if format_name.startswith("zeek_"):
+            return format_name.replace("zeek_", "") + ".log"
+        if format_name == "ecar":
+            obj = record.fields.get("object", "?")
+            action = record.fields.get("action", "?")
+            return f"{obj}/{action}"
+        if format_name == "syslog":
+            return f"app={record.fields.get('app_name', '?')}"
+        if format_name == "snort_alert":
+            return f"SID {record.fields.get('sid', '?')}"
+        return ""
 
     @staticmethod
     def _condition_matches(condition: dict[str, Any], fields: dict[str, Any]) -> bool:
