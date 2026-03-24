@@ -127,9 +127,13 @@ class TestSIDInWindowsEvents:
             'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
         )
 
-        # Process dispatched via SecurityEvent
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
-        assert event.event_type == "process_create"
+        # Process dispatched via SecurityEvent (find process_create among possible file/registry events)
+        process_events = [
+            call[0][0] for call in mock_emitters['windows_event_security'].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        assert len(process_events) >= 1
+        event = process_events[0]
         assert SID_PATTERN.match(event.auth.user_sid)
         assert event.auth.user_sid == activity_gen._get_sid('alice.smith')
 

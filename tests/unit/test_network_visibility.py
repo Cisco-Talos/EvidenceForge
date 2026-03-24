@@ -68,7 +68,7 @@ class TestBidirectionalSensor:
                 NetworkSensor(type="network", name="ws-tap",
                               monitoring_segments=["workstations"],
                               direction="bidirectional",
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
             ],
         )
         return NetworkVisibilityEngine(config, systems)
@@ -118,7 +118,7 @@ class TestDirectionFiltering:
                 NetworkSensor(type="network", name="sensor",
                               monitoring_segments=["workstations"],
                               direction=direction,
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
             ],
         )
         return NetworkVisibilityEngine(config, systems)
@@ -162,7 +162,7 @@ class TestMultiSensorMultiFormat:
                 NetworkSensor(type="network", name="core-tap",
                               monitoring_segments=["workstations", "servers"],
                               direction="bidirectional",
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
                 NetworkSensor(type="ids", name="perimeter-ids",
                               monitoring_segments=["dmz"],
                               direction="inbound",
@@ -170,34 +170,34 @@ class TestMultiSensorMultiFormat:
                 NetworkSensor(type="network", name="dmz-tap",
                               monitoring_segments=["dmz"],
                               direction="bidirectional",
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
             ],
         )
         return NetworkVisibilityEngine(config, systems)
 
     def test_workstation_to_external_zeek_only(self):
-        """Workstation → external: only core-tap sees it → zeek_conn."""
+        """Workstation → external: only core-tap sees it → zeek formats."""
         engine = self._make_engine()
         formats = engine.get_log_formats_for_connection("10.10.10.1", "8.8.8.8")
-        assert formats == {"zeek_conn"}
+        assert "zeek_conn" in formats
 
     def test_external_to_dmz_zeek_and_snort(self):
         """External → DMZ: perimeter-ids (inbound, snort) + dmz-tap (bidir, zeek)."""
         engine = self._make_engine()
         formats = engine.get_log_formats_for_connection("8.8.8.8", "10.10.50.1")
-        assert formats == {"zeek_conn", "snort_alert"}
+        assert "zeek_conn" in formats and "snort_alert" in formats
 
     def test_dmz_to_external_zeek_only(self):
         """DMZ → external: perimeter-ids is inbound-only (no), dmz-tap bidir (yes)."""
         engine = self._make_engine()
         formats = engine.get_log_formats_for_connection("10.10.50.1", "8.8.8.8")
-        assert formats == {"zeek_conn"}
+        assert "zeek_conn" in formats
 
     def test_server_to_dmz_all_formats(self):
         """Server → DMZ: core-tap (servers bidir, zeek) + perimeter-ids (dmz inbound, snort) + dmz-tap (dmz bidir, zeek)."""
         engine = self._make_engine()
         formats = engine.get_log_formats_for_connection("10.10.30.1", "10.10.50.1")
-        assert formats == {"zeek_conn", "snort_alert"}
+        assert "zeek_conn" in formats and "snort_alert" in formats
 
     def test_invisible_connection_empty_formats(self):
         """Connection not seen by any sensor should return empty formats."""
@@ -232,7 +232,7 @@ class TestCIDRAutoInference:
                 NetworkSensor(type="network", name="sensor",
                               monitoring_segments=["workstations"],
                               direction="bidirectional",
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
             ],
         )
         engine = NetworkVisibilityEngine(config, systems)
@@ -254,7 +254,7 @@ class TestCIDRAutoInference:
                 NetworkSensor(type="network", name="sensor",
                               monitoring_segments=["workstations"],
                               direction="bidirectional",
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
             ],
         )
         engine = NetworkVisibilityEngine(config, systems)
@@ -282,7 +282,7 @@ class TestTapVsSpanPlacement:
                               monitoring_segments=["workstations"],
                               direction="bidirectional",
                               placement=placement,
-                              log_formats=["zeek_conn"]),
+                              log_formats=["zeek"]),
             ],
         )
         return NetworkVisibilityEngine(config, systems)

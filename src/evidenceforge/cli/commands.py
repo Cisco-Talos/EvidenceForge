@@ -116,6 +116,8 @@ def generate(
     try:
         console.print("\n[bold]Loading scenario...[/bold]")
         scenario_data = load_yaml(scenario_file)
+        from evidenceforge.utils.personas import merge_builtin_personas
+        scenario_data = merge_builtin_personas(scenario_data)
         scenario = Scenario(**scenario_data)
         console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
         console.print(f"  Description: {scenario.description}")
@@ -339,6 +341,10 @@ def validate(
         console.print(f"[bold red]Error:[/bold red] Failed to parse YAML: {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
 
+    # Step 1.5: Merge pre-built personas
+    from evidenceforge.utils.personas import merge_builtin_personas
+    scenario_data = merge_builtin_personas(scenario_data)
+
     # Step 2: Pydantic schema validation
     try:
         scenario = Scenario(**scenario_data)
@@ -445,6 +451,8 @@ def eval_cmd(
     # Load and validate scenario
     try:
         scenario_data = load_yaml(scenario_file)
+        from evidenceforge.utils.personas import merge_builtin_personas
+        scenario_data = merge_builtin_personas(scenario_data)
         scenario = Scenario(**scenario_data)
         status_console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
     except ValidationError as e:

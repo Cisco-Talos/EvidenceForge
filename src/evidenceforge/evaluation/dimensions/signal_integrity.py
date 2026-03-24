@@ -136,6 +136,12 @@ class SignalIntegrityScorer(DimensionScorer):
             event_time = self._parse_event_time(event.time, start_time)
             event_types = self._match_activity(event.activity)
 
+            # Phase 8.4: extract flat details dict from typed EventSpec objects
+            details: dict[str, Any] = {}
+            for spec in event.events:
+                spec_dict = spec.model_dump(exclude_none=True, exclude={"type", "technique", "description", "supplementary"})
+                details.update(spec_dict)
+
             resolved.append(ResolvedEvent(
                 index=i,
                 time=event_time,
@@ -143,7 +149,7 @@ class SignalIntegrityScorer(DimensionScorer):
                 system=event.system,
                 system_ip=system_ips.get(event.system),
                 activity=event.activity,
-                details=event.details or {},
+                details=details,
                 event_types=event_types,
             ))
 

@@ -103,17 +103,33 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     def _render_system_process(self, event: SecurityEvent) -> None:
         proc = event.process
-        app_name = proc.image.split('/')[-1]
-        facility = 9 if 'cron' in proc.command_line.lower() else 3
-        event_data = {
-            'timestamp': event.timestamp,
-            'hostname': event.host.hostname,
-            'app_name': app_name,
-            'pid': proc.pid,
-            'facility': facility, 'severity': 6,
-            'message': f'started: {proc.command_line}',
-            '_host_fqdn': self._get_host_fqdn(event),
-        }
+        # Detect CRON processes: parent is cron daemon or image is cron
+        is_cron = (
+            'cron' in (proc.parent_image or '').lower()
+            or proc.image in ('/usr/sbin/cron', '/usr/sbin/crond')
+        )
+        if is_cron:
+            # CRON format: CRON[pid]: (user) CMD (command)
+            event_data = {
+                'timestamp': event.timestamp,
+                'hostname': event.host.hostname,
+                'app_name': 'CRON',
+                'pid': proc.pid,
+                'facility': 9, 'severity': 6,
+                'message': f'({proc.username}) CMD ({proc.command_line})',
+                '_host_fqdn': self._get_host_fqdn(event),
+            }
+        else:
+            app_name = proc.image.split('/')[-1]
+            event_data = {
+                'timestamp': event.timestamp,
+                'hostname': event.host.hostname,
+                'app_name': app_name,
+                'pid': proc.pid,
+                'facility': 3, 'severity': 6,
+                'message': f'started: {proc.command_line}',
+                '_host_fqdn': self._get_host_fqdn(event),
+            }
         self.emit_event(event_data)
 
     def _render_ssh_session(self, event: SecurityEvent) -> None:
@@ -165,6 +181,16 @@ class SyslogEmitter(HostMultiplexEmitter):
             'message': f'New session {session_id} of user {auth.username}.',
             '_host_fqdn': host_fqdn,
         })
+
+    def _dispatch(self, event_data: dict[str, Any]) -> None:
+        """Route syslog event to both centralized and per-host files."""
+        rendered = self._render_event(event_data)
+        host_fqdn = event_data.pop('_host_fqdn', '')
+        # Always write to centralized syslog.log
+        self.emit_to_host(rendered, '')
+        # Also write to per-host file if host FQDN is set
+        if host_fqdn:
+            self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         context = {

@@ -92,6 +92,7 @@ class ScenarioValidator:
         self._validate_event_sequences()
         self._validate_network_segments()
         self._validate_network_sensors()
+        self._validate_output_formats()
         return self.issues
 
     def has_errors(self) -> bool:
@@ -270,23 +271,50 @@ class ScenarioValidator:
                     )
 
     def _validate_event_sequences(self) -> None:
-        """Validate storyline event_sequence structure if present."""
+        """Validate typed event declarations (Phase 8.4).
+
+        Per-event-type field validation is handled by Pydantic models (EventSpec).
+        This method performs cross-reference checks that Pydantic can't do.
+        """
         if not self.scenario.storyline:
             return
 
+        _KNOWN_FORMATS = {
+            'windows_event_security', 'windows_event_sysmon',
+            'zeek_conn', 'zeek_dns', 'zeek_http', 'zeek_ssl', 'zeek_files',
+            'zeek_dhcp', 'zeek_ntp', 'zeek_weird', 'zeek_x509',
+            'zeek_ocsp', 'zeek_pe', 'zeek_packet_filter', 'zeek_reporter',
+            'ecar', 'syslog', 'bash_history', 'snort_alert', 'web_access',
+        }
+
         for idx, event in enumerate(self.scenario.storyline):
-            if event.event_sequence is None:
-                continue
-            for seq_idx, sub_event in enumerate(event.event_sequence):
-                if "sub_event_type" not in sub_event:
-                    self.issues.append(
-                        ValidationIssue(
-                            severity="error",
-                            field_path=f"storyline.{idx}.event_sequence.{seq_idx}",
-                            message=f"Storyline event at {event.time}: event_sequence[{seq_idx}] missing 'sub_event_type'",
-                            suggestion="Each sub-event must have a 'sub_event_type' field",
+            for spec_idx, spec in enumerate(event.events):
+                # Validate connection dst_ip is a valid IP
+                if hasattr(spec, 'dst_ip') and spec.dst_ip:
+                    try:
+                        import ipaddress
+                        ipaddress.ip_address(spec.dst_ip)
+                    except ValueError:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.dst_ip",
+                                message=f"Invalid IP address: {spec.dst_ip}",
+                                suggestion="Use a valid IPv4 or IPv6 address",
+                            )
                         )
-                    )
+
+                # Validate raw event target_format
+                if hasattr(spec, 'target_format') and spec.target_format:
+                    if spec.target_format not in _KNOWN_FORMATS:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.target_format",
+                                message=f"Unknown target format: {spec.target_format}",
+                                suggestion=f"Use one of: {', '.join(sorted(_KNOWN_FORMATS))}",
+                            )
+                        )
 
     def _validate_network_segments(self) -> None:
         """Validate network segment cross-references."""
@@ -323,12 +351,15 @@ class ScenarioValidator:
         if not self.scenario.environment.network:
             return
 
-        known_formats = {
-            "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
-            "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
-            "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
-            "snort_alert", "web_access",
-        }
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS
+
+        # Valid sensor log_formats: group names + standalone non-group formats
+        known_sensor_formats = set(FORMAT_GROUPS.keys()) | {"snort_alert"}
+        # Individual emitter names that must use their group instead
+        _group_members = {}
+        for group, members in FORMAT_GROUPS.items():
+            for member in members:
+                _group_members[member] = group
 
         for idx, sensor in enumerate(self.scenario.environment.network.sensors):
             for seg_idx, seg_name in enumerate(sensor.monitoring_segments):
@@ -343,15 +374,58 @@ class ScenarioValidator:
                     )
 
             for fmt_idx, fmt in enumerate(sensor.log_formats):
-                if fmt not in known_formats:
+                if fmt in _group_members:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"environment.network.sensors.{idx}.log_formats.{fmt_idx}",
+                            message=f"Sensor '{sensor.name}' uses individual format '{fmt}'",
+                            suggestion=f"Use the group name '{_group_members[fmt]}' instead",
+                        )
+                    )
+                elif fmt not in known_sensor_formats:
                     self.issues.append(
                         ValidationIssue(
                             severity="warning",
                             field_path=f"environment.network.sensors.{idx}.log_formats.{fmt_idx}",
                             message=f"Sensor '{sensor.name}' uses unknown log format '{fmt}'",
-                            suggestion=f"Known network formats: {', '.join(sorted(known_formats))}",
+                            suggestion=f"Known formats: {', '.join(sorted(known_sensor_formats))}",
                         )
                     )
+
+    def _validate_output_formats(self) -> None:
+        """Validate output.logs format names."""
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS
+
+        known_output_formats = (
+            set(FORMAT_GROUPS.keys())
+            | {"ecar", "syslog", "bash_history", "snort_alert", "web_access"}
+        )
+        _group_members = {}
+        for group, members in FORMAT_GROUPS.items():
+            for member in members:
+                _group_members[member] = group
+
+        for idx, log_spec in enumerate(self.scenario.output.logs):
+            fmt = log_spec.get("format", "")
+            if fmt in _group_members:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"output.logs.{idx}.format",
+                        message=f"Individual format '{fmt}' not allowed in output.logs",
+                        suggestion=f"Use the group name '{_group_members[fmt]}' instead",
+                    )
+                )
+            elif fmt and fmt not in known_output_formats:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"output.logs.{idx}.format",
+                        message=f"Unknown output format '{fmt}'",
+                        suggestion=f"Known formats: {', '.join(sorted(known_output_formats))}",
+                    )
+                )
 
     def _get_system_ip(self, hostname: str) -> str | None:
         """Get IP address for a system by hostname."""

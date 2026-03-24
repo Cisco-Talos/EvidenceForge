@@ -193,19 +193,18 @@ class NetworkVisibilityEngine:
     def get_log_formats_for_connection(
         self, src_ip: str, dst_ip: str
     ) -> set[str]:
-        """Return the union of log_formats from all observing sensors.
+        """Return the expanded union of log_formats from all observing sensors.
 
         If no network config (backward compat), returns all Zeek formats
         so all emitters receive events when there's no network topology.
+        Format group names (e.g., 'zeek') are expanded to individual emitter names.
         """
+        from evidenceforge.events.dispatcher import expand_formats, FORMAT_GROUPS
+
         if not self._enabled:
-            return {
-                "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
-                "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
-                "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
-            }
+            return set(FORMAT_GROUPS["zeek"])
 
         formats: set[str] = set()
         for sensor in self.get_observing_sensors(src_ip, dst_ip):
             formats.update(sensor.log_formats)
-        return formats
+        return expand_formats(formats)

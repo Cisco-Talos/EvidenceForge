@@ -12,11 +12,11 @@ from evidenceforge.models.scenario import Environment, TimeWindow
 def parse_duration(duration_str: str) -> timedelta:
     """Parse duration string to timedelta.
 
-    Supports: "10h", "3d", "2h30m", "1d3h45m"
-    Units: h (hours), d (days), m (minutes)
+    Supports: "10h", "3d", "2h30m", "1d3h45m", "20m30s", "500ms"
+    Units: d (days), h (hours), m (minutes), s (seconds), ms (milliseconds)
 
     Args:
-        duration_str: Duration string matching pattern ^(\\d+[hdm])+$
+        duration_str: Duration string matching pattern ^(\\d+(ms|[hdms]))+$
 
     Returns:
         timedelta object
@@ -24,22 +24,26 @@ def parse_duration(duration_str: str) -> timedelta:
     Raises:
         ValueError: If format is invalid
     """
-    if not re.match(r"^(\d+[hdm])+$", duration_str):
+    if not re.match(r"^(\d+(ms|[hdms]))+$", duration_str):
         raise ValueError(f"Invalid duration format: {duration_str}")
 
-    # Parse all digit-unit pairs
-    pattern = r"(\d+)([hdm])"
+    # Parse all digit-unit pairs (ms must match before single-char m/s)
+    pattern = r"(\d+)(ms|[hdms])"
     matches = re.findall(pattern, duration_str)
 
-    total_seconds = 0
+    total_seconds = 0.0
     for value, unit in matches:
         value = int(value)
         if unit == "d":
-            total_seconds += value * 86400  # days to seconds
+            total_seconds += value * 86400
         elif unit == "h":
-            total_seconds += value * 3600  # hours to seconds
+            total_seconds += value * 3600
         elif unit == "m":
-            total_seconds += value * 60  # minutes to seconds
+            total_seconds += value * 60
+        elif unit == "s":
+            total_seconds += value
+        elif unit == "ms":
+            total_seconds += value * 0.001
 
     return timedelta(seconds=total_seconds)
 

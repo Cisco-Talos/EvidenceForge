@@ -184,31 +184,10 @@ class GenerationEngine:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {self.output_dir}")
 
-        # Load format definitions and create emitters
-        # Phase 2.2: Added new formats (eCAR, syslog, bash_history, snort, web)
-        # Note: windows_event_security kept temporarily until Phase 2.10 when activity.py
-        # is updated to emit to eCAR instead
-        formats_to_generate = [
-            'windows_event_security',  # Phase 1 - Temporary (activity.py still uses this)
-            'zeek_conn',               # Phase 1 - Network visibility
-            'zeek_dns',                # Phase 5.3 - DNS query logging
-            'zeek_http',               # Zeek expansion - HTTP logging
-            'zeek_ssl',                # Zeek expansion - SSL/TLS logging
-            'zeek_files',              # Zeek expansion - File transfer logging
-            'zeek_dhcp',               # Zeek expansion - DHCP logging
-            'zeek_ntp',                # Zeek expansion - NTP logging
-            'zeek_weird',              # Zeek expansion - Anomaly logging
-            'zeek_x509',               # Zeek expansion - X.509 certificate logging
-            'zeek_ocsp',               # Zeek expansion - OCSP response logging
-            'zeek_pe',                 # Zeek expansion - PE analysis logging
-            'zeek_packet_filter',      # Zeek expansion - Packet filter state
-            'zeek_reporter',           # Zeek expansion - Sensor diagnostics
-            'ecar',                    # Phase 2.2 - Primary host EDR/XDR
-            'syslog',                  # Phase 2.2 - Linux native logs
-            'bash_history',            # Phase 2.2 - Command history
-            'snort_alert',             # Phase 2.2 - IDS alerts
-            'web_access'               # Phase 2.2 - Web logs
-        ]
+        # Derive formats from scenario output config, expanding group names
+        from evidenceforge.events.dispatcher import expand_formats
+        requested = {log["format"] for log in self.scenario.output.logs if "format" in log}
+        formats_to_generate = expand_formats(requested)
 
         # Map format names to emitter classes
         emitter_classes = {
@@ -234,20 +213,23 @@ class GenerationEngine:
             'web_access': WebEmitter,
         }
 
-        # Build per-format sensor hostname mapping for network sensors
+        # Build per-format sensor hostname mapping (expand group names)
         _sensor_hostnames_by_format: dict[str, list[str]] = {}
         if self.scenario.environment.network and self.scenario.environment.network.sensors:
             for s in self.scenario.environment.network.sensors:
                 hostname = s.hostname or s.name
-                for fmt in s.log_formats:
+                for fmt in expand_formats(s.log_formats):
                     _sensor_hostnames_by_format.setdefault(fmt, []).append(hostname)
 
         _ZEEK_FORMATS = {k for k in emitter_classes if k.startswith("zeek_")}
         # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
         _SENSOR_FORMATS = _ZEEK_FORMATS | {'snort_alert'}
-        _HOST_FORMATS = {'windows_event_security', 'ecar', 'syslog', 'bash_history'}
+        _HOST_FORMATS = {'windows_event_security', 'windows_event_sysmon', 'ecar', 'syslog', 'bash_history'}
 
-        for format_name in formats_to_generate:
+        for format_name in sorted(formats_to_generate):
+            if format_name not in emitter_classes:
+                logger.debug(f"No emitter class for format: {format_name}")
+                continue
             format_def = load_format(format_name)
 
             if format_name in _SENSOR_FORMATS:
@@ -306,6 +288,10 @@ class GenerationEngine:
             sid_registry=sid_registry,
             dispatcher=self.dispatcher,
         )
+        # Build IP→System lookup for HostContext resolution on connection events
+        self.activity_generator._ip_to_system = {
+            s.ip: s for s in self.scenario.environment.systems
+        }
         logger.info("Initialized activity generator")
 
         # Set initial state manager time
@@ -348,6 +334,80 @@ class GenerationEngine:
 
         logger.info("Initialization complete")
 
+    def _emit_sensor_startup(self) -> None:
+        """Emit Zeek sensor startup records (packet_filter.log, reporter.log).
+
+        Fired once per sensor at scenario start time.
+        """
+        if not self.scenario.environment.network:
+            return
+        from evidenceforge.events.dispatcher import expand_formats
+        rng = random.Random(hash("sensor_startup"))
+        for sensor in self.scenario.environment.network.sensors:
+            sensor_fmts = expand_formats(sensor.log_formats)
+            if not any(f.startswith("zeek_") for f in sensor_fmts):
+                continue
+            hostname = sensor.hostname or sensor.name
+            ts = self.start_time + timedelta(seconds=rng.uniform(0.1, 2.0))
+
+            # packet_filter.log: BPF filter loaded at startup
+            if 'zeek_packet_filter' in self.emitters:
+                self.activity_generator.generate_raw(
+                    time=ts, target_format='zeek_packet_filter', fields={
+                        'ts': ts, 'node': hostname,
+                        'filter': 'ip or not ip',
+                        'init': True, 'success': True,
+                        '_sensor_hostnames': [hostname],
+                    },
+                )
+
+            # reporter.log: startup diagnostics (2-4 messages)
+            if 'zeek_reporter' in self.emitters:
+                msgs = [
+                    ("Reporter::INFO", "zeek_init() called"),
+                    ("Reporter::INFO", f"listening on {rng.choice(['eth0', 'ens160', 'ens192'])}"),
+                    ("Reporter::INFO", "loaded base/frameworks/notice/main.zeek"),
+                ]
+                if rng.random() < 0.5:
+                    msgs.append(("Reporter::WARNING", "Zeek compiled without GeoIP support"))
+                for i, (level, msg) in enumerate(msgs):
+                    self.activity_generator.generate_raw(
+                        time=ts + timedelta(milliseconds=i * 50), target_format='zeek_reporter',
+                        fields={
+                            'ts': ts + timedelta(milliseconds=i * 50),
+                            'level': level, 'message': msg, 'location': '',
+                            '_sensor_hostnames': [hostname],
+                        },
+                    )
+
+    def _emit_dhcp_leases(self) -> None:
+        """Emit DHCP lease records for each system at scenario start.
+
+        Real networks show DHCP transactions at boot. One transaction per
+        host with deterministic MAC address derived from IP.
+        """
+        if 'zeek_dhcp' not in self.emitters:
+            return
+        rng = random.Random(hash("dhcp_leases"))
+        from evidenceforge.utils.ids import generate_zeek_uid
+        for system in self.scenario.environment.systems:
+            # Generate deterministic MAC from IP
+            ip_hash = hash(f"mac_{system.ip}")
+            mac = f"00:50:56:{(ip_hash >> 16) & 0xff:02x}:{(ip_hash >> 8) & 0xff:02x}:{ip_hash & 0xff:02x}"
+            ts = self.start_time + timedelta(seconds=rng.uniform(0.5, 5.0))
+            uid = generate_zeek_uid("C")
+            self.activity_generator.generate_raw(
+                time=ts, target_format='zeek_dhcp', system=system, fields={
+                    'ts': ts, 'uids': [uid],
+                    'client_addr': system.ip, 'server_addr': '10.0.0.1',
+                    'mac': mac, 'host_name': system.hostname,
+                    'assigned_addr': system.ip,
+                    'lease_time': float(rng.choice([3600, 7200, 14400, 86400])),
+                    'msg_types': ['DISCOVER', 'OFFER', 'REQUEST', 'ACK'],
+                    'duration': round(rng.uniform(0.01, 0.5), 6),
+                },
+            )
+
     def _generate_baseline(self) -> None:
         """Generate baseline activity for all enabled users.
 
@@ -360,6 +420,8 @@ class GenerationEngine:
         - Uniform distribution with jitter within each hour
         """
         logger.info("Starting baseline activity generation")
+        self._emit_sensor_startup()
+        self._emit_dhcp_leases()
 
         # Get enabled users only
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
@@ -940,22 +1002,16 @@ class GenerationEngine:
                 "system": system.hostname
             })
 
-            # Match activity to event types (simple keyword matching)
-            event_types = self._match_activity_to_events(storyline_event.activity)
-
-            # Execute each matched event type
+            # Phase 8.4: iterate over typed event specs
             self.state_manager.set_current_time(event_time)
+            explicit_types = {spec.type for spec in storyline_event.events}
 
-            for event_type in event_types:
-                malicious_event = self._execute_storyline_event(
-                    actor=actor,
-                    system=system,
-                    time=event_time,
-                    event_type=event_type,
-                    activity=storyline_event.activity,
-                    details=storyline_event.details
+            for spec in storyline_event.events:
+                malicious_event = self._execute_typed_event(
+                    spec=spec, actor=actor, system=system,
+                    time=event_time, activity=storyline_event.activity,
+                    explicit_types=explicit_types,
                 )
-
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
 
@@ -983,17 +1039,253 @@ class GenerationEngine:
 
         logger.info(f"Executing interleaved storyline event: {storyline_event.actor} on {storyline_event.system} at {event_time}")
 
-        event_types = self._match_activity_to_events(storyline_event.activity)
         self.state_manager.set_current_time(event_time)
 
-        for event_type in event_types:
-            malicious_event = self._execute_storyline_event(
-                actor=actor, system=system, time=event_time,
-                event_type=event_type, activity=storyline_event.activity,
-                details=storyline_event.details,
+        # Phase 8.4: iterate over typed event specs (no keyword matching)
+        explicit_types = {spec.type for spec in storyline_event.events}
+        for spec in storyline_event.events:
+            malicious_event = self._execute_typed_event(
+                spec=spec, actor=actor, system=system,
+                time=event_time, activity=storyline_event.activity,
+                explicit_types=explicit_types,
             )
             if malicious_event:
                 self.malicious_events.append(malicious_event)
+
+    def _execute_typed_event(
+        self,
+        spec,  # EventSpec union type
+        actor: User,
+        system: System,
+        time: datetime,
+        activity: str,
+        explicit_types: set[str],
+    ) -> Optional[dict]:
+        """Execute a single typed event from the storyline events list.
+
+        Each event spec type maps to a specific generate_* method on ActivityGenerator.
+        Returns a malicious_event dict for GROUND_TRUTH.md.
+        """
+        malicious_event = {
+            'time': time,
+            'actor': actor.username,
+            'system': system.hostname,
+            'activity': activity,
+            'type': spec.type,
+        }
+
+        if spec.type == 'logon':
+            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
+            source_ip = spec.source_ip or random.choice(_attacker_ips)
+            logon_id = self.activity_generator.generate_logon(
+                user=actor, system=system, time=time,
+                logon_type=spec.logon_type, source_ip=source_ip,
+            )
+            malicious_event['logon_id'] = logon_id
+            malicious_event['source_ip'] = source_ip
+
+        elif spec.type == 'failed_logon':
+            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174']
+            source_ip = spec.source_ip or random.choice(_attacker_ips)
+            self.activity_generator.generate_failed_logon(
+                user=actor, system=system, time=time,
+                logon_type=spec.logon_type, source_ip=source_ip,
+            )
+            malicious_event['source_ip'] = source_ip
+
+        elif spec.type == 'logoff':
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            if sessions:
+                logon_id = sessions[0].logon_id
+                self.activity_generator.generate_logoff(actor, system, time, logon_id)
+
+        elif spec.type == 'process':
+            # Ensure user has an active session
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            if not sessions:
+                logon_time = time - timedelta(seconds=random.uniform(0.5, 2.0))
+                logon_id = self.activity_generator.generate_logon(actor, system, logon_time, logon_type=3)
+            else:
+                logon_id = sessions[0].logon_id
+
+            from evidenceforge.generation.activity import _get_os_category
+            os_category = _get_os_category(system.os)
+            process_name = spec.process_name
+            command_line = spec.command_line or process_name
+
+            # Linux: emit bash_history for the command
+            if os_category == 'linux':
+                self.activity_generator.generate_bash_command(actor, system, time, command_line)
+
+            # Replace base64 placeholder
+            if '<base64_encoded_command>' in command_line:
+                command_line = command_line.replace(
+                    '<base64_encoded_command>',
+                    self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
+                )
+
+            parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
+            pid = self.activity_generator.generate_process(
+                user=actor, system=system, time=time, logon_id=logon_id,
+                process_name=process_name, command_line=command_line, parent_pid=parent_pid,
+            )
+            self.activity_generator._record_user_process(system, actor, pid, process_name)
+            self._last_storyline_pid = pid
+            self._last_storyline_system = system.hostname
+            malicious_event['process_name'] = process_name
+            malicious_event['command_line'] = command_line
+            malicious_event['pid'] = pid
+
+            # Emit FILE/CREATE for output files
+            output_file = self._extract_output_file(command_line, os_category)
+            if output_file:
+                file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
+                from evidenceforge.events.base import SecurityEvent as SE
+                from evidenceforge.events.contexts import FileContext, AuthContext as AC
+                host_ctx = self.activity_generator._build_host_context(system)
+                self.dispatcher.dispatch(SE(
+                    timestamp=file_time, event_type='file_create', host=host_ctx,
+                    auth=AC(username=actor.username),
+                    file=FileContext(path=output_file, action='create', pid=pid),
+                ))
+                malicious_event['output_file'] = output_file
+
+            # Emit 4648 for explicit credential tools
+            _EXPLICIT_CRED_TOOLS = {'psexec', 'wmic', 'runas', 'schtasks', 'net.exe', 'net1.exe'}
+            proc_basename = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
+            if proc_basename in _EXPLICIT_CRED_TOOLS and os_category == 'windows':
+                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
+                self.activity_generator.generate_explicit_credentials(
+                    user=actor, system=system, time=cred_time,
+                    target_username=actor.username, target_server='localhost',
+                    process_name=process_name, process_pid=pid,
+                )
+
+            # Supplementary events (4720, 4697, 4698, 1102, etc.) unless suppressed or already declared
+            if os_category == 'windows' and getattr(spec, 'supplementary', 'auto') != 'none':
+                self._emit_supplementary_events(
+                    actor, system, time, command_line, pid, logon_id,
+                    skip_types=explicit_types,
+                )
+
+        elif spec.type == 'connection':
+            _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88']
+            source_ip = spec.source_ip or system.ip
+            dst_ip = spec.dst_ip
+            dst_port = spec.dst_port
+            service = spec.service or ('ssl' if dst_port == 443 else 'http' if dst_port == 80 else 'ssl')
+            uid = self.activity_generator.generate_connection(
+                src_ip=source_ip, dst_ip=dst_ip, time=time,
+                dst_port=dst_port, service=service,
+                duration=random.uniform(1.0, 30.0),
+                orig_bytes=random.randint(1000, 10000),
+                resp_bytes=random.randint(5000, 50000),
+                emit_dns=True,
+                source_system=system,
+            )
+            malicious_event['dst_ip'] = dst_ip
+            malicious_event['dst_port'] = dst_port
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+        elif spec.type == 'ssh_session':
+            source_ip = spec.source_ip or system.ip
+            target = next((s for s in self.scenario.environment.systems if s.ip == system.ip), system)
+            uid = self.activity_generator.generate_ssh_session(
+                user=actor, target_system=target, time=time, source_ip=source_ip,
+            )
+            malicious_event['dst_ip'] = system.ip
+            malicious_event['dst_port'] = 22
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+        elif spec.type == 'rdp_session':
+            source_ip = spec.source_ip or system.ip
+            target = next((s for s in self.scenario.environment.systems if s.ip == system.ip), system)
+            uid = self.activity_generator.generate_rdp_session(
+                user=actor, target_system=target, time=time, source_ip=source_ip,
+            )
+            malicious_event['dst_ip'] = system.ip
+            malicious_event['dst_port'] = 3389
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+        elif spec.type == 'account_created':
+            dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
+            target_sid = spec.target_sid or self._make_domain_sid()
+            self.activity_generator.generate_account_created(
+                actor=actor, system=dc, time=time,
+                target_username=spec.target_username, target_sid=target_sid,
+            )
+            malicious_event['target_username'] = spec.target_username
+
+        elif spec.type == 'account_deleted':
+            dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
+            target_sid = spec.target_sid or self._make_domain_sid()
+            self.activity_generator.generate_account_deleted(
+                actor=actor, system=dc, time=time,
+                target_username=spec.target_username, target_sid=target_sid,
+            )
+            malicious_event['target_username'] = spec.target_username
+
+        elif spec.type == 'group_member_added':
+            dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
+            group_rid = 512 if 'admin' in spec.group_name.lower() else random.randint(1100, 9999)
+            group_sid = self._make_domain_sid(group_rid)
+            member_sid = self._make_domain_sid()
+            self.activity_generator.generate_group_membership_change(
+                actor=actor, system=dc, time=time,
+                action='add', scope=spec.scope,
+                group_name=spec.group_name, group_sid=group_sid,
+                member_username=spec.member_name, member_sid=member_sid,
+            )
+            malicious_event['group_name'] = spec.group_name
+            malicious_event['member_name'] = spec.member_name
+
+        elif spec.type == 'service_installed':
+            self.activity_generator.generate_service_installed(
+                user=actor, system=system, time=time,
+                service_name=spec.service_name,
+                service_file_name=spec.service_file_name,
+                service_account=spec.service_account,
+            )
+            malicious_event['service_name'] = spec.service_name
+
+        elif spec.type == 'scheduled_task_created':
+            task_content = spec.task_content or ''
+            self.activity_generator.generate_scheduled_task(
+                user=actor, system=system, time=time,
+                task_name=spec.task_name, action='created', task_content=task_content,
+            )
+            malicious_event['task_name'] = spec.task_name
+
+        elif spec.type == 'log_cleared':
+            self.activity_generator.generate_log_cleared(user=actor, system=system, time=time)
+
+        elif spec.type == 'create_remote_thread':
+            # CreateRemoteThread needs source+target PIDs — use last storyline process as source
+            source_pid = getattr(self, '_last_storyline_pid', 0) or 0
+            source_image = 'unknown'
+            self.activity_generator.generate_create_remote_thread(
+                user=actor, system=system, time=time,
+                source_pid=source_pid, source_image=source_image,
+                target_pid=4, target_image=spec.target_process,
+            )
+            malicious_event['target_process'] = spec.target_process
+
+        elif spec.type == 'raw':
+            self.activity_generator.generate_raw(
+                time=time, target_format=spec.target_format,
+                fields=spec.fields, system=system,
+            )
+            malicious_event['target_format'] = spec.target_format
+
+        return malicious_event
+
+    def _make_domain_sid(self, rid: int | None = None) -> str:
+        """Generate a SID using the scenario's domain SID prefix."""
+        for sid in self.activity_generator.sid_registry.values():
+            if sid.startswith('S-1-5-21-') and sid.count('-') == 7:
+                prefix = '-'.join(sid.split('-')[:7])
+                return f'{prefix}-{rid or random.randint(1100, 9999)}'
+        return f'S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{rid or random.randint(1100, 9999)}'
 
     def _parse_storyline_time(self, time_str: str) -> datetime:
         """Parse storyline event time to absolute datetime.
@@ -1031,289 +1323,130 @@ class GenerationEngine:
 
         raise ValueError(f"Invalid storyline time format: {time_str}")
 
-    def _match_activity_to_events(self, activity: str) -> list[str]:
-        """Match activity description to event types using keyword matching.
+    # _match_activity_to_events and _execute_storyline_event deleted in Phase 8.4
+    # Replaced by _execute_typed_event which reads from typed EventSpec objects
 
-        Phase 1: Simple keyword-based matching.
 
-        Args:
-            activity: Activity description string
-
-        Returns:
-            List of event types to generate
-        """
-        # Keyword mapping for Phase 1
-        keywords = {
-            'logon': ['logon', 'log in', 'login', 'authenticate', 'sign in', 'rdp', 'ssh'],
-            'logoff': ['logoff', 'log off', 'logout', 'sign out'],
-            'process': ['execute', 'run', 'launch', 'start', 'spawn', 'powershell', 'cmd', 'command', 'search', 'read', 'enumerate', 'dump', 'query', 'list', 'archive', 'compress', 'delete', 'remove', 'clean'],
-            'connection': ['connect', 'access', 'download', 'upload', 'communicate', 'c2', 'exfiltrate', 'ssh', 'rdp', 'remote'],
-        }
-
-        activity_lower = activity.lower()
-        matched = []
-
-        for event_type, kws in keywords.items():
-            if any(kw in activity_lower for kw in kws):
-                matched.append(event_type)
-
-        # Default to process if no match
-        return matched if matched else ['process']
-
-    def _execute_storyline_event(
+    def _emit_supplementary_events(
         self,
         actor: User,
         system: System,
         time: datetime,
-        event_type: str,
-        activity: str,
-        details: Optional[dict]
-    ) -> Optional[dict]:
-        """Execute a single storyline event of a specific type.
+        command_line: str,
+        pid: int,
+        logon_id: str,
+        skip_types: set[str] | None = None,
+    ) -> None:
+        """Emit supplementary Windows events based on command-line patterns.
 
-        Args:
-            actor: User performing the activity
-            system: System where activity occurs
-            time: Event timestamp
-            event_type: Type of event (logon, process, connection, etc.)
-            activity: Activity description
-            details: Optional activity-specific details
+        Detects administrative commands (net user, net group, schtasks, sc create,
+        wevtutil cl) and emits corresponding high-level audit events (4720, 4726,
+        4728, 4697, 4698, 1102) that Windows would generate alongside the 4688.
 
-        Returns:
-            Malicious event dict for GROUND_TRUTH.md, or None if not tracked
+        skip_types: set of event types already explicitly declared in the storyline
+        events list. Supplementary inference skips these to avoid duplicates.
         """
-        details = details or {}
-        malicious_event = {
-            'time': time,
-            'actor': actor.username,
-            'system': system.hostname,
-            'activity': activity,
-            'type': event_type,
-        }
+        skip_types = skip_types or set()
+        import re
+        cmd_lower = command_line.lower()
 
-        if event_type == 'logon':
-            # Default attacker IPs: realistic hosting/VPN ranges (not RFC 5737)
-            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
-            source_ip = details.get('source_ip', random.choice(_attacker_ips))
-            # Auto-detect logon type from technique/activity keywords
-            is_rdp_logon = ('rdp' in activity.lower()
-                            or details.get('technique', '').startswith('T1021.001')
-                            or details.get('dst_port') == 3389)
-            is_ssh_logon = ('ssh' in activity.lower()
-                            or details.get('technique', '').startswith('T1021.004'))
-            default_logon_type = 10 if is_rdp_logon else 3
-            logon_type = details.get('logon_type', default_logon_type)
-            logon_id = self.activity_generator.generate_logon(
-                user=actor,
-                system=system,
-                time=time,
-                logon_type=logon_type,
-                source_ip=source_ip
+        # Find the DC for account management events
+        dc = next(
+            (s for s in self.scenario.environment.systems if s.type == 'domain_controller'),
+            system,
+        )
+
+        delay_s = random.uniform(0.1, 0.5)
+
+        # Helper: get domain SID prefix from existing SID registry
+        def _domain_sid_prefix() -> str:
+            for sid in self.activity_generator.sid_registry.values():
+                if sid.startswith('S-1-5-21-') and sid.count('-') == 7:
+                    return '-'.join(sid.split('-')[:7])
+            return f'S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}'
+
+        def _make_sid(rid: int | None = None) -> str:
+            prefix = _domain_sid_prefix()
+            if rid is None:
+                rid = random.randint(1100, 9999)
+            return f'{prefix}-{rid}'
+
+        # net user <name> /add /domain → 4720 (account created)
+        match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', cmd_lower)
+        if match and 'account_created' not in skip_types:
+            orig_match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', command_line, re.IGNORECASE)
+            target_name = orig_match.group(1) if orig_match else match.group(1)
+            target_sid = _make_sid()
+            self.activity_generator.generate_account_created(
+                actor=actor, system=dc,
+                time=time + timedelta(seconds=delay_s),
+                target_username=target_name,
+                target_sid=target_sid,
             )
-            malicious_event['logon_id'] = logon_id
-            malicious_event['source_ip'] = source_ip
 
-        elif event_type == 'process':
-            # Get or create session for this user
-            sessions = self.state_manager.get_sessions_for_user(actor.username)
-            if not sessions:
-                # Create session first with timestamp slightly before the process
-                logon_time = time - timedelta(seconds=random.uniform(0.5, 2.0))
-                logon_id = self.activity_generator.generate_logon(actor, system, logon_time, logon_type=3)
-            else:
-                logon_id = sessions[0].logon_id  # Use first active session
-
-            # Linux command events: emit bash_history + eCAR for commands
-            from evidenceforge.generation.activity import _get_os_category
-            linux_command = details.get('command')
-            os_category = _get_os_category(system.os)
-            if linux_command and os_category == 'linux':
-                # Emit bash history entry
-                self.activity_generator.generate_bash_command(
-                    actor, system, time, linux_command
-                )
-                # Also generate eCAR PROCESS/CREATE for the command
-                cmd_binary = linux_command.split()[0] if linux_command.strip() else '/bin/bash'
-                process_name = cmd_binary
-                command_line = linux_command
-            else:
-                # Use details or create malicious-looking process (Windows)
-                process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
-                command_line = details.get('command_line', 'powershell.exe -enc <base64_encoded_command>')
-
-            # Replace base64 placeholder with actual encoded command
-            if '<base64_encoded_command>' in command_line:
-                command_line = command_line.replace(
-                    '<base64_encoded_command>',
-                    self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
-                )
-
-            # Use previous storyline process as parent (attack chain continuity)
-            last_pid = getattr(self, '_last_storyline_pid', None)
-            if last_pid and self.activity_generator._is_pid_alive(system, last_pid):
-                parent_pid = last_pid
-            else:
-                parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
-            pid = self.activity_generator.generate_process(
-                user=actor,
-                system=system,
-                time=time,
-                logon_id=logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
+        # net user <name> /delete /domain → 4726 (account deleted)
+        match = re.search(r'net\s+user\s+(\S+)\s+/delete', cmd_lower)
+        if match and 'account_deleted' not in skip_types:
+            orig_match = re.search(r'net\s+user\s+(\S+)\s+/delete', command_line, re.IGNORECASE)
+            target_name = orig_match.group(1) if orig_match else match.group(1)
+            target_sid = _make_sid()
+            self.activity_generator.generate_account_deleted(
+                actor=actor, system=dc,
+                time=time + timedelta(seconds=delay_s),
+                target_username=target_name,
+                target_sid=target_sid,
             )
-            self.activity_generator._record_user_process(system, actor, pid, process_name)
 
-            self._last_storyline_pid = pid  # Track for parent chain continuity
-            malicious_event['process_name'] = process_name
-            malicious_event['command_line'] = command_line
-            malicious_event['pid'] = pid
+        # net group "<GroupName>" <user> /add /domain → 4728 (global group member added)
+        match = re.search(r'net\s+group\s+"?([^"]+)"?\s+(\S+)\s+/add', command_line, re.IGNORECASE)
+        if match and 'group_member_added' not in skip_types:
+            group_name = match.group(1)
+            member_name = match.group(2)
+            # Domain Admins = RID 512
+            group_rid = 512 if 'admin' in group_name.lower() else random.randint(1100, 9999)
+            group_sid = _make_sid(group_rid)
+            member_sid = _make_sid()
+            self.activity_generator.generate_group_membership_change(
+                actor=actor, system=dc,
+                time=time + timedelta(seconds=delay_s),
+                action='add', scope='global',
+                group_name=group_name, group_sid=group_sid,
+                member_username=member_name, member_sid=member_sid,
+            )
 
-            # Emit FILE/CREATE for output files referenced in command line
-            output_file = self._extract_output_file(command_line, os_category)
-            if output_file:
-                file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
-                from evidenceforge.events.base import RawLogEntry
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=file_time, target_emitter='ecar',
-                    data={
-                        'timestamp': file_time,
-                        'hostname': system.hostname,
-                        'object': 'FILE', 'action': 'CREATE',
-                        'file_name': output_file,
-                        'pid': pid,
-                        'principal': actor.username,
-                    },
-                ))
-                malicious_event['output_file'] = output_file
+        # schtasks /Create ... /TN "<TaskName>" → 4698 (scheduled task created)
+        match = re.search(r'schtasks\s+/create\b.*?/tn\s+"?([^"]+)"?', command_line, re.IGNORECASE)
+        if match and 'scheduled_task_created' not in skip_types:
+            task_name = match.group(1)
+            # Extract /TR value for task content
+            tr_match = re.search(r'/tr\s+"?([^"]+)"?', command_line, re.IGNORECASE)
+            task_action = tr_match.group(1) if tr_match else ''
+            self.activity_generator.generate_scheduled_task(
+                user=actor, system=system,
+                time=time + timedelta(seconds=delay_s),
+                task_name=task_name,
+                action='created',
+                task_content=f'<Actions><Exec><Command>{task_action}</Command></Exec></Actions>',
+            )
 
-            # Emit 4648 for processes using explicit credentials (PsExec, WMIC, runas, etc.)
-            _EXPLICIT_CRED_TOOLS = {'psexec', 'wmic', 'runas', 'schtasks', 'net.exe', 'net1.exe'}
-            proc_basename = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
-            technique = details.get('technique', '')
-            if (proc_basename in _EXPLICIT_CRED_TOOLS
-                    or technique.startswith('T1021')
-                    or technique.startswith('T1053')) and os_category == 'windows':
-                target_server = details.get('dst_ip', 'localhost')
-                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
-                self.activity_generator.generate_explicit_credentials(
-                    user=actor,
-                    system=system,
-                    time=cred_time,
-                    target_username=actor.username,
-                    target_server=target_server,
-                    process_name=process_name,
-                    process_pid=pid,
-                )
+        # sc create <ServiceName> binPath= "<path>" → 4697 (service installed)
+        match = re.search(r'sc\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?', command_line, re.IGNORECASE)
+        if match and 'service_installed' not in skip_types:
+            svc_name = match.group(1)
+            svc_path = match.group(2)
+            self.activity_generator.generate_service_installed(
+                user=actor, system=system,
+                time=time + timedelta(seconds=delay_s),
+                service_name=svc_name,
+                service_file_name=svc_path,
+            )
 
-        elif event_type == 'connection':
-            # Detect SSH from activity keywords or MITRE technique
-            is_ssh = ('ssh' in activity.lower()
-                      or details.get('technique', '').startswith('T1021.004')
-                      or details.get('dst_port') == 22
-                      or details.get('service') == 'ssh')
-
-            # Detect RDP from activity keywords or MITRE technique
-            is_rdp = ('rdp' in activity.lower()
-                      or details.get('technique', '').startswith('T1021.001')
-                      or details.get('dst_port') == 3389
-                      or details.get('logon_type') == 10)
-
-            # Default C2 IPs: realistic cloud hosting ranges (not RFC 5737)
-            _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88', '64.227.38.102', '108.61.13.174']
-            if is_ssh:
-                # SSH: target is the storyline system, source is from details or actor's workstation
-                dst_ip = system.ip
-                dst_port = 22
-                service = 'ssh'
-            elif is_rdp:
-                # RDP: target is the storyline system, source from details
-                dst_ip = system.ip
-                dst_port = 3389
-                service = 'rdp'
-            else:
-                dst_ip = details.get('dst_ip', random.choice(_c2_ips))
-                dst_port = details.get('dst_port', 443)
-                service = details.get('service', 'ssl')
-
-            # For lateral movement (SSH/RDP), the source is the attacker's previous system
-            source_ip = details.get('source_ip', system.ip)
-
-            # Validate destination is different from source
-            if dst_ip == system.ip and not is_ssh and not is_rdp:
-                logger.warning(
-                    f"Skipping storyline connection: dst_ip {dst_ip} matches system IP {system.ip}. "
-                    f"Adjusting to external IP."
-                )
-                dst_ip = random.choice(['159.65.43.201', '134.209.29.115', '167.71.156.88'])
-
-            # SSH connections use compound ssh_session event (Zeek + syslog + eCAR)
-            if is_ssh:
-                source_ip = details.get('source_ip', system.ip)
-                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), system)
-                uid = self.activity_generator.generate_ssh_session(
-                    user=actor, target_system=target, time=time, source_ip=source_ip,
-                )
-            elif is_rdp:
-                # RDP: compound event (Zeek conn + 4624 type 10 + eCAR on target)
-                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), system)
-                uid = self.activity_generator.generate_rdp_session(
-                    user=actor, target_system=target,
-                    time=time, source_ip=source_ip,
-                )
-            elif dst_port == 22:
-                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), None)
-                if target:
-                    uid = self.activity_generator.generate_ssh_session(
-                        user=actor, target_system=target, time=time, source_ip=source_ip,
-                    )
-                else:
-                    uid = self.activity_generator.generate_connection(
-                        src_ip=source_ip, dst_ip=dst_ip, time=time,
-                        dst_port=22, service='ssh', duration=random.uniform(30.0, 1800.0),
-                        orig_bytes=random.randint(2000, 50000), resp_bytes=random.randint(5000, 200000),
-                        emit_dns=True,
-                    )
-            else:
-                uid = self.activity_generator.generate_connection(
-                    src_ip=source_ip, dst_ip=dst_ip, time=time,
-                    dst_port=dst_port, service=service,
-                    duration=random.uniform(1.0, 30.0),
-                    orig_bytes=random.randint(1000, 10000),
-                    resp_bytes=random.randint(5000, 50000),
-                    emit_dns=True,
-                )
-
-            malicious_event['dst_ip'] = dst_ip
-            malicious_event['dst_port'] = dst_port
-            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
-
-            # Emit 4648 (explicit credentials) for lateral movement to internal systems
-            from evidenceforge.generation.activity import _get_os_category as _os_cat
-            technique = details.get('technique', '')
-            is_lateral = (is_ssh or is_rdp
-                          or technique.startswith('T1021')
-                          or technique.startswith('T1053'))
-            if is_lateral and _os_cat(system.os) == 'windows':
-                target_host = next(
-                    (s for s in self.scenario.environment.systems if s.ip == dst_ip),
-                    None,
-                )
-                target_server_name = target_host.hostname if target_host else dst_ip
-                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
-                self.activity_generator.generate_explicit_credentials(
-                    user=actor,
-                    system=system,
-                    time=cred_time,
-                    target_username=actor.username,
-                    target_server=target_server_name,
-                    process_name=r'C:\Windows\System32\lsass.exe',
-                    process_pid=0,
-                    source_ip=source_ip,
-                )
-
-        return malicious_event
+        # wevtutil cl Security → 1102 (log cleared)
+        if 'wevtutil' in cmd_lower and 'cl' in cmd_lower and 'log_cleared' not in skip_types:
+            self.activity_generator.generate_log_cleared(
+                user=actor, system=system,
+                time=time + timedelta(seconds=delay_s),
+            )
 
     @staticmethod
     def _extract_output_file(command_line: str, os_category: str) -> str | None:
@@ -1773,6 +1906,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(40, 120),
                         resp_bytes=rng.randint(80, 512),
+                        source_system=system,
                     )
 
             # NTP sync: 0-1 per hour, anchored to per-system offset
@@ -1792,6 +1926,7 @@ class GenerationEngine:
                     duration=rng.uniform(0.01, 0.1),
                     orig_bytes=48,
                     resp_bytes=48,
+                    source_system=system,
                 )
 
             # SMB browsing: 1-3 per hour (Windows workstations only), evenly spaced
@@ -1819,6 +1954,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.1, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=rng.randint(500, 5000),
+                        source_system=system,
                     )
 
             # Kerberos: domain-joined Windows machines → DC, 4-8 per hour
@@ -1836,6 +1972,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(200, 1500),
                         resp_bytes=rng.randint(200, 2000),
+                        source_system=system,
                     )
 
             # LDAP: domain-joined Windows machines → DC, 2-5 per hour
@@ -1853,6 +1990,7 @@ class GenerationEngine:
                         duration=rng.uniform(0.01, 0.5),
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
+                        source_system=system,
                     )
 
             # HTTPS background traffic: Windows Update, CRL checks, telemetry
@@ -1880,6 +2018,7 @@ class GenerationEngine:
                         orig_bytes=rng.randint(200, 5000),
                         resp_bytes=rng.randint(500, 50000),
                         emit_dns=True,
+                        source_system=system,
                     )
             elif os_cat == 'linux':
                 # Linux servers: package repos, API calls
@@ -1898,6 +2037,7 @@ class GenerationEngine:
                         orig_bytes=rng.randint(200, 3000),
                         resp_bytes=rng.randint(500, 30000),
                         emit_dns=True,
+                        source_system=system,
                     )
 
             # Database: app servers + some workstations → DB servers from scenario
@@ -1919,6 +2059,7 @@ class GenerationEngine:
                             duration=rng.uniform(0.01, 2.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
+                            source_system=system,
                         )
 
             # Scheduled tasks: periodic at fixed intervals with small jitter.
@@ -1993,6 +2134,7 @@ class GenerationEngine:
                         dst_port=0, proto='icmp',
                         duration=rng.uniform(0.0001, 0.005),
                         orig_bytes=64, resp_bytes=64,
+                        source_system=system,
                     )
 
             # SSH: connections to Linux servers, 1-3 per hour from other systems
@@ -2013,6 +2155,7 @@ class GenerationEngine:
                             duration=rng.uniform(30.0, 3600.0),
                             orig_bytes=rng.randint(2000, 50000),
                             resp_bytes=rng.randint(5000, 200000),
+                            source_system=system,
                         )
 
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
@@ -2044,22 +2187,22 @@ class GenerationEngine:
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    self.dispatcher.dispatch_raw(RawLogEntry(
-                        timestamp=ts, target_emitter='windows_event_security',
-                        data={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
-                              'Channel': 'Security', 'Level': 0,
-                              'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
-                              'SubjectUserSid': 'S-1-0-0', 'SubjectUserName': '-',
-                              'SubjectDomainName': '-', 'SubjectLogonId': '0x0',
-                              'TargetUserSid': 'S-1-5-7', 'TargetUserName': 'ANONYMOUS LOGON',
-                              'TargetDomainName': 'NT AUTHORITY',
-                              'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
-                              'LogonType': 3, 'LogonProcessName': 'NtLmSsp',
-                              'AuthenticationPackageName': 'NTLM', 'LmPackageName': 'NTLM V2',
-                              'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-                              'WorkstationName': '-', 'ProcessId': '0x0', 'ProcessName': '-',
-                              'IpAddress': '-', 'IpPort': 0},
-                    ))
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='windows_event_security', system=system,
+                        fields={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
+                                'Channel': 'Security', 'Level': 0,
+                                'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
+                                'SubjectUserSid': 'S-1-0-0', 'SubjectUserName': '-',
+                                'SubjectDomainName': '-', 'SubjectLogonId': '0x0',
+                                'TargetUserSid': 'S-1-5-7', 'TargetUserName': 'ANONYMOUS LOGON',
+                                'TargetDomainName': 'NT AUTHORITY',
+                                'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
+                                'LogonType': 3, 'LogonProcessName': 'NtLmSsp',
+                                'AuthenticationPackageName': 'NTLM', 'LmPackageName': 'NTLM V2',
+                                'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                                'WorkstationName': '-', 'ProcessId': '0x0', 'ProcessName': '-',
+                                'IpAddress': '-', 'IpPort': 0},
+                    )
 
         # Phase 6.2: Machine account ($) authentication to DCs
         # Every Windows domain-joined system authenticates as COMPUTERNAME$ to DCs
@@ -2210,14 +2353,15 @@ class GenerationEngine:
                                 'fstrim', 'motd-news', 'ua-timer', 'systemd-tmpfiles-clean']
                     svc = rng.choice(services)
                     action = rng.choice(['Starting', 'Finished'])
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd', 'pid': sys_pids.get('systemd', 1),
                         'facility': 3, 'severity': 6,
                         'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.'},
-                    ))
+                    )
                 elif source_roll < 0.35:
-                    # CRON — uppercase, (user) CMD (command)
+                    # CRON — dispatched via SecurityEvent for syslog + eCAR correlation
                     cron_cmds = [
                         ('root', 'test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )'),
                         ('root', 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'),
@@ -2225,26 +2369,35 @@ class GenerationEngine:
                         ('www-data', '/usr/bin/php /var/www/html/cron.php'),
                     ]
                     user, cmd = rng.choice(cron_cmds)
-                    cron_pid = self.state_manager.create_process(
-                        system.hostname, sys_pids.get('cron', 0),
-                        '/usr/sbin/cron', f'CRON[{user}]', user, 'System')
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'CRON', 'pid': cron_pid,
-                        'facility': 9, 'severity': 6,
-                        'message': f'({user}) CMD ({cmd})'},
-                    ))
+                    self.activity_generator.generate_system_process(
+                        system=system, time=ts,
+                        process_name='/usr/sbin/cron',
+                        command_line=cmd,
+                        parent_pid=sys_pids.get('cron', 0),
+                        username=user,
+                    )
                 elif source_roll < 0.50:
                     # kernel — no PID, includes uptime counter
                     if is_dmz and rng.random() < 0.85:
-                        # UFW BLOCK messages on DMZ servers
+                        # UFW BLOCK messages on DMZ servers — dual emission:
+                        # 1. Syslog kernel format (RawLogEntry)
+                        # 2. Zeek conn with conn_state=REJ (SecurityEvent via generate_connection)
                         src_ip = f'{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}'
+                        spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
                         msg = (f'[{uptime}.{rng.randint(100000,999999)}] [UFW BLOCK] '
                                f'IN=ens160 OUT= SRC={src_ip} DST={system.ip} '
                                f'LEN={rng.randint(40,60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40,255)} '
-                               f'ID={rng.randint(1,65535)} PROTO=TCP SPT={rng.randint(1024,65535)} DPT={dpt} '
+                               f'ID={rng.randint(1,65535)} PROTO=TCP SPT={spt} DPT={dpt} '
                                f'WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0')
+                        # Emit Zeek conn record for blocked connection (REJ = SYN then RST)
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip, dst_ip=system.ip, time=ts,
+                            dst_port=dpt, proto='tcp',
+                            conn_state='REJ',
+                            src_port=spt,
+                            source_system=system,
+                        )
                     else:
                         # AppArmor or audit messages — monotonic serial per host
                         self._audit_serials[system.hostname] = self._audit_serials.get(system.hostname, 1000) + rng.randint(1, 5)
@@ -2252,23 +2405,25 @@ class GenerationEngine:
                         msg = (f'[{uptime}.{rng.randint(100000,999999)}] audit: type=1400 '
                                f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{audit_serial}): '
                                f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"')
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'kernel', 'pid': None,
                         'facility': 0, 'severity': 5,
                         'message': msg},
-                    ))
+                    )
                 elif source_roll < 0.65:
                     # systemd-logind — session tracking
                     sid = rng.randint(100, 9999)
                     user = rng.choice(['root', 'admin', 'www-data', 'ubuntu'])
                     action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-logind', 'pid': sys_pids.get('logind', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
                         'message': action},
-                    ))
+                    )
                 elif source_roll < 0.80:
                     # sshd — disconnect/keepalive messages (use scenario system IPs)
                     # Generate matching Zeek SSH connection + syslog message together
@@ -2283,21 +2438,24 @@ class GenerationEngine:
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
+                        source_system=system,
                     )
                     msgs = [
                         f'Received disconnect from {ip} port {port}:11: disconnected by user',
                         f'Disconnected from user admin {ip} port {port}',
                         f'pam_unix(sshd:session): session closed for user admin',
                     ]
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'sshd', 'pid': rng.randint(5000, 60000),
                         'facility': 10, 'severity': 6,
                         'message': rng.choice(msgs)},
-                    ))
+                    )
                 elif source_roll < 0.90:
                     # snapd
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'snapd', 'pid': sys_pids.get('snapd', rng.randint(500, 2000)),
                         'facility': 3, 'severity': 6,
@@ -2306,7 +2464,7 @@ class GenerationEngine:
                             'daemon.go:460: gracefully waiting for running hooks',
                             'stateengine.go:150: state ensure starting',
                         ])},
-                    ))
+                    )
                 else:
                     # systemd-timesyncd: "for the first time" only once per system
                     ntp_ip = rng.choice(['91.189.89.198', '91.189.89.199', '91.189.94.4'])
@@ -2321,13 +2479,14 @@ class GenerationEngine:
                             f'Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).',
                             f'Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).',
                         ])
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-timesyncd',
                         'pid': sys_pids.get('timesyncd', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
                         'message': msg},
-                    ))
+                    )
 
         # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour), evenly spaced
         systems = self.scenario.environment.systems
@@ -2355,4 +2514,79 @@ class GenerationEngine:
                     duration=rng.uniform(0.0005, 0.005),
                     orig_bytes=64,
                     resp_bytes=64,
+                    source_system=system,
                 )
+
+        # IDS false-positive alerts: 1-3 per hour from IDS sensors
+        if 'snort_alert' in self.emitters and self.scenario.environment.network:
+            _FP_SIGS = [
+                (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3),
+                (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3),
+                (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3),
+                (2210044, "SURICATA STREAM Packet with broken ack", "protocol-command-decode", 3),
+                (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3),
+                (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2),
+                (2019876, "ET INFO Packed Executable Download", "misc-activity", 2),
+                (2027865, "ET DNS Query to a .top domain", "potentially-bad-traffic", 2),
+            ]
+            from evidenceforge.events.dispatcher import expand_formats
+            for sensor in self.scenario.environment.network.sensors:
+                if 'snort_alert' not in expand_formats(sensor.log_formats):
+                    continue
+                sensor_host = sensor.hostname or sensor.name
+                num_alerts = rng.randint(1, 3)
+                for _ in range(num_alerts):
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    sig = rng.choice(_FP_SIGS)
+                    src_sys = rng.choice(systems)
+                    dst_sys = rng.choice(systems)
+                    if src_sys.ip == dst_sys.ip:
+                        continue
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='snort_alert', fields={
+                            'timestamp': ts, 'sid': sig[0], 'message': sig[1],
+                            'classification': sig[2], 'priority': sig[3],
+                            'protocol': rng.choice(['TCP', 'UDP', 'ICMP']),
+                            'src_ip': src_sys.ip, 'src_port': rng.randint(1024, 65535),
+                            'dst_ip': dst_sys.ip, 'dst_port': rng.choice([22, 80, 443, 53, 8080]),
+                            '_sensor_hostnames': [sensor_host],
+                        },
+                    )
+
+        # Web access logs: 10-30 requests per hour on systems with web services
+        if 'web_access' in self.emitters:
+            _WEB_PATHS = [
+                ('/', 'GET', 200), ('/index.html', 'GET', 200),
+                ('/api/v1/health', 'GET', 200), ('/favicon.ico', 'GET', 200),
+                ('/robots.txt', 'GET', 200), ('/assets/main.css', 'GET', 200),
+                ('/assets/app.js', 'GET', 200), ('/images/logo.png', 'GET', 200),
+                ('/wp-login.php', 'GET', 404), ('/admin', 'GET', 403),
+                ('/.env', 'GET', 403), ('/api/v1/data', 'POST', 200),
+                ('/phpmyadmin/', 'GET', 404), ('/xmlrpc.php', 'POST', 404),
+            ]
+            _WEB_UAS = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+                'curl/7.88.1',
+                'python-requests/2.31.0',
+            ]
+            for sys_obj in systems:
+                if not any(p in svc.lower() for svc in (sys_obj.services or []) for p in ('http', 'iis', 'nginx', 'apache', 'web')):
+                    continue
+                num_reqs = rng.randint(10, 30)
+                other_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+                for _ in range(num_reqs):
+                    offset = rng.randint(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    path, method, status = rng.choice(_WEB_PATHS)
+                    client_ip = rng.choice(other_ips) if other_ips else '10.0.0.1'
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='web_access', system=sys_obj, fields={
+                            'timestamp': ts, 'client_ip': client_ip,
+                            'method': method, 'path': path,
+                            'protocol': 'HTTP/1.1', 'status_code': status,
+                            'bytes_sent': rng.randint(200, 50000) if status == 200 else rng.randint(100, 500),
+                            'referer': '-', 'user_agent': rng.choice(_WEB_UAS),
+                        },
+                    )

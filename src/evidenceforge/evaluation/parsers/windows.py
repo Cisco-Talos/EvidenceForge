@@ -89,7 +89,10 @@ class WindowsEventParser(LogParser):
                     value = data_el.text or ""
                     if name:
                         # Try to coerce known integer fields
-                        if name in ("LogonType", "IpPort", "KeyLength", "PreAuthType"):
+                        if name in ("LogonType", "IpPort", "KeyLength", "PreAuthType",
+                                    "NetworkPort", "SourcePort", "DestPort",
+                                    "Protocol", "FilterRTID", "LayerRTID",
+                                    "ProcessID"):
                             try:
                                 fields[name] = int(value)
                             except ValueError:

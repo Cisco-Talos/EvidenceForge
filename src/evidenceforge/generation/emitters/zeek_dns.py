@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -10,12 +11,65 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
 
     Generates Zeek DNS query/response logs. Each record represents a DNS
     transaction with query name, type, response code, and answers.
+
+    Handles SecurityEvents with DnsContext (fan-out from connection events)
+    and also retains emit_raw() for backward compatibility.
     """
 
     _log_filename = "dns.json"
     _flat_filename = "zeek_dns.json"
-    # DNS events dispatched via dispatch_raw(), not SecurityEvent pipeline
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"connection"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Handle connection events that carry a DnsContext."""
+        return (
+            event.event_type in self._supported_types
+            and event.network is not None
+            and event.dns is not None
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render DnsContext + NetworkContext to Zeek dns.log NDJSON."""
+        net = event.network
+        dns = event.dns
+        event_data: dict[str, Any] = {
+            'ts': event.timestamp,
+            'uid': net.zeek_uid,
+            'id.orig_h': net.src_ip,
+            'id.orig_p': net.src_port,
+            'id.resp_h': net.dst_ip,
+            'id.resp_p': net.dst_port,
+            'proto': net.protocol,
+            'trans_id': dns.trans_id,
+            'query': dns.query,
+            'qclass': dns.qclass,
+            'qclass_name': dns.qclass_name,
+            'qtype': dns.qtype,
+            'qtype_name': dns.query_type,
+            'rcode': dns.rcode_num,
+            'rcode_name': dns.rcode,
+            'AA': dns.AA,
+            'TC': dns.TC,
+            'RD': dns.RD,
+            'RA': dns.RA,
+            'Z': dns.Z,
+            'rejected': dns.rejected,
+            'opcode': dns.opcode,
+            'opcode_name': dns.opcode_name,
+        }
+        if dns.rtt is not None:
+            event_data['rtt'] = dns.rtt
+        if dns.answers:
+            event_data['answers'] = dns.answers
+        if dns.TTLs:
+            event_data['TTLs'] = dns.TTLs
+
+        # Sensor hostname routing (set by dispatcher for network visibility)
+        event_data['_sensor_hostnames'] = event._sensor_hostnames_by_format.get(
+            self.format_def.name if self.format_def else 'zeek_dns', []
+        )
+
+        self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Zeek DNS record to NDJSON format."""

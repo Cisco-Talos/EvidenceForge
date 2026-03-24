@@ -12,7 +12,10 @@ runner = CliRunner()
 
 EXPECTED_SKILL_FILES = {"scenario.md", "generate.md", "validate.md"}
 EXPECTED_PERSONA_COUNT = 15
-EXPECTED_REFERENCE = "references/scenario-reference.md"
+EXPECTED_REFERENCES = {
+    "references/scenario-reference.md",
+    "references/evidence-formats.md",
+}
 
 
 class TestInstallSkills:
@@ -35,14 +38,15 @@ class TestInstallSkills:
         for skill_file in EXPECTED_SKILL_FILES:
             assert (eforge_dir / skill_file).is_file(), f"Missing skill: {skill_file}"
 
-    def test_copies_reference_doc(self, tmp_path):
-        """scenario-reference.md is copied to references/."""
+    def test_copies_reference_docs(self, tmp_path):
+        """Reference docs are copied to references/."""
         install_skills(tmp_path)
 
-        ref = tmp_path / "eforge" / EXPECTED_REFERENCE
-        assert ref.is_file()
-        content = ref.read_text()
-        assert len(content) > 100, "Reference doc appears empty or truncated"
+        for ref_path in EXPECTED_REFERENCES:
+            ref = tmp_path / "eforge" / ref_path
+            assert ref.is_file(), f"Missing reference: {ref_path}"
+            content = ref.read_text()
+            assert len(content) > 100, f"Reference doc appears empty or truncated: {ref_path}"
 
     def test_copies_all_personas(self, tmp_path):
         """All 15 persona YAML files are installed."""
@@ -109,7 +113,8 @@ class TestInstallSkills:
         assert "scenario.md" in installed
         assert "generate.md" in installed
         assert "validate.md" in installed
-        assert EXPECTED_REFERENCE in installed
+        for ref in EXPECTED_REFERENCES:
+            assert ref in installed
         assert any(f.startswith("personas/") for f in installed)
         assert isinstance(removed, list)
 

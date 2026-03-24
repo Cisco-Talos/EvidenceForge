@@ -24,6 +24,10 @@ class EcarEmitter(HostMultiplexEmitter):
         "logon", "logoff", "failed_logon",
         "process_create", "process_terminate", "system_process_create",
         "ssh_session",
+        "connection",
+        "file_create", "file_modify", "file_delete",
+        "registry_modify",
+        "module_load",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -40,6 +44,12 @@ class EcarEmitter(HostMultiplexEmitter):
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
+            "connection": self._render_connection,
+            "file_create": self._render_file_event,
+            "file_modify": self._render_file_event,
+            "file_delete": self._render_file_event,
+            "registry_modify": self._render_registry_event,
+            "module_load": self._render_module_event,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -123,6 +133,79 @@ class EcarEmitter(HostMultiplexEmitter):
             '_host_fqdn': self._get_host_fqdn(event),
         }
         self.emit_event(event_data)
+
+    def _render_file_event(self, event: SecurityEvent) -> None:
+        """Render eCAR FILE event from canonical FileContext."""
+        action_map = {"file_create": "CREATE", "file_modify": "MODIFY", "file_delete": "DELETE"}
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'FILE',
+            'action': action_map.get(event.event_type, 'CREATE'),
+            'pid': event.file.pid if event.file else -1,
+            'principal': event.auth.username if event.auth else '',
+            'file_path': event.file.path if event.file else '',
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_registry_event(self, event: SecurityEvent) -> None:
+        """Render eCAR REGISTRY event from canonical RegistryContext."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'REGISTRY',
+            'action': 'MODIFY',
+            'pid': event.registry.pid if event.registry else -1,
+            'principal': event.auth.username if event.auth else '',
+            'registry_key': event.registry.key if event.registry else '',
+            'registry_value': event.registry.value if event.registry else '',
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_module_event(self, event: SecurityEvent) -> None:
+        """Render eCAR MODULE/LOAD event from canonical FileContext."""
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': event.host.hostname if event.host else '',
+            'object': 'MODULE',
+            'action': 'LOAD',
+            'pid': event.file.pid if event.file else -1,
+            'principal': event.auth.username if event.auth else '',
+            'file_path': event.file.path if event.file else '',
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _render_connection(self, event: SecurityEvent) -> None:
+        """Render eCAR FLOW/CONNECT event from canonical NetworkContext."""
+        net = event.network
+        hostname = event.host.hostname if event.host else net.src_ip
+        event_data = {
+            'timestamp': event.timestamp,
+            'hostname': hostname,
+            'object': 'FLOW',
+            'action': 'CONNECT',
+            'pid': net.initiating_pid,
+            'src_ip': net.src_ip,
+            'src_port': net.src_port,
+            'dst_ip': net.dst_ip,
+            'dst_port': net.dst_port,
+            'protocol': net.protocol,
+            '_host_fqdn': self._get_host_fqdn(event),
+        }
+        self.emit_event(event_data)
+
+    def _dispatch(self, event_data: dict[str, Any]) -> None:
+        """Route event to both per-host and centralized writers."""
+        rendered = self._render_event(event_data)
+        host_fqdn = event_data.pop('_host_fqdn', '')
+        # Always write to the centralized flat file
+        self.emit_to_host(rendered, '')
+        # Also write to per-host file if we have a host FQDN
+        if host_fqdn:
+            self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render eCAR event to JSON format (NDJSON - one event per line).

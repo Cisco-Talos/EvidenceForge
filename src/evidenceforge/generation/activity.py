@@ -14,7 +14,7 @@ from threading import local, get_ident, Lock
 from typing import Optional
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
-from evidenceforge.events.contexts import AuthContext, HostContext
+from evidenceforge.events.contexts import AuthContext, FileContext, HostContext, RegistryContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -723,11 +723,11 @@ def _get_http_status(dst_ip: str, uri: str) -> tuple[int, str]:
 
 
 def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]:
-    """Validate that a network connection would be observable by network sensors.
+    """Validate that a network connection is not fundamentally impossible.
 
-    Network-based data sources like Zeek can only observe traffic that actually
-    traverses the network. This function checks for connections that would never
-    be visible to network sensors.
+    Checks for addresses that should never appear in generated traffic
+    (localhost, link-local, multicast). Same-host connections (src==dst) are
+    valid for host-based logs and handled separately via SecurityEvent.local_only.
 
     Args:
         src_ip: Source IP address
@@ -736,10 +736,6 @@ def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]
     Returns:
         Tuple of (is_invalid, reason). If is_invalid=True, connection should not be generated.
     """
-    # Check if source and destination are the same
-    if src_ip == dst_ip:
-        return True, f"Source and destination are identical ({src_ip})"
-
     # Check for localhost addresses (127.0.0.0/8)
     # Network sensors cannot observe localhost traffic
     if src_ip.startswith('127.') or dst_ip.startswith('127.'):
@@ -806,6 +802,9 @@ class ActivityGenerator:
         self._event_record_counters: dict[str, int] = {}
         self._counter_lock = Lock()  # Thread-safe counter for EventRecordID
         self.sid_registry = sid_registry or {}
+
+        # IP→System lookup for HostContext resolution on connection events
+        self._ip_to_system: dict[str, Any] = {}
 
         # Process tree tracking: recent user processes per (hostname, username)
         # Used by _select_parent_pid() for realistic parent-child relationships
@@ -1121,17 +1120,35 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Phase 5.2: Probabilistic eCAR object diversity (via dispatch_raw)
+        # Phase 8.2: Probabilistic eCAR object diversity via canonical SecurityEvent
         rng = _get_rng()
         os_category = _get_os_category(system.os)
-        if 'ecar' in self.dispatcher.emitters:
-            if rng.random() < 0.40:
-                action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
-                self._emit_ecar_file_event(system, time, pid, action, user.username)
-            if os_category == 'windows' and rng.random() < 0.30:
-                self._emit_ecar_module_event(system, time, pid, user.username)
-            if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
-                self._emit_ecar_registry_event(system, time, pid, user.username)
+        host_ctx = self._build_host_context(system)
+        auth_ctx = AuthContext(username=user.username)
+        if rng.random() < 0.40:
+            action = rng.choice(['CREATE', 'MODIFY', 'MODIFY', 'DELETE'])
+            pool = self._ECAR_FILE_PATHS_WIN if os_category == 'windows' else self._ECAR_FILE_PATHS_LINUX
+            path = rng.choice(pool).replace('{user}', user.username).replace('{rand}', f'{rng.randint(10000, 99999)}')
+            event_type = {'CREATE': 'file_create', 'MODIFY': 'file_modify', 'DELETE': 'file_delete'}[action]
+            self.dispatcher.dispatch(SecurityEvent(
+                timestamp=time, event_type=event_type,
+                host=host_ctx, auth=auth_ctx,
+                file=FileContext(path=path, action=action.lower(), pid=pid),
+            ))
+        if os_category == 'windows' and rng.random() < 0.30:
+            dll_path = rng.choice(self._ECAR_DLL_POOL)
+            self.dispatcher.dispatch(SecurityEvent(
+                timestamp=time, event_type='module_load',
+                host=host_ctx, auth=auth_ctx,
+                file=FileContext(path=dll_path, action='load', pid=pid),
+            ))
+        if os_category == 'windows' and 'system32' in process_name.lower() and rng.random() < 0.20:
+            key, value = rng.choice(self._ECAR_REGISTRY_KEYS)
+            self.dispatcher.dispatch(SecurityEvent(
+                timestamp=time, event_type='registry_modify',
+                host=host_ctx, auth=auth_ctx,
+                registry=RegistryContext(key=key, value=value, action='modify', pid=pid),
+            ))
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
@@ -1198,6 +1215,8 @@ class ActivityGenerator:
         emit_dns: bool = False,
         pid: int = -1,
         source_system: Optional['System'] = None,
+        conn_state: Optional[str] = None,
+        dns: Optional['DnsContext'] = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1227,23 +1246,28 @@ class ActivityGenerator:
         if emit_dns and proto == 'tcp' and dst_port not in (53,):
             self._emit_dns_lookup(src_ip, dst_ip, time)
 
-        # Validate connection would be observable by network sensors
+        # Same-host connections are valid for host-based logs (eCAR FLOW)
+        # but invisible to network sensors (Zeek/Snort)
+        local_only = (src_ip == dst_ip)
+
+        # Validate connection is not fundamentally invalid (localhost, link-local, multicast)
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
             logger.warning(
                 f"Skipping invalid network connection: {src_ip} -> {dst_ip}. "
-                f"Reason: {reason}. Network sensors would not observe this traffic."
+                f"Reason: {reason}."
             )
             return ""
 
-        # Phase 2.5: Check network topology visibility
-        visibility = self._network_visibility or (self.dispatcher.visibility_engine if self.dispatcher else None)
-        if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
-            logger.debug(
-                f"Skipping connection {src_ip} -> {dst_ip}: "
-                f"not observable by any configured sensor"
-            )
-            return ""
+        # Phase 2.5: Check network topology visibility (skip for local-only)
+        if not local_only:
+            visibility = self._network_visibility or (self.dispatcher.visibility_engine if self.dispatcher else None)
+            if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
+                logger.debug(
+                    f"Skipping connection {src_ip} -> {dst_ip}: "
+                    f"not observable by any configured sensor"
+                )
+                return ""
 
         if src_port is None:
             src_port = _get_rng().randint(49152, 65535)
@@ -1260,7 +1284,14 @@ class ActivityGenerator:
         # Protocol-aware connection state selection
         rng = _get_rng()
 
-        if proto == 'icmp':
+        # If caller provides explicit conn_state (e.g., UFW BLOCK → REJ), skip probabilistic selection
+        if conn_state is not None:
+            history = {'REJ': 'Sr', 'S0': 'S', 'SF': 'ShADadfF', 'OTH': 'Cc'}.get(conn_state, 'ShADadfF')
+            if conn_state in ('S0', 'REJ'):
+                duration = None
+                resp_bytes = 0
+                orig_bytes = rng.choice([0, 40, 44, 48])
+        elif proto == 'icmp':
             conn_state = 'OTH'
             history = '-'
             src_port = 0   # ICMP has no ports; Zeek emits 0
@@ -1303,6 +1334,12 @@ class ActivityGenerator:
                     duration = duration * rng.uniform(0.1, 0.5)
                 if resp_bytes:
                     resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+            elif conn_state == 'OTH':
+                # OTH/Cc = midstream capture fragment — minimal data visible
+                orig_bytes = rng.randint(0, 200)
+                resp_bytes = rng.randint(0, 200)
+                if duration is not None:
+                    duration = rng.uniform(0.001, 0.5)
 
         # Calculate packet counts — enforce consistency with history
         if proto == 'udp' and history:
@@ -1341,10 +1378,19 @@ class ActivityGenerator:
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
             service = _PORT_SERVICE[dst_port]
 
-        # Phase 2: Build SecurityEvent with NetworkContext
+        # Phase 2: Build SecurityEvent with NetworkContext + HostContext
+        # Resolve source system for HostContext (needed by eCAR emitter for hostname/routing)
+        host_ctx = None
+        if source_system:
+            host_ctx = self._build_host_context(source_system)
+        elif hasattr(self, '_ip_to_system') and src_ip in self._ip_to_system:
+            host_ctx = self._build_host_context(self._ip_to_system[src_ip])
+
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
+            host=host_ctx,
+            local_only=local_only,
             network=NetworkContext(
                 src_ip=src_ip, src_port=src_port,
                 dst_ip=dst_ip, dst_port=dst_port,
@@ -1363,9 +1409,14 @@ class ActivityGenerator:
             ),
         )
 
+        # DNS context for Zeek dns.log fan-out
+        if dns is not None:
+            event.dns = dns
+
         # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
+        # Skip for local-only events (no network sensor will see them)
         rng = _get_rng()
-        if service == 'ssl' and proto == 'tcp' and conn_state == 'SF':
+        if not local_only and service == 'ssl' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import SslContext
             server_name = REVERSE_DNS.get(dst_ip)
             if not server_name:
@@ -1390,7 +1441,55 @@ class ActivityGenerator:
                 established=True,
                 ssl_history='CsiI' if rng.random() < 0.7 else 'CsijI',
             )
-        elif service == 'http' and proto == 'tcp' and conn_state == 'SF':
+
+            # X.509 certificate for SSL connections (fan-out to x509.log)
+            from evidenceforge.events.contexts import X509Context
+            import hashlib
+            cert_hash = hashlib.sha256(f"cert_{server_name}".encode()).hexdigest()
+            is_ecdsa = rng.random() < 0.4
+            _ISSUERS = [
+                "CN=R3, O=Let's Encrypt, C=US",
+                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+                "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
+                "CN=E1, O=Let's Encrypt, C=US",
+                "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            ]
+            now_epoch = event.timestamp.timestamp()
+            event.x509 = X509Context(
+                fingerprint=cert_hash,
+                certificate_version=3,
+                certificate_serial=f"{rng.randint(0x1000000000, 0xFFFFFFFFFF):X}",
+                certificate_subject=f"CN={server_name}",
+                certificate_issuer=rng.choice(_ISSUERS),
+                certificate_not_valid_before=now_epoch - rng.randint(86400, 86400 * 365),
+                certificate_not_valid_after=now_epoch + rng.randint(86400 * 30, 86400 * 365),
+                certificate_key_alg='id-ecPublicKey' if is_ecdsa else 'rsaEncryption',
+                certificate_sig_alg='ecdsa-with-SHA256' if is_ecdsa else 'sha256WithRSAEncryption',
+                certificate_key_type='ecdsa' if is_ecdsa else 'rsa',
+                certificate_key_length=256 if is_ecdsa else rng.choice([2048, 4096]),
+                certificate_exponent='65537' if not is_ecdsa else '',
+                san_dns=[server_name, f"*.{'.'.join(server_name.split('.')[1:])}"] if '.' in server_name else [server_name],
+                basic_constraints_ca=False,
+                host_cert=True,
+                client_cert=False,
+            )
+
+            # OCSP response (~30% of SSL connections)
+            if rng.random() < 0.30:
+                from evidenceforge.events.contexts import OcspContext
+                from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
+                event.ocsp = OcspContext(
+                    id=_gen_uid('F'),
+                    hash_algorithm='sha256',
+                    issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[:40],
+                    issuer_key_hash=hashlib.sha256(f"key_{event.x509.certificate_issuer}".encode()).hexdigest()[:40],
+                    serial_number=event.x509.certificate_serial,
+                    cert_status='good',
+                    this_update=now_epoch - rng.randint(0, 86400),
+                    next_update=now_epoch + rng.randint(86400, 86400 * 7),
+                )
+
+        elif not local_only and service == 'http' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import HttpContext
             _USER_AGENTS_WINDOWS = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -1408,9 +1507,18 @@ class ActivityGenerator:
             host = REVERSE_DNS.get(dst_ip, dst_ip)
             if dst_port not in (80, 443):
                 host = f'{host}:{dst_port}'
-            _URIS = ['/', '/index.html', '/api/v1/status', '/favicon.ico', '/robots.txt',
-                      '/assets/main.css', '/assets/app.js', '/images/logo.png']
-            uri = rng.choice(_URIS)
+            _URI_MIME_MAP = {
+                '/': 'text/html',
+                '/index.html': 'text/html',
+                '/api/v1/status': 'application/json',
+                '/favicon.ico': 'image/x-icon',
+                '/robots.txt': 'text/plain',
+                '/assets/main.css': 'text/css',
+                '/assets/app.js': 'application/javascript',
+                '/images/logo.png': 'image/png',
+            }
+            uri = rng.choice(list(_URI_MIME_MAP.keys()))
+            mime_type = _URI_MIME_MAP[uri]
             status_code, status_msg = _get_http_status(dst_ip, uri)
             resp_body_len = resp_bytes or rng.randint(200, 50000)
             if status_code in (301, 302):
@@ -1427,6 +1535,7 @@ class ActivityGenerator:
                 response_body_len=resp_body_len,
                 status_code=status_code,
                 status_msg=status_msg,
+                resp_mime_types=[mime_type] if status_code == 200 else [],
                 tags=[],
             )
             # Probabilistic file transfer for HTTP responses with content
@@ -1434,14 +1543,12 @@ class ActivityGenerator:
                 from evidenceforge.events.contexts import FileTransferContext
                 from evidenceforge.utils.ids import generate_zeek_uid
                 fuid = generate_zeek_uid('F')
-                _MIME_TYPES = ['text/html', 'text/plain', 'application/javascript',
-                               'text/css', 'image/png', 'image/jpeg', 'application/json']
                 event.file_transfer = FileTransferContext(
                     fuid=fuid,
                     source='HTTP',
                     depth=0,
                     analyzers=[],
-                    mime_type=rng.choice(_MIME_TYPES),
+                    mime_type=mime_type,
                     duration=rng.uniform(0.0, 0.01),
                     local_orig=_is_private_ip(dst_ip),
                     is_orig=False,
@@ -1454,9 +1561,62 @@ class ActivityGenerator:
                 event.http.resp_fuids = [fuid]
                 event.http.resp_mime_types = [event.file_transfer.mime_type]
 
+                # PE analysis for Windows executables in file transfers
+                if mime_type in ('application/x-dosexec', 'application/octet-stream') and rng.random() < 0.1:
+                    from evidenceforge.events.contexts import PeContext
+                    is_64 = rng.random() < 0.7
+                    event.pe = PeContext(
+                        id=fuid,
+                        machine='AMD64' if is_64 else 'I386',
+                        compile_ts=event.timestamp.timestamp() - rng.randint(86400, 86400 * 365 * 3),
+                        is_exe=True,
+                        is_64bit=is_64,
+                        uses_aslr=rng.random() < 0.8,
+                        uses_dep=rng.random() < 0.9,
+                        uses_code_integrity=rng.random() < 0.1,
+                        has_import_table=True,
+                        has_export_table=rng.random() < 0.2,
+                        has_cert_table=rng.random() < 0.3,
+                        has_debug_data=rng.random() < 0.4,
+                    )
+
+        # NTP context for Zeek ntp.log fan-out
+        if not local_only and service == 'ntp' and proto == 'udp':
+            from evidenceforge.events.contexts import NtpContext
+            ntp_rng = _get_rng()
+            event.ntp = NtpContext(
+                version=ntp_rng.choice([3, 4]),
+                mode=3,  # client
+                stratum=ntp_rng.randint(1, 4),
+                poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
+                precision=ntp_rng.uniform(-25.0, -18.0),
+                root_delay=ntp_rng.uniform(0.0, 0.1),
+                root_disp=ntp_rng.uniform(0.0, 0.05),
+                ref_id=ntp_rng.choice(['GPS', 'PPS', 'GOES', '.GPS.', '.PPS.']),
+            )
+
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
+
+        # Zeek weird.log: probabilistic network anomalies (~3% of connections)
+        if not local_only and rng.random() < 0.03:
+            _WEIRD_NAMES = [
+                'window_recision', 'possible_split_routing',
+                'above_hole_data_without_any_acks', 'data_before_established',
+                'connection_originator_SYN_ack', 'truncated_header',
+                'inappropriate_FIN', 'bad_TCP_checksum',
+            ]
+            self.generate_raw(
+                time=time, target_format='zeek_weird', fields={
+                    'ts': time, 'uid': uid,
+                    'id.orig_h': src_ip, 'id.orig_p': src_port,
+                    'id.resp_h': dst_ip, 'id.resp_p': dst_port,
+                    'name': rng.choice(_WEIRD_NAMES),
+                    'notice': False, 'peer': '',
+                    'source': 'TCP' if proto == 'tcp' else 'UDP',
+                },
+            )
 
         # Emit 5156 (WFP connection) on Windows source hosts
         if source_system and _get_os_category(source_system.os) == 'windows':
@@ -1466,10 +1626,6 @@ class ActivityGenerator:
                 dst_ip=dst_ip, dst_port=dst_port,
                 protocol=proto, pid=pid if pid > 0 else 4,
             )
-
-        # eCAR FLOW still via helper (not format-filtered by visibility)
-        flow_hostname = REVERSE_DNS.get(src_ip, src_ip)
-        self._emit_ecar_flow_event(src_ip, dst_ip, dst_port, time, flow_hostname, pid=pid, src_port=src_port, protocol=proto)
 
         return uid
 
@@ -1723,176 +1879,131 @@ class ActivityGenerator:
 
         src_port = rng.randint(49152, 65535)
 
-        # Emit Zeek conn.log UDP/53 record — UID is generated in StateManager
-        # and shared with dns.log for cross-log correlation.
-        # Pass src_port so conn.log and dns.log share the same 5-tuple.
+        from evidenceforge.events.contexts import DnsContext
+
         dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
-        dns_uid = self.generate_connection(
-            src_ip=src_ip,
-            dst_ip=dns_server_ip,
-            time=dns_time,
-            dst_port=53,
-            proto='udp',
-            service='dns',
-            duration=rng.uniform(0.001, 0.03),
-            orig_bytes=rng.randint(40, 100),
-            resp_bytes=rng.randint(80, 400),
-            src_port=src_port,
-        )
-        # If connection was filtered (e.g. same-host DNS), generate standalone UID
-        if not dns_uid:
-            from evidenceforge.utils.ids import generate_zeek_uid
-            dns_uid = generate_zeek_uid("C")
+        ad_domain = getattr(self, '_ad_domain', 'corp.local')
+        is_internal = hostname.endswith(f'.{ad_domain}') or hostname.endswith('.local')
 
-        # Emit Zeek dns.log record
-        if 'zeek_dns' in self.dispatcher.emitters:
-            # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
-            if rng.random() < 0.002:
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=dns_time, target_emitter='zeek_dns',
-                    data={'ts': dns_time, 'uid': dns_uid,
-                          'id.orig_h': src_ip, 'id.orig_p': src_port,
-                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                          'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                          'qtype': 1, 'qtype_name': 'A',
-                          'rcode': 2, 'rcode_name': 'SERVFAIL',
-                          'AA': False, 'TC': False, 'RD': True, 'RA': True,
-                          'Z': 0, 'rejected': False,
-                          'opcode': 0, 'opcode_name': 'query'},
-                ))
-                return
+        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
+        if rng.random() < 0.002:
+            dns_ctx = DnsContext(
+                query=hostname, trans_id=rng.randint(1, 65535),
+                qtype=1, query_type='A', rcode='SERVFAIL', rcode_num=2,
+            )
+            self.generate_connection(
+                src_ip=src_ip, dst_ip=dns_server_ip, time=dns_time,
+                dst_port=53, proto='udp', service='dns',
+                duration=rng.uniform(0.001, 0.03),
+                orig_bytes=rng.randint(40, 100), resp_bytes=rng.randint(80, 400),
+                src_port=src_port, dns=dns_ctx,
+            )
+            return
 
-            # Determine query type, query string, and answer
-            qtype_roll = rng.random()
-            ad_domain = getattr(self, '_ad_domain', 'corp.local')
-            is_internal = hostname.endswith(f'.{ad_domain}') or hostname.endswith('.local')
+        # Determine query type, query string, and answer
+        qtype_roll = rng.random()
 
-            if qtype_roll < 0.65:
-                # A record: hostname → IPv4
-                qtype, qtype_name = 1, 'A'
-                query = hostname
-                # Multi-answer: CDNs/clouds return multiple A records (40% chance)
-                if not is_internal and rng.random() < 0.40:
-                    # Find sibling IPs from the SAME PROVIDER (not cross-provider)
-                    sibling_ips = []
-                    for provider_ips in _PROVIDER_IP_GROUPS:
-                        if dst_ip in provider_ips:
-                            sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
-                            break
-                    if sibling_ips:
-                        extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
-                        answers = [dst_ip] + extra
-                    else:
-                        answers = [dst_ip]
+        if qtype_roll < 0.65:
+            # A record: hostname → IPv4
+            qtype, qtype_name = 1, 'A'
+            query = hostname
+            # Multi-answer: CDNs/clouds return multiple A records (40% chance)
+            if not is_internal and rng.random() < 0.40:
+                sibling_ips = []
+                for provider_ips in _PROVIDER_IP_GROUPS:
+                    if dst_ip in provider_ips:
+                        sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
+                        break
+                if sibling_ips:
+                    extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
+                    answers = [dst_ip] + extra
                 else:
                     answers = [dst_ip]
-            elif qtype_roll < 0.85:
-                # AAAA record: hostname → IPv6
-                qtype, qtype_name = 28, 'AAAA'
-                query = hostname
-                answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
-            elif qtype_roll < 0.93:
-                # PTR record: reversed IP → rDNS name (not forward hostname)
-                qtype, qtype_name = 12, 'PTR'
-                octets = dst_ip.split('.')
-                query = '.'.join(reversed(octets)) + '.in-addr.arpa'
-                if _is_private_ip(dst_ip):
-                    answers = [hostname]  # Internal PTR can match forward name
-                else:
-                    answers = [_generate_rdns_name(rng, dst_ip)]
-            elif qtype_roll < 0.98:
-                # SRV record: AD service discovery
-                qtype, qtype_name = 33, 'SRV'
-                domain = ad_domain
-                query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
-                dc_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
-                dc_ip = _get_rng().choice(dc_ips)
-                dc_hostname = REVERSE_DNS.get(dc_ip, f'dc-01.{domain}')
-                # Determine port from service prefix
-                svc_prefix = query.split('.')[0]  # e.g., '_ldap'
-                port = _SRV_PORT_MAP.get(svc_prefix, 389)
-                answers = [f'0 100 {port} {dc_hostname}']
-                is_internal = True
             else:
-                # MX record: domain → mail server
-                qtype, qtype_name = 15, 'MX'
-                parts = hostname.split('.', 1)
-                query = parts[1] if len(parts) > 1 else hostname
-                answers = [f'10 mail.{query}']
-
-            # Phase 6.0: varied TTLs with cache-aging jitter for realism
-            # External services use short TTLs (CDN/cloud load balancing)
-            # Internal services use longer TTLs (stable infrastructure)
-            if is_internal:
-                base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+                answers = [dst_ip]
+        elif qtype_roll < 0.85:
+            # AAAA record: hostname → IPv6
+            qtype, qtype_name = 28, 'AAAA'
+            query = hostname
+            answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
+        elif qtype_roll < 0.93:
+            # PTR record: reversed IP → rDNS name
+            qtype, qtype_name = 12, 'PTR'
+            octets = dst_ip.split('.')
+            query = '.'.join(reversed(octets)) + '.in-addr.arpa'
+            if _is_private_ip(dst_ip):
+                answers = [hostname]
             else:
-                base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
-            # Simulate cache aging: subtract 0-50% of the original TTL
-            ttl = max(1, base_ttl - rng.randint(0, base_ttl // 2))
+                answers = [_generate_rdns_name(rng, dst_ip)]
+        elif qtype_roll < 0.98:
+            # SRV record: AD service discovery
+            qtype, qtype_name = 33, 'SRV'
+            domain = ad_domain
+            query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
+            dc_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
+            dc_ip = _get_rng().choice(dc_ips)
+            dc_hostname = REVERSE_DNS.get(dc_ip, f'dc-01.{domain}')
+            svc_prefix = query.split('.')[0]
+            port = _SRV_PORT_MAP.get(svc_prefix, 389)
+            answers = [f'0 100 {port} {dc_hostname}']
+            is_internal = True
+        else:
+            # MX record: domain → mail server
+            qtype, qtype_name = 15, 'MX'
+            parts = hostname.split('.', 1)
+            query = parts[1] if len(parts) > 1 else hostname
+            answers = [f'10 mail.{query}']
 
-            # Match TTLs count to answers count for multi-answer responses
-            num_answers = len(answers)
-            # Each answer can have slightly different remaining TTL
-            ttls = []
-            for _ in range(num_answers):
-                jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
-                ttls.append(float(jittered))
+        # Phase 6.0: varied TTLs with cache-aging jitter
+        if is_internal:
+            base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+        else:
+            base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
 
-            # This lookup precedes an actual connection, so always NOERROR
-            self.dispatcher.dispatch_raw(RawLogEntry(
-                timestamp=dns_time, target_emitter='zeek_dns',
-                data={'ts': dns_time, 'uid': dns_uid,
-                      'id.orig_h': src_ip, 'id.orig_p': src_port,
-                      'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                      'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                      'rtt': rng.uniform(0.0005, 0.1),
-                      'query': query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                      'qtype': qtype, 'qtype_name': qtype_name,
-                      'rcode': 0, 'rcode_name': 'NOERROR',
-                      'AA': is_internal, 'TC': False, 'RD': True, 'RA': True,
-                      'Z': 0, 'answers': answers, 'TTLs': ttls,
-                      'rejected': False,
-                      'opcode': 0, 'opcode_name': 'query'},
-            ))
+        ttls = []
+        for _ in range(len(answers)):
+            jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
+            ttls.append(float(jittered))
 
-            # Phase 6.0: ~20% chance of emitting an additional NXDOMAIN query
-            # (suffix search failure, WPAD probe, etc.) alongside the real lookup
-            if rng.random() < 0.20:
-                nxdomain_queries = [
-                    f'{hostname}.{ad_domain}',  # Suffix search failure
-                    f'wpad.{ad_domain}', 'wpad.local', 'wpad',
-                    f'isatap.{ad_domain}', 'isatap',
-                    f'_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}',
-                    f'oldserver.{ad_domain}', f'printer01.{ad_domain}',
-                ]
-                nx_query = rng.choice(nxdomain_queries)
-                nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
-                nx_src_port = rng.randint(49152, 65535)
-                # Emit conn.log first to get the shared UID
-                nx_uid = self.generate_connection(
-                    src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
-                    dst_port=53, proto='udp', service='dns',
-                    duration=rng.uniform(0.001, 0.01),
-                    orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
-                    src_port=nx_src_port,
-                )
-                if not nx_uid:
-                    from evidenceforge.utils.ids import generate_zeek_uid
-                    nx_uid = generate_zeek_uid("C")
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=nx_time, target_emitter='zeek_dns',
-                    data={'ts': nx_time, 'uid': nx_uid,
-                          'id.orig_h': src_ip, 'id.orig_p': nx_src_port,
-                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                          'query': nx_query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                          'qtype': 1, 'qtype_name': 'A',
-                          'rcode': 3, 'rcode_name': 'NXDOMAIN',
-                          'AA': True, 'TC': False, 'RD': True, 'RA': True,
-                          'Z': 0, 'rejected': False,
-                          'opcode': 0, 'opcode_name': 'query'},
-                ))
+        # Build DnsContext and emit connection + dns.log via fan-out
+        dns_ctx = DnsContext(
+            query=query, trans_id=rng.randint(1, 65535),
+            qtype=qtype, query_type=qtype_name, rcode='NOERROR', rcode_num=0,
+            answers=answers, TTLs=ttls, rtt=rng.uniform(0.0005, 0.1),
+            AA=is_internal, RD=True, RA=True,
+        )
+        self.generate_connection(
+            src_ip=src_ip, dst_ip=dns_server_ip, time=dns_time,
+            dst_port=53, proto='udp', service='dns',
+            duration=rng.uniform(0.001, 0.03),
+            orig_bytes=rng.randint(40, 100), resp_bytes=rng.randint(80, 400),
+            src_port=src_port, dns=dns_ctx,
+        )
+
+        # Phase 6.0: ~20% chance of NXDOMAIN companion query
+        if rng.random() < 0.20:
+            nxdomain_queries = [
+                f'{hostname}.{ad_domain}',
+                f'wpad.{ad_domain}', 'wpad.local', 'wpad',
+                f'isatap.{ad_domain}', 'isatap',
+                f'_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}',
+                f'oldserver.{ad_domain}', f'printer01.{ad_domain}',
+            ]
+            nx_query = rng.choice(nxdomain_queries)
+            nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+            nx_src_port = rng.randint(49152, 65535)
+            nx_ctx = DnsContext(
+                query=nx_query, trans_id=rng.randint(1, 65535),
+                qtype=1, query_type='A', rcode='NXDOMAIN', rcode_num=3,
+                AA=True, RD=True, RA=True,
+            )
+            self.generate_connection(
+                src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
+                dst_port=53, proto='udp', service='dns',
+                duration=rng.uniform(0.001, 0.01),
+                orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
+                src_port=nx_src_port, dns=nx_ctx,
+            )
 
     def get_baseline_pattern(
         self,
@@ -2812,6 +2923,8 @@ class ActivityGenerator:
         target_image: str,
     ) -> None:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        from evidenceforge.events.contexts import ProcessContext
+
         event = SecurityEvent(
             timestamp=time,
             event_type="create_remote_thread",
@@ -2862,6 +2975,29 @@ class ActivityGenerator:
                 target_sid=target_sid,
                 sam_account_name=target_username,
             ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_raw(
+        self,
+        time: datetime,
+        target_format: str,
+        fields: dict,
+        system: 'System | None' = None,
+    ) -> None:
+        """Emit a raw event through the SecurityEvent pipeline.
+
+        Unlike dispatch_raw(), this goes through state management,
+        visibility filtering, and local_only checks.
+        """
+        from evidenceforge.events.contexts import RawContext
+
+        host_ctx = self._build_host_context(system) if system else None
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="raw",
+            host=host_ctx,
+            raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
 
@@ -3137,66 +3273,11 @@ class ActivityGenerator:
         'C:\\Windows\\System32\\gdi32.dll',
     ]
 
-    def _emit_ecar_file_event(
-        self, system: System, time: datetime, pid: int,
-        action: str, username: str,
-    ) -> None:
-        """Emit eCAR FILE event via dispatch_raw (CREATE, MODIFY, or DELETE)."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        rng = _get_rng()
-        os_cat = _get_os_category(system.os)
-        pool = self._ECAR_FILE_PATHS_WIN if os_cat == 'windows' else self._ECAR_FILE_PATHS_LINUX
-        path = rng.choice(pool).replace('{user}', username).replace('{rand}', f'{rng.randint(10000, 99999)}')
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': system.hostname, 'object': 'FILE',
-                  'action': action, 'pid': pid, 'principal': username, 'file_path': path},
-        ))
+    # _emit_ecar_file_event and _emit_ecar_registry_event removed in Phase 8.2
+    # FILE/REGISTRY events now dispatched via SecurityEvent canonical model
 
-    def _emit_ecar_registry_event(
-        self, system: System, time: datetime, pid: int, username: str,
-    ) -> None:
-        """Emit eCAR REGISTRY/MODIFY event via dispatch_raw (Windows only)."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        key, value = _get_rng().choice(self._ECAR_REGISTRY_KEYS)
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': system.hostname, 'object': 'REGISTRY',
-                  'action': 'MODIFY', 'pid': pid, 'principal': username,
-                  'registry_key': key, 'registry_value': value},
-        ))
+    # _emit_ecar_flow_event removed in Phase 8.1 — eCAR FLOW now dispatched
+    # via SecurityEvent "connection" type through the canonical event model
 
-    def _emit_ecar_flow_event(
-        self, src_ip: str, dst_ip: str, dst_port: int,
-        time: datetime, hostname: str, pid: int = -1,
-        src_port: int = 0, protocol: str = 'tcp',
-    ) -> None:
-        """Emit eCAR FLOW/CONNECT event via dispatch_raw."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        if src_port == 0:
-            src_port = _get_rng().randint(49152, 65535)
-        if protocol not in ('udp', 'icmp') and dst_port in (53, 123):
-            protocol = 'udp'
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': hostname, 'object': 'FLOW',
-                  'action': 'CONNECT', 'pid': pid, 'src_ip': src_ip,
-                  'src_port': src_port, 'dst_ip': dst_ip, 'dst_port': dst_port,
-                  'protocol': protocol},
-        ))
-
-    def _emit_ecar_module_event(
-        self, system: System, time: datetime, pid: int, username: str,
-    ) -> None:
-        """Emit eCAR MODULE/LOAD event via dispatch_raw (DLL load, Windows only)."""
-        if 'ecar' not in self.dispatcher.emitters:
-            return
-        dll_path = _get_rng().choice(self._ECAR_DLL_POOL)
-        self.dispatcher.dispatch_raw(RawLogEntry(
-            timestamp=time, target_emitter='ecar',
-            data={'timestamp': time, 'hostname': system.hostname, 'object': 'MODULE',
-                  'action': 'LOAD', 'pid': pid, 'principal': username, 'file_path': dll_path},
-        ))
+    # _emit_ecar_module_event removed in Phase 8.2
+    # MODULE events now dispatched via SecurityEvent canonical model

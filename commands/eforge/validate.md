@@ -36,6 +36,8 @@ Exit codes:
 - Missing required fields you can infer from context
 - YAML formatting issues (bad indentation, missing quotes)
 - Duplicate entries that can be trivially renamed
+- Typed event field errors (extra/missing fields caught by Pydantic validation)
+- Invalid IP addresses in connection events
 
 Fix the issue in the scenario file, then re-run `eforge validate` to confirm.
 

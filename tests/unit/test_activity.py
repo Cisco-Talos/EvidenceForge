@@ -19,12 +19,11 @@ from evidenceforge.models import User, System
 class TestNetworkValidation:
     """Tests for network connection validation."""
 
-    def test_invalid_same_src_dst(self):
-        """Connection with same source and destination should be invalid."""
-        is_invalid, reason = _is_invalid_network_connection("10.0.0.1", "10.0.0.1")
+    def test_same_src_dst_is_valid(self):
+        """Same-IP connections are valid (handled by SecurityEvent.local_only)."""
+        is_invalid, _reason = _is_invalid_network_connection("10.0.0.1", "10.0.0.1")
 
-        assert is_invalid is True
-        assert "identical" in reason.lower()
+        assert is_invalid is False
 
     def test_invalid_localhost_src(self):
         """Connection with localhost source should be invalid."""
@@ -195,9 +194,14 @@ class TestActivityGenerator:
         assert pid > 0
 
         # Verify Windows emitter received process_create SecurityEvent
+        # (may not be last call due to probabilistic file/registry/module events after process)
         assert mock_emitters['windows_event_security'].emit.called
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
-        assert event.event_type == "process_create"
+        process_events = [
+            call[0][0] for call in mock_emitters['windows_event_security'].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        assert len(process_events) >= 1
+        event = process_events[0]
         assert event.auth.username == test_user.username
         assert event.process.logon_id == logon_id
         assert event.process.image == process_name
@@ -224,8 +228,11 @@ class TestActivityGenerator:
             "notepad.exe", "notepad.exe", parent_pid=parent_pid
         )
 
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
-        assert event.process.parent_pid == parent_pid
+        process_events = [
+            call[0][0] for call in mock_emitters['windows_event_security'].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        assert process_events[-1].process.parent_pid == parent_pid
 
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and dispatch SecurityEvent."""

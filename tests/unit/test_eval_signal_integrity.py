@@ -55,7 +55,7 @@ def _scenario_with_storyline(storyline_yaml: list[dict]) -> Scenario:
             description="Normal activity", intensity="low", variation="low",
         ),
         storyline=[StorylineEvent(**e) for e in storyline_yaml],
-        output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        output=OutputSpec(logs=[{"format": "windows"}], destination="./out"),
     )
 
 
@@ -65,6 +65,7 @@ class TestStorylineResolution:
             "time": "2024-01-15T12:00:00Z",
             "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
+            "events": [{"type": "logon"}],
         }])
         scorer = SignalIntegrityScorer()
         resolved = scorer._resolve_storyline(scenario.storyline, scenario)
@@ -76,6 +77,7 @@ class TestStorylineResolution:
             "time": "+2h",
             "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
+            "events": [{"type": "logon"}],
         }])
         scorer = SignalIntegrityScorer()
         resolved = scorer._resolve_storyline(scenario.storyline, scenario)
@@ -86,6 +88,7 @@ class TestStorylineResolution:
             "time": "+3600",
             "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
+            "events": [{"type": "logon"}],
         }])
         scorer = SignalIntegrityScorer()
         resolved = scorer._resolve_storyline(scenario.storyline, scenario)
@@ -102,6 +105,7 @@ class TestStorylineResolution:
         scenario = _scenario_with_storyline([{
             "time": "+1h", "actor": "jsmith", "system": "WS-01",
             "activity": "Connect to server",
+            "events": [{"type": "connection", "dst_ip": "10.0.20.10", "dst_port": 443}],
         }])
         scorer = SignalIntegrityScorer()
         resolved = scorer._resolve_storyline(scenario.storyline, scenario)
@@ -112,9 +116,11 @@ class TestEventPresence:
     def test_all_events_found(self):
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
             {"time": "+2h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Execute command"},
+             "activity": "Execute command",
+             "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
         records = {
             "windows_event_security": [
@@ -136,9 +142,11 @@ class TestEventPresence:
     def test_missing_events(self):
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
             {"time": "+2h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Execute command"},
+             "activity": "Execute command",
+             "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
         # Only one matching record — second event has no trace
         records = {
@@ -166,7 +174,7 @@ class TestIndicatorAccuracy:
         scenario = _scenario_with_storyline([{
             "time": "+1h", "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
-            "details": {"source_ip": "10.0.10.50"},
+            "events": [{"type": "logon", "source_ip": "10.0.10.50"}],
         }])
         records = {
             "windows_event_security": [
@@ -185,7 +193,7 @@ class TestIndicatorAccuracy:
         scenario = _scenario_with_storyline([{
             "time": "+1h", "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
-            "details": {"source_ip": "10.0.10.50"},
+            "events": [{"type": "logon", "source_ip": "10.0.10.50"}],
         }])
         records = {
             "windows_event_security": [
@@ -205,9 +213,11 @@ class TestPivotLinkability:
     def test_same_actor_is_linkable(self):
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
             {"time": "+2h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Execute command"},
+             "activity": "Execute command",
+             "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
         records = {
             "windows_event_security": [
@@ -229,7 +239,8 @@ class TestPivotLinkability:
     def test_single_event_is_perfect(self):
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
         ])
         records = {
             "windows_event_security": [
@@ -249,9 +260,11 @@ class TestTemporalIntegrity:
     def test_correct_order(self):
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
             {"time": "+2h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Execute command"},
+             "activity": "Execute command",
+             "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
         records = {
             "windows_event_security": [
@@ -274,7 +287,8 @@ class TestTemporalIntegrity:
         """Trace timestamp far from expected time should fail."""
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
         ])
         # Trace is 10 minutes late (> 120s tolerance)
         records = {
@@ -296,6 +310,7 @@ class TestBashHistoryMatching:
         scenario = _scenario_with_storyline([{
             "time": "+1h", "actor": "attacker", "system": "SRV-01",
             "activity": "Execute 'whoami' command",
+            "events": [{"type": "process", "process_name": "whoami"}],
         }])
         records = {
             "bash_history": [
@@ -316,7 +331,8 @@ class TestEndToEnd:
         """Full scorer returns proper DimensionScore structure."""
         scenario = _scenario_with_storyline([
             {"time": "+1h", "actor": "jsmith", "system": "WS-01",
-             "activity": "Login to workstation"},
+             "activity": "Login to workstation",
+             "events": [{"type": "logon"}]},
         ])
         records = {
             "windows_event_security": [

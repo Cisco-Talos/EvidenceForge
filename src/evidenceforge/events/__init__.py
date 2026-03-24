@@ -14,6 +14,7 @@ from evidenceforge.events.contexts import (
     KerberosContext,
     NetworkContext,
     ProcessContext,
+    RawContext,
     RegistryContext,
     ShellContext,
 )
@@ -31,4 +32,5 @@ __all__ = [
     "IdsContext",
     "KerberosContext",
     "ShellContext",
+    "RawContext",
 ]

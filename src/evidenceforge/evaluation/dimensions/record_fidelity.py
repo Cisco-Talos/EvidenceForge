@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # EventID -> variant name mapping for Windows Event Security
 WINDOWS_VARIANT_MAP = {
+    1102: "log_cleared",
     4624: "logon",
     4625: "failed_logon",
     4634: "logoff",
@@ -35,8 +36,23 @@ WINDOWS_VARIANT_MAP = {
     4672: "special_privileges",
     4688: "process_creation",
     4689: "process_termination",
+    4697: "service_installed",
+    4698: "scheduled_task",
+    4720: "account_created",
+    4723: "password_change",
+    4724: "password_reset",
+    4726: "account_deleted",
+    4728: "group_membership_change",
+    4729: "group_membership_change",
+    4732: "group_membership_change",
+    4733: "group_membership_change",
+    4738: "account_changed",
+    4756: "group_membership_change",
+    4757: "group_membership_change",
     4768: "kerberos_tgt",
     4769: "kerberos_service_ticket",
+    4770: "kerberos_service_ticket",  # TGS renewal uses same fields as 4769
+    4771: "kerberos_preauth_failed",
     4776: "ntlm_validation",
     5156: "wfp_connection",
 }
@@ -85,6 +101,14 @@ class RecordFidelityScorer(DimensionScorer):
         total = 0
         passing = 0
         failures: list[str] = []
+        # Aggregated counts: {format_name: {category: count}}
+        failure_counts: dict[str, dict[str, int]] = {}
+
+        def _track_failure(fmt: str, category: str, detail: str) -> None:
+            failure_counts.setdefault(fmt, {})
+            failure_counts[fmt][category] = failure_counts[fmt].get(category, 0) + 1
+            if len(failures) < 20:
+                failures.append(detail)
 
         for format_name, record_list in records.items():
             fmt_def = self._load_format_def(format_name)
@@ -93,26 +117,36 @@ class RecordFidelityScorer(DimensionScorer):
 
                 # If the record had parse errors, it fails Tier A
                 if record.parse_errors:
-                    if len(failures) < 10:
-                        failures.append(
-                            f"[{format_name}] Parse error: {record.parse_errors[0]}"
+                    ctx = self._build_event_context(format_name, record, None)
+                    ctx_label = f" ({ctx})" if ctx else ""
+                    line_info = f" (line {record.line_number})" if record.line_number else ""
+                    for err in record.parse_errors:
+                        _track_failure(
+                            format_name, "parse_error",
+                            f"[{format_name}{ctx_label}]{line_info} Parse error: {err}",
                         )
                     continue
 
                 # Validate against format definition if available
                 if fmt_def is not None:
                     variant = self._get_variant(format_name, record)
+                    ctx = self._build_event_context(format_name, record, variant)
+                    ctx_label = f" ({ctx})" if ctx else ""
                     # Normalize fields for validation (e.g., epoch timestamps)
                     normalized = self._normalize_for_validation(
                         format_name, record.fields, record.timestamp
                     )
-                    result = validate_event(fmt_def, normalized, variant)
+                    result = validate_event(fmt_def, normalized, variant, event_context=ctx)
                     if result.valid:
                         passing += 1
-                    elif len(failures) < 10:
-                        failures.append(
-                            f"[{format_name}] {result.errors[0]}"
-                        )
+                    else:
+                        line_info = f" (line {record.line_number})" if record.line_number else ""
+                        for err in result.errors:
+                            category = self._categorize_error(err)
+                            _track_failure(
+                                format_name, category,
+                                f"[{format_name}{ctx_label}]{line_info} {err}",
+                            )
                 else:
                     # No format def — count as passing if parsed successfully
                     passing += 1
@@ -125,7 +159,18 @@ class RecordFidelityScorer(DimensionScorer):
             score=score,
             details=f"{passing}/{total} records pass structure validation",
             sample_failures=failures,
+            failure_summary=failure_counts,
         )
+
+    @staticmethod
+    def _categorize_error(error_msg: str) -> str:
+        """Categorize a validation error for summary reporting."""
+        lower = error_msg.lower()
+        if "required field missing" in lower:
+            return "missing_field"
+        if "invalid" in lower or "expected" in lower:
+            return "constraint_violation"
+        return "validation_error"
 
     def _score_tier_b(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
         """Tier B: Co-occurrence Rules.
@@ -293,11 +338,41 @@ class RecordFidelityScorer(DimensionScorer):
         return None
 
     @staticmethod
+    def _build_event_context(
+        format_name: str, record: ParsedRecord, variant: str | None,
+    ) -> str:
+        """Build a human-readable context string for validator messages."""
+        if format_name in ("windows_event_security", "windows_event_sysmon"):
+            eid = record.fields.get("EventID", "?")
+            parts = [f"EventID {eid}"]
+            if variant:
+                parts.append(variant)
+            return ", ".join(parts)
+        if format_name.startswith("zeek_"):
+            return format_name.replace("zeek_", "") + ".log"
+        if format_name == "ecar":
+            obj = record.fields.get("object", "?")
+            action = record.fields.get("action", "?")
+            return f"{obj}/{action}"
+        if format_name == "syslog":
+            return f"app={record.fields.get('app_name', '?')}"
+        if format_name == "snort_alert":
+            return f"SID {record.fields.get('sid', '?')}"
+        return ""
+
+    @staticmethod
     def _condition_matches(condition: dict[str, Any], fields: dict[str, Any]) -> bool:
         """Check if a record's fields match a rule's condition."""
         if not condition:
             return True
         for key, expected in condition.items():
+            if key == "exclude":
+                # Exclude records matching any of the exclusion criteria
+                for ex_key, ex_val in expected.items():
+                    actual = fields.get(ex_key)
+                    if actual == ex_val or str(actual) == str(ex_val):
+                        return False
+                continue
             actual = fields.get(key)
             if actual != expected:
                 # Try string/int coercion

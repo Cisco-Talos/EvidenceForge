@@ -31,6 +31,7 @@ def _make_scenario(intensity="high", storyline_count=5):
         StorylineEvent(
             time=f"+{i+1}h", actor="jsmith", system="WS-01",
             activity="Execute command",
+            events=[{"type": "process", "process_name": "cmd.exe"}],
         )
         for i in range(storyline_count)
     ]

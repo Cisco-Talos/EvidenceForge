@@ -15,7 +15,7 @@ pairs:
     match_fields:
       before: TargetLogonId
       after: SubjectLogonId
-    exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"]
+    exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "DWM-1", "DWM-2", "DWM-3", "UMFD-0", "UMFD-1", "UMFD-2", "ANONYMOUS LOGON"]
 
   - name: "Logon before logoff"
     before:

@@ -199,6 +199,16 @@ variants:
         required: false
         description: "Linked logon ID for split-token logons"
 
+      - name: RemoteUserID
+        type: sid
+        required: false
+        description: "SID of the remote user"
+
+      - name: RemoteMachineID
+        type: sid
+        required: false
+        description: "SID of the remote machine"
+
   # EventID 4634: An account was logged off
   - name: logoff
     event_id: "4634"
@@ -426,6 +436,16 @@ variants:
         required: false
         description: "Full path of the logon process executable"
 
+      - name: RemoteUserID
+        type: sid
+        required: false
+        description: "SID of the remote user"
+
+      - name: RemoteMachineID
+        type: sid
+        required: false
+        description: "SID of the remote machine"
+
   # EventID 4672: Special privileges assigned to new logon
   - name: special_privileges
     event_id: "4672"
@@ -537,6 +557,14 @@ variants:
       - name: NetworkPort
         type: integer
         required: false
+      - name: LogonGuid
+        type: string
+        required: false
+        description: "GUID to correlate with Kerberos authentication"
+      - name: TargetLogonGuid
+        type: string
+        required: false
+        description: "GUID for target logon correlation"
 
   # EventID 4768: A Kerberos authentication ticket (TGT) was requested
   - name: kerberos_tgt
@@ -684,6 +712,12 @@ variants:
         required: false
       - name: LayerRTID
         type: integer
+        required: false
+      - name: RemoteUserID
+        type: sid
+        required: false
+      - name: RemoteMachineID
+        type: sid
         required: false
 
   # EventID 4771: Kerberos pre-authentication failed
@@ -854,6 +888,63 @@ variants:
       - name: SubjectLogonId
         type: hex_string
         required: true
+      - name: SamAccountName
+        type: string
+        required: false
+      - name: DisplayName
+        type: string
+        required: false
+      - name: UserPrincipalName
+        type: string
+        required: false
+      - name: HomeDirectory
+        type: string
+        required: false
+      - name: HomePath
+        type: string
+        required: false
+      - name: ScriptPath
+        type: string
+        required: false
+      - name: ProfilePath
+        type: string
+        required: false
+      - name: UserWorkstations
+        type: string
+        required: false
+      - name: PasswordLastSet
+        type: string
+        required: false
+      - name: AccountExpires
+        type: string
+        required: false
+      - name: PrimaryGroupId
+        type: string
+        required: false
+      - name: AllowedToDelegateTo
+        type: string
+        required: false
+      - name: OldUacValue
+        type: string
+        required: false
+      - name: NewUacValue
+        type: string
+        required: false
+      - name: UserAccountControl
+        type: string
+        required: false
+      - name: UserParameters
+        type: string
+        required: false
+      - name: SidHistory
+        type: string
+        required: false
+      - name: LogonHours
+        type: string
+        required: false
+      - name: PrivilegeList
+        type: string
+        required: false
 
   # EventID 4723: Password change attempt
   - name: password_change
@@ -935,6 +1026,9 @@ variants:
       - name: SubjectLogonId
         type: hex_string
         required: true
+      - name: PrivilegeList
+        type: string
+        required: false
 
   # EventID 4738: User account changed
   - name: account_changed

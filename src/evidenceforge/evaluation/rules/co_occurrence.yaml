@@ -6,6 +6,8 @@ windows_event_security:
     condition:
       EventID: 4624
       LogonType: 3
+      exclude:
+        TargetUserName: "ANONYMOUS LOGON"
     checks:
       - field: IpAddress
         not_equal: "-"
@@ -88,9 +90,9 @@ windows_event_security:
     condition:
       EventID: 4776
     checks:
-      - field: SourceWorkstation
+      - field: Workstation
         min_length: 1
-      - field: LogonAccount
+      - field: TargetUserName
         min_length: 1
 
   - name: "WFP connection has direction"

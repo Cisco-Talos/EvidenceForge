@@ -172,8 +172,8 @@ baseline_activity:
 
 output:
   logs:
-    - {format: windows_event_security}
-    - {format: zeek_conn}
+    - {format: windows}
+    - {format: zeek}
     - {format: ecar}
     - {format: syslog}
     - {format: bash_history}

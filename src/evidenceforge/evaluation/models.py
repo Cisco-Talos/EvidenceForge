@@ -18,6 +18,9 @@ class SubScore(BaseModel):
     score: float | None = Field(None, ge=0.0, le=100.0)
     details: str = ""
     sample_failures: list[str] = Field(default_factory=list)
+    failure_summary: dict[str, dict[str, int]] = Field(default_factory=dict)
+    """Aggregated failure counts by format and category.
+    e.g. {"windows_event_security": {"parse_error": 2, "missing_field": 1}}"""
 
 
 class AcceptanceCriterion(BaseModel):

@@ -14,6 +14,8 @@ This architecture combines LLM flexibility/realism with deterministic speed, cos
 
 **Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation.
 
+**Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). Process events auto-generate supplementary Windows audit events (4720, 4697, etc.) from command-line patterns unless `supplementary: none` is set. See `docs/scenario-reference.md` for the full event type reference.
+
 ## 🔴 MANDATORY: Implementation State Tracking
 
 **CRITICAL: Read this section first before doing ANY work on this project.**

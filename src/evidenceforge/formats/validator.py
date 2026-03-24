@@ -14,6 +14,9 @@ from json_logic import jsonLogic
 
 from .format_def import FieldConstraint, FieldDefinition, FieldType, FormatDefinition
 
+# Deduplicate unknown field warnings: only warn once per (format, field) pair
+_warned_unknown_fields: set[tuple[str, str]] = set()
+
 logger = logging.getLogger(__name__)
 
 
@@ -238,6 +241,7 @@ def validate_event(
     format_def: FormatDefinition,
     event_data: dict[str, Any],
     variant_name: str | None = None,
+    event_context: str | None = None,
 ) -> ValidationResult:
     """Validate an event against a format definition.
 
@@ -245,11 +249,14 @@ def validate_event(
         format_def: Format definition
         event_data: Event data dict (field name -> value)
         variant_name: Optional variant name (for formats with variants)
+        event_context: Optional context string for better messages
+            (e.g., "EventID 4720, account_created" or "dns.log")
 
     Returns:
         ValidationResult with all validation errors
     """
     result = ValidationResult()
+    ctx_suffix = f" ({event_context})" if event_context else ""
 
     # Build combined field list (base + variant)
     fields = list(format_def.fields)
@@ -264,15 +271,20 @@ def validate_event(
     # Check required fields
     for field_def in fields:
         if field_def.required and field_def.name not in event_data:
-            result.add_error(field_def.name, "Required field missing")
+            result.add_error(field_def.name, f"Required field missing{ctx_suffix}")
 
     # Validate present fields
     for field_name, field_value in event_data.items():
         # Find field definition
         field_def = next((f for f in fields if f.name == field_name), None)
         if not field_def:
-            # Unknown field (warning, not error)
-            logger.warning(f"Unknown field in {format_def.name}: {field_name}")
+            # Unknown field (warning, not error) — deduplicate per context
+            key = (format_def.name, field_name, event_context or "")
+            if key not in _warned_unknown_fields:
+                _warned_unknown_fields.add(key)
+                logger.warning(
+                    f"Unknown field in {format_def.name}{ctx_suffix}: {field_name}"
+                )
             continue
 
         # Validate field

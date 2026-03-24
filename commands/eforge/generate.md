@@ -84,8 +84,12 @@ scenarios/<scenario-name>/
   ENVIRONMENT.md         ← created by /eforge scenario
   GROUND_TRUTH.md        ← generated (answer key)
   data/                  ← generated log files
-    windows_event_security.xml
-    zeek_conn.json
+    windows/
+      security.xml
+      sysmon.xml
+    zeek/
+      conn.json
+      dns.json
     ...
 ```
 
@@ -141,13 +145,15 @@ After reviewing output, you can suggest:
 
 | Format | Description | Generated For |
 |--------|-------------|---------------|
-| windows_event_security | Windows Event Logs (XML) | Windows systems |
-| zeek_conn | Zeek connection logs (NDJSON) | Network connections via sensors |
-| ecar | eCAR EDR/XDR events (NDJSON) | Any OS (optional EDR layer) |
-| syslog | Linux syslog (RFC 5424) | Linux systems |
+| windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 8) | Windows systems |
+| zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
+| ecar | eCAR EDR/XDR events (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
+| syslog | Linux syslog (BSD format) | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
-| web_access | W3C web access logs (combined format) | Web servers |
+| web_access | Apache/Nginx combined access logs | Web servers |
+
+See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each format.
 
 ## Performance Expectations
 

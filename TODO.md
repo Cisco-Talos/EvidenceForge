@@ -1614,17 +1614,127 @@ Migrate each `generate_*` method: refactor to two-phase build + dispatch, implem
 
 ---
 
+## Phase 8: Cross-Source Correlation (P0 Architectural Fixes)
+
+**Goal:** Eliminate systemic cross-source correlation gaps caused by `RawLogEntry` bypass of the canonical event model. Background noise events should correlate across log formats the same way storyline events do.
+
+**Root cause:** The Phase 7 canonical event model migration left three categories of events on the `RawLogEntry` escape hatch. These events appear in only one log format, so analysts cannot correlate them across sources — a major synthetic data tell.
+
+### 8.1 Migrate eCAR FLOW to canonical SecurityEvent dispatch
+
+**Approach:** Root cause fix — make `EcarEmitter` handle `connection` SecurityEvents natively, just like Zeek emitters do. Both emitters render from the same `NetworkContext`, so correlation (shared UID, timestamps, ports) is guaranteed by construction. Do NOT take the band-aid approach of passing the Zeek UID into the existing `RawLogEntry` helper — that keeps two independent code paths that can drift.
+
+- [ ] Add `"connection"` to `EcarEmitter._supported_types`
+- [ ] Implement `EcarEmitter._render_connection()` that reads from `SecurityEvent.network` to produce FLOW records (src_ip, dst_ip, dst_port, src_port, protocol, zeek_uid)
+- [ ] Remove `_emit_ecar_flow_event()` helper and its call site in `generate_connection()` (~line 1486)
+- [ ] Verify eCAR FLOW records now carry Zeek UID for analyst pivoting
+- [ ] Run tests, eval comparison
+
+**Impact:** ~3,000+ FLOW events per 6-hour scenario currently uncorrelated with Zeek conn.log. Fix ensures every network connection produces correlated Zeek + eCAR records from a single SecurityEvent source of truth.
+
+**Files:** `emitters/ecar.py`, `activity.py`
+
+### 8.2 Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch
+
+- [ ] **Phase A (short-term):** Add `file_create`, `file_modify`, `registry_modify`, `module_load` event types
+- [ ] Implement `EcarEmitter._render_file_event()`, `_render_registry_event()`, `_render_module_event()`
+- [ ] Replace `_emit_ecar_file_event()`, `_emit_ecar_registry_event()`, `_emit_ecar_module_event()` with SecurityEvent dispatch
+- [ ] **Phase B (long-term):** Implement Windows 4663 (Object Access) renderer in `WindowsEventEmitter` for FILE events
+- [ ] **Phase B (long-term):** Implement Sysmon Event 11 (FileCreate), 12/13 (RegistryEvent) renderers in `SysmonEventEmitter`
+- [ ] Run tests, eval comparison
+
+**Impact:** ~150-250 FILE + REGISTRY + MODULE events per 6-hour scenario are islands. Phase A makes eCAR internally consistent; Phase B adds Windows cross-source correlation.
+
+**Files:** `emitters/ecar.py`, `emitters/windows.py` (Phase B), `activity.py`
+
+### 8.3 Migrate syslog system messages to SecurityEvent where applicable
+
+- [ ] **CRON executions:** Replace `dispatch_raw` syslog CRON entries with `generate_system_process()` calls (already produces SecurityEvent with ProcessContext). Correlates CRON with eCAR PROCESS.
+- [ ] **Kernel UFW BLOCK:** Emit `SecurityEvent` with `NetworkContext` (conn_state=`REJ`/`S0`) so Zeek emitters produce matching records when sensor covers the segment.
+- [ ] **systemd service start/stop:** Evaluate whether these should produce eCAR PROCESS events (service daemons are processes).
+- [ ] **Syslog-only messages** (timesyncd, snapd, kernel uptime): These are legitimately single-format. No migration needed, but consider adding a `SyslogMessageContext` for testability.
+- [ ] Run tests, eval comparison
+
+**Impact:** ~1,500-2,000 syslog entries per 6-hour scenario are uncorrelated. CRON and UFW are the highest-value fixes since detection engineers expect process telemetry for scheduled tasks and network telemetry for blocked connections.
+
+**Files:** `engine.py` (syslog generation ~lines 2330-2460), `emitters/syslog.py`
+
+### 8.4 Replace keyword matching with explicit typed event declarations in scenario YAML
+
+**Problem:** Storyline events are mapped to SecurityEvent types via keyword substring matching on the free-text `activity` description. This has caused repeated bugs where a description didn't contain the expected keyword, causing events to be silently skipped or mistyped. The `details` dict is an untyped flat bag shared across all event types in a single storyline step, so typos in field names silently fall back to defaults with no validation.
+
+**Approach (Option C):** Add a typed `events` list to each storyline entry. Each event in the list has a `type` field and per-type validated fields (Pydantic models). The `activity` string becomes documentation only (used for GROUND_TRUTH.md). Supplementary inference (`_emit_supplementary_events`) continues to auto-generate same-system audit side-effects (4720, 4697, 4698, 1102, etc.) from command-line patterns unless suppressed.
+
+**New YAML format:**
+
+```yaml
+storyline:
+  - time: "+1h7m"
+    actor: attacker
+    system: DC-01
+    activity: "Create backdoor domain account"   # Documentation only
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc-audit P@ssw0rd2024! /add /domain"
+        # supplementary: auto (default) — engine infers 4720 from command line
+      - type: connection
+        dst_ip: "91.219.236.180"
+        dst_port: 443
+```
+
+**Backward compatibility:** If `events` is absent, fall back to keyword matching on `activity` (existing behavior). This allows incremental migration of scenarios.
+
+**Supplementary inference rules:**
+- Supplementary inference runs by default on `process` events (same behavior as today)
+- If a supplementary event's type is already explicitly declared in the `events` list, inference skips it (no duplicates)
+- Author can suppress inference with `supplementary: none` on any event
+- Supplementary inference only handles same-system audit side-effects (Windows auto-logged events)
+
+**Best practices for scenario authors:**
+
+1. **Always declare the primary action explicitly** — don't rely on keyword matching
+2. **Let inference handle same-system audit side-effects** — you don't need to list 4720/4697/4698/1102/4728 when the process command line already triggers them. That's what `supplementary: auto` does.
+3. **Explicitly declare cross-system events** — inference cannot generate events on other systems. If a domain logon should produce Kerberos 4768/4769 on the DC, or an RDP session should produce a logon on the target, declare those as separate events. The inference layer only knows about the local system's command line.
+4. **Explicitly declare events when field-level precision matters** — inference uses auto-generated values (random SIDs, default UAC flags). If two storyline steps are related (create account in step 1, add to group in step 2) and the SIDs need to match, declare both explicitly with matching values.
+5. **Use explicit events for specialized detection types** — Sysmon CreateRemoteThread, LSASS object access, large exfiltration byte counts. Inference doesn't detect these patterns.
+
+**Validation at load time:**
+- Each event type has a Pydantic model defining required/optional fields
+- Required fields with no sensible default (e.g., `target_username` for `account_created`, `process_name` for `process`) fail validation immediately
+- Optional fields use documented defaults (e.g., `logon_type` defaults to 3, `command_line` defaults to process_name)
+- `eforge validate` catches all field errors before generation starts
+
+**Implementation tasks:**
+
+- [ ] Define per-event-type Pydantic models for storyline event details (process, logon, connection, account_created, group_member_added, service_installed, scheduled_task, log_cleared, etc.)
+- [ ] Add `events` list field to storyline entry model (optional, for backward compat)
+- [ ] Add `supplementary` field to event model (enum: `auto` | `none`, default `auto`)
+- [ ] Refactor `_execute_storyline_event()` to read from typed event objects instead of flat `details` dict
+- [ ] Add deduplication: collect explicit event types first, skip supplementary inference for already-declared types
+- [ ] Update `eforge validate` to validate per-event-type fields at load time
+- [ ] Update scenario skill (`skills/forge/scenario.md`) to generate `events` blocks
+- [ ] Migrate existing test fixture scenarios to use `events` format
+- [ ] Remove `_match_activity_to_events()` keyword matcher once all scenarios migrated
+
+**Files:** `models/scenario.py`, `generation/engine.py`, `validation/schema.py`, `skills/forge/scenario.md`, `tests/fixtures/scenarios/*.yaml`
+
+---
+
 ## Post-MVP Enhancements (Future)
 
 **Not part of MVP, but tracked here for future reference.**
 
 ### Short-term (Post-MVP)
 - [ ] ~~Bedrock LLM client for semantic validation~~ → Handled by `/eforge validate` skill
+- [ ] **P0:** `snort_alert` typed event spec — let scenario authors declare which storyline connections trigger specific IDS signatures (sid, message, classification, priority)
+- [ ] **P1:** HTTP proxy server support — system type or service for forward proxies (Squid, Blue Coat, Zscaler) that log web_access with correct client→proxy→server IP routing
 - [ ] Checkpointing and resume for long-running generation
 - [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
 - [ ] ~~Subjective realism evaluation (LLM-based)~~ → Handled by `/eforge evaluate` skill
 - [ ] Config file inheritance/templating
+- [ ] Subset sensor format support: allow excluding specific log types from a format group (e.g., `log_formats: [zeek, -zeek_dns]` for a Zeek sensor with DNS logging disabled)
 - [ ] PyPI package distribution
 - [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Network diagram ingestion: auto-infer sensor placement (span vs tap) from diagram topology
