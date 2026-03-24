@@ -238,11 +238,13 @@ output:
 ### OS-Aware Log Routing
 
 The `os` field on systems determines which native log formats are generated:
-- **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs
+- **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
 - **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
 - **eCAR** → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
 - **Zeek, Snort** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **web_access** → Generated for systems running web services
+
+See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each log format.
 
 ### Validation Rules
 

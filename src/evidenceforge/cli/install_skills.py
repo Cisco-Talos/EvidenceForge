@@ -18,6 +18,7 @@ SKILL_FILES = [
 
 REFERENCE_FILES = [
     "references/scenario-reference.md",
+    "references/evidence-formats.md",
 ]
 
 
@@ -79,12 +80,16 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
             manifest[skill_file] = source
 
     # Reference docs — installed: _data/references/, dev: docs/
-    installed_ref = data_root / "references" / "scenario-reference.md"
-    dev_ref = data_root / "docs" / "scenario-reference.md"
-    if installed_ref.exists():
-        manifest["references/scenario-reference.md"] = installed_ref
-    elif dev_ref.exists():
-        manifest["references/scenario-reference.md"] = dev_ref
+    for ref_name, dev_name in [
+        ("scenario-reference.md", "scenario-reference.md"),
+        ("evidence-formats.md", "EVIDENCE_FORMATS.md"),
+    ]:
+        installed_ref = data_root / "references" / ref_name
+        dev_ref = data_root / "docs" / dev_name
+        if installed_ref.exists():
+            manifest[f"references/{ref_name}"] = installed_ref
+        elif dev_ref.exists():
+            manifest[f"references/{ref_name}"] = dev_ref
 
     # Persona files — installed: _data/personas/, dev: personas/
     personas_dir = data_root / "personas"

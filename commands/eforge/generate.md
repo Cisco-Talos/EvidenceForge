@@ -141,13 +141,16 @@ After reviewing output, you can suggest:
 
 | Format | Description | Generated For |
 |--------|-------------|---------------|
-| windows_event_security | Windows Event Logs (XML) | Windows systems |
-| zeek_conn | Zeek connection logs (NDJSON) | Network connections via sensors |
-| ecar | eCAR EDR/XDR events (NDJSON) | Any OS (optional EDR layer) |
-| syslog | Linux syslog (RFC 5424) | Linux systems |
+| windows_event_security | Windows Security Event Logs (XML) — 30 event IDs | Windows systems |
+| windows_event_sysmon | Sysmon operational logs (XML) — Events 1, 8 | Windows systems |
+| zeek_conn | Zeek connection logs + dns/http/ssl/files/ntp (NDJSON) | Network connections via sensors |
+| ecar | eCAR EDR/XDR events (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
+| syslog | Linux syslog (BSD format) | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
-| web_access | W3C web access logs (combined format) | Web servers |
+| web_access | Apache/Nginx combined access logs | Web servers |
+
+See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each format.
 
 ## Performance Expectations
 
