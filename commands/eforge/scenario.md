@@ -350,7 +350,7 @@ echo -n 'cat /etc/passwd' | base64
 
 Always generate the encoded string via Bash and paste the real output into the scenario YAML. A threat hunter who decodes the base64 should find the actual command inside.
 
-For the `time` field, prefer relative offsets from the scenario start ("+15m", "+1h30m", "+2h") — they're easier to read and relocatable. Space events realistically: real attackers pause between steps, but don't drag reconnaissance over 6 hours either.
+For the `time` field, prefer relative offsets from the scenario start ("+15m", "+1h30m", "+2h") — they're easier to read and relocatable. Units supported: `d` (days), `h` (hours), `m` (minutes), `s` (seconds), `ms` (milliseconds). Use seconds/milliseconds for rapid sequences like password sprays ("+20m30s", "+20m30s500ms"). Space events realistically: real attackers pause between steps, but don't drag reconnaissance over 6 hours either.
 
 ## ENVIRONMENT.md — Student Context Document
 

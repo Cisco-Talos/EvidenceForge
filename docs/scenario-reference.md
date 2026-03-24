@@ -142,7 +142,7 @@ personas:
 time_window:
   start: "2024-01-15T10:00:00Z"  # Required: ISO 8601 UTC
   end: "2024-01-15T18:00:00Z"    # Either end OR duration required
-  duration: "8h"                   # Supports: "10h", "3d", "2h30m"
+  duration: "8h"                   # Supports: "10h", "3d", "2h30m", "5m30s", "500ms"
 ```
 
 ## Baseline Activity
@@ -162,7 +162,7 @@ Storyline events define specific actions at specific times. Each entry declares 
 
 ```yaml
 storyline:
-  - time: "+2h30m"             # Required: ISO 8601, relative offset, or seconds
+  - time: "+2h30m"             # Required: ISO 8601 or relative offset (d/h/m/s/ms)
     actor: john.doe            # Required: username, built-in account (SYSTEM/root), or service_account
     system: WS-01              # Required: system hostname
     activity: "lateral movement via pass-the-hash"  # Required: human-readable description (GROUND_TRUTH.md)

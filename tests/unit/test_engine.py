@@ -292,6 +292,15 @@ class TestGenerationEngine:
 
         assert result == datetime(2024, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
 
+    def test_parse_storyline_time_relative_with_seconds(self, minimal_scenario, tmp_path):
+        """Should parse relative duration with seconds like '+20m30s'."""
+        engine = GenerationEngine(minimal_scenario, tmp_path)
+        engine.start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+        result = engine._parse_storyline_time("+20m30s")
+
+        assert result == datetime(2024, 1, 15, 10, 20, 30, tzinfo=timezone.utc)
+
     def test_parse_storyline_time_relative_seconds(self, minimal_scenario, tmp_path):
         """Should parse relative seconds like '+7200'."""
         engine = GenerationEngine(minimal_scenario, tmp_path)

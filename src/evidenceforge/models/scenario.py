@@ -38,18 +38,18 @@ class TimeWindow(BaseModel):
     @field_validator("duration")
     @classmethod
     def validate_duration_format(cls, v: str | None) -> str | None:
-        """Validate duration format matches pattern like '10h', '3d', '2h30m'.
+        """Validate duration format matches pattern like '10h', '3d', '2h30m', '5m30s'.
 
         Phase 1 only validates format, not semantics. Parsing into timedelta
         happens in utils/time.py.
         """
         if v is None:
             return None
-        # Allow multiple digit-unit pairs like "2h30m"
-        if not re.match(r"^(\d+[hdm])+$", v):
+        # Allow multiple digit-unit pairs like "2h30m", "5m30s", "500ms"
+        if not re.match(r"^(\d+(ms|[hdms]))+$", v):
             raise ValueError(
-                "Duration must match pattern like '10h', '3d', '2h30m' "
-                "(digits followed by h/d/m units)"
+                "Duration must match pattern like '10h', '3d', '2h30m', '5m30s', '500ms' "
+                "(digits followed by d/h/m/s/ms units)"
             )
         return v
 

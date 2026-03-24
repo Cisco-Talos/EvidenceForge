@@ -80,6 +80,31 @@ class TestTimeUtils:
         expected = timedelta(days=1, hours=3, minutes=45)
         assert result == expected
 
+    def test_parse_duration_seconds(self):
+        """Test parsing seconds duration."""
+        result = parse_duration("30s")
+        assert result == timedelta(seconds=30)
+
+    def test_parse_duration_minutes_seconds(self):
+        """Test parsing combined minutes and seconds."""
+        result = parse_duration("2m30s")
+        assert result == timedelta(minutes=2, seconds=30)
+
+    def test_parse_duration_hours_minutes_seconds(self):
+        """Test parsing combined hours, minutes, and seconds."""
+        result = parse_duration("1h30m15s")
+        assert result == timedelta(hours=1, minutes=30, seconds=15)
+
+    def test_parse_duration_milliseconds(self):
+        """Test parsing milliseconds duration."""
+        result = parse_duration("500ms")
+        assert result == timedelta(milliseconds=500)
+
+    def test_parse_duration_seconds_milliseconds(self):
+        """Test parsing combined seconds and milliseconds."""
+        result = parse_duration("2s500ms")
+        assert result == timedelta(seconds=2, milliseconds=500)
+
     def test_parse_duration_invalid(self):
         """Test that invalid duration raises error."""
         with pytest.raises(ValueError, match="Invalid duration format"):
