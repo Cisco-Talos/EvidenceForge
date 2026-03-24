@@ -723,11 +723,11 @@ def _get_http_status(dst_ip: str, uri: str) -> tuple[int, str]:
 
 
 def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]:
-    """Validate that a network connection would be observable by network sensors.
+    """Validate that a network connection is not fundamentally impossible.
 
-    Network-based data sources like Zeek can only observe traffic that actually
-    traverses the network. This function checks for connections that would never
-    be visible to network sensors.
+    Checks for addresses that should never appear in generated traffic
+    (localhost, link-local, multicast). Same-host connections (src==dst) are
+    valid for host-based logs and handled separately via SecurityEvent.local_only.
 
     Args:
         src_ip: Source IP address
@@ -736,10 +736,6 @@ def _is_invalid_network_connection(src_ip: str, dst_ip: str) -> tuple[bool, str]
     Returns:
         Tuple of (is_invalid, reason). If is_invalid=True, connection should not be generated.
     """
-    # Check if source and destination are the same
-    if src_ip == dst_ip:
-        return True, f"Source and destination are identical ({src_ip})"
-
     # Check for localhost addresses (127.0.0.0/8)
     # Network sensors cannot observe localhost traffic
     if src_ip.startswith('127.') or dst_ip.startswith('127.'):
@@ -1249,23 +1245,28 @@ class ActivityGenerator:
         if emit_dns and proto == 'tcp' and dst_port not in (53,):
             self._emit_dns_lookup(src_ip, dst_ip, time)
 
-        # Validate connection would be observable by network sensors
+        # Same-host connections are valid for host-based logs (eCAR FLOW)
+        # but invisible to network sensors (Zeek/Snort)
+        local_only = (src_ip == dst_ip)
+
+        # Validate connection is not fundamentally invalid (localhost, link-local, multicast)
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
             logger.warning(
                 f"Skipping invalid network connection: {src_ip} -> {dst_ip}. "
-                f"Reason: {reason}. Network sensors would not observe this traffic."
+                f"Reason: {reason}."
             )
             return ""
 
-        # Phase 2.5: Check network topology visibility
-        visibility = self._network_visibility or (self.dispatcher.visibility_engine if self.dispatcher else None)
-        if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
-            logger.debug(
-                f"Skipping connection {src_ip} -> {dst_ip}: "
-                f"not observable by any configured sensor"
-            )
-            return ""
+        # Phase 2.5: Check network topology visibility (skip for local-only)
+        if not local_only:
+            visibility = self._network_visibility or (self.dispatcher.visibility_engine if self.dispatcher else None)
+            if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
+                logger.debug(
+                    f"Skipping connection {src_ip} -> {dst_ip}: "
+                    f"not observable by any configured sensor"
+                )
+                return ""
 
         if src_port is None:
             src_port = _get_rng().randint(49152, 65535)
@@ -1388,6 +1389,7 @@ class ActivityGenerator:
             timestamp=time,
             event_type="connection",
             host=host_ctx,
+            local_only=local_only,
             network=NetworkContext(
                 src_ip=src_ip, src_port=src_port,
                 dst_ip=dst_ip, dst_port=dst_port,
@@ -1407,8 +1409,9 @@ class ActivityGenerator:
         )
 
         # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
+        # Skip for local-only events (no network sensor will see them)
         rng = _get_rng()
-        if service == 'ssl' and proto == 'tcp' and conn_state == 'SF':
+        if not local_only and service == 'ssl' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import SslContext
             server_name = REVERSE_DNS.get(dst_ip)
             if not server_name:
@@ -1433,7 +1436,7 @@ class ActivityGenerator:
                 established=True,
                 ssl_history='CsiI' if rng.random() < 0.7 else 'CsijI',
             )
-        elif service == 'http' and proto == 'tcp' and conn_state == 'SF':
+        elif not local_only and service == 'http' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import HttpContext
             _USER_AGENTS_WINDOWS = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -1786,13 +1789,13 @@ class ActivityGenerator:
             resp_bytes=rng.randint(80, 400),
             src_port=src_port,
         )
-        # If connection was filtered (e.g. same-host DNS), generate standalone UID
+        # If connection was filtered (e.g. invalid address), generate standalone UID
         if not dns_uid:
             from evidenceforge.utils.ids import generate_zeek_uid
             dns_uid = generate_zeek_uid("C")
 
-        # Emit Zeek dns.log record
-        if 'zeek_dns' in self.dispatcher.emitters:
+        # Emit Zeek dns.log record (skip for same-host DNS — Zeek can't observe it)
+        if 'zeek_dns' in self.dispatcher.emitters and src_ip != dns_server_ip:
             # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
             if rng.random() < 0.002:
                 self.dispatcher.dispatch_raw(RawLogEntry(
@@ -2859,6 +2862,8 @@ class ActivityGenerator:
         target_image: str,
     ) -> None:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        from evidenceforge.events.contexts import ProcessContext
+
         event = SecurityEvent(
             timestamp=time,
             event_type="create_remote_thread",

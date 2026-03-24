@@ -68,6 +68,10 @@ class SecurityEvent:
     dhcp: DhcpContext | None = None
     ntp: NtpContext | None = None
 
+    # Host-local event: skip network-sensor formats (Zeek/Snort) but still
+    # emit to host-based formats (eCAR, Windows, Sysmon).  Set when src_ip == dst_ip.
+    local_only: bool = False
+
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format
     _sensor_hostnames_by_format: dict[str, list[str]] = field(default_factory=dict)

@@ -19,12 +19,11 @@ from evidenceforge.models import User, System
 class TestNetworkValidation:
     """Tests for network connection validation."""
 
-    def test_invalid_same_src_dst(self):
-        """Connection with same source and destination should be invalid."""
-        is_invalid, reason = _is_invalid_network_connection("10.0.0.1", "10.0.0.1")
+    def test_same_src_dst_is_valid(self):
+        """Same-IP connections are valid (handled by SecurityEvent.local_only)."""
+        is_invalid, _reason = _is_invalid_network_connection("10.0.0.1", "10.0.0.1")
 
-        assert is_invalid is True
-        assert "identical" in reason.lower()
+        assert is_invalid is False
 
     def test_invalid_localhost_src(self):
         """Connection with localhost source should be invalid."""

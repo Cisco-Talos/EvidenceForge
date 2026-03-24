@@ -82,6 +82,9 @@ class EventDispatcher:
         for format_name, emitter in self.emitters.items():
             if not emitter.can_handle(event):
                 continue
+            # Host-local events (same src/dst IP) are invisible to network sensors
+            if event.local_only and format_name in _NETWORK_FORMATS:
+                continue
             # Network visibility filter: only applies to network-format emitters
             if visible_formats is not None and format_name in _NETWORK_FORMATS:
                 if format_name not in visible_formats:
