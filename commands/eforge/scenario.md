@@ -53,7 +53,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 ### Persona Selection
 
-EvidenceForge includes a library of 15 pre-built personas in the `personas/` directory (located alongside this skill file). Read the YAML files for full details when creating a scenario.
+EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Only define personas inline if you need to customize behavior. Read the YAML files in `personas/` for full details.
 
 | Persona | Work Hours | Risk Profile | Typical Role |
 |---------|-----------|--------------|-------------|

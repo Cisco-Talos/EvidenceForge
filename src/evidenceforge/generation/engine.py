@@ -1181,6 +1181,7 @@ class GenerationEngine:
                 orig_bytes=random.randint(1000, 10000),
                 resp_bytes=random.randint(5000, 50000),
                 emit_dns=True,
+                source_system=system,
             )
             malicious_event['dst_ip'] = dst_ip
             malicious_event['dst_port'] = dst_port

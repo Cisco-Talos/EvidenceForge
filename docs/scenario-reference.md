@@ -75,7 +75,7 @@ systems:
 
 ## Personas
 
-Personas define user behavior patterns for activity generation.
+Personas define user behavior patterns for activity generation. EvidenceForge includes 15 pre-built personas (developer, analyst, sysadmin, executive, etc.) that are resolved automatically by name — reference them in user definitions without needing to define them inline. Define personas inline only if you need to customize behavior beyond what the pre-built library provides; inline definitions override pre-built ones with the same name.
 
 ```yaml
 personas:
