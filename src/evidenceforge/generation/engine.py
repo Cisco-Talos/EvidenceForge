@@ -299,6 +299,15 @@ class GenerationEngine:
         # Set initial state manager time
         self.state_manager.set_current_time(self.start_time)
 
+        # Resolve scenario timezone for work-hours modulation
+        self._scenario_tz = None
+        if self.scenario.environment.timezone and self.scenario.environment.timezone.default:
+            try:
+                from zoneinfo import ZoneInfo
+                self._scenario_tz = ZoneInfo(self.scenario.environment.timezone.default)
+            except (KeyError, ValueError):
+                pass
+
         # Phase 6.3: Resolve AD domain for FQDNs and domain name fields
         self._ad_domain = self._resolve_ad_domain()
         self._netbios_domain = self._ad_domain.split('.')[0].upper() if self._ad_domain else 'CORP'
@@ -486,8 +495,14 @@ class GenerationEngine:
                 user_offsets = self._user_time_offsets.get(user.username)
 
                 # Calculate events for this user this hour
+                # Convert UTC hour to local timezone hour for work-hours modulation
+                local_hour = current_hour.hour
+                if hasattr(self, '_scenario_tz') and self._scenario_tz:
+                    from datetime import timezone as tz
+                    utc_dt = current_hour.replace(tzinfo=tz.utc)
+                    local_hour = utc_dt.astimezone(self._scenario_tz).hour
                 num_events = self._calculate_events_for_hour(
-                    user, current_hour=current_hour.hour, persona=persona,
+                    user, current_hour=local_hour, persona=persona,
                     user_offsets=user_offsets,
                 )
 
@@ -719,17 +734,17 @@ class GenerationEngine:
 
         # Morning ramp-up: sigmoid from start-1.5 to start
         if h < start - 1.5:
-            return 0.02  # Near-zero early morning
+            return 0.05  # Low off-hours activity (organic anomalies)
         if h < start + 0.5:
             t = (h - (start - 1.0)) / 1.5  # 0 to 1 over transition
-            return 0.02 + 0.98 * self._sigmoid(t * 2 - 1)
+            return 0.05 + 0.95 * self._sigmoid(t * 2 - 1)
 
         # Evening ramp-down: sigmoid from end to end+1.5
         if h > end + 1.5:
-            return 0.02  # Near-zero late evening
+            return 0.05  # Low off-hours activity (organic anomalies)
         if h > end - 0.5:
             t = (h - (end - 0.5)) / 1.5  # 0 to 1 over transition
-            return 0.02 + 0.98 * (1.0 - self._sigmoid(t * 2 - 1))
+            return 0.05 + 0.95 * (1.0 - self._sigmoid(t * 2 - 1))
 
         # Lunch dip (soft, 50% not 0%)
         if lunch:
