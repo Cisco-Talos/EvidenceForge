@@ -1336,10 +1336,12 @@ storyline:
       - type: failed_logon
         source_ip: "10.1.2.22"
         logon_type: 3
+        target_username: sarah.beck
         description: "Failed logon attempt reproducing user lockout"
       - type: failed_logon
         source_ip: "10.1.2.22"
         logon_type: 3
+        target_username: sarah.beck
         description: "Second failed logon attempt"
 
   # --- Web server attack attempts (exercises raw events + snort) ---

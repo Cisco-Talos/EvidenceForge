@@ -259,10 +259,15 @@ class LogonEventSpec(_EventSpecBase):
 
 
 class FailedLogonEventSpec(_EventSpecBase):
-    """Failed authentication event (generates 4625, eCAR USER_SESSION/LOGIN failure)."""
+    """Failed authentication event (generates 4625, eCAR USER_SESSION/LOGIN failure).
+
+    If target_username is set, the failed logon targets that user (e.g., help desk
+    testing a locked-out account). Otherwise, the actor is used as the target.
+    """
     type: Literal["failed_logon"] = "failed_logon"
     source_ip: str | None = None
     logon_type: int = 3
+    target_username: str | None = None
 
 
 class LogoffEventSpec(_EventSpecBase):

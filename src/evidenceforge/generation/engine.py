@@ -1138,6 +1138,7 @@ class GenerationEngine:
             self.activity_generator.generate_failed_logon(
                 user=actor, system=system, time=time,
                 logon_type=spec.logon_type, source_ip=source_ip,
+                target_username=getattr(spec, 'target_username', None),
             )
             malicious_event['source_ip'] = source_ip
 

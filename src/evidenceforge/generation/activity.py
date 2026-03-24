@@ -948,6 +948,7 @@ class ActivityGenerator:
         time: datetime,
         logon_type: int = 2,
         source_ip: Optional[str] = None,
+        target_username: Optional[str] = None,
     ) -> None:
         """Generate a failed logon event.
 
@@ -956,21 +957,25 @@ class ActivityGenerator:
         syslog "Failed password", eCAR LOGIN with failure_reason).
 
         Args:
-            user: User attempting to log on
+            user: User attempting to log on (or performing the test)
             system: Target system
             time: Attempt timestamp
             logon_type: Logon type attempted
             source_ip: Source IP (defaults to system IP for interactive)
+            target_username: If set, the logon targets this user instead of the actor
         """
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
+
+        # Use target_username if provided, otherwise use the actor's username
+        effective_username = target_username or user.username
 
         # Determine failure substatus with correct SID handling
         rng = _get_rng()
         substatus_roll = rng.random()
         if substatus_roll < 0.60:
             substatus = '0xc000006a'  # Wrong password
-            user_sid = self._get_sid(user.username)
+            user_sid = self._get_sid(effective_username)
             failure_reason = '%%2313'
         elif substatus_roll < 0.85:
             substatus = '0xc0000064'  # User not found: NULL SID
@@ -978,11 +983,11 @@ class ActivityGenerator:
             failure_reason = '%%2313'
         elif substatus_roll < 0.95:
             substatus = '0xc0000234'  # Account locked out
-            user_sid = self._get_sid(user.username)
+            user_sid = self._get_sid(effective_username)
             failure_reason = '%%2304'
         else:
             substatus = '0xc0000072'  # Account disabled
-            user_sid = self._get_sid(user.username)
+            user_sid = self._get_sid(effective_username)
             failure_reason = '%%2307'
 
         event = SecurityEvent(
@@ -990,7 +995,7 @@ class ActivityGenerator:
             event_type="failed_logon",
             host=self._build_host_context(system),
             auth=AuthContext(
-                username=user.username,
+                username=effective_username,
                 user_sid=user_sid,
                 logon_type=logon_type,
                 auth_package='Negotiate',
