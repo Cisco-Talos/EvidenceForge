@@ -33,6 +33,7 @@ from evidenceforge.generation.emitters import (
     EcarEmitter,
     SyslogEmitter,
     BashHistoryEmitter,
+    ProxyEmitter,
     SnortEmitter,
     SysmonEventEmitter,
     WebEmitter,
@@ -211,6 +212,7 @@ class GenerationEngine:
             'bash_history': BashHistoryEmitter,
             'snort_alert': SnortEmitter,
             'web_access': WebEmitter,
+            'proxy_access': ProxyEmitter,
         }
 
         # Build per-format sensor hostname mapping (expand group names)
@@ -224,7 +226,7 @@ class GenerationEngine:
         _ZEEK_FORMATS = {k for k in emitter_classes if k.startswith("zeek_")}
         # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
         _SENSOR_FORMATS = _ZEEK_FORMATS | {'snort_alert'}
-        _HOST_FORMATS = {'windows_event_security', 'windows_event_sysmon', 'ecar', 'syslog', 'bash_history', 'web_access'}
+        _HOST_FORMATS = {'windows_event_security', 'windows_event_sysmon', 'ecar', 'syslog', 'bash_history', 'web_access', 'proxy_access'}
 
         for format_name in sorted(formats_to_generate):
             if format_name not in emitter_classes:
@@ -1278,6 +1280,36 @@ class GenerationEngine:
             malicious_event['target_format'] = spec.target_format
 
         return malicious_event
+
+    def _get_system_exposure(self, system) -> str:
+        """Get the network exposure for a system based on its segment.
+
+        Returns 'internal', 'external', or 'both'. Defaults to 'both' if
+        no network config exists (backward compat).
+        """
+        if not self.scenario.environment.network:
+            return 'both'
+        import ipaddress as _ipa
+        sys_ip = _ipa.ip_address(system.ip)
+        for seg in self.scenario.environment.network.segments:
+            net = _ipa.ip_network(seg.cidr, strict=False)
+            if sys_ip in net:
+                return seg.exposure
+        return 'internal'
+
+    @staticmethod
+    def _generate_external_client_ip(rng) -> str:
+        """Generate a random external (non-RFC1918) IP for web server clients."""
+        while True:
+            ip = f'{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}'
+            first = int(ip.split('.')[0])
+            if first == 10 or first == 127:
+                continue
+            if ip.startswith('172.') and 16 <= int(ip.split('.')[1]) <= 31:
+                continue
+            if ip.startswith('192.168.'):
+                continue
+            return ip
 
     def _make_domain_sid(self, rid: int | None = None) -> str:
         """Generate a SID using the scenario's domain SID prefix."""
@@ -2554,7 +2586,7 @@ class GenerationEngine:
                         },
                     )
 
-        # Web access logs: 10-30 requests per hour on systems with web services
+        # Web access logs: 10-30 requests per hour on systems with web_server role
         if 'web_access' in self.emitters:
             _WEB_PATHS = [
                 ('/', 'GET', 200), ('/index.html', 'GET', 200),
@@ -2572,15 +2604,26 @@ class GenerationEngine:
                 'python-requests/2.31.0',
             ]
             for sys_obj in systems:
-                if not any(p in svc.lower() for svc in (sys_obj.services or []) for p in ('http', 'iis', 'nginx', 'apache', 'web')):
+                if 'web_server' not in (sys_obj.roles or []):
                     continue
                 num_reqs = rng.randint(10, 30)
-                other_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+
+                # Determine client IP pool based on segment exposure
+                internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+                exposure = self._get_system_exposure(sys_obj)
                 for _ in range(num_reqs):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     path, method, status = rng.choice(_WEB_PATHS)
-                    client_ip = rng.choice(other_ips) if other_ips else '10.0.0.1'
+                    if exposure == 'external':
+                        client_ip = self._generate_external_client_ip(rng)
+                    elif exposure == 'both':
+                        if rng.random() < 0.6:
+                            client_ip = self._generate_external_client_ip(rng)
+                        else:
+                            client_ip = rng.choice(internal_ips) if internal_ips else '10.0.0.1'
+                    else:  # internal
+                        client_ip = rng.choice(internal_ips) if internal_ips else '10.0.0.1'
                     self.activity_generator.generate_raw(
                         time=ts, target_format='web_access', system=sys_obj, fields={
                             'timestamp': ts, 'client_ip': client_ip,

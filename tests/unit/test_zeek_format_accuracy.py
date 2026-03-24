@@ -560,4 +560,4 @@ class TestSampleDataFieldValidation:
         """All format YAMLs load successfully."""
         from evidenceforge.formats import load_all_formats
         formats = load_all_formats()
-        assert len(formats) == 20
+        assert len(formats) == 21

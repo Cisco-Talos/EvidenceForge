@@ -118,6 +118,7 @@ class System(BaseModel):
     type: str = Field(..., pattern="^(workstation|server|domain_controller)$")
     assigned_user: str | None = None
     services: list[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list, description="System roles: forward_proxy, web_server, dns_server, mail_server, etc.")
 
     @field_validator("ip")
     @classmethod
@@ -428,6 +429,7 @@ class NetworkSegment(BaseModel):
     cidr: str
     description: str = ""
     systems: list[str] = Field(default_factory=list)
+    exposure: Literal["internal", "external", "both"] = "internal"
 
     @field_validator("cidr")
     @classmethod

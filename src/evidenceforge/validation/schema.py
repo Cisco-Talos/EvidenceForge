@@ -284,7 +284,7 @@ class ScenarioValidator:
             'zeek_conn', 'zeek_dns', 'zeek_http', 'zeek_ssl', 'zeek_files',
             'zeek_dhcp', 'zeek_ntp', 'zeek_weird', 'zeek_x509',
             'zeek_ocsp', 'zeek_pe', 'zeek_packet_filter', 'zeek_reporter',
-            'ecar', 'syslog', 'bash_history', 'snort_alert', 'web_access',
+            'ecar', 'syslog', 'bash_history', 'snort_alert', 'web_access', 'proxy_access',
         }
 
         for idx, event in enumerate(self.scenario.storyline):
@@ -399,7 +399,7 @@ class ScenarioValidator:
 
         known_output_formats = (
             set(FORMAT_GROUPS.keys())
-            | {"ecar", "syslog", "bash_history", "snort_alert", "web_access"}
+            | {"ecar", "syslog", "bash_history", "snort_alert", "web_access", "proxy_access"}
         )
         _group_members = {}
         for group, members in FORMAT_GROUPS.items():
