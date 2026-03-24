@@ -2989,10 +2989,14 @@ class ActivityGenerator:
 
         Unlike dispatch_raw(), this goes through state management,
         visibility filtering, and local_only checks.
+        Automatically injects _host_fqdn for host-based emitter routing.
         """
         from evidenceforge.events.contexts import RawContext
 
         host_ctx = self._build_host_context(system) if system else None
+        # Inject host FQDN for HostMultiplexEmitter routing
+        if host_ctx and '_host_fqdn' not in fields:
+            fields['_host_fqdn'] = host_ctx.fqdn if hasattr(host_ctx, 'fqdn') and host_ctx.fqdn else host_ctx.hostname
         event = SecurityEvent(
             timestamp=time,
             event_type="raw",

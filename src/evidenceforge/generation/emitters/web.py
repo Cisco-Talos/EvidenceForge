@@ -1,24 +1,24 @@
 """Web server access log emitter."""
 
-from pathlib import Path
 from typing import Any
 
-from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
-class WebEmitter(LogEmitter):
-    """Emitter for W3C web server access logs (Apache/Nginx Combined Log Format)."""
+class WebEmitter(HostMultiplexEmitter):
+    """Emitter for W3C web server access logs (Apache/Nginx Combined Log Format).
 
+    Per-host FQDN directory routing: each web server gets its own access log.
+    """
+
+    _log_filename = "web_access.log"
     _supported_types: set[str] = set()
 
-    def emit_event(self, event_data: dict[str, Any]) -> None:
-        """Route to threaded or non-threaded path."""
-        if self.threaded:
-            self._emit_threaded(event_data)
-        else:
-            rendered = self._render_event(event_data)
-            self._buffer_event(rendered)
+    def _dispatch(self, event_data: dict[str, Any]) -> None:
+        """Route web access event to per-host file."""
+        rendered = self._render_event(event_data)
+        host_fqdn = event_data.pop('_host_fqdn', '')
+        self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render web access log entry.

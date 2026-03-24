@@ -183,14 +183,10 @@ class SyslogEmitter(HostMultiplexEmitter):
         })
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
-        """Route syslog event to both centralized and per-host files."""
+        """Route syslog event to per-host file."""
         rendered = self._render_event(event_data)
         host_fqdn = event_data.pop('_host_fqdn', '')
-        # Always write to centralized syslog.log
-        self.emit_to_host(rendered, '')
-        # Also write to per-host file if host FQDN is set
-        if host_fqdn:
-            self.emit_to_host(rendered, host_fqdn)
+        self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         context = {

@@ -224,7 +224,7 @@ class GenerationEngine:
         _ZEEK_FORMATS = {k for k in emitter_classes if k.startswith("zeek_")}
         # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
         _SENSOR_FORMATS = _ZEEK_FORMATS | {'snort_alert'}
-        _HOST_FORMATS = {'windows_event_security', 'windows_event_sysmon', 'ecar', 'syslog', 'bash_history'}
+        _HOST_FORMATS = {'windows_event_security', 'windows_event_sysmon', 'ecar', 'syslog', 'bash_history', 'web_access'}
 
         for format_name in sorted(formats_to_generate):
             if format_name not in emitter_classes:
