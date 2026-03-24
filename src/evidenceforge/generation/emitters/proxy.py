@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
@@ -9,10 +10,67 @@ class ProxyEmitter(HostMultiplexEmitter):
     """Emitter for forward proxy access logs (W3C Extended Log Format).
 
     Per-host FQDN directory routing: each proxy server gets its own access log.
+
+    Handles SecurityEvents with ProxyContext (fan-out from connection events).
+    For HTTPS connections, emits a CONNECT entry followed by the actual request.
     """
 
     _log_filename = "proxy_access.log"
-    _supported_types: set[str] = set()  # raw-only via generate_raw()
+    _supported_types: set[str] = {"connection"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Handle connection events that carry a ProxyContext."""
+        return (
+            event.event_type in self._supported_types
+            and event.proxy is not None
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render ProxyContext to W3C Extended format.
+
+        For HTTPS (port 443), emits CONNECT entry first, then the actual request.
+        """
+        px = event.proxy
+        net = event.network
+
+        # For HTTPS: emit CONNECT entry first
+        if net and net.dst_port == 443:
+            connect_data = {
+                'timestamp': event.timestamp,
+                'client_ip': px.client_ip,
+                'username': px.username,
+                'method': 'CONNECT',
+                'url': f'{px.host}:443',
+                'status_code': 200,
+                'sc_bytes': 0,
+                'cs_bytes': 0,
+                'time_taken': 0,
+                'user_agent': px.user_agent,
+                'host': f'{px.host}:443',
+                'content_type': None,
+                'cache_result': 'NONE',
+                '_host_fqdn': px.proxy_fqdn,
+            }
+            self._dispatch(connect_data)
+
+        # Emit the actual request
+        event_data = {
+            'timestamp': event.timestamp,
+            'client_ip': px.client_ip,
+            'username': px.username,
+            'method': px.method,
+            'url': px.url,
+            'status_code': px.status_code,
+            'sc_bytes': px.sc_bytes,
+            'cs_bytes': px.cs_bytes,
+            'time_taken': px.time_taken,
+            'user_agent': px.user_agent,
+            'host': px.host,
+            'content_type': px.content_type,
+            'cache_result': px.cache_result,
+            '_host_fqdn': px.proxy_fqdn,
+        }
+        self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route proxy access event to per-host file."""

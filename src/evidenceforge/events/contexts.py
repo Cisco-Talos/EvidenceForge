@@ -376,6 +376,25 @@ class PeContext:
 
 
 @dataclass(slots=True)
+class ProxyContext:
+    """HTTP proxy transaction details for proxy_access.log fan-out."""
+
+    client_ip: str
+    username: str = ""
+    method: str = "GET"
+    url: str = ""               # Full destination URL or host:port for CONNECT
+    host: str = ""              # Destination hostname
+    status_code: int = 200
+    sc_bytes: int = 0           # Server→client bytes
+    cs_bytes: int = 0           # Client→server bytes
+    time_taken: int = 0         # Request duration in ms
+    user_agent: str = ""
+    content_type: str = ""
+    cache_result: str = "MISS"  # HIT, MISS, NONE, DENIED
+    proxy_fqdn: str = ""        # FQDN of proxy system for routing
+
+
+@dataclass(slots=True)
 class RawContext:
     """Carries arbitrary fields destined for one specific emitter.
 

@@ -71,7 +71,34 @@ systems:
     type: workstation          # Required: workstation|server|domain_controller
     assigned_user: jsmith      # Optional: reference to username
     services: ["IIS"]          # Optional
+    roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, mail_server
 ```
+
+### System Roles
+
+The `roles` field declares a system's function in the network. The engine uses roles for traffic routing decisions:
+
+- `web_server` — generates web access logs for HTTP requests to this system
+- `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
+- `dns_server` — DNS resolution target
+- `mail_server` — mail relay/server
+
+### Network Segment Exposure
+
+Segments can declare their internet exposure via the `exposure` field:
+
+```yaml
+network:
+  segments:
+    - name: workstations
+      cidr: "10.0.1.0/24"
+      exposure: internal        # Only internal clients (default)
+    - name: dmz
+      cidr: "10.0.2.0/24"
+      exposure: both            # Internal + external clients
+```
+
+Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
 
 ## Personas
 
@@ -334,7 +361,7 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy_access`.
 
 ## Backward Compatibility
 

@@ -334,7 +334,38 @@ class GenerationEngine:
 
         self._storyline_executed: set[int] = set()
 
+        # Build proxy routing table: maps source system IP → proxy System chain
+        self._proxy_routes: dict[str, list] = {}
+        self._build_proxy_routes()
+        # Share proxy routes with activity generator for baseline connection generation
+        self.activity_generator._proxy_routes = self._proxy_routes
+
         logger.info("Initialization complete")
+
+    def _build_proxy_routes(self) -> None:
+        """Build proxy routing table: which systems route through which proxies.
+
+        Default: all internal systems route outbound HTTP/HTTPS through any
+        forward_proxy in the scenario. With multiple proxies, internal segments
+        route through the first proxy found, which may chain to another.
+        """
+        proxies = [s for s in self.scenario.environment.systems if 'forward_proxy' in (s.roles or [])]
+        if not proxies or 'proxy_access' not in self.emitters:
+            return
+
+        # Simple routing: all non-proxy systems route through the first proxy
+        # Future: segment-aware chaining for multiple proxies
+        proxy = proxies[0]
+        for system in self.scenario.environment.systems:
+            if 'forward_proxy' in (system.roles or []):
+                continue  # proxies don't route through themselves
+            self._proxy_routes[system.ip] = [proxy]
+        logger.info(f"Proxy routing: {len(self._proxy_routes)} systems → {proxy.hostname}")
+
+    def _get_proxy_for_system(self, system) -> 'System | None':
+        """Get the first proxy in the chain for a given system, or None."""
+        chain = self._proxy_routes.get(system.ip)
+        return chain[0] if chain else None
 
     def _emit_sensor_startup(self) -> None:
         """Emit Zeek sensor startup records (packet_filter.log, reporter.log).

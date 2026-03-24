@@ -27,6 +27,7 @@ from evidenceforge.events.contexts import (
     OcspContext,
     PeContext,
     ProcessContext,
+    ProxyContext,
     RawContext,
     RegistryContext,
     ScheduledTaskContext,
@@ -72,6 +73,7 @@ class SecurityEvent:
     ntp: NtpContext | None = None
     ocsp: OcspContext | None = None
     pe: PeContext | None = None
+    proxy: ProxyContext | None = None
 
     # Raw event: carries arbitrary fields for a single target emitter.
     # Goes through pipeline (state mgmt, visibility, local_only) unlike dispatch_raw().

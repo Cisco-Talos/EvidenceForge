@@ -1413,6 +1413,48 @@ class ActivityGenerator:
         if dns is not None:
             event.dns = dns
 
+        # Proxy context: attach if source system routes through a proxy for HTTP/HTTPS
+        if not local_only and service in ('ssl', 'http') and dst_port in (80, 443):
+            proxy_routes = getattr(self, '_proxy_routes', {})
+            chain = proxy_routes.get(src_ip)
+            if chain:
+                from evidenceforge.events.contexts import ProxyContext
+                proxy_sys = chain[0]
+                proxy_fqdn = getattr(proxy_sys, 'hostname', '')
+                # Build proxy FQDN from hostname + domain
+                ad_domain = getattr(self, '_ad_domain', '')
+                if ad_domain and '.' not in proxy_fqdn:
+                    proxy_fqdn = f'{proxy_fqdn}.{ad_domain}'
+                hostname = REVERSE_DNS.get(dst_ip, dst_ip)
+                schema = 'https' if dst_port == 443 else 'http'
+                url = f'{schema}://{hostname}/'
+                # Pick a random user from the scenario (if available)
+                user_agent = _get_rng().choice([
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+                ])
+                cache_roll = _get_rng().random()
+                if cache_roll < 0.30:
+                    cache_result = 'HIT'
+                elif cache_roll < 0.95:
+                    cache_result = 'MISS'
+                else:
+                    cache_result = 'DENIED'
+                event.proxy = ProxyContext(
+                    client_ip=src_ip,
+                    method='GET',
+                    url=url,
+                    host=hostname,
+                    status_code=200 if cache_result != 'DENIED' else 403,
+                    sc_bytes=resp_bytes or 0,
+                    cs_bytes=orig_bytes or 0,
+                    time_taken=int((duration or 0) * 1000),
+                    user_agent=user_agent,
+                    content_type='text/html',
+                    cache_result=cache_result,
+                    proxy_fqdn=proxy_fqdn,
+                )
+
         # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
         # Skip for local-only events (no network sensor will see them)
         rng = _get_rng()
