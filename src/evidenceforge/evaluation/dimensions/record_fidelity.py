@@ -51,6 +51,7 @@ WINDOWS_VARIANT_MAP = {
     4757: "group_membership_change",
     4768: "kerberos_tgt",
     4769: "kerberos_service_ticket",
+    4770: "kerberos_service_ticket",  # TGS renewal uses same fields as 4769
     4771: "kerberos_preauth_failed",
     4776: "ntlm_validation",
     5156: "wfp_connection",

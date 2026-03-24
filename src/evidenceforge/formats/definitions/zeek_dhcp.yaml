@@ -10,9 +10,9 @@ fields:
     description: "Timestamp of DHCP transaction"
 
   - name: uids
-    type: string
+    type: list
     required: true
-    description: "Connection UIDs (rendered as JSON array)"
+    description: "Connection UIDs (JSON array of strings)"
 
   - name: client_addr
     type: ip_address
@@ -35,9 +35,9 @@ fields:
     description: "Client domain"
 
   - name: msg_types
-    type: string
+    type: list
     required: true
-    description: "DHCP message types (rendered as JSON array)"
+    description: "DHCP message types (JSON array of strings)"
 
   - name: duration
     type: float

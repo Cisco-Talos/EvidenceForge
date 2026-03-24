@@ -862,10 +862,15 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Windows Event dict to XML format."""
+        from xml.sax.saxutils import escape as xml_escape
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        # Escape XML special characters in string values to prevent parse errors
+        for key, val in event_data.items():
+            if isinstance(val, str) and key != "TimeCreated":
+                event_data[key] = xml_escape(val)
         return self._template.render(**event_data)
 
     def _run(self) -> None:
