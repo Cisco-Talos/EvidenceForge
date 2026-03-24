@@ -158,45 +158,110 @@ Intensity mapping: low=5, medium=15, high=40 events/user/hour.
 
 ## Storyline
 
-Storyline events define specific actions at specific times.
+Storyline events define specific actions at specific times. Each entry declares what happened (`activity`, for documentation/GROUND_TRUTH.md) and what events to generate (`events` list with typed, validated fields).
 
 ```yaml
 storyline:
   - time: "+2h30m"             # Required: ISO 8601, relative offset, or seconds
     actor: john.doe            # Required: username, built-in account (SYSTEM/root), or service_account
     system: WS-01              # Required: system hostname
-    activity: "lateral movement"  # Required: activity description
-    details:                   # Optional: activity-specific details
-      target_ip: "10.0.1.20"
-      method: "pass-the-hash"
+    activity: "lateral movement via pass-the-hash"  # Required: human-readable description (GROUND_TRUTH.md)
+    events:                    # Required: typed event declarations
+      - type: logon
+        source_ip: "10.0.1.20"
+        logon_type: 3
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c whoami"
 ```
 
-### Phase 2.4+ Optional Fields
+### Event Types
 
+Each event in the `events` list has a `type` field that selects a validated schema. Unknown fields are rejected at load time.
+
+| Type | Generates | Required Fields | Optional Fields |
+|------|-----------|-----------------|-----------------|
+| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `supplementary` (auto/none) |
+| `logon` | 4624, 4672, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
+| `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
+| `logoff` | 4634, eCAR LOGOUT | | |
+| `connection` | Zeek conn, eCAR FLOW | `dst_ip` | `dst_port` (default 443), `service`, `source_ip` |
+| `ssh_session` | Zeek conn + syslog sshd + eCAR | | `source_ip` |
+| `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
+| `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
+| `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
+| `group_member_added` | 4728/4732/4756 (on DC) | `group_name`, `member_name` | `scope` (global/local/universal) |
+| `service_installed` | 4697 | `service_name`, `service_file_name` | `service_account` |
+| `scheduled_task_created` | 4698 | `task_name` | `task_content` |
+| `log_cleared` | 1102 | | |
+| `create_remote_thread` | Sysmon 8 | `target_process` | |
+
+All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+### Supplementary Event Inference
+
+Process events with `supplementary: auto` (the default) automatically generate additional Windows audit events by parsing the command line:
+
+| Command Pattern | Inferred Event |
+|----------------|---------------|
+| `net user <name> /add` | 4720 (account created) |
+| `net user <name> /delete` | 4726 (account deleted) |
+| `net group "<group>" <user> /add` | 4728 (group member added) |
+| `schtasks /Create /TN "<name>"` | 4698 (scheduled task created) |
+| `sc create <name> binPath=` | 4697 (service installed) |
+| `wevtutil cl Security` | 1102 (log cleared) |
+
+If the same event type is already explicitly declared in the `events` list, inference skips it (no duplicates). Set `supplementary: none` to disable inference entirely.
+
+### Best Practices
+
+1. **Always declare the primary action explicitly** -- don't rely on inference for the main event
+2. **Let inference handle same-system audit side-effects** -- 4720/4697/4698/1102 are auto-generated from command lines
+3. **Explicitly declare cross-system events** -- inference cannot generate events on other systems (e.g., DC Kerberos for domain logon, RDP logon on target)
+4. **Explicitly declare events when field precision matters** -- inference uses auto-generated values (random SIDs); declare explicitly if SIDs must match across steps
+5. **Use explicit events for specialized detection types** -- CreateRemoteThread, LSASS access; inference doesn't detect these patterns
+
+### Examples
+
+**Password spray + lateral movement:**
 ```yaml
-storyline:
-  - time: "+2h30m"
-    # ... Phase 1 fields above ...
-
-    event_sequence:            # Phase 2.4+: Multi-step sub-events
-      - sub_event_type: process
-        delay_seconds: 5
-        details:
-          process_name: powershell.exe
-      - sub_event_type: file
-        delay_seconds: 10
-        details:
-          file_path: C:\temp\payload.exe
-
-    duration: "30m"            # Phase 2.4+: Event duration
-    success_probability: 0.8   # Phase 2.4+: 0.0-1.0
-    retry_on_failure: true     # Phase 2.4+: Retry flag
+- time: "+30m"
+  actor: attacker
+  system: WS-01
+  activity: "Password spray against domain accounts"
+  events:
+    - type: failed_logon
+      source_ip: "185.220.101.34"
+    - type: failed_logon
+      source_ip: "185.220.101.34"
+    - type: logon
+      source_ip: "185.220.101.34"
+      logon_type: 3
 ```
 
-**event_sequence** items must have:
-- `sub_event_type` (required): Type of sub-event (e.g., process, file, network)
-- `delay_seconds` (optional): Delay before this sub-event
-- `details` (optional): Sub-event-specific details
+**Process with auto-inferred audit events:**
+```yaml
+- time: "+1h"
+  actor: attacker
+  system: DC-01
+  activity: "Create backdoor domain account"
+  events:
+    - type: process
+      process_name: "C:\\Windows\\System32\\net.exe"
+      command_line: "net user svc-audit P@ss! /add /domain"
+      # supplementary: auto (default) -- engine auto-generates 4720 from command line
+```
+
+**Explicit cross-system events:**
+```yaml
+- time: "+1h30m"
+  actor: attacker
+  system: WEB-01
+  activity: "SSH lateral movement to web server"
+  events:
+    - type: ssh_session
+      source_ip: "10.20.10.13"
+```
 
 ## Output
 
@@ -214,7 +279,8 @@ Supported formats: `windows_event_security`, `zeek_conn`, `ecar`, `syslog`, `bas
 
 ## Backward Compatibility
 
-All Phase 2.4+ fields are optional with null defaults. Existing Phase 1 scenarios work without modification:
+Persona fields are optional with null defaults:
 - `expanded_activities`, `work_hours_parsed`, `activity_intensity` default to null
-- `event_sequence`, `duration`, `retry_on_failure`, `success_probability` default to null
 - `work_hours_parsed` is auto-populated from the `work_hours` string if not explicitly provided
+
+**Breaking change (Phase 8.4):** The `events` field on storyline entries is now required. The old `details` dict and `event_sequence` fields have been removed. All storyline entries must use the typed `events` list format.

