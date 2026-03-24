@@ -24,6 +24,8 @@ from evidenceforge.events.contexts import (
     KerberosContext,
     NetworkContext,
     NtpContext,
+    OcspContext,
+    PeContext,
     ProcessContext,
     RawContext,
     RegistryContext,
@@ -68,6 +70,8 @@ class SecurityEvent:
     x509: X509Context | None = None
     dhcp: DhcpContext | None = None
     ntp: NtpContext | None = None
+    ocsp: OcspContext | None = None
+    pe: PeContext | None = None
 
     # Raw event: carries arbitrary fields for a single target emitter.
     # Goes through pipeline (state mgmt, visibility, local_only) unlike dispatch_raw().

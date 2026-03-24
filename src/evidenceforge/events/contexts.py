@@ -340,6 +340,42 @@ class NtpContext:
 
 
 @dataclass(slots=True)
+class OcspContext:
+    """OCSP response details for Zeek ocsp.log."""
+
+    id: str = ""                    # F-prefix file ID
+    hash_algorithm: str = "sha256"
+    issuer_name_hash: str = ""
+    issuer_key_hash: str = ""
+    serial_number: str = ""
+    cert_status: str = "good"       # "good", "revoked", "unknown"
+    this_update: float = 0.0
+    next_update: float = 0.0
+
+
+@dataclass(slots=True)
+class PeContext:
+    """PE (Portable Executable) analysis for Zeek pe.log."""
+
+    id: str = ""                    # F-prefix file ID from files.log
+    machine: str = "AMD64"
+    compile_ts: float = 0.0
+    os: str = "WINDOWS_NT"
+    subsystem: str = "WINDOWS_GUI"
+    is_exe: bool = True
+    is_64bit: bool = True
+    uses_aslr: bool = True
+    uses_dep: bool = True
+    uses_code_integrity: bool = False
+    uses_seh: bool = True
+    has_import_table: bool = True
+    has_export_table: bool = False
+    has_cert_table: bool = False
+    has_debug_data: bool = False
+    section_names: list[str] = field(default_factory=lambda: [".text", ".rdata", ".data", ".rsrc"])
+
+
+@dataclass(slots=True)
 class RawContext:
     """Carries arbitrary fields destined for one specific emitter.
 

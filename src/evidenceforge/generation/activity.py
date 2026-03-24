@@ -1441,6 +1441,54 @@ class ActivityGenerator:
                 established=True,
                 ssl_history='CsiI' if rng.random() < 0.7 else 'CsijI',
             )
+
+            # X.509 certificate for SSL connections (fan-out to x509.log)
+            from evidenceforge.events.contexts import X509Context
+            import hashlib
+            cert_hash = hashlib.sha256(f"cert_{server_name}".encode()).hexdigest()
+            is_ecdsa = rng.random() < 0.4
+            _ISSUERS = [
+                "CN=R3, O=Let's Encrypt, C=US",
+                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+                "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
+                "CN=E1, O=Let's Encrypt, C=US",
+                "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            ]
+            now_epoch = event.timestamp.timestamp()
+            event.x509 = X509Context(
+                fingerprint=cert_hash,
+                certificate_version=3,
+                certificate_serial=f"{rng.randint(0x1000000000, 0xFFFFFFFFFF):X}",
+                certificate_subject=f"CN={server_name}",
+                certificate_issuer=rng.choice(_ISSUERS),
+                certificate_not_valid_before=now_epoch - rng.randint(86400, 86400 * 365),
+                certificate_not_valid_after=now_epoch + rng.randint(86400 * 30, 86400 * 365),
+                certificate_key_alg='id-ecPublicKey' if is_ecdsa else 'rsaEncryption',
+                certificate_sig_alg='ecdsa-with-SHA256' if is_ecdsa else 'sha256WithRSAEncryption',
+                certificate_key_type='ecdsa' if is_ecdsa else 'rsa',
+                certificate_key_length=256 if is_ecdsa else rng.choice([2048, 4096]),
+                certificate_exponent='65537' if not is_ecdsa else '',
+                san_dns=[server_name, f"*.{'.'.join(server_name.split('.')[1:])}"] if '.' in server_name else [server_name],
+                basic_constraints_ca=False,
+                host_cert=True,
+                client_cert=False,
+            )
+
+            # OCSP response (~30% of SSL connections)
+            if rng.random() < 0.30:
+                from evidenceforge.events.contexts import OcspContext
+                from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
+                event.ocsp = OcspContext(
+                    id=_gen_uid('F'),
+                    hash_algorithm='sha256',
+                    issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[:40],
+                    issuer_key_hash=hashlib.sha256(f"key_{event.x509.certificate_issuer}".encode()).hexdigest()[:40],
+                    serial_number=event.x509.certificate_serial,
+                    cert_status='good',
+                    this_update=now_epoch - rng.randint(0, 86400),
+                    next_update=now_epoch + rng.randint(86400, 86400 * 7),
+                )
+
         elif not local_only and service == 'http' and proto == 'tcp' and conn_state == 'SF':
             from evidenceforge.events.contexts import HttpContext
             _USER_AGENTS_WINDOWS = [
@@ -1513,9 +1561,62 @@ class ActivityGenerator:
                 event.http.resp_fuids = [fuid]
                 event.http.resp_mime_types = [event.file_transfer.mime_type]
 
+                # PE analysis for Windows executables in file transfers
+                if mime_type in ('application/x-dosexec', 'application/octet-stream') and rng.random() < 0.1:
+                    from evidenceforge.events.contexts import PeContext
+                    is_64 = rng.random() < 0.7
+                    event.pe = PeContext(
+                        id=fuid,
+                        machine='AMD64' if is_64 else 'I386',
+                        compile_ts=event.timestamp.timestamp() - rng.randint(86400, 86400 * 365 * 3),
+                        is_exe=True,
+                        is_64bit=is_64,
+                        uses_aslr=rng.random() < 0.8,
+                        uses_dep=rng.random() < 0.9,
+                        uses_code_integrity=rng.random() < 0.1,
+                        has_import_table=True,
+                        has_export_table=rng.random() < 0.2,
+                        has_cert_table=rng.random() < 0.3,
+                        has_debug_data=rng.random() < 0.4,
+                    )
+
+        # NTP context for Zeek ntp.log fan-out
+        if not local_only and service == 'ntp' and proto == 'udp':
+            from evidenceforge.events.contexts import NtpContext
+            ntp_rng = _get_rng()
+            event.ntp = NtpContext(
+                version=ntp_rng.choice([3, 4]),
+                mode=3,  # client
+                stratum=ntp_rng.randint(1, 4),
+                poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
+                precision=ntp_rng.uniform(-25.0, -18.0),
+                root_delay=ntp_rng.uniform(0.0, 0.1),
+                root_disp=ntp_rng.uniform(0.0, 0.05),
+                ref_id=ntp_rng.choice(['GPS', 'PPS', 'GOES', '.GPS.', '.PPS.']),
+            )
+
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
+
+        # Zeek weird.log: probabilistic network anomalies (~3% of connections)
+        if not local_only and rng.random() < 0.03:
+            _WEIRD_NAMES = [
+                'window_recision', 'possible_split_routing',
+                'above_hole_data_without_any_acks', 'data_before_established',
+                'connection_originator_SYN_ack', 'truncated_header',
+                'inappropriate_FIN', 'bad_TCP_checksum',
+            ]
+            self.generate_raw(
+                time=time, target_format='zeek_weird', fields={
+                    'ts': time, 'uid': uid,
+                    'id.orig_h': src_ip, 'id.orig_p': src_port,
+                    'id.resp_h': dst_ip, 'id.resp_p': dst_port,
+                    'name': rng.choice(_WEIRD_NAMES),
+                    'notice': False, 'peer': '',
+                    'source': 'TCP' if proto == 'tcp' else 'UDP',
+                },
+            )
 
         # Emit 5156 (WFP connection) on Windows source hosts
         if source_system and _get_os_category(source_system.os) == 'windows':

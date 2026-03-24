@@ -334,6 +334,80 @@ class GenerationEngine:
 
         logger.info("Initialization complete")
 
+    def _emit_sensor_startup(self) -> None:
+        """Emit Zeek sensor startup records (packet_filter.log, reporter.log).
+
+        Fired once per sensor at scenario start time.
+        """
+        if not self.scenario.environment.network:
+            return
+        from evidenceforge.events.dispatcher import expand_formats
+        rng = random.Random(hash("sensor_startup"))
+        for sensor in self.scenario.environment.network.sensors:
+            sensor_fmts = expand_formats(sensor.log_formats)
+            if not any(f.startswith("zeek_") for f in sensor_fmts):
+                continue
+            hostname = sensor.hostname or sensor.name
+            ts = self.start_time + timedelta(seconds=rng.uniform(0.1, 2.0))
+
+            # packet_filter.log: BPF filter loaded at startup
+            if 'zeek_packet_filter' in self.emitters:
+                self.activity_generator.generate_raw(
+                    time=ts, target_format='zeek_packet_filter', fields={
+                        'ts': ts, 'node': hostname,
+                        'filter': 'ip or not ip',
+                        'init': True, 'success': True,
+                        '_sensor_hostnames': [hostname],
+                    },
+                )
+
+            # reporter.log: startup diagnostics (2-4 messages)
+            if 'zeek_reporter' in self.emitters:
+                msgs = [
+                    ("Reporter::INFO", "zeek_init() called"),
+                    ("Reporter::INFO", f"listening on {rng.choice(['eth0', 'ens160', 'ens192'])}"),
+                    ("Reporter::INFO", "loaded base/frameworks/notice/main.zeek"),
+                ]
+                if rng.random() < 0.5:
+                    msgs.append(("Reporter::WARNING", "Zeek compiled without GeoIP support"))
+                for i, (level, msg) in enumerate(msgs):
+                    self.activity_generator.generate_raw(
+                        time=ts + timedelta(milliseconds=i * 50), target_format='zeek_reporter',
+                        fields={
+                            'ts': ts + timedelta(milliseconds=i * 50),
+                            'level': level, 'message': msg, 'location': '',
+                            '_sensor_hostnames': [hostname],
+                        },
+                    )
+
+    def _emit_dhcp_leases(self) -> None:
+        """Emit DHCP lease records for each system at scenario start.
+
+        Real networks show DHCP transactions at boot. One transaction per
+        host with deterministic MAC address derived from IP.
+        """
+        if 'zeek_dhcp' not in self.emitters:
+            return
+        rng = random.Random(hash("dhcp_leases"))
+        from evidenceforge.utils.ids import generate_zeek_uid
+        for system in self.scenario.environment.systems:
+            # Generate deterministic MAC from IP
+            ip_hash = hash(f"mac_{system.ip}")
+            mac = f"00:50:56:{(ip_hash >> 16) & 0xff:02x}:{(ip_hash >> 8) & 0xff:02x}:{ip_hash & 0xff:02x}"
+            ts = self.start_time + timedelta(seconds=rng.uniform(0.5, 5.0))
+            uid = generate_zeek_uid("C")
+            self.activity_generator.generate_raw(
+                time=ts, target_format='zeek_dhcp', system=system, fields={
+                    'ts': ts, 'uids': [uid],
+                    'client_addr': system.ip, 'server_addr': '10.0.0.1',
+                    'mac': mac, 'host_name': system.hostname,
+                    'assigned_addr': system.ip,
+                    'lease_time': float(rng.choice([3600, 7200, 14400, 86400])),
+                    'msg_types': ['DISCOVER', 'OFFER', 'REQUEST', 'ACK'],
+                    'duration': round(rng.uniform(0.01, 0.5), 6),
+                },
+            )
+
     def _generate_baseline(self) -> None:
         """Generate baseline activity for all enabled users.
 
@@ -346,6 +420,8 @@ class GenerationEngine:
         - Uniform distribution with jitter within each hour
         """
         logger.info("Starting baseline activity generation")
+        self._emit_sensor_startup()
+        self._emit_dhcp_leases()
 
         # Get enabled users only
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
