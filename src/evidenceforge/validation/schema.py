@@ -278,6 +278,14 @@ class ScenarioValidator:
         if not self.scenario.storyline:
             return
 
+        _KNOWN_FORMATS = {
+            'windows_event_security', 'windows_event_sysmon',
+            'zeek_conn', 'zeek_dns', 'zeek_http', 'zeek_ssl', 'zeek_files',
+            'zeek_dhcp', 'zeek_ntp', 'zeek_weird', 'zeek_x509',
+            'zeek_ocsp', 'zeek_pe', 'zeek_packet_filter', 'zeek_reporter',
+            'ecar', 'syslog', 'bash_history', 'snort_alert', 'web_access',
+        }
+
         for idx, event in enumerate(self.scenario.storyline):
             for spec_idx, spec in enumerate(event.events):
                 # Validate connection dst_ip is a valid IP
@@ -292,6 +300,18 @@ class ScenarioValidator:
                                 field_path=f"storyline.{idx}.events.{spec_idx}.dst_ip",
                                 message=f"Invalid IP address: {spec.dst_ip}",
                                 suggestion="Use a valid IPv4 or IPv6 address",
+                            )
+                        )
+
+                # Validate raw event target_format
+                if hasattr(spec, 'target_format') and spec.target_format:
+                    if spec.target_format not in _KNOWN_FORMATS:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.target_format",
+                                message=f"Unknown target format: {spec.target_format}",
+                                suggestion=f"Use one of: {', '.join(sorted(_KNOWN_FORMATS))}",
                             )
                         )
 

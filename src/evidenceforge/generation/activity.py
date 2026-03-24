@@ -1216,6 +1216,7 @@ class ActivityGenerator:
         pid: int = -1,
         source_system: Optional['System'] = None,
         conn_state: Optional[str] = None,
+        dns: Optional['DnsContext'] = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1407,6 +1408,10 @@ class ActivityGenerator:
                 initiating_pid=pid,
             ),
         )
+
+        # DNS context for Zeek dns.log fan-out
+        if dns is not None:
+            event.dns = dns
 
         # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
         # Skip for local-only events (no network sensor will see them)
@@ -1773,176 +1778,131 @@ class ActivityGenerator:
 
         src_port = rng.randint(49152, 65535)
 
-        # Emit Zeek conn.log UDP/53 record — UID is generated in StateManager
-        # and shared with dns.log for cross-log correlation.
-        # Pass src_port so conn.log and dns.log share the same 5-tuple.
+        from evidenceforge.events.contexts import DnsContext
+
         dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
-        dns_uid = self.generate_connection(
-            src_ip=src_ip,
-            dst_ip=dns_server_ip,
-            time=dns_time,
-            dst_port=53,
-            proto='udp',
-            service='dns',
-            duration=rng.uniform(0.001, 0.03),
-            orig_bytes=rng.randint(40, 100),
-            resp_bytes=rng.randint(80, 400),
-            src_port=src_port,
-        )
-        # If connection was filtered (e.g. invalid address), generate standalone UID
-        if not dns_uid:
-            from evidenceforge.utils.ids import generate_zeek_uid
-            dns_uid = generate_zeek_uid("C")
+        ad_domain = getattr(self, '_ad_domain', 'corp.local')
+        is_internal = hostname.endswith(f'.{ad_domain}') or hostname.endswith('.local')
 
-        # Emit Zeek dns.log record (skip for same-host DNS — Zeek can't observe it)
-        if 'zeek_dns' in self.dispatcher.emitters and src_ip != dns_server_ip:
-            # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
-            if rng.random() < 0.002:
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=dns_time, target_emitter='zeek_dns',
-                    data={'ts': dns_time, 'uid': dns_uid,
-                          'id.orig_h': src_ip, 'id.orig_p': src_port,
-                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                          'query': hostname, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                          'qtype': 1, 'qtype_name': 'A',
-                          'rcode': 2, 'rcode_name': 'SERVFAIL',
-                          'AA': False, 'TC': False, 'RD': True, 'RA': True,
-                          'Z': 0, 'rejected': False,
-                          'opcode': 0, 'opcode_name': 'query'},
-                ))
-                return
+        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
+        if rng.random() < 0.002:
+            dns_ctx = DnsContext(
+                query=hostname, trans_id=rng.randint(1, 65535),
+                qtype=1, query_type='A', rcode='SERVFAIL', rcode_num=2,
+            )
+            self.generate_connection(
+                src_ip=src_ip, dst_ip=dns_server_ip, time=dns_time,
+                dst_port=53, proto='udp', service='dns',
+                duration=rng.uniform(0.001, 0.03),
+                orig_bytes=rng.randint(40, 100), resp_bytes=rng.randint(80, 400),
+                src_port=src_port, dns=dns_ctx,
+            )
+            return
 
-            # Determine query type, query string, and answer
-            qtype_roll = rng.random()
-            ad_domain = getattr(self, '_ad_domain', 'corp.local')
-            is_internal = hostname.endswith(f'.{ad_domain}') or hostname.endswith('.local')
+        # Determine query type, query string, and answer
+        qtype_roll = rng.random()
 
-            if qtype_roll < 0.65:
-                # A record: hostname → IPv4
-                qtype, qtype_name = 1, 'A'
-                query = hostname
-                # Multi-answer: CDNs/clouds return multiple A records (40% chance)
-                if not is_internal and rng.random() < 0.40:
-                    # Find sibling IPs from the SAME PROVIDER (not cross-provider)
-                    sibling_ips = []
-                    for provider_ips in _PROVIDER_IP_GROUPS:
-                        if dst_ip in provider_ips:
-                            sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
-                            break
-                    if sibling_ips:
-                        extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
-                        answers = [dst_ip] + extra
-                    else:
-                        answers = [dst_ip]
+        if qtype_roll < 0.65:
+            # A record: hostname → IPv4
+            qtype, qtype_name = 1, 'A'
+            query = hostname
+            # Multi-answer: CDNs/clouds return multiple A records (40% chance)
+            if not is_internal and rng.random() < 0.40:
+                sibling_ips = []
+                for provider_ips in _PROVIDER_IP_GROUPS:
+                    if dst_ip in provider_ips:
+                        sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
+                        break
+                if sibling_ips:
+                    extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
+                    answers = [dst_ip] + extra
                 else:
                     answers = [dst_ip]
-            elif qtype_roll < 0.85:
-                # AAAA record: hostname → IPv6
-                qtype, qtype_name = 28, 'AAAA'
-                query = hostname
-                answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
-            elif qtype_roll < 0.93:
-                # PTR record: reversed IP → rDNS name (not forward hostname)
-                qtype, qtype_name = 12, 'PTR'
-                octets = dst_ip.split('.')
-                query = '.'.join(reversed(octets)) + '.in-addr.arpa'
-                if _is_private_ip(dst_ip):
-                    answers = [hostname]  # Internal PTR can match forward name
-                else:
-                    answers = [_generate_rdns_name(rng, dst_ip)]
-            elif qtype_roll < 0.98:
-                # SRV record: AD service discovery
-                qtype, qtype_name = 33, 'SRV'
-                domain = ad_domain
-                query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
-                dc_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
-                dc_ip = _get_rng().choice(dc_ips)
-                dc_hostname = REVERSE_DNS.get(dc_ip, f'dc-01.{domain}')
-                # Determine port from service prefix
-                svc_prefix = query.split('.')[0]  # e.g., '_ldap'
-                port = _SRV_PORT_MAP.get(svc_prefix, 389)
-                answers = [f'0 100 {port} {dc_hostname}']
-                is_internal = True
             else:
-                # MX record: domain → mail server
-                qtype, qtype_name = 15, 'MX'
-                parts = hostname.split('.', 1)
-                query = parts[1] if len(parts) > 1 else hostname
-                answers = [f'10 mail.{query}']
-
-            # Phase 6.0: varied TTLs with cache-aging jitter for realism
-            # External services use short TTLs (CDN/cloud load balancing)
-            # Internal services use longer TTLs (stable infrastructure)
-            if is_internal:
-                base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+                answers = [dst_ip]
+        elif qtype_roll < 0.85:
+            # AAAA record: hostname → IPv6
+            qtype, qtype_name = 28, 'AAAA'
+            query = hostname
+            answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
+        elif qtype_roll < 0.93:
+            # PTR record: reversed IP → rDNS name
+            qtype, qtype_name = 12, 'PTR'
+            octets = dst_ip.split('.')
+            query = '.'.join(reversed(octets)) + '.in-addr.arpa'
+            if _is_private_ip(dst_ip):
+                answers = [hostname]
             else:
-                base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
-            # Simulate cache aging: subtract 0-50% of the original TTL
-            ttl = max(1, base_ttl - rng.randint(0, base_ttl // 2))
+                answers = [_generate_rdns_name(rng, dst_ip)]
+        elif qtype_roll < 0.98:
+            # SRV record: AD service discovery
+            qtype, qtype_name = 33, 'SRV'
+            domain = ad_domain
+            query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
+            dc_ips = getattr(self, '_dns_server_ips', ['10.0.0.1'])
+            dc_ip = _get_rng().choice(dc_ips)
+            dc_hostname = REVERSE_DNS.get(dc_ip, f'dc-01.{domain}')
+            svc_prefix = query.split('.')[0]
+            port = _SRV_PORT_MAP.get(svc_prefix, 389)
+            answers = [f'0 100 {port} {dc_hostname}']
+            is_internal = True
+        else:
+            # MX record: domain → mail server
+            qtype, qtype_name = 15, 'MX'
+            parts = hostname.split('.', 1)
+            query = parts[1] if len(parts) > 1 else hostname
+            answers = [f'10 mail.{query}']
 
-            # Match TTLs count to answers count for multi-answer responses
-            num_answers = len(answers)
-            # Each answer can have slightly different remaining TTL
-            ttls = []
-            for _ in range(num_answers):
-                jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
-                ttls.append(float(jittered))
+        # Phase 6.0: varied TTLs with cache-aging jitter
+        if is_internal:
+            base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+        else:
+            base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
 
-            # This lookup precedes an actual connection, so always NOERROR
-            self.dispatcher.dispatch_raw(RawLogEntry(
-                timestamp=dns_time, target_emitter='zeek_dns',
-                data={'ts': dns_time, 'uid': dns_uid,
-                      'id.orig_h': src_ip, 'id.orig_p': src_port,
-                      'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                      'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                      'rtt': rng.uniform(0.0005, 0.1),
-                      'query': query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                      'qtype': qtype, 'qtype_name': qtype_name,
-                      'rcode': 0, 'rcode_name': 'NOERROR',
-                      'AA': is_internal, 'TC': False, 'RD': True, 'RA': True,
-                      'Z': 0, 'answers': answers, 'TTLs': ttls,
-                      'rejected': False,
-                      'opcode': 0, 'opcode_name': 'query'},
-            ))
+        ttls = []
+        for _ in range(len(answers)):
+            jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
+            ttls.append(float(jittered))
 
-            # Phase 6.0: ~20% chance of emitting an additional NXDOMAIN query
-            # (suffix search failure, WPAD probe, etc.) alongside the real lookup
-            if rng.random() < 0.20:
-                nxdomain_queries = [
-                    f'{hostname}.{ad_domain}',  # Suffix search failure
-                    f'wpad.{ad_domain}', 'wpad.local', 'wpad',
-                    f'isatap.{ad_domain}', 'isatap',
-                    f'_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}',
-                    f'oldserver.{ad_domain}', f'printer01.{ad_domain}',
-                ]
-                nx_query = rng.choice(nxdomain_queries)
-                nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
-                nx_src_port = rng.randint(49152, 65535)
-                # Emit conn.log first to get the shared UID
-                nx_uid = self.generate_connection(
-                    src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
-                    dst_port=53, proto='udp', service='dns',
-                    duration=rng.uniform(0.001, 0.01),
-                    orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
-                    src_port=nx_src_port,
-                )
-                if not nx_uid:
-                    from evidenceforge.utils.ids import generate_zeek_uid
-                    nx_uid = generate_zeek_uid("C")
-                self.dispatcher.dispatch_raw(RawLogEntry(
-                    timestamp=nx_time, target_emitter='zeek_dns',
-                    data={'ts': nx_time, 'uid': nx_uid,
-                          'id.orig_h': src_ip, 'id.orig_p': nx_src_port,
-                          'id.resp_h': dns_server_ip, 'id.resp_p': 53,
-                          'proto': 'udp', 'trans_id': rng.randint(1, 65535),
-                          'query': nx_query, 'qclass': 1, 'qclass_name': 'C_INTERNET',
-                          'qtype': 1, 'qtype_name': 'A',
-                          'rcode': 3, 'rcode_name': 'NXDOMAIN',
-                          'AA': True, 'TC': False, 'RD': True, 'RA': True,
-                          'Z': 0, 'rejected': False,
-                          'opcode': 0, 'opcode_name': 'query'},
-                ))
+        # Build DnsContext and emit connection + dns.log via fan-out
+        dns_ctx = DnsContext(
+            query=query, trans_id=rng.randint(1, 65535),
+            qtype=qtype, query_type=qtype_name, rcode='NOERROR', rcode_num=0,
+            answers=answers, TTLs=ttls, rtt=rng.uniform(0.0005, 0.1),
+            AA=is_internal, RD=True, RA=True,
+        )
+        self.generate_connection(
+            src_ip=src_ip, dst_ip=dns_server_ip, time=dns_time,
+            dst_port=53, proto='udp', service='dns',
+            duration=rng.uniform(0.001, 0.03),
+            orig_bytes=rng.randint(40, 100), resp_bytes=rng.randint(80, 400),
+            src_port=src_port, dns=dns_ctx,
+        )
+
+        # Phase 6.0: ~20% chance of NXDOMAIN companion query
+        if rng.random() < 0.20:
+            nxdomain_queries = [
+                f'{hostname}.{ad_domain}',
+                f'wpad.{ad_domain}', 'wpad.local', 'wpad',
+                f'isatap.{ad_domain}', 'isatap',
+                f'_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}',
+                f'oldserver.{ad_domain}', f'printer01.{ad_domain}',
+            ]
+            nx_query = rng.choice(nxdomain_queries)
+            nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+            nx_src_port = rng.randint(49152, 65535)
+            nx_ctx = DnsContext(
+                query=nx_query, trans_id=rng.randint(1, 65535),
+                qtype=1, query_type='A', rcode='NXDOMAIN', rcode_num=3,
+                AA=True, RD=True, RA=True,
+            )
+            self.generate_connection(
+                src_ip=src_ip, dst_ip=dns_server_ip, time=nx_time,
+                dst_port=53, proto='udp', service='dns',
+                duration=rng.uniform(0.001, 0.01),
+                orig_bytes=rng.randint(40, 80), resp_bytes=rng.randint(80, 200),
+                src_port=nx_src_port, dns=nx_ctx,
+            )
 
     def get_baseline_pattern(
         self,
@@ -2914,6 +2874,29 @@ class ActivityGenerator:
                 target_sid=target_sid,
                 sam_account_name=target_username,
             ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_raw(
+        self,
+        time: datetime,
+        target_format: str,
+        fields: dict,
+        system: 'System | None' = None,
+    ) -> None:
+        """Emit a raw event through the SecurityEvent pipeline.
+
+        Unlike dispatch_raw(), this goes through state management,
+        visibility filtering, and local_only checks.
+        """
+        from evidenceforge.events.contexts import RawContext
+
+        host_ctx = self._build_host_context(system) if system else None
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="raw",
+            host=host_ctx,
+            raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
 

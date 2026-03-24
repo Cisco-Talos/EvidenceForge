@@ -1211,6 +1211,13 @@ class GenerationEngine:
             )
             malicious_event['target_process'] = spec.target_process
 
+        elif spec.type == 'raw':
+            self.activity_generator.generate_raw(
+                time=time, target_format=spec.target_format,
+                fields=spec.fields, system=system,
+            )
+            malicious_event['target_format'] = spec.target_format
+
         return malicious_event
 
     def _make_domain_sid(self, rid: int | None = None) -> str:
@@ -2121,22 +2128,22 @@ class GenerationEngine:
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    self.dispatcher.dispatch_raw(RawLogEntry(
-                        timestamp=ts, target_emitter='windows_event_security',
-                        data={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
-                              'Channel': 'Security', 'Level': 0,
-                              'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
-                              'SubjectUserSid': 'S-1-0-0', 'SubjectUserName': '-',
-                              'SubjectDomainName': '-', 'SubjectLogonId': '0x0',
-                              'TargetUserSid': 'S-1-5-7', 'TargetUserName': 'ANONYMOUS LOGON',
-                              'TargetDomainName': 'NT AUTHORITY',
-                              'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
-                              'LogonType': 3, 'LogonProcessName': 'NtLmSsp',
-                              'AuthenticationPackageName': 'NTLM', 'LmPackageName': 'NTLM V2',
-                              'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-                              'WorkstationName': '-', 'ProcessId': '0x0', 'ProcessName': '-',
-                              'IpAddress': '-', 'IpPort': 0},
-                    ))
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='windows_event_security', system=system,
+                        fields={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
+                                'Channel': 'Security', 'Level': 0,
+                                'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
+                                'SubjectUserSid': 'S-1-0-0', 'SubjectUserName': '-',
+                                'SubjectDomainName': '-', 'SubjectLogonId': '0x0',
+                                'TargetUserSid': 'S-1-5-7', 'TargetUserName': 'ANONYMOUS LOGON',
+                                'TargetDomainName': 'NT AUTHORITY',
+                                'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
+                                'LogonType': 3, 'LogonProcessName': 'NtLmSsp',
+                                'AuthenticationPackageName': 'NTLM', 'LmPackageName': 'NTLM V2',
+                                'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
+                                'WorkstationName': '-', 'ProcessId': '0x0', 'ProcessName': '-',
+                                'IpAddress': '-', 'IpPort': 0},
+                    )
 
         # Phase 6.2: Machine account ($) authentication to DCs
         # Every Windows domain-joined system authenticates as COMPUTERNAME$ to DCs
@@ -2287,12 +2294,13 @@ class GenerationEngine:
                                 'fstrim', 'motd-news', 'ua-timer', 'systemd-tmpfiles-clean']
                     svc = rng.choice(services)
                     action = rng.choice(['Starting', 'Finished'])
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd', 'pid': sys_pids.get('systemd', 1),
                         'facility': 3, 'severity': 6,
                         'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.'},
-                    ))
+                    )
                 elif source_roll < 0.35:
                     # CRON — dispatched via SecurityEvent for syslog + eCAR correlation
                     cron_cmds = [
@@ -2338,23 +2346,25 @@ class GenerationEngine:
                         msg = (f'[{uptime}.{rng.randint(100000,999999)}] audit: type=1400 '
                                f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{audit_serial}): '
                                f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"')
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'kernel', 'pid': None,
                         'facility': 0, 'severity': 5,
                         'message': msg},
-                    ))
+                    )
                 elif source_roll < 0.65:
                     # systemd-logind — session tracking
                     sid = rng.randint(100, 9999)
                     user = rng.choice(['root', 'admin', 'www-data', 'ubuntu'])
                     action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-logind', 'pid': sys_pids.get('logind', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
                         'message': action},
-                    ))
+                    )
                 elif source_roll < 0.80:
                     # sshd — disconnect/keepalive messages (use scenario system IPs)
                     # Generate matching Zeek SSH connection + syslog message together
@@ -2376,15 +2386,17 @@ class GenerationEngine:
                         f'Disconnected from user admin {ip} port {port}',
                         f'pam_unix(sshd:session): session closed for user admin',
                     ]
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'sshd', 'pid': rng.randint(5000, 60000),
                         'facility': 10, 'severity': 6,
                         'message': rng.choice(msgs)},
-                    ))
+                    )
                 elif source_roll < 0.90:
                     # snapd
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'snapd', 'pid': sys_pids.get('snapd', rng.randint(500, 2000)),
                         'facility': 3, 'severity': 6,
@@ -2393,7 +2405,7 @@ class GenerationEngine:
                             'daemon.go:460: gracefully waiting for running hooks',
                             'stateengine.go:150: state ensure starting',
                         ])},
-                    ))
+                    )
                 else:
                     # systemd-timesyncd: "for the first time" only once per system
                     ntp_ip = rng.choice(['91.189.89.198', '91.189.89.199', '91.189.94.4'])
@@ -2408,13 +2420,14 @@ class GenerationEngine:
                             f'Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).',
                             f'Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).',
                         ])
-                    self.dispatcher.dispatch_raw(RawLogEntry(timestamp=ts, target_emitter='syslog', data={
+                    self.activity_generator.generate_raw(
+                        time=ts, target_format='syslog', system=system, fields={
                         'timestamp': ts, 'hostname': system.hostname,
                         'app_name': 'systemd-timesyncd',
                         'pid': sys_pids.get('timesyncd', rng.randint(400, 800)),
                         'facility': 3, 'severity': 6,
                         'message': msg},
-                    ))
+                    )
 
         # Phase 5.3: ICMP ping between systems on same subnet (1-3 per hour), evenly spaced
         systems = self.scenario.environment.systems

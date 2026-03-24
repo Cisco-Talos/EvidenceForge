@@ -109,29 +109,30 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        # Should emit to zeek_dns (first call is the actual NOERROR lookup;
-        # additional NXDOMAIN background queries may follow)
-        assert mock_emitters['zeek_dns'].emit_raw.called
-        dns_event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
+        # DNS now goes through SecurityEvent pipeline via emit() (DnsContext fan-out)
+        assert mock_emitters['zeek_dns'].emit.called
+        dns_se = mock_emitters['zeek_dns'].emit.call_args_list[0][0][0]
+        dns_ctx = dns_se.dns
+        assert dns_ctx is not None
         # Query type varies (A, AAAA, PTR, SRV, MX) — validate based on type
-        qtype_name = dns_event['qtype_name']
+        qtype_name = dns_ctx.query_type
         if qtype_name == 'A':
-            assert dns_event['query'] == 'www.google.com'
-            # Multi-answer DNS: answers is a list, may include sibling IPs
-            assert '172.217.14.206' in dns_event['answers']
+            assert dns_ctx.query == 'www.google.com'
+            assert '172.217.14.206' in dns_ctx.answers
         elif qtype_name == 'AAAA':
-            assert dns_event['query'] == 'www.google.com'
-            assert ':' in dns_event['answers'][0]  # IPv6
+            assert dns_ctx.query == 'www.google.com'
+            assert ':' in dns_ctx.answers[0]
         elif qtype_name == 'PTR':
-            assert dns_event['query'].endswith('.in-addr.arpa')
-            assert dns_event['answers'] == ['www.google.com']
+            assert dns_ctx.query.endswith('.in-addr.arpa')
+            assert dns_ctx.answers == ['www.google.com']
         elif qtype_name == 'SRV':
-            assert dns_event['query'].startswith('_')
+            assert dns_ctx.query.startswith('_')
         elif qtype_name == 'MX':
-            assert 'mail.' in dns_event['answers'][0]
-        assert dns_event['id.orig_h'] == '10.0.10.1'
-        assert dns_event['id.resp_p'] == 53
-        assert dns_event['proto'] == 'udp'
+            assert 'mail.' in dns_ctx.answers[0]
+        net = dns_se.network
+        assert net.src_ip == '10.0.10.1'
+        assert net.dst_port == 53
+        assert net.protocol == 'udp'
 
     def test_dns_lookup_emits_conn_record(self, activity_gen, win_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
@@ -152,9 +153,9 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        dns_event = mock_emitters['zeek_dns'].emit_raw.call_args[0][0]
+        dns_se = mock_emitters['zeek_dns'].emit.call_args[0][0]
         # DNS timestamp should be before the connection timestamp
-        assert dns_event['ts'] < timestamp
+        assert dns_se.timestamp < timestamp
 
     def test_dns_conn_uid_correlation(self, activity_gen, timestamp, state_manager, mock_emitters):
         """DNS conn.log and dns.log entries must share the same Zeek UID."""
@@ -164,13 +165,14 @@ class TestDnsLookupEmission:
             dst_ip='172.217.14.206',
             time=timestamp,
         )
-        # Get the first dns.log event (the NOERROR lookup)
-        dns_event = mock_emitters['zeek_dns'].emit_raw.call_args_list[0][0][0]
-        dns_uid = dns_event['uid']
+        # Both conn and dns now go through emit() on the SAME SecurityEvent
+        # Get the dns.log SecurityEvent
+        dns_se = mock_emitters['zeek_dns'].emit.call_args_list[0][0][0]
+        dns_uid = dns_se.network.zeek_uid
 
-        # Get the first conn.log event (the UDP/53 record) — dispatched via emit()
-        conn_event = mock_emitters['zeek_conn'].emit.call_args_list[0][0][0]
-        conn_uid = conn_event.network.zeek_uid
+        # Get the conn.log SecurityEvent
+        conn_se = mock_emitters['zeek_conn'].emit.call_args_list[0][0][0]
+        conn_uid = conn_se.network.zeek_uid
 
         # UIDs must match — this is how Zeek correlates logs
         assert dns_uid == conn_uid, (

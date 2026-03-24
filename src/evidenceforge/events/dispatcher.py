@@ -27,6 +27,14 @@ _NETWORK_FORMATS = {
     "snort_alert",
 }
 
+# Zeek sub-formats colocated with zeek_conn on the same sensor.
+# If zeek_conn is visible for a connection, these are too.
+_ZEEK_COLOCATED = {
+    "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
+    "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
+    "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
+}
+
 
 class EventDispatcher:
     """Routes SecurityEvents to StateManager and matching emitters."""
@@ -45,7 +53,10 @@ class EventDispatcher:
         """Route a structured event to StateManager + matching emitters."""
         self.state_manager.apply(event)
         for emitter in self._get_matching_emitters(event):
-            emitter.emit(event)
+            if event.raw is not None:
+                emitter.emit_raw(event.raw.fields)
+            else:
+                emitter.emit(event)
 
     def dispatch_raw(self, entry: RawLogEntry) -> None:
         """Route a raw log entry directly to a specific emitter (escape hatch).
@@ -59,6 +70,16 @@ class EventDispatcher:
 
     def _get_matching_emitters(self, event: SecurityEvent) -> list[LogEmitter]:
         """Two-layer filtering: format eligibility + network visibility."""
+        # Raw event routing: target a single specific emitter
+        if event.raw is not None:
+            emitter = self.emitters.get(event.raw.target_format)
+            if emitter is None:
+                logger.warning(f"Raw event targets unknown emitter: {event.raw.target_format!r}")
+                return []
+            if event.local_only and event.raw.target_format in _NETWORK_FORMATS:
+                return []
+            return [emitter]
+
         # For network events, determine which formats can see this traffic
         # and annotate the event with observing sensor hostnames
         visible_formats: set[str] | None = None
@@ -76,6 +97,12 @@ class EventDispatcher:
                 hostname = sensor.hostname or sensor.name
                 for fmt in sensor.log_formats:
                     format_to_sensors.setdefault(fmt, []).append(hostname)
+            # Zeek sub-formats inherit sensor hostnames from zeek_conn
+            conn_sensors = format_to_sensors.get("zeek_conn", [])
+            if conn_sensors:
+                for colocated in _ZEEK_COLOCATED:
+                    if colocated not in format_to_sensors:
+                        format_to_sensors[colocated] = conn_sensors
             event._sensor_hostnames_by_format = format_to_sensors
 
         matched = []
@@ -86,8 +113,10 @@ class EventDispatcher:
             if event.local_only and format_name in _NETWORK_FORMATS:
                 continue
             # Network visibility filter: only applies to network-format emitters
+            # Zeek sub-formats (dns, http, ssl, etc.) are colocated with zeek_conn
             if visible_formats is not None and format_name in _NETWORK_FORMATS:
                 if format_name not in visible_formats:
-                    continue
+                    if not (format_name in _ZEEK_COLOCATED and "zeek_conn" in visible_formats):
+                        continue
             matched.append(emitter)
         return matched

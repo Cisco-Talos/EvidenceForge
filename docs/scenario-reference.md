@@ -195,8 +195,33 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8 | `target_process` | |
+| `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+### Raw Events
+
+The `raw` event type targets a specific output format with arbitrary field data. Use it for events not covered by the typed event specs above (e.g., custom syslog messages, specific Windows events).
+
+```yaml
+- time: "+2h"
+  actor: attacker
+  system: WEB-01
+  activity: "Web shell access logged in Apache"
+  events:
+    - type: raw
+      target_format: syslog
+      fields:
+        timestamp: "+2h"
+        hostname: WEB-01
+        app_name: "apache2"
+        pid: 1234
+        facility: 3
+        severity: 6
+        message: "192.0.2.50 - - [15/Jan/2024:12:00:00 +0000] \"GET /uploads/cmd.php?c=id HTTP/1.1\" 200 45"
+```
+
+`target_format` must be a supported format name (e.g., `syslog`, `windows_event_security`, `ecar`, `zeek_conn`). The `fields` dict is passed directly to the target emitter without schema validation — ensure field names match the format's expected structure.
 
 ### Correlated Events for Process Commands
 

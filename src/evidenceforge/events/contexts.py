@@ -8,6 +8,7 @@ All use @dataclass(slots=True) for memory efficiency.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -99,12 +100,30 @@ class NetworkContext:
 
 @dataclass(slots=True)
 class DnsContext:
-    """DNS query/response details."""
+    """DNS query/response details for Zeek dns.log fan-out."""
 
     query: str
-    query_type: str = "A"
+    query_type: str = "A"           # qtype_name: "A", "AAAA", "PTR", "CNAME", "SOA", "SRV", "MX"
     response_ip: str = ""
-    rcode: str = "NOERROR"
+    rcode: str = "NOERROR"          # rcode_name: "NOERROR", "NXDOMAIN", "SERVFAIL"
+
+    # Zeek dns.log fields
+    trans_id: int = 0
+    qclass: int = 1
+    qclass_name: str = "C_INTERNET"
+    qtype: int = 1                  # Numeric: 1=A, 28=AAAA, 12=PTR, 5=CNAME, 6=SOA, 33=SRV, 15=MX
+    rcode_num: int = 0              # Numeric: 0=NOERROR, 2=SERVFAIL, 3=NXDOMAIN
+    answers: list[str] = field(default_factory=list)
+    TTLs: list[float] = field(default_factory=list)
+    AA: bool = False
+    TC: bool = False
+    RD: bool = True
+    RA: bool = True
+    rejected: bool = False
+    rtt: float | None = None
+    opcode: int = 0
+    opcode_name: str = "query"
+    Z: int = 0
 
 
 @dataclass(slots=True)
@@ -318,3 +337,15 @@ class NtpContext:
     rec_ts: float = 0.0
     xmt_ts: float = 0.0
     num_exts: int = 0
+
+
+@dataclass(slots=True)
+class RawContext:
+    """Carries arbitrary fields destined for one specific emitter.
+
+    Use when an event needs pipeline benefits (state management, visibility,
+    local_only) but doesn't have a dedicated context model.
+    """
+
+    target_format: str              # Emitter key, e.g. "syslog", "windows_event_security"
+    fields: dict[str, Any]

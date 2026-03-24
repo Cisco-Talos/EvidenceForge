@@ -338,6 +338,18 @@ class CreateRemoteThreadEventSpec(_EventSpecBase):
     target_process: str
 
 
+class RawEventSpec(_EventSpecBase):
+    """Raw event targeting a specific emitter with arbitrary fields.
+
+    Use for events without a dedicated typed spec (e.g., custom syslog messages,
+    specific Windows events not covered by other types).
+    """
+    type: Literal["raw"] = "raw"
+    target_format: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+
+
 # Discriminated union of all event spec types
 EventSpec = Annotated[
     Union[
@@ -345,7 +357,7 @@ EventSpec = Annotated[
         ConnectionEventSpec, SshSessionEventSpec, RdpSessionEventSpec,
         AccountCreatedEventSpec, AccountDeletedEventSpec, GroupMemberAddedEventSpec,
         ServiceInstalledEventSpec, ScheduledTaskCreatedEventSpec,
-        LogClearedEventSpec, CreateRemoteThreadEventSpec,
+        LogClearedEventSpec, CreateRemoteThreadEventSpec, RawEventSpec,
     ],
     Discriminator("type"),
 ]

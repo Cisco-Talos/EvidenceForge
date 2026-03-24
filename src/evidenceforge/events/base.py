@@ -25,6 +25,7 @@ from evidenceforge.events.contexts import (
     NetworkContext,
     NtpContext,
     ProcessContext,
+    RawContext,
     RegistryContext,
     ScheduledTaskContext,
     ServiceContext,
@@ -67,6 +68,10 @@ class SecurityEvent:
     x509: X509Context | None = None
     dhcp: DhcpContext | None = None
     ntp: NtpContext | None = None
+
+    # Raw event: carries arbitrary fields for a single target emitter.
+    # Goes through pipeline (state mgmt, visibility, local_only) unlike dispatch_raw().
+    raw: RawContext | None = None
 
     # Host-local event: skip network-sensor formats (Zeek/Snort) but still
     # emit to host-based formats (eCAR, Windows, Sysmon).  Set when src_ip == dst_ip.
