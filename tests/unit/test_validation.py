@@ -294,7 +294,7 @@ class TestScenarioValidator:
                     actor="nonexistent_actor",  # Invalid
                     system="TEST-01",
                     activity="malicious activity",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
             output=OutputSpec(
@@ -352,7 +352,7 @@ class TestScenarioValidator:
                     actor="attacker",  # Not in users list — should fail
                     system="TEST-01",
                     activity="malicious activity",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
             output=OutputSpec(
@@ -409,7 +409,7 @@ class TestScenarioValidator:
                     actor="testuser",
                     system="NONEXISTENT-01",  # Invalid
                     activity="malicious activity",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
             output=OutputSpec(
@@ -885,81 +885,6 @@ class TestScenarioValidator:
         assert "sequence" in issues[0].field_path
         assert "must be a list" in issues[0].message
 
-    def test_valid_event_sequence(self):
-        """Valid event_sequence should produce no issues."""
-        scenario = Scenario(
-            version="1.0",
-            name="test",
-            description="Test scenario",
-            environment=Environment(
-                description="Test env",
-                users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com")
-                ],
-                systems=[
-                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
-                ],
-            ),
-            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
-            storyline=[
-                StorylineEvent(
-                    time="2024-01-15T10:30:00Z",
-                    actor="testuser",
-                    system="TEST-01",
-                    activity="multi-step attack",
-                    event_sequence=[
-                        {"sub_event_type": "process", "delay_seconds": 5},
-                        {"sub_event_type": "file", "delay_seconds": 10},
-                    ],
-                )
-            ],
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
-        )
-
-        validator = ScenarioValidator(scenario)
-        issues = validator.validate()
-        assert len(issues) == 0
-
-    def test_event_sequence_missing_sub_event_type(self):
-        """event_sequence item without sub_event_type should error."""
-        scenario = Scenario(
-            version="1.0",
-            name="test",
-            description="Test scenario",
-            environment=Environment(
-                description="Test env",
-                users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com")
-                ],
-                systems=[
-                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
-                ],
-            ),
-            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
-            storyline=[
-                StorylineEvent(
-                    time="2024-01-15T10:30:00Z",
-                    actor="testuser",
-                    system="TEST-01",
-                    activity="multi-step attack",
-                    event_sequence=[
-                        {"delay_seconds": 5},  # Missing sub_event_type
-                    ],
-                )
-            ],
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
-        )
-
-        validator = ScenarioValidator(scenario)
-        issues = validator.validate()
-
-        assert len(issues) == 1
-        assert issues[0].severity == "error"
-        assert "event_sequence" in issues[0].field_path
-        assert "sub_event_type" in issues[0].message
-
     def test_none_optional_fields_no_issues(self):
         """Personas/events with None optional fields should produce no issues."""
         scenario = Scenario(
@@ -991,7 +916,7 @@ class TestScenarioValidator:
                     actor="testuser",
                     system="TEST-01",
                     activity="simple attack",
-                    # event_sequence=None (default)
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
@@ -1025,7 +950,7 @@ class TestScenarioValidator:
                     actor=actor_name,
                     system="TEST-01",
                     activity="system-level activity",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
@@ -1060,7 +985,7 @@ class TestScenarioValidator:
                     actor="svc_backup",
                     system="TEST-01",
                     activity="backup service activity",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
@@ -1095,7 +1020,7 @@ class TestScenarioValidator:
                     actor="totally_unknown",
                     system="TEST-01",
                     activity="suspicious activity",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),

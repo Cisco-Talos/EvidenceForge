@@ -279,7 +279,7 @@ class TestParallelGeneration:
                 actor="user0",
                 system="TEST-WS-01",
                 activity="suspicious logon from external IP",
-                details={"source_ip": "203.0.113.10"}
+                events=[{"type": "logon", "source_ip": "203.0.113.10", "logon_type": 3}]
             )
         ]
 

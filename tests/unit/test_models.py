@@ -325,18 +325,20 @@ class TestStorylineEvent:
             actor="attacker",
             system="WS-01",
             activity="Execute malicious payload",
-            details={"file": "malware.exe"},
+            events=[{"type": "process", "process_name": "malware.exe"}],
         )
         assert event.actor == "attacker"
-        assert event.details is not None
-        assert event.details["file"] == "malware.exe"
+        assert event.events is not None
+        assert event.events[0].process_name == "malware.exe"
 
-    def test_storyline_event_defaults(self):
-        """Test storyline event default values."""
+    def test_storyline_event_with_events_list(self):
+        """Test storyline event with events list."""
         event = StorylineEvent(
-            time="+2h30m", actor="jdoe", system="WS-01", activity="Access file share"
+            time="+2h30m", actor="jdoe", system="WS-01", activity="Access file share",
+            events=[{"type": "process", "process_name": "cmd.exe"}],
         )
-        assert event.details == {}
+        assert len(event.events) == 1
+        assert event.events[0].type == "process"
 
 
 class TestOutputSpec:

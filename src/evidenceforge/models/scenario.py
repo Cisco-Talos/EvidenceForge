@@ -13,10 +13,10 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 import ipaddress
 import re
 from datetime import datetime
-from typing import Any, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
 import pytz
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator, model_validator
 
 
 class TimeWindow(BaseModel):
@@ -62,7 +62,6 @@ class TimeWindow(BaseModel):
             raise ValueError("Cannot specify both 'end' and 'duration'")
         return self
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class User(BaseModel):
@@ -96,7 +95,6 @@ class User(BaseModel):
             raise ValueError(f"Invalid email format: {v}")
         return v
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class System(BaseModel):
@@ -131,7 +129,6 @@ class System(BaseModel):
             raise ValueError(f"Invalid IP address: {v}") from e
         return v
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class Group(BaseModel):
@@ -151,7 +148,6 @@ class Group(BaseModel):
     members: list[str] = Field(default_factory=list)
     permissions: list[str] | None = None
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class Persona(BaseModel):
@@ -236,53 +232,145 @@ class BaselineActivity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class StorylineEvent(BaseModel):
-    """Storyline event with optional LLM expansion fields.
+# --- Phase 8.4: Per-event-type Pydantic models for typed storyline declarations ---
 
-    Phase 1: Single activity per event, ad-hoc details dict
-    Phase 2.4: Add optional event_sequence for complex multi-step events
-    Phase 3.1: LLM expands high-level events into detailed sequences
+
+class _EventSpecBase(BaseModel):
+    """Base for all event spec models. Common optional metadata fields."""
+    technique: str | None = None  # MITRE ATT&CK technique ID (for GROUND_TRUTH.md)
+    description: str | None = None  # Human-readable description (for GROUND_TRUTH.md)
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProcessEventSpec(_EventSpecBase):
+    """Process execution event (generates 4688, Sysmon 1, eCAR PROCESS/CREATE)."""
+    type: Literal["process"] = "process"
+    process_name: str
+    command_line: str | None = None  # defaults to process_name at generation time
+    supplementary: Literal["auto", "none"] = "auto"
+
+
+class LogonEventSpec(_EventSpecBase):
+    """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN)."""
+    type: Literal["logon"] = "logon"
+    logon_type: int = 3
+    source_ip: str | None = None
+
+
+class FailedLogonEventSpec(_EventSpecBase):
+    """Failed authentication event (generates 4625, eCAR USER_SESSION/LOGIN failure)."""
+    type: Literal["failed_logon"] = "failed_logon"
+    source_ip: str | None = None
+    logon_type: int = 3
+
+
+class LogoffEventSpec(_EventSpecBase):
+    """Logoff event (generates 4634, eCAR USER_SESSION/LOGOUT)."""
+    type: Literal["logoff"] = "logoff"
+
+
+class ConnectionEventSpec(_EventSpecBase):
+    """Network connection event (generates Zeek conn, eCAR FLOW, optionally Snort)."""
+    type: Literal["connection"] = "connection"
+    dst_ip: str
+    dst_port: int = 443
+    service: str | None = None  # ssl, http, etc.
+    source_ip: str | None = None
+
+
+class SshSessionEventSpec(_EventSpecBase):
+    """SSH session event (generates Zeek conn + syslog sshd + eCAR)."""
+    type: Literal["ssh_session"] = "ssh_session"
+    source_ip: str | None = None
+
+
+class RdpSessionEventSpec(_EventSpecBase):
+    """RDP session event (generates Zeek conn + 4624 type 10 + eCAR on target)."""
+    type: Literal["rdp_session"] = "rdp_session"
+    source_ip: str | None = None
+
+
+class AccountCreatedEventSpec(_EventSpecBase):
+    """Account creation event (generates 4720 on DC)."""
+    type: Literal["account_created"] = "account_created"
+    target_username: str
+    target_sid: str | None = None  # auto-generated from domain SID if not provided
+
+
+class AccountDeletedEventSpec(_EventSpecBase):
+    """Account deletion event (generates 4726 on DC)."""
+    type: Literal["account_deleted"] = "account_deleted"
+    target_username: str
+    target_sid: str | None = None
+
+
+class GroupMemberAddedEventSpec(_EventSpecBase):
+    """Group membership change event (generates 4728/4732/4756 on DC)."""
+    type: Literal["group_member_added"] = "group_member_added"
+    group_name: str
+    member_name: str
+    scope: Literal["global", "local", "universal"] = "global"
+
+
+class ServiceInstalledEventSpec(_EventSpecBase):
+    """Service installation event (generates 4697)."""
+    type: Literal["service_installed"] = "service_installed"
+    service_name: str
+    service_file_name: str
+    service_account: str = "LocalSystem"
+
+
+class ScheduledTaskCreatedEventSpec(_EventSpecBase):
+    """Scheduled task creation event (generates 4698)."""
+    type: Literal["scheduled_task_created"] = "scheduled_task_created"
+    task_name: str
+    task_content: str | None = None
+
+
+class LogClearedEventSpec(_EventSpecBase):
+    """Security log cleared event (generates 1102)."""
+    type: Literal["log_cleared"] = "log_cleared"
+
+
+class CreateRemoteThreadEventSpec(_EventSpecBase):
+    """Remote thread injection event (generates Sysmon Event 8)."""
+    type: Literal["create_remote_thread"] = "create_remote_thread"
+    target_process: str
+
+
+# Discriminated union of all event spec types
+EventSpec = Annotated[
+    Union[
+        ProcessEventSpec, LogonEventSpec, FailedLogonEventSpec, LogoffEventSpec,
+        ConnectionEventSpec, SshSessionEventSpec, RdpSessionEventSpec,
+        AccountCreatedEventSpec, AccountDeletedEventSpec, GroupMemberAddedEventSpec,
+        ServiceInstalledEventSpec, ScheduledTaskCreatedEventSpec,
+        LogClearedEventSpec, CreateRemoteThreadEventSpec,
+    ],
+    Discriminator("type"),
+]
+
+
+class StorylineEvent(BaseModel):
+    """Storyline event with typed event declarations.
+
+    Each storyline entry declares what happened (activity, for GROUND_TRUTH.md)
+    and what events to generate (events list with per-type validated fields).
 
     Attributes:
         time: Event time (ISO 8601, relative offset like "+2h30m", or seconds "+7200")
-        actor: Username of the account performing the action (compromised account or system account)
+        actor: Username of the account performing the action
         system: Target system hostname
-        activity: Natural language activity description
-        details: Optional activity-specific details (flexible dict)
-        event_sequence: Optional detailed sub-events for multi-step actions (Phase 3.1 LLM-populated)
-        duration: Optional event duration (e.g., '30m' for long-running activity)
-        retry_on_failure: Optional flag for whether this event retries if it fails
-        success_probability: Optional probability this event succeeds (0.0-1.0)
+        activity: Human-readable activity description (used in GROUND_TRUTH.md only)
+        events: List of typed event declarations — each specifies type + type-specific fields
     """
 
-    # Phase 1 fields (required)
     time: str
     actor: str
     system: str
     activity: str
-    details: dict[str, Any] | None = Field(default_factory=dict)
+    events: list[EventSpec]
 
-    # Phase 2.4 optional fields (backward compatible - prepare for future LLM expansion)
-    event_sequence: Optional[list[dict[str, Any]]] = Field(
-        None,
-        description="Detailed sub-events for multi-step actions (populated by LLM in Phase 3.1)"
-    )
-    duration: Optional[str] = Field(
-        None,
-        description="Event duration (e.g., '30m' for long-running activity)"
-    )
-    retry_on_failure: Optional[bool] = Field(
-        None,
-        description="Whether this event retries if it fails"
-    )
-    success_probability: Optional[float] = Field(
-        None,
-        ge=0.0,
-        le=1.0,
-        description="Probability this event succeeds (0.0-1.0)"
-    )
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class Timezone(BaseModel):
@@ -311,7 +399,6 @@ class Timezone(BaseModel):
             raise ValueError(f"Unknown timezone: {v}") from e
         return v
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class NetworkSegment(BaseModel):
@@ -340,7 +427,6 @@ class NetworkSegment(BaseModel):
             raise ValueError(f"Invalid CIDR notation: {v}") from e
         return v
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class NetworkSensor(BaseModel):
@@ -371,7 +457,6 @@ class NetworkSensor(BaseModel):
     log_formats: list[str] = Field(default_factory=lambda: ["zeek_conn"])
     description: str = ""
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class NetworkConfig(BaseModel):
@@ -401,7 +486,6 @@ class NetworkConfig(BaseModel):
             raise ValueError("Network config must have at least one sensor")
         return v
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class Environment(BaseModel):
@@ -455,7 +539,6 @@ class Environment(BaseModel):
             raise ValueError("Environment must have at least one system")
         return v
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class OutputSpec(BaseModel):
@@ -473,7 +556,6 @@ class OutputSpec(BaseModel):
     destination: str
     compression: bool = Field(default=False)
 
-    model_config = ConfigDict(extra="forbid")
 
 
 class Scenario(BaseModel):

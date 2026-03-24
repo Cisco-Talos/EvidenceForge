@@ -944,22 +944,16 @@ class GenerationEngine:
                 "system": system.hostname
             })
 
-            # Match activity to event types (simple keyword matching)
-            event_types = self._match_activity_to_events(storyline_event.activity)
-
-            # Execute each matched event type
+            # Phase 8.4: iterate over typed event specs
             self.state_manager.set_current_time(event_time)
+            explicit_types = {spec.type for spec in storyline_event.events}
 
-            for event_type in event_types:
-                malicious_event = self._execute_storyline_event(
-                    actor=actor,
-                    system=system,
-                    time=event_time,
-                    event_type=event_type,
-                    activity=storyline_event.activity,
-                    details=storyline_event.details
+            for spec in storyline_event.events:
+                malicious_event = self._execute_typed_event(
+                    spec=spec, actor=actor, system=system,
+                    time=event_time, activity=storyline_event.activity,
+                    explicit_types=explicit_types,
                 )
-
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
 
@@ -987,17 +981,245 @@ class GenerationEngine:
 
         logger.info(f"Executing interleaved storyline event: {storyline_event.actor} on {storyline_event.system} at {event_time}")
 
-        event_types = self._match_activity_to_events(storyline_event.activity)
         self.state_manager.set_current_time(event_time)
 
-        for event_type in event_types:
-            malicious_event = self._execute_storyline_event(
-                actor=actor, system=system, time=event_time,
-                event_type=event_type, activity=storyline_event.activity,
-                details=storyline_event.details,
+        # Phase 8.4: iterate over typed event specs (no keyword matching)
+        explicit_types = {spec.type for spec in storyline_event.events}
+        for spec in storyline_event.events:
+            malicious_event = self._execute_typed_event(
+                spec=spec, actor=actor, system=system,
+                time=event_time, activity=storyline_event.activity,
+                explicit_types=explicit_types,
             )
             if malicious_event:
                 self.malicious_events.append(malicious_event)
+
+    def _execute_typed_event(
+        self,
+        spec,  # EventSpec union type
+        actor: User,
+        system: System,
+        time: datetime,
+        activity: str,
+        explicit_types: set[str],
+    ) -> Optional[dict]:
+        """Execute a single typed event from the storyline events list.
+
+        Each event spec type maps to a specific generate_* method on ActivityGenerator.
+        Returns a malicious_event dict for GROUND_TRUTH.md.
+        """
+        malicious_event = {
+            'time': time,
+            'actor': actor.username,
+            'system': system.hostname,
+            'activity': activity,
+            'type': spec.type,
+        }
+
+        if spec.type == 'logon':
+            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
+            source_ip = spec.source_ip or random.choice(_attacker_ips)
+            logon_id = self.activity_generator.generate_logon(
+                user=actor, system=system, time=time,
+                logon_type=spec.logon_type, source_ip=source_ip,
+            )
+            malicious_event['logon_id'] = logon_id
+            malicious_event['source_ip'] = source_ip
+
+        elif spec.type == 'failed_logon':
+            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174']
+            source_ip = spec.source_ip or random.choice(_attacker_ips)
+            self.activity_generator.generate_failed_logon(
+                user=actor, system=system, time=time,
+                logon_type=spec.logon_type, source_ip=source_ip,
+            )
+            malicious_event['source_ip'] = source_ip
+
+        elif spec.type == 'logoff':
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            if sessions:
+                logon_id = sessions[0].logon_id
+                self.activity_generator.generate_logoff(actor, system, time, logon_id)
+
+        elif spec.type == 'process':
+            # Ensure user has an active session
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            if not sessions:
+                logon_time = time - timedelta(seconds=random.uniform(0.5, 2.0))
+                logon_id = self.activity_generator.generate_logon(actor, system, logon_time, logon_type=3)
+            else:
+                logon_id = sessions[0].logon_id
+
+            from evidenceforge.generation.activity import _get_os_category
+            os_category = _get_os_category(system.os)
+            process_name = spec.process_name
+            command_line = spec.command_line or process_name
+
+            # Linux: emit bash_history for the command
+            if os_category == 'linux':
+                self.activity_generator.generate_bash_command(actor, system, time, command_line)
+
+            # Replace base64 placeholder
+            if '<base64_encoded_command>' in command_line:
+                command_line = command_line.replace(
+                    '<base64_encoded_command>',
+                    self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
+                )
+
+            parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
+            pid = self.activity_generator.generate_process(
+                user=actor, system=system, time=time, logon_id=logon_id,
+                process_name=process_name, command_line=command_line, parent_pid=parent_pid,
+            )
+            self.activity_generator._record_user_process(system, actor, pid, process_name)
+            self._last_storyline_pid = pid
+            self._last_storyline_system = system.hostname
+            malicious_event['process_name'] = process_name
+            malicious_event['command_line'] = command_line
+            malicious_event['pid'] = pid
+
+            # Emit FILE/CREATE for output files
+            output_file = self._extract_output_file(command_line, os_category)
+            if output_file:
+                file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
+                from evidenceforge.events.base import SecurityEvent as SE
+                from evidenceforge.events.contexts import FileContext, AuthContext as AC
+                host_ctx = self.activity_generator._build_host_context(system)
+                self.dispatcher.dispatch(SE(
+                    timestamp=file_time, event_type='file_create', host=host_ctx,
+                    auth=AC(username=actor.username),
+                    file=FileContext(path=output_file, action='create', pid=pid),
+                ))
+                malicious_event['output_file'] = output_file
+
+            # Emit 4648 for explicit credential tools
+            _EXPLICIT_CRED_TOOLS = {'psexec', 'wmic', 'runas', 'schtasks', 'net.exe', 'net1.exe'}
+            proc_basename = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
+            if proc_basename in _EXPLICIT_CRED_TOOLS and os_category == 'windows':
+                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
+                self.activity_generator.generate_explicit_credentials(
+                    user=actor, system=system, time=cred_time,
+                    target_username=actor.username, target_server='localhost',
+                    process_name=process_name, process_pid=pid,
+                )
+
+            # Supplementary events (4720, 4697, 4698, 1102, etc.) unless suppressed or already declared
+            if os_category == 'windows' and getattr(spec, 'supplementary', 'auto') != 'none':
+                self._emit_supplementary_events(
+                    actor, system, time, command_line, pid, logon_id,
+                    skip_types=explicit_types,
+                )
+
+        elif spec.type == 'connection':
+            _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88']
+            source_ip = spec.source_ip or system.ip
+            dst_ip = spec.dst_ip
+            dst_port = spec.dst_port
+            service = spec.service or ('ssl' if dst_port == 443 else 'http' if dst_port == 80 else 'ssl')
+            uid = self.activity_generator.generate_connection(
+                src_ip=source_ip, dst_ip=dst_ip, time=time,
+                dst_port=dst_port, service=service,
+                duration=random.uniform(1.0, 30.0),
+                orig_bytes=random.randint(1000, 10000),
+                resp_bytes=random.randint(5000, 50000),
+                emit_dns=True,
+            )
+            malicious_event['dst_ip'] = dst_ip
+            malicious_event['dst_port'] = dst_port
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+        elif spec.type == 'ssh_session':
+            source_ip = spec.source_ip or system.ip
+            target = next((s for s in self.scenario.environment.systems if s.ip == system.ip), system)
+            uid = self.activity_generator.generate_ssh_session(
+                user=actor, target_system=target, time=time, source_ip=source_ip,
+            )
+            malicious_event['dst_ip'] = system.ip
+            malicious_event['dst_port'] = 22
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+        elif spec.type == 'rdp_session':
+            source_ip = spec.source_ip or system.ip
+            target = next((s for s in self.scenario.environment.systems if s.ip == system.ip), system)
+            uid = self.activity_generator.generate_rdp_session(
+                user=actor, target_system=target, time=time, source_ip=source_ip,
+            )
+            malicious_event['dst_ip'] = system.ip
+            malicious_event['dst_port'] = 3389
+            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
+
+        elif spec.type == 'account_created':
+            dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
+            target_sid = spec.target_sid or self._make_domain_sid()
+            self.activity_generator.generate_account_created(
+                actor=actor, system=dc, time=time,
+                target_username=spec.target_username, target_sid=target_sid,
+            )
+            malicious_event['target_username'] = spec.target_username
+
+        elif spec.type == 'account_deleted':
+            dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
+            target_sid = spec.target_sid or self._make_domain_sid()
+            self.activity_generator.generate_account_deleted(
+                actor=actor, system=dc, time=time,
+                target_username=spec.target_username, target_sid=target_sid,
+            )
+            malicious_event['target_username'] = spec.target_username
+
+        elif spec.type == 'group_member_added':
+            dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
+            group_rid = 512 if 'admin' in spec.group_name.lower() else random.randint(1100, 9999)
+            group_sid = self._make_domain_sid(group_rid)
+            member_sid = self._make_domain_sid()
+            self.activity_generator.generate_group_membership_change(
+                actor=actor, system=dc, time=time,
+                action='add', scope=spec.scope,
+                group_name=spec.group_name, group_sid=group_sid,
+                member_username=spec.member_name, member_sid=member_sid,
+            )
+            malicious_event['group_name'] = spec.group_name
+            malicious_event['member_name'] = spec.member_name
+
+        elif spec.type == 'service_installed':
+            self.activity_generator.generate_service_installed(
+                user=actor, system=system, time=time,
+                service_name=spec.service_name,
+                service_file_name=spec.service_file_name,
+                service_account=spec.service_account,
+            )
+            malicious_event['service_name'] = spec.service_name
+
+        elif spec.type == 'scheduled_task_created':
+            task_content = spec.task_content or ''
+            self.activity_generator.generate_scheduled_task(
+                user=actor, system=system, time=time,
+                task_name=spec.task_name, action='created', task_content=task_content,
+            )
+            malicious_event['task_name'] = spec.task_name
+
+        elif spec.type == 'log_cleared':
+            self.activity_generator.generate_log_cleared(user=actor, system=system, time=time)
+
+        elif spec.type == 'create_remote_thread':
+            # CreateRemoteThread needs source+target PIDs — use last storyline process as source
+            source_pid = getattr(self, '_last_storyline_pid', 0) or 0
+            source_image = 'unknown'
+            self.activity_generator.generate_create_remote_thread(
+                user=actor, system=system, time=time,
+                source_pid=source_pid, source_image=source_image,
+                target_pid=4, target_image=spec.target_process,
+            )
+            malicious_event['target_process'] = spec.target_process
+
+        return malicious_event
+
+    def _make_domain_sid(self, rid: int | None = None) -> str:
+        """Generate a SID using the scenario's domain SID prefix."""
+        for sid in self.activity_generator.sid_registry.values():
+            if sid.startswith('S-1-5-21-') and sid.count('-') == 7:
+                prefix = '-'.join(sid.split('-')[:7])
+                return f'{prefix}-{rid or random.randint(1100, 9999)}'
+        return f'S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{rid or random.randint(1100, 9999)}'
 
     def _parse_storyline_time(self, time_str: str) -> datetime:
         """Parse storyline event time to absolute datetime.
@@ -1035,298 +1257,9 @@ class GenerationEngine:
 
         raise ValueError(f"Invalid storyline time format: {time_str}")
 
-    def _match_activity_to_events(self, activity: str) -> list[str]:
-        """Match activity description to event types using keyword matching.
+    # _match_activity_to_events and _execute_storyline_event deleted in Phase 8.4
+    # Replaced by _execute_typed_event which reads from typed EventSpec objects
 
-        Phase 1: Simple keyword-based matching.
-
-        Args:
-            activity: Activity description string
-
-        Returns:
-            List of event types to generate
-        """
-        # Keyword mapping for Phase 1
-        keywords = {
-            'logon': ['logon', 'log in', 'login', 'authenticate', 'sign in', 'rdp', 'ssh'],
-            'logoff': ['logoff', 'log off', 'logout', 'sign out'],
-            'process': ['execute', 'run', 'launch', 'start', 'spawn', 'powershell', 'cmd', 'command', 'search', 'read', 'enumerate', 'dump', 'query', 'list', 'archive', 'compress', 'delete', 'remove', 'clean'],
-            'connection': ['connect', 'access', 'download', 'upload', 'communicate', 'c2', 'exfiltrate', 'ssh', 'rdp', 'remote'],
-        }
-
-        activity_lower = activity.lower()
-        matched = []
-
-        for event_type, kws in keywords.items():
-            if any(kw in activity_lower for kw in kws):
-                matched.append(event_type)
-
-        # Default to process if no match
-        return matched if matched else ['process']
-
-    def _execute_storyline_event(
-        self,
-        actor: User,
-        system: System,
-        time: datetime,
-        event_type: str,
-        activity: str,
-        details: Optional[dict]
-    ) -> Optional[dict]:
-        """Execute a single storyline event of a specific type.
-
-        Args:
-            actor: User performing the activity
-            system: System where activity occurs
-            time: Event timestamp
-            event_type: Type of event (logon, process, connection, etc.)
-            activity: Activity description
-            details: Optional activity-specific details
-
-        Returns:
-            Malicious event dict for GROUND_TRUTH.md, or None if not tracked
-        """
-        details = details or {}
-        malicious_event = {
-            'time': time,
-            'actor': actor.username,
-            'system': system.hostname,
-            'activity': activity,
-            'type': event_type,
-        }
-
-        if event_type == 'logon':
-            # Default attacker IPs: realistic hosting/VPN ranges (not RFC 5737)
-            _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
-            source_ip = details.get('source_ip', random.choice(_attacker_ips))
-            # Auto-detect logon type from technique/activity keywords
-            is_rdp_logon = ('rdp' in activity.lower()
-                            or details.get('technique', '').startswith('T1021.001')
-                            or details.get('dst_port') == 3389)
-            is_ssh_logon = ('ssh' in activity.lower()
-                            or details.get('technique', '').startswith('T1021.004'))
-            default_logon_type = 10 if is_rdp_logon else 3
-            logon_type = details.get('logon_type', default_logon_type)
-            logon_id = self.activity_generator.generate_logon(
-                user=actor,
-                system=system,
-                time=time,
-                logon_type=logon_type,
-                source_ip=source_ip
-            )
-            malicious_event['logon_id'] = logon_id
-            malicious_event['source_ip'] = source_ip
-
-        elif event_type == 'process':
-            # Get or create session for this user
-            sessions = self.state_manager.get_sessions_for_user(actor.username)
-            if not sessions:
-                # Create session first with timestamp slightly before the process
-                logon_time = time - timedelta(seconds=random.uniform(0.5, 2.0))
-                logon_id = self.activity_generator.generate_logon(actor, system, logon_time, logon_type=3)
-            else:
-                logon_id = sessions[0].logon_id  # Use first active session
-
-            # Linux command events: emit bash_history + eCAR for commands
-            from evidenceforge.generation.activity import _get_os_category
-            os_category = _get_os_category(system.os)
-            linux_command = details.get('command') or (details.get('command_line') if os_category == 'linux' else None)
-            if linux_command and os_category == 'linux':
-                # Emit bash history entry
-                self.activity_generator.generate_bash_command(
-                    actor, system, time, linux_command
-                )
-                # Also generate eCAR PROCESS/CREATE for the command
-                cmd_binary = details.get('process_name', linux_command.split()[0] if linux_command.strip() else '/bin/bash')
-                process_name = cmd_binary
-                command_line = linux_command
-            else:
-                # Use details or create malicious-looking process (Windows)
-                process_name = details.get('process_name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
-                command_line = details.get('command_line', 'powershell.exe -enc <base64_encoded_command>')
-
-            # Replace base64 placeholder with actual encoded command
-            if '<base64_encoded_command>' in command_line:
-                command_line = command_line.replace(
-                    '<base64_encoded_command>',
-                    self._generate_encoded_powershell(hash(f"{time}_{actor.username}"))
-                )
-
-            # Determine parent for attack process.
-            # Only chain to previous storyline pid if on the same system (same attack phase).
-            # Otherwise, start a new chain from the user's shell (explorer→cmd/powershell).
-            last_pid = getattr(self, '_last_storyline_pid', None)
-            last_system = getattr(self, '_last_storyline_system', None)
-            if (last_pid
-                    and last_system == system.hostname
-                    and self.activity_generator._is_pid_alive(system, last_pid)):
-                # Same system: use a common shell parent instead of chaining
-                # net.exe doesn't spawn net.exe; both are spawned from cmd/explorer
-                parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
-            else:
-                parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
-            pid = self.activity_generator.generate_process(
-                user=actor,
-                system=system,
-                time=time,
-                logon_id=logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                parent_pid=parent_pid,
-            )
-            self.activity_generator._record_user_process(system, actor, pid, process_name)
-
-            self._last_storyline_pid = pid  # Track for parent chain continuity
-            self._last_storyline_system = system.hostname
-            malicious_event['process_name'] = process_name
-            malicious_event['command_line'] = command_line
-            malicious_event['pid'] = pid
-
-            # Emit FILE/CREATE for output files referenced in command line
-            output_file = self._extract_output_file(command_line, os_category)
-            if output_file:
-                file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
-                from evidenceforge.events.base import SecurityEvent as SE
-                from evidenceforge.events.contexts import FileContext, AuthContext as AC
-                host_ctx = self.activity_generator._build_host_context(system)
-                self.dispatcher.dispatch(SE(
-                    timestamp=file_time, event_type='file_create',
-                    host=host_ctx,
-                    auth=AC(username=actor.username),
-                    file=FileContext(path=output_file, action='create', pid=pid),
-                ))
-                malicious_event['output_file'] = output_file
-
-            # Emit 4648 for processes using explicit credentials (PsExec, WMIC, runas, etc.)
-            _EXPLICIT_CRED_TOOLS = {'psexec', 'wmic', 'runas', 'schtasks', 'net.exe', 'net1.exe'}
-            proc_basename = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
-            technique = details.get('technique', '')
-            if (proc_basename in _EXPLICIT_CRED_TOOLS
-                    or technique.startswith('T1021')
-                    or technique.startswith('T1053')) and os_category == 'windows':
-                target_server = details.get('dst_ip', 'localhost')
-                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
-                self.activity_generator.generate_explicit_credentials(
-                    user=actor,
-                    system=system,
-                    time=cred_time,
-                    target_username=actor.username,
-                    target_server=target_server,
-                    process_name=process_name,
-                    process_pid=pid,
-                )
-
-            # Emit supplementary Windows events based on command-line patterns
-            if os_category == 'windows':
-                self._emit_supplementary_events(actor, system, time, command_line, pid, logon_id)
-
-        elif event_type == 'connection':
-            # Detect SSH from activity keywords or MITRE technique
-            is_ssh = ('ssh' in activity.lower()
-                      or details.get('technique', '').startswith('T1021.004')
-                      or details.get('dst_port') == 22
-                      or details.get('service') == 'ssh')
-
-            # Detect RDP from activity keywords or MITRE technique
-            is_rdp = ('rdp' in activity.lower()
-                      or details.get('technique', '').startswith('T1021.001')
-                      or details.get('dst_port') == 3389
-                      or details.get('logon_type') == 10)
-
-            # Default C2 IPs: realistic cloud hosting ranges (not RFC 5737)
-            _c2_ips = ['159.65.43.201', '134.209.29.115', '167.71.156.88', '64.227.38.102', '108.61.13.174']
-            if is_ssh:
-                # SSH: target is the storyline system, source is from details or actor's workstation
-                dst_ip = system.ip
-                dst_port = 22
-                service = 'ssh'
-            elif is_rdp:
-                # RDP: target is the storyline system, source from details
-                dst_ip = system.ip
-                dst_port = 3389
-                service = 'rdp'
-            else:
-                dst_ip = details.get('dst_ip', random.choice(_c2_ips))
-                dst_port = details.get('dst_port', 443)
-                service = details.get('service', 'ssl')
-
-            # For lateral movement (SSH/RDP), the source is the attacker's previous system
-            source_ip = details.get('source_ip', system.ip)
-
-            # Validate destination is different from source
-            if dst_ip == system.ip and not is_ssh and not is_rdp:
-                logger.warning(
-                    f"Skipping storyline connection: dst_ip {dst_ip} matches system IP {system.ip}. "
-                    f"Adjusting to external IP."
-                )
-                dst_ip = random.choice(['159.65.43.201', '134.209.29.115', '167.71.156.88'])
-
-            # SSH connections use compound ssh_session event (Zeek + syslog + eCAR)
-            if is_ssh:
-                source_ip = details.get('source_ip', system.ip)
-                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), system)
-                uid = self.activity_generator.generate_ssh_session(
-                    user=actor, target_system=target, time=time, source_ip=source_ip,
-                )
-            elif is_rdp:
-                # RDP: compound event (Zeek conn + 4624 type 10 + eCAR on target)
-                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), system)
-                uid = self.activity_generator.generate_rdp_session(
-                    user=actor, target_system=target,
-                    time=time, source_ip=source_ip,
-                )
-            elif dst_port == 22:
-                target = next((s for s in self.scenario.environment.systems if s.ip == dst_ip), None)
-                if target:
-                    uid = self.activity_generator.generate_ssh_session(
-                        user=actor, target_system=target, time=time, source_ip=source_ip,
-                    )
-                else:
-                    uid = self.activity_generator.generate_connection(
-                        src_ip=source_ip, dst_ip=dst_ip, time=time,
-                        dst_port=22, service='ssh', duration=random.uniform(30.0, 1800.0),
-                        orig_bytes=random.randint(2000, 50000), resp_bytes=random.randint(5000, 200000),
-                        emit_dns=True,
-                    )
-            else:
-                uid = self.activity_generator.generate_connection(
-                    src_ip=source_ip, dst_ip=dst_ip, time=time,
-                    dst_port=dst_port, service=service,
-                    duration=random.uniform(1.0, 30.0),
-                    orig_bytes=random.randint(1000, 10000),
-                    resp_bytes=random.randint(5000, 50000),
-                    emit_dns=True,
-                )
-
-            malicious_event['dst_ip'] = dst_ip
-            malicious_event['dst_port'] = dst_port
-            malicious_event['uid'] = uid if uid else '(filtered by sensor placement)'
-
-            # Emit 4648 (explicit credentials) for lateral movement to internal systems
-            from evidenceforge.generation.activity import _get_os_category as _os_cat
-            technique = details.get('technique', '')
-            is_lateral = (is_ssh or is_rdp
-                          or technique.startswith('T1021')
-                          or technique.startswith('T1053'))
-            if is_lateral and _os_cat(system.os) == 'windows':
-                target_host = next(
-                    (s for s in self.scenario.environment.systems if s.ip == dst_ip),
-                    None,
-                )
-                target_server_name = target_host.hostname if target_host else dst_ip
-                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
-                self.activity_generator.generate_explicit_credentials(
-                    user=actor,
-                    system=system,
-                    time=cred_time,
-                    target_username=actor.username,
-                    target_server=target_server_name,
-                    process_name=r'C:\Windows\System32\lsass.exe',
-                    process_pid=0,
-                    source_ip=source_ip,
-                )
-
-        return malicious_event
 
     def _emit_supplementary_events(
         self,
@@ -1336,13 +1269,18 @@ class GenerationEngine:
         command_line: str,
         pid: int,
         logon_id: str,
+        skip_types: set[str] | None = None,
     ) -> None:
         """Emit supplementary Windows events based on command-line patterns.
 
         Detects administrative commands (net user, net group, schtasks, sc create,
         wevtutil cl) and emits corresponding high-level audit events (4720, 4726,
         4728, 4697, 4698, 1102) that Windows would generate alongside the 4688.
+
+        skip_types: set of event types already explicitly declared in the storyline
+        events list. Supplementary inference skips these to avoid duplicates.
         """
+        skip_types = skip_types or set()
         import re
         cmd_lower = command_line.lower()
 
@@ -1369,7 +1307,7 @@ class GenerationEngine:
 
         # net user <name> /add /domain → 4720 (account created)
         match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', cmd_lower)
-        if match:
+        if match and 'account_created' not in skip_types:
             orig_match = re.search(r'net\s+user\s+(\S+)\s+\S+\s+/add', command_line, re.IGNORECASE)
             target_name = orig_match.group(1) if orig_match else match.group(1)
             target_sid = _make_sid()
@@ -1382,7 +1320,7 @@ class GenerationEngine:
 
         # net user <name> /delete /domain → 4726 (account deleted)
         match = re.search(r'net\s+user\s+(\S+)\s+/delete', cmd_lower)
-        if match:
+        if match and 'account_deleted' not in skip_types:
             orig_match = re.search(r'net\s+user\s+(\S+)\s+/delete', command_line, re.IGNORECASE)
             target_name = orig_match.group(1) if orig_match else match.group(1)
             target_sid = _make_sid()
@@ -1395,7 +1333,7 @@ class GenerationEngine:
 
         # net group "<GroupName>" <user> /add /domain → 4728 (global group member added)
         match = re.search(r'net\s+group\s+"?([^"]+)"?\s+(\S+)\s+/add', command_line, re.IGNORECASE)
-        if match:
+        if match and 'group_member_added' not in skip_types:
             group_name = match.group(1)
             member_name = match.group(2)
             # Domain Admins = RID 512
@@ -1412,7 +1350,7 @@ class GenerationEngine:
 
         # schtasks /Create ... /TN "<TaskName>" → 4698 (scheduled task created)
         match = re.search(r'schtasks\s+/create\b.*?/tn\s+"?([^"]+)"?', command_line, re.IGNORECASE)
-        if match:
+        if match and 'scheduled_task_created' not in skip_types:
             task_name = match.group(1)
             # Extract /TR value for task content
             tr_match = re.search(r'/tr\s+"?([^"]+)"?', command_line, re.IGNORECASE)
@@ -1427,7 +1365,7 @@ class GenerationEngine:
 
         # sc create <ServiceName> binPath= "<path>" → 4697 (service installed)
         match = re.search(r'sc\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?', command_line, re.IGNORECASE)
-        if match:
+        if match and 'service_installed' not in skip_types:
             svc_name = match.group(1)
             svc_path = match.group(2)
             self.activity_generator.generate_service_installed(
@@ -1438,7 +1376,7 @@ class GenerationEngine:
             )
 
         # wevtutil cl Security → 1102 (log cleared)
-        if 'wevtutil' in cmd_lower and 'cl' in cmd_lower:
+        if 'wevtutil' in cmd_lower and 'cl' in cmd_lower and 'log_cleared' not in skip_types:
             self.activity_generator.generate_log_cleared(
                 user=actor, system=system,
                 time=time + timedelta(seconds=delay_s),

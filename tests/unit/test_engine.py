@@ -10,6 +10,7 @@ from evidenceforge.models import (
     Scenario, Environment, User, System, TimeWindow,
     BaselineActivity, OutputSpec, StorylineEvent
 )
+from evidenceforge.models.scenario import ConnectionEventSpec
 
 
 class TestGenerationEngine:
@@ -134,7 +135,7 @@ class TestGenerationEngine:
                     actor="attacker",
                     system="TEST-01",
                     activity="Execute malicious PowerShell command",
-                    details={"process_name": "powershell.exe"}
+                    events=[{"type": "process", "process_name": "powershell.exe"}]
                 )
             ]
         )
@@ -496,37 +497,8 @@ class TestGenerationEngine:
 
         assert system is None
 
-    def test_match_activity_to_events_logon(self, minimal_scenario, tmp_path):
-        """Should match logon keywords to logon event type."""
-        engine = GenerationEngine(minimal_scenario, tmp_path)
-
-        events = engine._match_activity_to_events("User attempts to log in to the system")
-
-        assert 'logon' in events
-
-    def test_match_activity_to_events_process(self, minimal_scenario, tmp_path):
-        """Should match process keywords to process event type."""
-        engine = GenerationEngine(minimal_scenario, tmp_path)
-
-        events = engine._match_activity_to_events("Execute PowerShell command")
-
-        assert 'process' in events
-
-    def test_match_activity_to_events_connection(self, minimal_scenario, tmp_path):
-        """Should match connection keywords to connection event type."""
-        engine = GenerationEngine(minimal_scenario, tmp_path)
-
-        events = engine._match_activity_to_events("Connect to C2 server")
-
-        assert 'connection' in events
-
-    def test_match_activity_to_events_default(self, minimal_scenario, tmp_path):
-        """Should default to process if no match."""
-        engine = GenerationEngine(minimal_scenario, tmp_path)
-
-        events = engine._match_activity_to_events("Some unrecognized activity")
-
-        assert events == ['process']
+    # test_match_activity_to_events_* deleted in Phase 8.4
+    # Keyword matching replaced by typed event declarations in scenario YAML
 
     @patch('evidenceforge.generation.engine.GroundTruthGenerator')
     @patch('evidenceforge.generation.engine.ActivityGenerator')
@@ -851,17 +823,16 @@ class TestGenerationEngine:
         engine = GenerationEngine(scenario_with_storyline, tmp_path)
         engine._initialize()
 
-        # Modify storyline to have connection with same IP
+        # Modify storyline to have connection event
         engine.scenario.storyline[0].activity = "Connect to external server"
-        engine.scenario.storyline[0].details = {"dst_ip": "10.0.0.1"}  # Same as system IP
+        engine.scenario.storyline[0].events = [ConnectionEventSpec(dst_ip="159.65.43.201", dst_port=443)]
 
         engine._execute_storyline()
 
-        # Should adjust to a realistic external IP (not the original system IP)
+        # Phase 8.4: engine uses dst_ip from the typed EventSpec directly
         assert mock_activity_instance.generate_connection.called
         call_args = mock_activity_instance.generate_connection.call_args
-        assert call_args[1]['dst_ip'] != "10.0.0.1"  # Not the conflicting system IP
-        assert not call_args[1]['dst_ip'].startswith("10.")  # Not an internal IP
+        assert call_args[1]['dst_ip'] == "159.65.43.201"
 
     @patch('evidenceforge.generation.engine.ActivityGenerator')
     @patch('evidenceforge.generation.engine.ZeekReporterEmitter')

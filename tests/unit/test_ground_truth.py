@@ -41,14 +41,14 @@ class TestGroundTruthGenerator:
                     actor="attacker",
                     system="TEST-01",
                     activity="Execute malicious PowerShell command",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 ),
                 StorylineEvent(
                     time="2024-01-15T10:35:00Z",
                     actor="attacker",
                     system="TEST-01",
                     activity="Connect to C2 server",
-                    details={}
+                    events=[{"type": "process", "process_name": "cmd.exe"}]
                 )
             ]
         )

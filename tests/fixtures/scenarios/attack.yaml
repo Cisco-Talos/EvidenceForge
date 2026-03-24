@@ -55,67 +55,75 @@ storyline:
     actor: attacker
     system: WS-ANALYST-01
     activity: "Attacker authenticates using stolen credentials for jsmith account"
-    details:
-      source_ip: "203.0.113.50"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "203.0.113.50"
+        logon_type: 3
 
   - time: "+20m"
     actor: attacker
     system: WS-ANALYST-01
     activity: "Execute reconnaissance PowerShell script to enumerate domain users"
-    details:
-      process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-      command_line: "powershell.exe -enc JABkAGMAID0AIAAoAFsAUwB5AHMAdABlAG0ALgBEAGkAcgBlAGMAdABvAHIAeQBTAGUAcgB2AGkAYwBlAHMALgBBAGMAdABpAHYAZQBEAGkAcgBlAGMAdABvAHIAeQBdADoAOgBHAGUAdABDAHUAcgByAGUAbgB0AEQAbwBtAGEAaQBuACkAKQA7ACAAJABkAGMALgBHAGUAdABEAGkAcgBlAGMAdABvAHIAeQBFAG4AdAByAHkAKAApAC4AQwBoAGkAbABkAHIAZQBuACAAfAAgAD8AewAkAF8ALgBTAGMAaABlAG0AYQBDAGwAYQBzAHMATgBhAG0AZQAgAC0AZQBxACAAJwB1AHMAZQByACcAfQA="
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -enc JABkAGMAID0AIAAoAFsAUwB5AHMAdABlAG0ALgBEAGkAcgBlAGMAdABvAHIAeQBTAGUAcgB2AGkAYwBlAHMALgBBAGMAdABpAHYAZQBEAGkAcgBlAGMAdABvAHIAeQBdADoAOgBHAGUAdABDAHUAcgByAGUAbgB0AEQAbwBtAGEAaQBuACkAKQA7ACAAJABkAGMALgBHAGUAdABEAGkAcgBlAGMAdABvAHIAeQBFAG4AdAByAHkAKAApAC4AQwBoAGkAbABkAHIAZQBuACAAfAAgAD8AewAkAF8ALgBTAGMAaABlAG0AYQBDAGwAYQBzAHMATgBhAG0AZQAgAC0AZQBxACAAJwB1AHMAZQByACcAfQA="
 
   - time: "+25m"
     actor: attacker
     system: WS-ANALYST-01
     activity: "Connect to external C2 server for command and control"
-    details:
-      dst_ip: "198.51.100.10"
-      dst_port: 443
-      service: "https"
+    events:
+      - type: connection
+        dst_ip: "198.51.100.10"
+        dst_port: 443
+        service: "ssl"
 
   - time: "+45m"
     actor: attacker
     system: WS-EXEC-01
     activity: "Lateral movement: Authenticate to executive workstation using pass-the-hash"
-    details:
-      source_ip: "10.0.10.50"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "10.0.10.50"
+        logon_type: 3
 
   - time: "+50m"
     actor: attacker
     system: WS-EXEC-01
     activity: "Execute credential dumping tool to extract passwords"
-    details:
-      process_name: "C:\\Windows\\Temp\\mimikatz.exe"
-      command_line: "mimikatz.exe privilege::debug sekurlsa::logonpasswords exit"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\Temp\\mimikatz.exe"
+        command_line: "mimikatz.exe privilege::debug sekurlsa::logonpasswords exit"
 
   - time: "+1h"
     actor: attacker
     system: WS-EXEC-01
     activity: "Exfiltrate sensitive documents to external server"
-    details:
-      dst_ip: "198.51.100.20"
-      dst_port: 443
-      service: "https"
+    events:
+      - type: connection
+        dst_ip: "198.51.100.20"
+        dst_port: 443
+        service: "ssl"
 
   - time: "+1h10m"
     actor: attacker
     system: SRV-DC-01
     activity: "Lateral movement: Authenticate to domain controller with elevated privileges"
-    details:
-      source_ip: "10.0.10.100"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "10.0.10.100"
+        logon_type: 3
 
   - time: "+1h15m"
     actor: attacker
     system: SRV-DC-01
     activity: "Execute DCSync attack to dump domain credentials"
-    details:
-      process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-      command_line: "powershell.exe -Command \"Import-Module .\\PowerView.ps1; Get-DomainUser -LDAPFilter '(adminCount=1)'\""
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -Command \"Import-Module .\\PowerView.ps1; Get-DomainUser -LDAPFilter '(adminCount=1)'\""
 
 output:
   logs:

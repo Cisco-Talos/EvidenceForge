@@ -270,23 +270,30 @@ class ScenarioValidator:
                     )
 
     def _validate_event_sequences(self) -> None:
-        """Validate storyline event_sequence structure if present."""
+        """Validate typed event declarations (Phase 8.4).
+
+        Per-event-type field validation is handled by Pydantic models (EventSpec).
+        This method performs cross-reference checks that Pydantic can't do.
+        """
         if not self.scenario.storyline:
             return
 
         for idx, event in enumerate(self.scenario.storyline):
-            if event.event_sequence is None:
-                continue
-            for seq_idx, sub_event in enumerate(event.event_sequence):
-                if "sub_event_type" not in sub_event:
-                    self.issues.append(
-                        ValidationIssue(
-                            severity="error",
-                            field_path=f"storyline.{idx}.event_sequence.{seq_idx}",
-                            message=f"Storyline event at {event.time}: event_sequence[{seq_idx}] missing 'sub_event_type'",
-                            suggestion="Each sub-event must have a 'sub_event_type' field",
+            for spec_idx, spec in enumerate(event.events):
+                # Validate connection dst_ip is a valid IP
+                if hasattr(spec, 'dst_ip') and spec.dst_ip:
+                    try:
+                        import ipaddress
+                        ipaddress.ip_address(spec.dst_ip)
+                    except ValueError:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.dst_ip",
+                                message=f"Invalid IP address: {spec.dst_ip}",
+                                suggestion="Use a valid IPv4 or IPv6 address",
+                            )
                         )
-                    )
 
     def _validate_network_segments(self) -> None:
         """Validate network segment cross-references."""

