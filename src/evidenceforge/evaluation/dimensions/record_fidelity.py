@@ -100,6 +100,14 @@ class RecordFidelityScorer(DimensionScorer):
         total = 0
         passing = 0
         failures: list[str] = []
+        # Aggregated counts: {format_name: {category: count}}
+        failure_counts: dict[str, dict[str, int]] = {}
+
+        def _track_failure(fmt: str, category: str, detail: str) -> None:
+            failure_counts.setdefault(fmt, {})
+            failure_counts[fmt][category] = failure_counts[fmt].get(category, 0) + 1
+            if len(failures) < 20:
+                failures.append(detail)
 
         for format_name, record_list in records.items():
             fmt_def = self._load_format_def(format_name)
@@ -108,9 +116,13 @@ class RecordFidelityScorer(DimensionScorer):
 
                 # If the record had parse errors, it fails Tier A
                 if record.parse_errors:
-                    if len(failures) < 10:
-                        failures.append(
-                            f"[{format_name}] Parse error: {record.parse_errors[0]}"
+                    ctx = self._build_event_context(format_name, record, None)
+                    ctx_label = f" ({ctx})" if ctx else ""
+                    line_info = f" (line {record.line_number})" if record.line_number else ""
+                    for err in record.parse_errors:
+                        _track_failure(
+                            format_name, "parse_error",
+                            f"[{format_name}{ctx_label}]{line_info} Parse error: {err}",
                         )
                     continue
 
@@ -118,6 +130,7 @@ class RecordFidelityScorer(DimensionScorer):
                 if fmt_def is not None:
                     variant = self._get_variant(format_name, record)
                     ctx = self._build_event_context(format_name, record, variant)
+                    ctx_label = f" ({ctx})" if ctx else ""
                     # Normalize fields for validation (e.g., epoch timestamps)
                     normalized = self._normalize_for_validation(
                         format_name, record.fields, record.timestamp
@@ -125,11 +138,14 @@ class RecordFidelityScorer(DimensionScorer):
                     result = validate_event(fmt_def, normalized, variant, event_context=ctx)
                     if result.valid:
                         passing += 1
-                    elif len(failures) < 10:
-                        ctx_label = f" ({ctx})" if ctx else ""
-                        failures.append(
-                            f"[{format_name}{ctx_label}] {result.errors[0]}"
-                        )
+                    else:
+                        line_info = f" (line {record.line_number})" if record.line_number else ""
+                        for err in result.errors:
+                            category = self._categorize_error(err)
+                            _track_failure(
+                                format_name, category,
+                                f"[{format_name}{ctx_label}]{line_info} {err}",
+                            )
                 else:
                     # No format def — count as passing if parsed successfully
                     passing += 1
@@ -142,7 +158,18 @@ class RecordFidelityScorer(DimensionScorer):
             score=score,
             details=f"{passing}/{total} records pass structure validation",
             sample_failures=failures,
+            failure_summary=failure_counts,
         )
+
+    @staticmethod
+    def _categorize_error(error_msg: str) -> str:
+        """Categorize a validation error for summary reporting."""
+        lower = error_msg.lower()
+        if "required field missing" in lower:
+            return "missing_field"
+        if "invalid" in lower or "expected" in lower:
+            return "constraint_violation"
+        return "validation_error"
 
     def _score_tier_b(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
         """Tier B: Co-occurrence Rules.

@@ -72,6 +72,13 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
 
                 if verbose and sub.details:
                     console.print(f"       [dim]{sub.details}[/dim]")
+
+                # Show failure summary when there are failures (always, not just verbose)
+                if sub.failure_summary:
+                    for fmt, counts in sorted(sub.failure_summary.items()):
+                        parts = [f"{n} {cat.replace('_', ' ')}{'s' if n > 1 else ''}"
+                                 for cat, n in sorted(counts.items())]
+                        console.print(f"       [yellow]{fmt}[/yellow]: {', '.join(parts)}")
             else:
                 console.print(f"     {sub.name}:".ljust(42) + "[dim]N/A[/dim]")
 
@@ -97,9 +104,13 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
             for sub in dim.sub_scores:
                 if sub.sample_failures:
                     console.print(f"\n[bold]Sample failures ({sub.name}):[/bold]")
-                    for f in sub.sample_failures[:5]:
-                        # Escape brackets to prevent Rich from interpreting them as markup
-                        console.print(f"  {f}", style="dim", highlight=False)
+                    for f in sub.sample_failures[:20]:
+                        # Escape Rich markup brackets in failure text
+                        escaped = f.replace("[", "\\[")
+                        console.print(f"  {escaped}", style="dim")
+                    remaining = len(sub.sample_failures) - 20
+                    if remaining > 0:
+                        console.print(f"  ... and {remaining} more", style="dim")
 
     console.print()
 
