@@ -1951,14 +1951,20 @@ class GenerationEngine:
             os_cat = _get_os_category(system.os)
             sys_pids = self._system_pids.get(system.hostname, {})
 
-            # DNS lookups: 2-6 per hour, evenly spaced with jitter
+            # DNS lookups: truly periodic with small jitter, using global schedule
             if 'dns-client' in services:
-                num_dns = rng.randint(2, 6)
-                base_interval = 3600 / (num_dns + 1)
-                for i in range(num_dns):
-                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
-                    offset = max(0, min(3599, offset))
-                    ts = current_hour + timedelta(seconds=offset)
+                # Fixed interval per host (600-1800s = 10-30min between DNS queries)
+                dns_interval = 600 + (hash(f"dns_iv_{system.hostname}") % 1200)
+                # Phase offset so queries start at different times per host
+                dns_phase = hash(f"dns_ph_{system.hostname}") % dns_interval
+                # Find all query times that fall in this hour
+                hour_start_sec = (current_hour - self.start_time).total_seconds()
+                t = dns_phase
+                while t < hour_start_sec:
+                    t += dns_interval
+                while t < hour_start_sec + 3600:
+                    jitter = rng.gauss(0, dns_interval * 0.02)  # 2% jitter
+                    ts = self.start_time + timedelta(seconds=t + jitter)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
@@ -1972,10 +1978,11 @@ class GenerationEngine:
                         resp_bytes=rng.randint(80, 512),
                         source_system=system,
                     )
+                    t += dns_interval
 
-            # NTP sync: 0-1 per hour, anchored to per-system offset
-            if 'ntp-client' in services and rng.random() < 0.6:
-                offset = (hash(system.hostname) % 3600) + rng.gauss(0, 30)
+            # NTP sync: 1 per hour, anchored to per-system offset for regularity
+            if 'ntp-client' in services:
+                offset = (hash(system.hostname) % 3600) + rng.gauss(0, 5)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
@@ -2001,10 +2008,13 @@ class GenerationEngine:
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
 
             if 'smb-client' in services and os_cat == 'windows' and dc_targets:
-                num_smb = rng.randint(1, 3)
-                base_interval = 3600 / (num_smb + 1)
-                for i in range(num_smb):
-                    offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
+                smb_interval = 1200 + (hash(f"smb_iv_{system.hostname}") % 1800)  # 20-50min
+                smb_phase = hash(f"smb_ph_{system.hostname}") % smb_interval
+                t = smb_phase
+                while t < hour_start_sec:
+                    t += smb_interval
+                while t < hour_start_sec + 3600:
+                    offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
@@ -2020,6 +2030,7 @@ class GenerationEngine:
                         resp_bytes=rng.randint(500, 5000),
                         source_system=system,
                     )
+                    t += smb_interval
 
             # Kerberos: domain-joined Windows machines → DC, 4-8 per hour
             if 'kerberos-client' in services and os_cat == 'windows' and dc_targets:
