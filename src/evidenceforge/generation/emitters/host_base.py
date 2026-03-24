@@ -123,7 +123,7 @@ class HostMultiplexEmitter(LogEmitter):
             else:
                 flat_name = self._flat_filename or self._log_filename
                 path = self._base_dir / flat_name
-            sort = self._sort_flat_file and not host_fqdn and not self._direct_file_mode
+            sort = self._sort_flat_file
             writer = _SingleHostWriter(path, self._buffer_size, sort_on_flush=sort)
             self._writers[host_fqdn] = writer
             logger.debug(f"Created host writer: {path}")

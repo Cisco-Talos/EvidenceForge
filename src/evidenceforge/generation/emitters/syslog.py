@@ -189,8 +189,12 @@ class SyslogEmitter(HostMultiplexEmitter):
         self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
+        ts = event_data.get('timestamp')
+        if isinstance(ts, str):
+            from evidenceforge.utils.time import parse_iso8601
+            ts = parse_iso8601(ts)
         context = {
-            'timestamp': event_data.get('timestamp'),
+            'timestamp': ts,
             'hostname': event_data.get('hostname'),
             'facility': event_data.get('facility'),
             'severity': event_data.get('severity'),

@@ -1164,6 +1164,7 @@ class GenerationEngine:
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
             self._last_storyline_pid = pid
+            self._last_storyline_image = process_name
             self._last_storyline_system = system.hostname
             malicious_event['process_name'] = process_name
             malicious_event['command_line'] = command_line
@@ -1295,7 +1296,7 @@ class GenerationEngine:
         elif spec.type == 'create_remote_thread':
             # CreateRemoteThread needs source+target PIDs — use last storyline process as source
             source_pid = getattr(self, '_last_storyline_pid', 0) or 0
-            source_image = 'unknown'
+            source_image = getattr(self, '_last_storyline_image', '') or 'unknown'
             self.activity_generator.generate_create_remote_thread(
                 user=actor, system=system, time=time,
                 source_pid=source_pid, source_image=source_image,
@@ -2593,17 +2594,34 @@ class GenerationEngine:
                 (2027865, "ET DNS Query to a .top domain", "potentially-bad-traffic", 2),
             ]
             from evidenceforge.events.dispatcher import expand_formats
+            # Build per-sensor system lists based on monitored segments
+            segment_systems: dict[str, list] = {}
+            for seg in self.scenario.environment.network.segments:
+                seg_sys = [s for s in systems if s.hostname in (seg.systems or [])]
+                if not seg_sys:
+                    # Fallback: infer from CIDR
+                    import ipaddress
+                    net = ipaddress.ip_network(seg.cidr, strict=False)
+                    seg_sys = [s for s in systems if ipaddress.ip_address(s.ip) in net]
+                segment_systems[seg.name] = seg_sys
+
             for sensor in self.scenario.environment.network.sensors:
                 if 'snort_alert' not in expand_formats(sensor.log_formats):
                     continue
                 sensor_host = sensor.hostname or sensor.name
+                # Only pick systems from segments this sensor monitors
+                monitored_systems = []
+                for seg_name in sensor.monitoring_segments:
+                    monitored_systems.extend(segment_systems.get(seg_name, []))
+                if len(monitored_systems) < 2:
+                    continue
                 num_alerts = rng.randint(1, 3)
                 for _ in range(num_alerts):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     sig = rng.choice(_FP_SIGS)
-                    src_sys = rng.choice(systems)
-                    dst_sys = rng.choice(systems)
+                    src_sys = rng.choice(monitored_systems)
+                    dst_sys = rng.choice(monitored_systems)
                     if src_sys.ip == dst_sys.ip:
                         continue
                     self.activity_generator.generate_raw(
