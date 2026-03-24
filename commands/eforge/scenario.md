@@ -324,7 +324,13 @@ events:
     technique: "T1087.001 - Account Discovery: Local Account"
 ```
 
-**Supplementary inference:** Process events with `supplementary: auto` (default) auto-generate Windows audit events (4720, 4697, 4698, 1102) from command-line patterns. You don't need to declare these explicitly unless you need specific field values. If the same type is already in your `events` list, inference skips it.
+**Correlated events for process commands:** When a storyline step runs a command that would produce additional audit events (account creation, service installation, scheduled task creation, log clearing, process injection, etc.), explicitly declare those as separate events in the same step's `events` list alongside the `process` event. Think about what audit trail the command would leave in a real environment and declare each distinct event. For example:
+- `net user backdoor P@ss /add` → declare both `process` and `account_created` (with `target_username`)
+- `sc create evilsvc binPath=...` → declare both `process` and `service_installed` (with `service_name` and `service_file_name`)
+- `wevtutil cl Security` → declare both `process` and `log_cleared`
+- mimikatz credential dumping → declare `process` and `create_remote_thread` (with `target_process: lsass.exe`)
+
+The engine auto-infers 6 common Windows command patterns as a safety net, but do not rely on this -- always declare correlated events explicitly.
 
 Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
 

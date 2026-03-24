@@ -198,12 +198,30 @@ Each event in the `events` list has a `type` field that selects a validated sche
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
-### Supplementary Event Inference
+### Correlated Events for Process Commands
 
-Process events with `supplementary: auto` (the default) automatically generate additional Windows audit events by parsing the command line:
+When a `process` event declares a command that would produce additional audit events in a real environment, those correlated events should be explicitly declared in the same step's `events` list. This ensures complete, realistic log output regardless of what command is being run.
 
-| Command Pattern | Inferred Event |
-|----------------|---------------|
+The table below shows common categories of commands and the correlated event types to declare alongside the `process` event:
+
+| Command Category | Example Commands | Correlated Event Type |
+|-----------------|------------------|----------------------|
+| Account creation | `net user /add`, `useradd`, `New-ADUser`, `dsadd user` | `account_created` |
+| Account deletion | `net user /delete`, `userdel`, `Remove-ADUser` | `account_deleted` |
+| Group membership changes | `net group /add`, `net localgroup /add`, `Add-ADGroupMember`, `usermod -aG` | `group_member_added` |
+| Service creation | `sc create`, `New-Service`, `systemctl enable` | `service_installed` |
+| Scheduled task creation | `schtasks /Create`, `at`, `crontab -e`, `Register-ScheduledTask` | `scheduled_task_created` |
+| Log clearing | `wevtutil cl`, `Clear-EventLog`, `rm /var/log/*` | `log_cleared` |
+| Process injection | mimikatz `sekurlsa::`, reflective DLL injection, process hollowing | `create_remote_thread` |
+
+This is not an exhaustive list -- any command that would produce a distinct audit trail should have its correlated events declared explicitly.
+
+#### Engine Safety Net
+
+The engine automatically infers correlated events for 6 common Windows command patterns when `supplementary: auto` (the default) is set on a process event:
+
+| Command Pattern | Auto-Inferred Event |
+|----------------|---------------------|
 | `net user <name> /add` | 4720 (account created) |
 | `net user <name> /delete` | 4726 (account deleted) |
 | `net group "<group>" <user> /add` | 4728 (group member added) |
@@ -211,14 +229,14 @@ Process events with `supplementary: auto` (the default) automatically generate a
 | `sc create <name> binPath=` | 4697 (service installed) |
 | `wevtutil cl Security` | 1102 (log cleared) |
 
-If the same event type is already explicitly declared in the `events` list, inference skips it (no duplicates). Set `supplementary: none` to disable inference entirely.
+This safety net catches common cases, but should not be relied upon as the primary mechanism -- always declare correlated events explicitly. If the same event type is already in the `events` list, auto-inference skips it (no duplicates). Set `supplementary: none` to disable auto-inference entirely.
 
 ### Best Practices
 
 1. **Always declare the primary action explicitly** -- don't rely on inference for the main event
-2. **Let inference handle same-system audit side-effects** -- 4720/4697/4698/1102 are auto-generated from command lines
+2. **Declare correlated events for process commands** -- if a command creates an account, installs a service, clears logs, etc., add the corresponding event type to the `events` list
 3. **Explicitly declare cross-system events** -- inference cannot generate events on other systems (e.g., DC Kerberos for domain logon, RDP logon on target)
-4. **Explicitly declare events when field precision matters** -- inference uses auto-generated values (random SIDs); declare explicitly if SIDs must match across steps
+4. **Explicitly declare events when field precision matters** -- auto-inference uses auto-generated values (random SIDs); declare explicitly if SIDs must match across steps
 5. **Use explicit events for specialized detection types** -- CreateRemoteThread, LSASS access; inference doesn't detect these patterns
 
 ### Examples
@@ -239,7 +257,7 @@ If the same event type is already explicitly declared in the `events` list, infe
       logon_type: 3
 ```
 
-**Process with auto-inferred audit events:**
+**Process with explicit correlated events:**
 ```yaml
 - time: "+1h"
   actor: attacker
@@ -249,7 +267,23 @@ If the same event type is already explicitly declared in the `events` list, infe
     - type: process
       process_name: "C:\\Windows\\System32\\net.exe"
       command_line: "net user svc-audit P@ss! /add /domain"
-      # supplementary: auto (default) -- engine auto-generates 4720 from command line
+    - type: account_created
+      target_username: "svc-audit"
+```
+
+**Service persistence with correlated audit event:**
+```yaml
+- time: "+1h15m"
+  actor: attacker
+  system: WEB-01
+  activity: "Install malicious service for persistence"
+  events:
+    - type: process
+      process_name: "C:\\Windows\\System32\\sc.exe"
+      command_line: "sc create evilsvc binPath= C:\\Windows\\Temp\\payload.exe start= auto"
+    - type: service_installed
+      service_name: "evilsvc"
+      service_file_name: "C:\\Windows\\Temp\\payload.exe"
 ```
 
 **Explicit cross-system events:**
