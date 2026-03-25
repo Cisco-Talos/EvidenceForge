@@ -40,7 +40,7 @@ def _get_rng() -> random.Random:
     if not hasattr(_thread_local, 'rng'):
         thread_id = get_ident()
         # Deterministic seed: combine thread ID with global seed
-        # TODO: Make global seed configurable via config
+        # Global seed could be made configurable in the future
         seed = hash((thread_id, 42))  # 42 = global seed
         _thread_local.rng = random.Random(seed)
     return _thread_local.rng

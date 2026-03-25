@@ -50,18 +50,11 @@ logger = logging.getLogger(__name__)
 
 
 class GenerationEngine:
-    """Single-threaded log generation orchestrator for Phase 1.
+    """Log generation orchestrator.
 
     Coordinates StateManager, emitters, and activity generation to produce
-    temporally consistent logs across multiple formats (Windows Event Logs,
-    Zeek conn.log) with proper cross-references (LogonIDs, PIDs, timestamps).
-
-    Phase 1 Constraints:
-    - Single-threaded execution
-    - Small datasets (<10K events)
-    - Fixed baseline patterns (no LLM expansion)
-    - Simple storyline keyword matching
-    - Hour-by-hour time iteration
+    temporally consistent logs across multiple formats with proper
+    cross-references (LogonIDs, PIDs, timestamps, Zeek UIDs).
 
     Attributes:
         scenario: Validated Scenario object with environment, baseline, storyline
