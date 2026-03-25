@@ -76,6 +76,10 @@ Use markdown checkboxes organized by phase/feature:
 
 **Never delete completed tasks** - they show the project's progress and help with debugging/context.
 
+### Changelog Workflow
+
+When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line summary and move the detailed task history to `CHANGELOG.md`. This keeps `TODO.md` focused on active/future work while preserving the full development record.
+
 ## Tech Stack
 
 **Core:**
@@ -96,9 +100,9 @@ Use markdown checkboxes organized by phase/feature:
 - Target coverage: 95%+ overall, 95%+ for core generation engine
 
 **Format Support:**
-- python-evtx (try first) or XML fallback for Windows Event Logs
-- json-logic-py for format definition validation rules
+- json-logic-qubit for format definition validation rules
 - Standard library json/csv for text formats
+- XML output via string templates (no python-evtx dependency)
 
 ## Dependency Management
 
@@ -173,18 +177,11 @@ uv run python -m evidenceforge --help
 - Resolve paths early at boundaries: `Path(user_input).resolve()`
 - Check paths before operations — fail fast with clear messages
 
-## Configuration & Secrets
+## Configuration
 
-**Configuration hierarchy** (later overrides earlier):
-1. Default values in code
-2. System-wide config: `~/.config/evidence-forge/config.yaml`
-3. `.env` file (search from CWD upward to home, stop at first found)
-4. Project config: `./config.yaml`
-5. Command-line arguments
+Configuration is primarily through scenario YAML files and CLI arguments. No config.yaml or .env file is needed.
 
-Config files support `${VAR_NAME}` and `${VAR_NAME:-default}` syntax for environment variable interpolation (implemented in `utils/config.py`).
-
-**Secrets:** Never store AWS credentials in config files — use boto3 credential chain. Never log credential values or include secrets in error messages. Use redaction in debug output.
+**Secrets:** Never log credential values or include secrets in error messages. Use redaction in debug output.
 
 ## Key Architecture Patterns
 
@@ -241,10 +238,6 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 | 0 | Success | Operation completed successfully |
 | 1 | Input Error | Malformed YAML or file I/O error |
 | 2 | Schema Validation | Pydantic validation failure |
-| 3 | Semantic Validation | LLM-detected logical inconsistencies |
-| 10 | LLM API Failure | Persistent LLM API errors |
-| 11 | LLM Timeout | LLM operation exceeded timeout |
-| 20 | Resource Exhaustion | Insufficient disk space or memory |
 | 21 | Generation Error | Invalid state or unrecoverable generation failure |
 | 22 | Format Error | Format definition loading/validation error |
 | 130 | SIGINT | User interrupted (Ctrl+C) |
