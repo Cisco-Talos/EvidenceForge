@@ -11,10 +11,10 @@ Contains the BaselineMixin with methods for:
 
 import logging
 import math
-import random
 from datetime import UTC, datetime, timedelta
 
 from evidenceforge.models.scenario import Persona, User
+from evidenceforge.utils.rng import _get_rng
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,8 @@ class BaselineMixin:
                 )
 
                 if num_events > 0:
-                    if random.random() < 0.20:
+                    rng = _get_rng()
+                    if rng.random() < 0.20:
                         continue
 
                     persona_name = user.persona if user.persona else None
@@ -126,6 +127,7 @@ class BaselineMixin:
                            'bash', 'agetty')
         short_lived = ('msbuild', 'gcc', 'npm', 'make', 'dotnet', 'cargo', 'node.exe')
 
+        rng = _get_rng()
         for system in self.scenario.environment.systems:
             processes = self.state_manager.get_processes_on_system(system.hostname)
             for proc in list(processes):
@@ -136,13 +138,13 @@ class BaselineMixin:
                     continue
 
                 if any(p in image_lower for p in short_lived):
-                    max_hours = random.uniform(0.08, 0.5)
+                    max_hours = rng.uniform(0.08, 0.5)
                 elif any(p in image_lower for p in ('chrome', 'firefox', 'edge', 'outlook', 'teams', 'code')):
-                    max_hours = random.uniform(1.0, 4.0)
+                    max_hours = rng.uniform(1.0, 4.0)
                 else:
-                    max_hours = random.uniform(0.5, 2.0)
+                    max_hours = rng.uniform(0.5, 2.0)
 
-                if proc_age_hours > max_hours and random.random() < 0.5:
+                if proc_age_hours > max_hours and rng.random() < 0.5:
                     actor = self._find_actor(proc.username)
                     if not actor:
                         continue
@@ -150,7 +152,7 @@ class BaselineMixin:
                     sessions = self.state_manager.get_sessions_for_user(proc.username)
                     logon_id = sessions[0].logon_id if sessions else '0x0'
 
-                    term_offset = random.uniform(0, 3599)
+                    term_offset = rng.uniform(0, 3599)
                     term_time = current_hour + timedelta(seconds=term_offset)
                     self.state_manager.set_current_time(term_time)
                     self.activity_generator.generate_process_termination(
@@ -192,9 +194,10 @@ class BaselineMixin:
                 if session_age_hours < 0.5:
                     continue
 
+                rng = _get_rng()
                 logoff_probability = 0.6 if is_outside_work_hours else 0.3 if session_age_hours > 1 else 0.1
-                if random.random() < logoff_probability:
-                    logoff_offset = random.uniform(0, 3599)
+                if rng.random() < logoff_probability:
+                    logoff_offset = rng.uniform(0, 3599)
                     logoff_time = current_hour + timedelta(seconds=logoff_offset)
                     self.state_manager.set_current_time(logoff_time)
                     self.activity_generator.generate_logoff(
@@ -310,9 +313,10 @@ class BaselineMixin:
         if user_offsets and 'intensity_bias' in user_offsets:
             base_events = int(base_events * user_offsets['intensity_bias'])
 
+        rng = _get_rng()
         variation_map = {'low': 0.10, 'medium': 0.25, 'high': 0.50}
         stddev = base_events * variation_map[self.scenario.baseline_activity.variation]
-        num_events = max(0, int(random.gauss(base_events, stddev)))
+        num_events = max(0, int(rng.gauss(base_events, stddev)))
 
         return num_events
 
@@ -321,10 +325,11 @@ class BaselineMixin:
         if num_events == 0:
             return []
 
+        rng = _get_rng()
         interval = 3600 / num_events
         times = []
         for i in range(num_events):
-            offset = interval * i + random.uniform(-interval * 0.25, interval * 0.25)
+            offset = interval * i + rng.uniform(-interval * 0.25, interval * 0.25)
             offset = max(0, min(3599, offset))
             times.append(hour_start + timedelta(seconds=offset))
         return sorted(times)
@@ -360,19 +365,20 @@ class BaselineMixin:
             gap_bias = 1.0 + offsets.get('inter_gap_bias', 0)
             inter_gap_mean = max(60, inter_gap_mean * gap_bias)
 
+        rng = _get_rng()
         times: list[datetime] = []
         remaining = num_events
-        t = random.expovariate(1.0 / 60)
+        t = rng.expovariate(1.0 / 60)
 
         while remaining > 0:
-            cluster_size = min(remaining, random.randint(max(1, cluster_min - 1), cluster_max))
+            cluster_size = min(remaining, rng.randint(max(1, cluster_min - 1), cluster_max))
             for i in range(cluster_size):
                 if i > 0:
-                    t += random.uniform(0.3, 2.0)
+                    t += rng.uniform(0.3, 2.0)
                 if t < 3600:
                     times.append(hour_start + timedelta(seconds=t))
             remaining -= cluster_size
-            t += random.expovariate(1.0 / inter_gap_mean) + random.expovariate(1.0 / inter_gap_mean)
+            t += rng.expovariate(1.0 / inter_gap_mean) + rng.expovariate(1.0 / inter_gap_mean)
 
         if not times:
             return []
@@ -385,27 +391,26 @@ class BaselineMixin:
             if recent < 5:
                 final.append(ts)
             else:
-                final.append(final[-1] + timedelta(seconds=random.uniform(5.1, 8.0)))
+                final.append(final[-1] + timedelta(seconds=rng.uniform(5.1, 8.0)))
 
         return sorted(final)
 
     def _generate_user_activity(self, user: User, event_time: datetime) -> None:
         """Generate activity for user at specified time."""
+        rng = _get_rng()
         if user.primary_system:
             systems = [s for s in self.scenario.environment.systems if s.hostname == user.primary_system]
-            system = systems[0] if systems else random.choice(self.scenario.environment.systems)
+            system = systems[0] if systems else rng.choice(self.scenario.environment.systems)
         else:
             assigned_systems = [s for s in self.scenario.environment.systems if s.assigned_user == user.username]
             if assigned_systems:
-                system = random.choice(assigned_systems)
+                system = rng.choice(assigned_systems)
             else:
-                system = random.choice(self.scenario.environment.systems)
+                system = rng.choice(self.scenario.environment.systems)
 
         persona = self._get_user_persona(user)
         persona_name = user.persona if user.persona else None
         pattern = self.activity_generator.get_baseline_pattern(persona_name, persona=persona)
-
-        rng = random.Random(hash(f"{user.username}_{event_time}"))
 
         pattern = list(pattern)
         rng.shuffle(pattern)
@@ -451,7 +456,7 @@ class BaselineMixin:
         """
         from evidenceforge.generation.activity import _get_os_category
 
-        rng = random.Random(hash(f"{self.scenario.name}_sys_{current_hour}"))
+        rng = _get_rng()
         dns_ips = self._infra_ips.get('dns', ['10.0.0.1'])
         if isinstance(dns_ips, str):
             dns_ips = [dns_ips]

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from evidenceforge.generation.activity.helpers import _thread_local
+from evidenceforge.utils.rng import _thread_local
 
 
 @pytest.fixture(autouse=True)

@@ -10,11 +10,11 @@ Contains the StorylineMixin with methods for:
 
 import base64
 import logging
-import random
 import re
 from datetime import datetime, timedelta
 
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.rng import _get_rng
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
@@ -54,15 +54,15 @@ class StorylineMixin:
 
         for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
             event_time = self._parse_storyline_time(storyline_event.time)
-            jitter_rng = random.Random(hash(f"jitter_{event_num}_{self.scenario.name}"))
+            rng = _get_rng()
             jitter = timedelta(
-                seconds=jitter_rng.uniform(-30, 30),
-                microseconds=jitter_rng.randint(0, 999999),
+                seconds=rng.uniform(-30, 30),
+                microseconds=rng.randint(0, 999999),
             )
             event_time = event_time + jitter
             if _prev_event_time and event_time <= _prev_event_time:
                 event_time = _prev_event_time + timedelta(
-                    milliseconds=jitter_rng.randint(100, 5000)
+                    milliseconds=rng.randint(100, 5000)
                 )
             _prev_event_time = event_time
 
@@ -108,10 +108,10 @@ class StorylineMixin:
         event_num = event_idx + 1
 
         event_time = self._parse_storyline_time(storyline_event.time)
-        jitter_rng = random.Random(hash(f"jitter_{event_num}_{self.scenario.name}"))
+        rng = _get_rng()
         jitter = timedelta(
-            seconds=jitter_rng.uniform(-30, 30),
-            microseconds=jitter_rng.randint(0, 999999),
+            seconds=rng.uniform(-30, 30),
+            microseconds=rng.randint(0, 999999),
         )
         event_time = event_time + jitter
 
@@ -148,6 +148,7 @@ class StorylineMixin:
         Each event spec type maps to a specific generate_* method on ActivityGenerator.
         Returns a malicious_event dict for GROUND_TRUTH.md.
         """
+        rng = _get_rng()
         malicious_event = {
             'time': time,
             'actor': actor.username,
@@ -158,7 +159,7 @@ class StorylineMixin:
 
         if spec.type == 'logon':
             _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174', '23.129.64.210', '116.202.120.181']
-            source_ip = spec.source_ip or random.choice(_attacker_ips)
+            source_ip = spec.source_ip or rng.choice(_attacker_ips)
             logon_id = self.activity_generator.generate_logon(
                 user=actor, system=system, time=time,
                 logon_type=spec.logon_type, source_ip=source_ip,
@@ -168,7 +169,7 @@ class StorylineMixin:
 
         elif spec.type == 'failed_logon':
             _attacker_ips = ['45.33.32.156', '185.220.101.34', '91.219.236.174']
-            source_ip = spec.source_ip or random.choice(_attacker_ips)
+            source_ip = spec.source_ip or rng.choice(_attacker_ips)
             self.activity_generator.generate_failed_logon(
                 user=actor, system=system, time=time,
                 logon_type=spec.logon_type, source_ip=source_ip,
@@ -185,7 +186,7 @@ class StorylineMixin:
         elif spec.type == 'process':
             sessions = self.state_manager.get_sessions_for_user(actor.username)
             if not sessions:
-                logon_time = time - timedelta(seconds=random.uniform(0.5, 2.0))
+                logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
                 logon_id = self.activity_generator.generate_logon(actor, system, logon_time, logon_type=3)
             else:
                 logon_id = sessions[0].logon_id
@@ -219,7 +220,7 @@ class StorylineMixin:
 
             output_file = self._extract_output_file(command_line, os_category)
             if output_file:
-                file_time = time + timedelta(seconds=random.uniform(0.5, 3.0))
+                file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
                 from evidenceforge.events.base import SecurityEvent as SE
                 from evidenceforge.events.contexts import AuthContext as AC
                 from evidenceforge.events.contexts import FileContext
@@ -234,7 +235,7 @@ class StorylineMixin:
             _EXPLICIT_CRED_TOOLS = {'psexec', 'wmic', 'runas', 'schtasks', 'net.exe', 'net1.exe'}
             proc_basename = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
             if proc_basename in _EXPLICIT_CRED_TOOLS and os_category == 'windows':
-                cred_time = time - timedelta(milliseconds=random.randint(5, 50))
+                cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
                 self.activity_generator.generate_explicit_credentials(
                     user=actor, system=system, time=cred_time,
                     target_username=actor.username, target_server='localhost',
@@ -256,9 +257,9 @@ class StorylineMixin:
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip, dst_ip=dst_ip, time=time,
                 dst_port=dst_port, service=service,
-                duration=random.uniform(1.0, 30.0),
-                orig_bytes=random.randint(1000, 10000),
-                resp_bytes=random.randint(5000, 50000),
+                duration=rng.uniform(1.0, 30.0),
+                orig_bytes=rng.randint(1000, 10000),
+                resp_bytes=rng.randint(5000, 50000),
                 emit_dns=True,
                 source_system=system,
             )
@@ -306,7 +307,7 @@ class StorylineMixin:
 
         elif spec.type == 'group_member_added':
             dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
-            group_rid = 512 if 'admin' in spec.group_name.lower() else random.randint(1100, 9999)
+            group_rid = 512 if 'admin' in spec.group_name.lower() else rng.randint(1100, 9999)
             group_sid = self._make_domain_sid(group_rid)
             member_sid = self._make_domain_sid()
             self.activity_generator.generate_group_membership_change(
@@ -384,18 +385,19 @@ class StorylineMixin:
             system,
         )
 
-        delay_s = random.uniform(0.1, 0.5)
+        rng = _get_rng()
+        delay_s = rng.uniform(0.1, 0.5)
 
         def _domain_sid_prefix() -> str:
             for sid in self.activity_generator.sid_registry.values():
                 if sid.startswith('S-1-5-21-') and sid.count('-') == 7:
                     return '-'.join(sid.split('-')[:7])
-            return f'S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}'
+            return f'S-1-5-21-{rng.randint(100000000,999999999)}-{rng.randint(100000000,999999999)}-{rng.randint(100000000,999999999)}'
 
         def _make_sid(rid: int | None = None) -> str:
             prefix = _domain_sid_prefix()
             if rid is None:
-                rid = random.randint(1100, 9999)
+                rid = rng.randint(1100, 9999)
             return f'{prefix}-{rid}'
 
         # net user <name> /add /domain -> 4720 (account created)
@@ -429,7 +431,7 @@ class StorylineMixin:
         if match and 'group_member_added' not in skip_types:
             group_name = match.group(1)
             member_name = match.group(2)
-            group_rid = 512 if 'admin' in group_name.lower() else random.randint(1100, 9999)
+            group_rid = 512 if 'admin' in group_name.lower() else rng.randint(1100, 9999)
             group_sid = _make_sid(group_rid)
             member_sid = _make_sid()
             self.activity_generator.generate_group_membership_change(
@@ -526,17 +528,18 @@ class StorylineMixin:
 
     def _make_domain_sid(self, rid: int | None = None) -> str:
         """Generate a SID using the scenario's domain SID prefix."""
+        rng = _get_rng()
         for sid in self.activity_generator.sid_registry.values():
             if sid.startswith('S-1-5-21-') and sid.count('-') == 7:
                 prefix = '-'.join(sid.split('-')[:7])
-                return f'{prefix}-{rid or random.randint(1100, 9999)}'
-        return f'S-1-5-21-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{random.randint(100000000,999999999)}-{rid or random.randint(1100, 9999)}'
+                return f'{prefix}-{rid or rng.randint(1100, 9999)}'
+        return f'S-1-5-21-{rng.randint(100000000,999999999)}-{rng.randint(100000000,999999999)}-{rng.randint(100000000,999999999)}-{rid or rng.randint(1100, 9999)}'
 
     def _generate_encoded_powershell(self, seed: int) -> str:
         """Generate a realistic base64-encoded PowerShell command.
 
         PowerShell -enc expects UTF-16LE encoded base64.
         """
-        rng = random.Random(hash(f"ps_enc_{seed}_{self.scenario.name}"))
+        rng = _get_rng()
         cmd = rng.choice(POWERSHELL_COMMANDS)
         return base64.b64encode(cmd.encode('utf-16-le')).decode('ascii')

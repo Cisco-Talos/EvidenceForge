@@ -1,32 +1,10 @@
 """General helper functions for activity generation.
 
-Provides thread-local RNG, OS detection, and command parameterization.
+Provides OS detection and command parameterization. RNG is re-exported
+from evidenceforge.utils.rng for backward compatibility.
 """
 
-import random
-from threading import get_ident, local
-
-# Thread-local storage for RNG (Phase 2.1)
-_thread_local = local()
-
-
-def _get_rng() -> random.Random:
-    """Get thread-local Random instance with deterministic seed.
-
-    This provides thread-safe random number generation without GIL contention.
-    Each thread gets its own RNG instance with a deterministic seed based on
-    the thread ID, preserving reproducibility.
-
-    Returns:
-        Thread-local Random instance
-    """
-    if not hasattr(_thread_local, 'rng'):
-        thread_id = get_ident()
-        # Deterministic seed: combine thread ID with global seed
-        # Global seed could be made configurable in the future
-        seed = hash((thread_id, 42))  # 42 = global seed
-        _thread_local.rng = random.Random(seed)
-    return _thread_local.rng
+from evidenceforge.utils.rng import _get_rng, _thread_local  # noqa: F401
 
 
 def _get_os_category(os_string: str) -> str:
