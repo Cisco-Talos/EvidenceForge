@@ -8,8 +8,9 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 class ZeekWeirdEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek weird.log format (NDJSON).
 
-    Generates network anomaly/weird records. Uses dispatch_raw since
-    weird events are probabilistic side-effects, not tied to specific event types.
+    Generates network anomaly/weird records. Intentionally dispatch_raw-only:
+    weird events are probabilistic side-effects of connection processing,
+    not tied to specific SecurityEvent types.
     """
 
     _log_filename = "weird.json"

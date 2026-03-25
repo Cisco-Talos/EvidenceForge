@@ -8,8 +8,9 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 class ZeekDhcpEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek dhcp.log format (NDJSON).
 
-    Generates DHCP transaction logs. Uses dispatch_raw since DHCP has
-    a `uids` array (not single uid) and no standard id.* tuple.
+    Generates DHCP transaction logs. Intentionally dispatch_raw-only:
+    DHCP has a `uids` array (not single uid) and no standard id.* tuple,
+    so it doesn't fit the SecurityEvent canonical model.
     """
 
     _log_filename = "dhcp.json"
