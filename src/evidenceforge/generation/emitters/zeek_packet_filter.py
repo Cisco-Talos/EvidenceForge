@@ -8,8 +8,9 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 class ZeekPacketFilterEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek packet_filter.log format (NDJSON).
 
-    Generates sensor packet filter state logs.
-    Uses dispatch_raw — emitted once at sensor startup.
+    Generates sensor packet filter state logs. Intentionally
+    dispatch_raw-only: sensor infrastructure events with no
+    SecurityEvent representation.
     """
 
     _log_filename = "packet_filter.json"

@@ -146,8 +146,14 @@ class SensorMultiplexEmitter(LogEmitter):
             self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
-        """Render and route to sensor writers."""
+        """Render and route to sensor writers.
+
+        Skips events where _render_event returns None (e.g., SnortEmitter
+        filters out non-IDS connection events).
+        """
         rendered = self._render_event(event_data)
+        if rendered is None:
+            return
         sensor_hostnames = event_data.pop('_sensor_hostnames', None)
         self.emit_to_sensors(rendered, sensor_hostnames)
 

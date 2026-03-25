@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
@@ -9,10 +10,42 @@ class WebEmitter(HostMultiplexEmitter):
     """Emitter for W3C web server access logs (Apache/Nginx Combined Log Format).
 
     Per-host FQDN directory routing: each web server gets its own access log.
+
+    Handles SecurityEvents with HttpContext (fan-out from connection events
+    to web servers) and raw dict events from baseline web traffic generation.
     """
 
     _log_filename = "web_access.log"
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"connection"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Handle connection events that carry an HttpContext and target a web server."""
+        return (
+            event.event_type in self._supported_types
+            and event.http is not None
+            and event.host is not None
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render HttpContext to Combined Log Format."""
+        http = event.http
+        host = event.host
+        net = event.network
+
+        event_data = {
+            'timestamp': event.timestamp,
+            'client_ip': net.src_ip if net else '',
+            'username': '-',
+            'method': http.method,
+            'path': http.uri,
+            'protocol': f'HTTP/{http.version}',
+            'status_code': http.status_code,
+            'bytes_sent': http.response_body_len,
+            'referer': http.referrer or '-',
+            'user_agent': http.user_agent,
+            '_host_fqdn': host.fqdn or host.hostname,
+        }
+        self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route web access event to per-host file."""

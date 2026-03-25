@@ -8,8 +8,9 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 class ZeekReporterEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek reporter.log format (NDJSON).
 
-    Generates Zeek sensor diagnostic/warning logs.
-    Uses dispatch_raw — emitted for sensor startup warnings.
+    Generates Zeek sensor diagnostic/warning logs. Intentionally
+    dispatch_raw-only: sensor infrastructure events with no
+    SecurityEvent representation.
     """
 
     _log_filename = "reporter.json"

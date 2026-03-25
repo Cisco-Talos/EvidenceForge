@@ -1,9 +1,8 @@
 """Snort/Suricata alert emitter."""
 
-from pathlib import Path
 from typing import Any
 
-from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -11,18 +10,54 @@ class SnortEmitter(SensorMultiplexEmitter):
     """Emitter for Snort/Suricata fast alert format.
 
     Per-sensor directory routing: each IDS sensor gets its own alert file.
+
+    Handles SecurityEvents with IdsContext (fan-out from connection events
+    through IDS sensors) and raw dict events from baseline false-positive
+    alert generation.
     """
 
     _log_filename = "snort_alert.log"
     _flat_filename = "snort_alert.log"
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"connection"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Handle connection events that carry an IdsContext."""
+        return (
+            event.event_type in self._supported_types
+            and event.ids is not None
+        )
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render IdsContext to Snort fast alert format."""
+        ids = event.ids
+        net = event.network
+
+        event_data = {
+            'timestamp': event.timestamp,
+            'sid': ids.sid,
+            'message': ids.message,
+            'classification': ids.classification,
+            'priority': ids.priority,
+            'protocol': (net.protocol or 'TCP').upper() if net else 'TCP',
+            'src_ip': net.src_ip if net else '',
+            'src_port': net.src_port if net else 0,
+            'dst_ip': net.dst_ip if net else '',
+            'dst_port': net.dst_port if net else 0,
+        }
+        # Get sensor routing from the event's visibility metadata
+        if hasattr(event, '_sensor_hostnames_by_format'):
+            sensor_hosts = event._sensor_hostnames_by_format.get('snort_alert', [])
+            if sensor_hosts:
+                event_data['_sensor_hostnames'] = sensor_hosts
+
+        self._dispatch(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str | None:
         """Render Snort/Suricata alert to fast alert format.
 
-        Returns None if the event lacks required IDS alert fields (sid, message,
-        classification), which means it's a plain connection event that should
-        not generate an IDS alert.
+        Returns None if the event lacks required IDS alert fields (sid, message),
+        which means it's a plain connection event that should not generate an
+        IDS alert. The caller must handle None returns.
         """
         if not event_data.get('sid') and not event_data.get('message'):
             return None
