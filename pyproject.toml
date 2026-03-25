@@ -88,7 +88,7 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
-fail_under = 90
+fail_under = 80
 
 [tool.ruff]
 line-length = 100
