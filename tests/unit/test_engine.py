@@ -131,6 +131,7 @@ class TestGenerationEngine:
             personas=[],
             storyline=[
                 StorylineEvent(
+                    id="evt-test-1",
                     time="2024-01-15T10:30:00Z",
                     actor="attacker",
                     system="TEST-01",

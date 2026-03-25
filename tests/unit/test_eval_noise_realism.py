@@ -29,6 +29,7 @@ def _make_scenario(intensity="high", storyline_count=5):
 
     storyline = [
         StorylineEvent(
+            id=f"evt-test-{i+1}",
             time=f"+{i+1}h", actor="jsmith", system="WS-01",
             activity="Execute command",
             events=[{"type": "process", "process_name": "cmd.exe"}],

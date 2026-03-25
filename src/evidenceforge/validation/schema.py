@@ -4,13 +4,18 @@ This module provides validation beyond Pydantic's schema validation:
 - Cross-references between users, systems, personas, groups
 - Uniqueness constraints (usernames, hostnames, IPs)
 - Logical consistency checks
+- OS/format compatibility
+- Storyline plausibility
 """
 
 import ipaddress
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from evidenceforge.models import Scenario
+
+logger = logging.getLogger(__name__)
 
 # Well-known OS built-in accounts that are always valid as storyline actors
 # without needing to be defined in the environment users list.
@@ -22,6 +27,57 @@ BUILTIN_ACCOUNTS = {
     # Common service accounts
     "mysql", "postgres", "apache", "nginx",
 }
+
+# OS detection patterns (mirrors evaluation/visibility.py)
+_WINDOWS_PATTERNS = ["windows"]
+_LINUX_PATTERNS = ["linux", "ubuntu", "centos", "debian", "rhel"]
+
+# Formats that are bound to a specific OS
+_OS_BOUND_FORMATS: dict[str, str] = {
+    "windows_event_security": "windows",
+    "windows_event_sysmon": "windows",
+    "syslog": "linux",
+    "bash_history": "linux",
+}
+
+# Reverse: OS → expected host-local formats
+_OS_EXPECTED_FORMATS: dict[str, set[str]] = {
+    "windows": {"windows_event_security", "windows_event_sysmon"},
+    "linux": {"syslog", "bash_history"},
+}
+
+# Event types that are Windows-specific
+_WINDOWS_EVENT_TYPES = {
+    "service_installed", "scheduled_task_created", "log_cleared",
+    "create_remote_thread",
+}
+
+# Event types that imply Linux/SSH
+_LINUX_EVENT_TYPES = {"ssh_session"}
+
+# Process command patterns indicating wrong OS
+_WINDOWS_COMMAND_INDICATORS = {"powershell.exe", "cmd.exe", "reg.exe", "net.exe"}
+_LINUX_PATH_PREFIXES = ("/usr/", "/bin/", "/etc/", "/opt/", "/var/")
+
+# Eval volume targets by baseline intensity (noise-to-signal ratio)
+_VOLUME_TARGETS: dict[str, int] = {"low": 500, "medium": 5000, "high": 10000}
+
+
+def _get_os_category(os_string: str) -> str:
+    """Detect OS category from OS string.
+
+    Args:
+        os_string: OS name/version string (e.g., "Windows 10", "Linux Ubuntu 20.04")
+
+    Returns:
+        "windows", "linux", or "unknown"
+    """
+    os_lower = os_string.lower()
+    if any(p in os_lower for p in _WINDOWS_PATTERNS):
+        return "windows"
+    if any(p in os_lower for p in _LINUX_PATTERNS):
+        return "linux"
+    return "unknown"
 
 
 @dataclass
@@ -35,7 +91,7 @@ class ValidationIssue:
         suggestion: Optional actionable suggestion to fix the issue
     """
 
-    severity: str  # "error" | "warning"
+    severity: str  # "error" | "warning" | "info"
     field_path: str
     message: str
     suggestion: Optional[str] = None
@@ -93,6 +149,18 @@ class ScenarioValidator:
         self._validate_network_segments()
         self._validate_network_sensors()
         self._validate_output_formats()
+        # Eval-informed checks
+        self._validate_format_os_compatibility()
+        self._validate_segment_sensor_coverage()
+        self._validate_service_account_collisions()
+        self._validate_storyline_actor_work_hours()
+        self._validate_noise_feasibility()
+        self._validate_storyline_format_coverage()
+        self._validate_storyline_os_plausibility()
+        self._validate_storyline_linkability()
+        self._validate_storyline_causal_order()
+        self._validate_storyline_event_ids()
+        self._sort_issues()
         return self.issues
 
     def has_errors(self) -> bool:
@@ -433,3 +501,578 @@ class ScenarioValidator:
             if system.hostname == hostname:
                 return system.ip
         return None
+
+    def _get_system(self, hostname: str):
+        """Get System object by hostname."""
+        for system in self.scenario.environment.systems:
+            if system.hostname == hostname:
+                return system
+        return None
+
+    def _get_expanded_formats(self) -> set[str]:
+        """Get all expanded output format names from output.logs."""
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS
+
+        formats: set[str] = set()
+        for log_spec in self.scenario.output.logs:
+            fmt = log_spec.get("format", "")
+            if fmt in FORMAT_GROUPS:
+                formats.update(FORMAT_GROUPS[fmt])
+            elif fmt:
+                formats.add(fmt)
+        return formats
+
+    def _validate_format_os_compatibility(self) -> None:
+        """Check that OS-bound formats have matching systems and vice versa."""
+        expanded_formats = self._get_expanded_formats()
+        os_categories = {
+            system.hostname: _get_os_category(system.os)
+            for system in self.scenario.environment.systems
+        }
+        os_present = set(os_categories.values())
+
+        # Error: OS-bound format requested but no matching-OS systems
+        for fmt, required_os in _OS_BOUND_FORMATS.items():
+            if fmt in expanded_formats and required_os not in os_present:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path="output.logs",
+                        message=(
+                            f"Format '{fmt}' requires {required_os} systems "
+                            f"but none are defined"
+                        ),
+                        suggestion=(
+                            f"Add a {required_os} system or remove '{fmt}' "
+                            f"from output formats"
+                        ),
+                    )
+                )
+
+        # Warning: system OS has no corresponding format in output
+        for hostname, os_cat in os_categories.items():
+            if os_cat == "unknown":
+                continue
+            expected = _OS_EXPECTED_FORMATS.get(os_cat, set())
+            if expected and not (expected & expanded_formats):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path="output.logs",
+                        message=(
+                            f"System '{hostname}' is {os_cat} but no "
+                            f"{os_cat} log formats in output"
+                        ),
+                        suggestion=(
+                            f"Add a {os_cat} format group "
+                            f"(e.g., {', '.join(sorted(expected))})"
+                        ),
+                    )
+                )
+
+    def _validate_segment_sensor_coverage(self) -> None:
+        """Check that network segments with systems have sensor coverage."""
+        if not self.scenario.environment.network:
+            return
+
+        monitored_segments: set[str] = set()
+        for sensor in self.scenario.environment.network.sensors:
+            monitored_segments.update(sensor.monitoring_segments)
+
+        for idx, segment in enumerate(self.scenario.environment.network.segments):
+            if segment.systems and segment.name not in monitored_segments:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"environment.network.segments.{idx}",
+                        message=(
+                            f"Segment '{segment.name}' has systems but no "
+                            f"sensor monitoring it"
+                        ),
+                        suggestion="Add a sensor with this segment in monitoring_segments",
+                    )
+                )
+
+    def _validate_service_account_collisions(self) -> None:
+        """Check for collisions between service accounts and user accounts."""
+        collisions = self.service_accounts & self.usernames
+        for name in sorted(collisions):
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.service_accounts",
+                    message=(
+                        f"Service account '{name}' collides with a "
+                        f"user account of the same name"
+                    ),
+                    suggestion="Rename one to avoid ambiguity in log attribution",
+                )
+            )
+
+    def _validate_storyline_actor_work_hours(self) -> None:
+        """Check that storyline actors have personas with work_hours defined."""
+        if not self.scenario.storyline:
+            return
+
+        user_persona_map: dict[str, str | None] = {
+            user.username: user.persona
+            for user in self.scenario.environment.users
+        }
+        persona_map = {p.name: p for p in self.scenario.personas}
+        checked_actors: set[str] = set()
+
+        for idx, event in enumerate(self.scenario.storyline):
+            actor = event.actor
+            if actor in checked_actors or actor in BUILTIN_ACCOUNTS:
+                continue
+            if actor in self.service_accounts:
+                continue
+            checked_actors.add(actor)
+
+            persona_name = user_persona_map.get(actor)
+            if not persona_name:
+                continue  # No persona assigned — other validators catch this
+            persona = persona_map.get(persona_name)
+            if persona and not persona.work_hours_parsed:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"personas.{persona_name}.work_hours",
+                        message=(
+                            f"Storyline actor '{actor}' has persona "
+                            f"'{persona_name}' but work_hours could not be parsed"
+                        ),
+                        suggestion=(
+                            "Use a format like '9am-5pm' or "
+                            "'8:30am-5:30pm (lunch 12pm-1pm)'"
+                        ),
+                    )
+                )
+
+    def _validate_noise_feasibility(self) -> None:
+        """Check that noise-to-signal ratio is feasible for baseline intensity."""
+        if not self.scenario.storyline:
+            return
+
+        signal_count = len(self.scenario.storyline)
+        intensity = self.scenario.baseline_activity.intensity
+        target_ratio = _VOLUME_TARGETS.get(intensity, 5000)
+
+        # With very many storyline events and low intensity, the ratio can't
+        # be met. Warn if signal > 10% of target total volume.
+        target_total = signal_count * target_ratio
+        # A rough check: if the time window can't support this volume
+        # we warn. Simpler: just warn if signal count is very high for low
+        # intensity.
+        if intensity == "low" and signal_count > 50:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="baseline_activity.intensity",
+                    message=(
+                        f"Baseline intensity is 'low' but storyline has "
+                        f"{signal_count} events — noise-to-signal ratio "
+                        f"target ({target_ratio}:1) may be unreachable"
+                    ),
+                    suggestion="Consider increasing intensity to 'medium' or 'high'",
+                )
+            )
+        elif intensity == "medium" and signal_count > 200:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="baseline_activity.intensity",
+                    message=(
+                        f"Baseline intensity is 'medium' but storyline has "
+                        f"{signal_count} events — noise-to-signal ratio "
+                        f"target ({target_ratio}:1) may be unreachable"
+                    ),
+                    suggestion="Consider increasing intensity to 'high'",
+                )
+            )
+
+    def _validate_storyline_format_coverage(self) -> None:
+        """Check storyline systems have appropriate format coverage."""
+        if not self.scenario.storyline:
+            return
+
+        expanded_formats = self._get_expanded_formats()
+        checked_systems: set[str] = set()
+
+        for idx, event in enumerate(self.scenario.storyline):
+            hostname = event.system
+            if hostname in checked_systems or hostname not in self.hostnames:
+                continue
+            checked_systems.add(hostname)
+
+            system = self._get_system(hostname)
+            if not system:
+                continue
+
+            os_cat = _get_os_category(system.os)
+            expected = _OS_EXPECTED_FORMATS.get(os_cat, set())
+            missing = expected - expanded_formats
+            if missing:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{idx}.system",
+                        message=(
+                            f"[{event.id}] Storyline system '{hostname}' ({os_cat}) "
+                            f"expects formats {sorted(missing)} but they "
+                            f"are not in output.logs"
+                        ),
+                        suggestion="Add the missing formats to output.logs",
+                    )
+                )
+
+    def _validate_storyline_os_plausibility(self) -> None:
+        """Check storyline event types are plausible for target system OS."""
+        if not self.scenario.storyline:
+            return
+
+        for idx, event in enumerate(self.scenario.storyline):
+            system = self._get_system(event.system)
+            if not system:
+                continue
+            os_cat = _get_os_category(system.os)
+            if os_cat == "unknown":
+                continue
+
+            for spec_idx, spec in enumerate(event.events):
+                event_type = spec.type
+
+                # Windows-only events on Linux
+                if os_cat == "linux" and event_type in _WINDOWS_EVENT_TYPES:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=(
+                                f"storyline.{idx}.events.{spec_idx}"
+                            ),
+                            message=(
+                                f"[{event.id}] Event type '{event_type}' is Windows-specific "
+                                f"but system '{event.system}' is {os_cat}"
+                            ),
+                            suggestion=(
+                                "Change the target system to a Windows host "
+                                "or use a different event type"
+                            ),
+                        )
+                    )
+
+                # Linux-specific events on Windows
+                if os_cat == "windows" and event_type in _LINUX_EVENT_TYPES:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=(
+                                f"storyline.{idx}.events.{spec_idx}"
+                            ),
+                            message=(
+                                f"[{event.id}] Event type '{event_type}' is Linux-specific "
+                                f"but system '{event.system}' is {os_cat}"
+                            ),
+                            suggestion=(
+                                "Change the target system to a Linux host "
+                                "or use a different event type"
+                            ),
+                        )
+                    )
+
+                # Process command OS mismatch
+                if event_type == "process" and hasattr(spec, "command_line"):
+                    cmd = spec.command_line or spec.process_name
+                    cmd_lower = cmd.lower()
+
+                    if os_cat == "linux":
+                        for indicator in _WINDOWS_COMMAND_INDICATORS:
+                            if indicator in cmd_lower:
+                                self.issues.append(
+                                    ValidationIssue(
+                                        severity="warning",
+                                        field_path=(
+                                            f"storyline.{idx}.events"
+                                            f".{spec_idx}.command_line"
+                                        ),
+                                        message=(
+                                            f"[{event.id}] Command contains Windows "
+                                            f"indicator '{indicator}' but "
+                                            f"system '{event.system}' is "
+                                            f"{os_cat}"
+                                        ),
+                                        suggestion=(
+                                            "Use a Linux-compatible command "
+                                            "or change the target system"
+                                        ),
+                                    )
+                                )
+                                break
+
+                    elif os_cat == "windows":
+                        for prefix in _LINUX_PATH_PREFIXES:
+                            if cmd_lower.startswith(prefix):
+                                self.issues.append(
+                                    ValidationIssue(
+                                        severity="warning",
+                                        field_path=(
+                                            f"storyline.{idx}.events"
+                                            f".{spec_idx}.command_line"
+                                        ),
+                                        message=(
+                                            f"[{event.id}] Command starts with Linux "
+                                            f"path '{prefix}' but system "
+                                            f"'{event.system}' is {os_cat}"
+                                        ),
+                                        suggestion=(
+                                            "Use a Windows-compatible path "
+                                            "or change the target system"
+                                        ),
+                                    )
+                                )
+                                break
+
+    def _validate_storyline_linkability(self) -> None:
+        """Check consecutive storyline events share a pivotable indicator.
+
+        Suppressed when time gap > 4 hours (natural break). Remaining
+        issues are info-level since the check is inherently fuzzy.
+        """
+        if not self.scenario.storyline or len(self.scenario.storyline) < 2:
+            return
+
+        _GAP_THRESHOLD_SECS = 4 * 3600  # 4 hours
+
+        for idx in range(len(self.scenario.storyline) - 1):
+            curr = self.scenario.storyline[idx]
+            nxt = self.scenario.storyline[idx + 1]
+
+            # Skip if large time gap (natural break)
+            curr_secs = self._resolve_event_time(curr)
+            nxt_secs = self._resolve_event_time(nxt)
+            if (curr_secs is not None and nxt_secs is not None
+                    and (nxt_secs - curr_secs) > _GAP_THRESHOLD_SECS):
+                continue
+
+            # Shared if same actor, same system, or overlapping IPs
+            shared = False
+            if curr.actor == nxt.actor:
+                shared = True
+            elif curr.system == nxt.system:
+                shared = True
+            else:
+                # Check IP overlap from event specs
+                curr_ips = self._extract_ips(curr)
+                nxt_ips = self._extract_ips(nxt)
+                curr_sys_ip = self._get_system_ip(curr.system)
+                nxt_sys_ip = self._get_system_ip(nxt.system)
+                all_curr = curr_ips | ({curr_sys_ip} if curr_sys_ip else set())
+                all_nxt = nxt_ips | ({nxt_sys_ip} if nxt_sys_ip else set())
+                if all_curr & all_nxt:
+                    shared = True
+
+            if not shared:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="info",
+                        field_path=f"storyline.{idx}",
+                        message=(
+                            f"[{curr.id}] → [{nxt.id}] share no obvious "
+                            f"pivot indicator (actor, system, or IP)"
+                        ),
+                        suggestion=(
+                            "Ensure consecutive events share at least one "
+                            "field a hunter could pivot on"
+                        ),
+                    )
+                )
+
+    def _extract_ips(self, event) -> set[str]:
+        """Extract all IPs from a storyline event's typed event specs."""
+        ips: set[str] = set()
+        for spec in event.events:
+            if hasattr(spec, "source_ip") and spec.source_ip:
+                ips.add(spec.source_ip)
+            if hasattr(spec, "dst_ip") and spec.dst_ip:
+                ips.add(spec.dst_ip)
+        return ips
+
+    def _validate_storyline_causal_order(self) -> None:
+        """Check causal ordering of storyline event types.
+
+        Verifies that events requiring prior state (e.g., process execution
+        requires a prior logon) are correctly ordered. Only checks events
+        with valid actor/system references.
+        """
+        if not self.scenario.storyline:
+            return
+
+        valid_actors = self.usernames | BUILTIN_ACCOUNTS | self.service_accounts
+
+        # Parse grace period
+        from evidenceforge.utils.time import parse_duration
+        try:
+            grace_td = parse_duration(self.scenario.logon_grace_period)
+            grace_seconds = grace_td.total_seconds()
+        except (ValueError, TypeError):
+            grace_seconds = 1800  # fallback 30 minutes
+
+        # Track logons per (actor, system) pair
+        _LOGON_TYPES = {"logon", "ssh_session", "rdp_session"}
+        logons: dict[tuple[str, str], int] = {}  # (actor, system) → first idx
+        created_accounts: set[str] = set()
+
+        for idx, event in enumerate(self.scenario.storyline):
+            actor = event.actor
+            system = event.system
+
+            # Skip events with invalid references (other validators handle those)
+            if actor not in valid_actors or system not in self.hostnames:
+                continue
+
+            has_logon = False
+            has_process = False
+            has_logoff = False
+
+            for spec in event.events:
+                event_type = spec.type
+
+                if event_type in _LOGON_TYPES:
+                    key = (actor, system)
+                    if key not in logons:
+                        logons[key] = idx
+                    has_logon = True
+                elif event_type == "process":
+                    has_process = True
+                elif event_type == "logoff":
+                    has_logoff = True
+
+                elif event_type == "account_created":
+                    target = getattr(spec, "target_username", None)
+                    if target:
+                        created_accounts.add(target)
+
+                elif event_type == "account_deleted":
+                    target = getattr(spec, "target_username", None)
+                    if target and target not in created_accounts:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"storyline.{idx}",
+                                message=(
+                                    f"[{event.id}] Account deletion for "
+                                    f"'{target}' with no prior "
+                                    f"account_created event"
+                                ),
+                                suggestion=(
+                                    "Add an account_created event before "
+                                    "deleting this account, or this may be "
+                                    "an existing account deletion"
+                                ),
+                            )
+                        )
+
+            # Check process/logoff after processing all specs in this event
+            key = (actor, system)
+            skip_actor = actor in BUILTIN_ACCOUNTS or actor in self.service_accounts
+
+            # Suppress logon warnings within the grace period
+            event_secs = self._resolve_event_time(event)
+            in_grace = event_secs is not None and event_secs < grace_seconds
+
+            if (has_process and not has_logon and key not in logons
+                    and not skip_actor and not in_grace):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{idx}",
+                        message=(
+                            f"[{event.id}] Process event for '{actor}' on "
+                            f"'{system}' with no prior logon"
+                        ),
+                        suggestion=(
+                            "Add a logon/ssh_session/rdp_session "
+                            "event before this process event"
+                        ),
+                    )
+                )
+
+            if (has_logoff and not has_logon and key not in logons
+                    and not skip_actor and not in_grace):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{idx}",
+                        message=(
+                            f"[{event.id}] Logoff for '{actor}' on "
+                            f"'{system}' with no prior logon"
+                        ),
+                        suggestion=(
+                            "Add a logon event before this "
+                            "logoff event"
+                        ),
+                    )
+                )
+
+    def _validate_storyline_event_ids(self) -> None:
+        """Check that all storyline events have unique IDs."""
+        if not self.scenario.storyline:
+            return
+
+        seen_ids: dict[str, int] = {}
+        for idx, event in enumerate(self.scenario.storyline):
+            if event.id in seen_ids:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"storyline.{idx}.id",
+                        message=(
+                            f"Duplicate event ID '{event.id}' "
+                            f"(first seen at storyline.{seen_ids[event.id]})"
+                        ),
+                        suggestion="Each storyline event must have a unique ID",
+                    )
+                )
+            else:
+                seen_ids[event.id] = idx
+
+    def _resolve_event_time(self, event) -> float | None:
+        """Resolve a storyline event time to seconds from window start.
+
+        Returns:
+            Seconds from time_window.start, or None if unparseable.
+        """
+        from evidenceforge.utils.time import parse_duration
+
+        time_str = event.time
+        if time_str.startswith("+"):
+            try:
+                td = parse_duration(time_str[1:])
+                return td.total_seconds()
+            except (ValueError, TypeError):
+                return None
+        else:
+            # Absolute ISO 8601
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                start = self.scenario.time_window.start
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return (dt - start).total_seconds()
+            except (ValueError, TypeError):
+                return None
+
+    def _sort_issues(self) -> None:
+        """Sort issues by storyline index, with non-storyline issues first."""
+        import re
+
+        def sort_key(issue: ValidationIssue) -> tuple[int, int, str]:
+            match = re.match(r"storyline\.(\d+)", issue.field_path)
+            if match:
+                return (1, int(match.group(1)), issue.field_path)
+            return (0, 0, issue.field_path)
+
+        self.issues.sort(key=sort_key)

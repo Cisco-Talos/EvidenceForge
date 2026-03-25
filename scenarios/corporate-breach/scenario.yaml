@@ -690,6 +690,8 @@ time_window:
   start: "2024-06-11T14:00:00Z"
   duration: "48h"
 
+logon_grace_period: "30m"
+
 baseline_activity:
   description: >
     Normal weekday activity for a biotech company. Developers write code and SSH
@@ -707,7 +709,8 @@ storyline:
   # ============================================================
 
   # --- Watering hole: Raj visits poisoned npm mirror, downloads trojanized package ---
-  - time: "+3h"
+  - id: evt-001
+    time: "+3h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: >
@@ -728,7 +731,8 @@ storyline:
         description: "npm postinstall script executes malicious JavaScript payload"
 
   # --- Reverse shell established ---
-  - time: "+3h1m"
+  - id: evt-002
+    time: "+3h1m"
     actor: raj.patel
     system: DEV-RPATEL
     activity: >
@@ -748,7 +752,8 @@ storyline:
         description: "Reverse shell connects to C2 over HTTPS on non-standard port 8443"
 
   # --- Local reconnaissance on dev workstation ---
-  - time: "+3h5m"
+  - id: evt-003
+    time: "+3h5m"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Local reconnaissance — enumerate current user and system info"
@@ -766,7 +771,8 @@ storyline:
         command_line: "cat /etc/passwd"
         technique: "T1087.001 - Account Discovery: Local Account"
 
-  - time: "+3h7m"
+  - id: evt-004
+    time: "+3h7m"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Network reconnaissance — scan local subnet and identify other hosts"
@@ -781,7 +787,8 @@ storyline:
         technique: "T1018 - Remote System Discovery"
 
   # --- SSH key theft and lateral movement to build server ---
-  - time: "+3h15m"
+  - id: evt-005
+    time: "+3h15m"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Steal SSH keys from developer's home directory for lateral movement"
@@ -797,7 +804,8 @@ storyline:
         technique: "T1018 - Remote System Discovery"
         description: "Read known_hosts to identify SSH targets"
 
-  - time: "+3h20m"
+  - id: evt-006
+    time: "+3h20m"
     actor: raj.patel
     system: BUILD-01
     activity: "Lateral movement — SSH from dev workstation to build server using stolen key"
@@ -808,7 +816,8 @@ storyline:
         description: "SSH lateral movement from DEV-RPATEL to BUILD-01 using stolen key"
 
   # --- Build server recon: find credentials for R&D network ---
-  - time: "+3h25m"
+  - id: evt-007
+    time: "+3h25m"
     actor: raj.patel
     system: BUILD-01
     activity: "Search build server for credentials and configuration files"
@@ -825,7 +834,8 @@ storyline:
         description: "Read Jenkins credentials file containing R&D database creds"
 
   # --- C2 beacon from dev workstation ---
-  - time: "+5h"
+  - id: evt-008
+    time: "+5h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Periodic C2 beacon check-in"
@@ -837,7 +847,8 @@ storyline:
         technique: "T1071.001 - Application Layer Protocol: Web Protocols"
 
   # --- Pivot to R&D: SSH to research data server using stolen Jenkins creds ---
-  - time: "+5h10m"
+  - id: evt-009
+    time: "+5h10m"
     actor: raj.patel
     system: RD-DATA-01
     activity: >
@@ -851,7 +862,8 @@ storyline:
         description: "SSH pivot from BUILD-01 to RD-DATA-01 using svc-backup credentials"
 
   # --- R&D data server recon ---
-  - time: "+5h15m"
+  - id: evt-010
+    time: "+5h15m"
     actor: raj.patel
     system: RD-DATA-01
     activity: "Enumerate R&D data server — databases, files, running services"
@@ -870,7 +882,8 @@ storyline:
         technique: "T1082 - System Information Discovery"
 
   # --- Database enumeration and data theft ---
-  - time: "+5h30m"
+  - id: evt-011
+    time: "+5h30m"
     actor: raj.patel
     system: RD-DATA-01
     activity: "Query PostgreSQL for gene therapy research data"
@@ -888,7 +901,8 @@ storyline:
         technique: "T1213 - Data from Information Repositories"
         description: "Local PostgreSQL connection for data enumeration"
 
-  - time: "+5h35m"
+  - id: evt-012
+    time: "+5h35m"
     actor: raj.patel
     system: RD-DATA-01
     activity: "Dump gene therapy experiment results to CSV for exfiltration"
@@ -900,7 +914,8 @@ storyline:
         description: "Export proprietary gene therapy research data to CSV"
 
   # --- Stage and exfiltrate data ---
-  - time: "+5h45m"
+  - id: evt-013
+    time: "+5h45m"
     actor: raj.patel
     system: RD-DATA-01
     activity: "Compress and exfiltrate research data over HTTPS to C2"
@@ -917,7 +932,8 @@ storyline:
         description: "Exfiltrate compressed research data to C2 server"
 
   # --- Persistence: cron job on R&D data server ---
-  - time: "+5h50m"
+  - id: evt-014
+    time: "+5h50m"
     actor: raj.patel
     system: RD-DATA-01
     activity: "Establish persistence via cron job disguised as log rotation"
@@ -929,7 +945,8 @@ storyline:
         description: "Persistent cron job reconnects to C2 every 6 hours"
 
   # --- C2 beacons (afternoon/evening Day 1) ---
-  - time: "+8h"
+  - id: evt-015
+    time: "+8h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Periodic C2 beacon"
@@ -940,7 +957,8 @@ storyline:
         service: "ssl"
         technique: "T1071.001 - Application Layer Protocol: Web Protocols"
 
-  - time: "+11h"
+  - id: evt-016
+    time: "+11h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Periodic C2 beacon"
@@ -956,7 +974,8 @@ storyline:
   # ============================================================
 
   # --- Carlos accesses R&D NAS and copies sensitive files ---
-  - time: "+4h"
+  - id: evt-017
+    time: "+4h"
     actor: carlos.mendoza
     system: RD-CMENDOZA
     activity: "Carlos accesses R&D NAS to browse proprietary formulation data"
@@ -968,7 +987,8 @@ storyline:
         technique: "T1039 - Data from Network Shared Drive"
         description: "SMB connection from R&D workstation to NAS for file browsing"
 
-  - time: "+4h10m"
+  - id: evt-018
+    time: "+4h10m"
     actor: carlos.mendoza
     system: RD-CMENDOZA
     activity: "Carlos copies proprietary formulation documents to local disk"
@@ -980,7 +1000,8 @@ storyline:
         description: "Bulk copy of proprietary gene therapy formulation data"
 
   # --- Carlos compresses and uploads via proxy to personal cloud ---
-  - time: "+4h30m"
+  - id: evt-019
+    time: "+4h30m"
     actor: carlos.mendoza
     system: RD-CMENDOZA
     activity: "Carlos compresses files and prepares for exfiltration"
@@ -990,7 +1011,8 @@ storyline:
         command_line: "powershell.exe -c \"Compress-Archive -Path 'C:\\Users\\carlos.mendoza\\Documents\\backup\\*' -DestinationPath 'C:\\Users\\carlos.mendoza\\Documents\\formulations.zip' -Force\""
         technique: "T1560.001 - Archive Collected Data: Archive via Utility"
 
-  - time: "+4h40m"
+  - id: evt-020
+    time: "+4h40m"
     actor: carlos.mendoza
     system: RD-CMENDOZA
     activity: >
@@ -1010,7 +1032,8 @@ storyline:
   # ============================================================
 
   # --- Attacker returns, pivots to Windows R&D workstation ---
-  - time: "+27h"
+  - id: evt-021
+    time: "+27h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "C2 beacon — attacker re-engages Wednesday morning"
@@ -1022,7 +1045,8 @@ storyline:
         technique: "T1071.001 - Application Layer Protocol: Web Protocols"
 
   # --- RDP lateral movement to Windows R&D workstation ---
-  - time: "+27h15m"
+  - id: evt-022
+    time: "+27h15m"
     actor: raj.patel
     system: RD-EPARK
     activity: >
@@ -1036,7 +1060,8 @@ storyline:
         description: "RDP lateral movement from BUILD-01 to RD-EPARK"
 
   # --- Windows reconnaissance on R&D workstation ---
-  - time: "+27h20m"
+  - id: evt-023
+    time: "+27h20m"
     actor: raj.patel
     system: RD-EPARK
     activity: "Windows reconnaissance on R&D workstation"
@@ -1051,7 +1076,8 @@ storyline:
         technique: "T1069.002 - Permission Groups Discovery: Domain Groups"
 
   # --- Domain enumeration from Windows ---
-  - time: "+27h25m"
+  - id: evt-024
+    time: "+27h25m"
     actor: raj.patel
     system: RD-EPARK
     activity: "Enumerate domain controllers and admin accounts"
@@ -1066,7 +1092,8 @@ storyline:
         technique: "T1069.002 - Permission Groups Discovery: Domain Groups"
 
   # --- Credential dumping on Windows ---
-  - time: "+27h45m"
+  - id: evt-025
+    time: "+27h45m"
     actor: raj.patel
     system: RD-EPARK
     activity: >
@@ -1084,7 +1111,8 @@ storyline:
         description: "Remote thread created in LSASS during memory dump"
 
   # --- Create backdoor domain account ---
-  - time: "+28h"
+  - id: evt-026
+    time: "+28h"
     actor: raj.patel
     system: DC-01
     activity: "Create backdoor service account on domain controller using stolen admin creds"
@@ -1114,7 +1142,8 @@ storyline:
         technique: "T1098 - Account Manipulation"
 
   # --- Install persistence: scheduled task on DC ---
-  - time: "+28h15m"
+  - id: evt-027
+    time: "+28h15m"
     actor: raj.patel
     system: DC-01
     activity: "Create scheduled task for persistent C2 callback on domain controller"
@@ -1130,7 +1159,8 @@ storyline:
         technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
 
   # --- Install malicious service for additional persistence ---
-  - time: "+28h20m"
+  - id: evt-028
+    time: "+28h20m"
     actor: raj.patel
     system: DC-01
     activity: "Install malicious Windows service for persistent access"
@@ -1146,7 +1176,8 @@ storyline:
         technique: "T1543.003 - Create or Modify System Process: Windows Service"
 
   # --- Access file server for additional data ---
-  - time: "+29h"
+  - id: evt-029
+    time: "+29h"
     actor: raj.patel
     system: RD-EPARK
     activity: "Access corporate file server to harvest additional documents"
@@ -1167,7 +1198,8 @@ storyline:
         technique: "T1083 - File and Directory Discovery"
 
   # --- Second exfiltration over C2 ---
-  - time: "+29h30m"
+  - id: evt-030
+    time: "+29h30m"
     actor: raj.patel
     system: RD-EPARK
     activity: "Compress and exfiltrate file server documents"
@@ -1190,7 +1222,8 @@ storyline:
         description: "Second exfiltration chunk"
 
   # --- Cover tracks: clear Windows security log on DC ---
-  - time: "+30h"
+  - id: evt-031
+    time: "+30h"
     actor: raj.patel
     system: DC-01
     activity: "Clear Windows Security event log on domain controller to cover tracks"
@@ -1204,7 +1237,8 @@ storyline:
         technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
 
   # --- Cleanup on R&D workstation ---
-  - time: "+30h10m"
+  - id: evt-032
+    time: "+30h10m"
     actor: raj.patel
     system: RD-EPARK
     activity: "Clean up staging artifacts and disconnect mapped drive"
@@ -1219,7 +1253,8 @@ storyline:
         technique: "T1070 - Indicator Removal on Host"
 
   # --- Logoff from RDP session ---
-  - time: "+30h15m"
+  - id: evt-033
+    time: "+30h15m"
     actor: raj.patel
     system: RD-EPARK
     activity: "Attacker logs off from Emily Park's workstation"
@@ -1231,7 +1266,8 @@ storyline:
   # THREAD B CONTINUED — Insider makes second exfil attempt
   # ============================================================
 
-  - time: "+28h30m"
+  - id: evt-034
+    time: "+28h30m"
     actor: carlos.mendoza
     system: RD-CMENDOZA
     activity: >
@@ -1249,7 +1285,8 @@ storyline:
         command_line: "xcopy \\\\RD-NAS-01\\Patents\\*.docx C:\\Users\\carlos.mendoza\\Documents\\patents\\ /E /Y"
         technique: "T1005 - Data from Local System"
 
-  - time: "+28h45m"
+  - id: evt-035
+    time: "+28h45m"
     actor: carlos.mendoza
     system: RD-CMENDOZA
     activity: "Carlos uploads patent drafts to personal Google Drive via proxy"
@@ -1269,7 +1306,8 @@ storyline:
   # IT Admin legitimate activity (shows normal admin behavior for contrast)
   # ============================================================
 
-  - time: "+2h"
+  - id: evt-036
+    time: "+2h"
     actor: tom.nakamura
     system: DC-01
     activity: "Routine sysadmin RDP session to DC-01 for daily health check"
@@ -1279,7 +1317,8 @@ storyline:
         technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
         description: "Legitimate RDP from sysadmin workstation to domain controller"
 
-  - time: "+2h10m"
+  - id: evt-037
+    time: "+2h10m"
     actor: tom.nakamura
     system: DC-01
     activity: "Sysadmin checks Active Directory replication status"
@@ -1294,7 +1333,8 @@ storyline:
         command_line: "dcdiag /q"
         description: "Legitimate domain controller diagnostics"
 
-  - time: "+2h15m"
+  - id: evt-038
+    time: "+2h15m"
     actor: tom.nakamura
     system: DC-01
     activity: "Sysadmin logs off from DC after health check"
@@ -1302,7 +1342,8 @@ storyline:
       - type: logoff
 
   # --- Sysadmin SSH to Linux server (normal) ---
-  - time: "+26h"
+  - id: evt-039
+    time: "+26h"
     actor: tom.nakamura
     system: BUILD-01
     activity: "Routine sysadmin SSH to build server for maintenance"
@@ -1311,7 +1352,8 @@ storyline:
         source_ip: "10.1.2.20"
         description: "Legitimate SSH from sysadmin workstation to build server"
 
-  - time: "+26h15m"
+  - id: evt-040
+    time: "+26h15m"
     actor: tom.nakamura
     system: BUILD-01
     activity: "Sysadmin checks disk usage and running containers"
@@ -1326,7 +1368,8 @@ storyline:
         description: "List all Docker containers"
 
   # --- Help desk password reset (normal, exercises failed_logon) ---
-  - time: "+3h30m"
+  - id: evt-041
+    time: "+3h30m"
     actor: brian.kelley
     system: WS-BKELLEY
     activity: >
@@ -1345,7 +1388,8 @@ storyline:
         description: "Second failed logon attempt"
 
   # --- Web server attack attempts (exercises raw events + snort) ---
-  - time: "+6h"
+  - id: evt-042
+    time: "+6h"
     actor: root
     system: WEB-EXT
     activity: >
@@ -1374,7 +1418,8 @@ storyline:
         description: "Directory traversal attempt logged by Nginx"
 
   # --- Late C2 beacons (Day 2) ---
-  - time: "+32h"
+  - id: evt-043
+    time: "+32h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Periodic C2 beacon"
@@ -1385,7 +1430,8 @@ storyline:
         service: "ssl"
         technique: "T1071.001 - Application Layer Protocol: Web Protocols"
 
-  - time: "+38h"
+  - id: evt-044
+    time: "+38h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Periodic C2 beacon"
@@ -1396,7 +1442,8 @@ storyline:
         service: "ssl"
         technique: "T1071.001 - Application Layer Protocol: Web Protocols"
 
-  - time: "+45h"
+  - id: evt-045
+    time: "+45h"
     actor: raj.patel
     system: DEV-RPATEL
     activity: "Final C2 beacon within scenario window"

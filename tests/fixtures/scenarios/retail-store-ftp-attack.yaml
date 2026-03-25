@@ -323,7 +323,8 @@ output:
   compression: false
 
 storyline:
-  - time: "2024-01-15T15:30:00Z"  # 10:30 AM Eastern - during business hours
+  - id: evt-001
+    time: "2024-01-15T15:30:00Z"  # 10:30 AM Eastern - during business hours
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Exploit FTP server RCE vulnerability (CVE-2023-XXXXX) to gain initial access"
@@ -336,7 +337,8 @@ storyline:
         technique: "T1190 - Exploit Public-Facing Application"
         description: "Attacker exploits vulnerable FTP server to execute arbitrary commands"
 
-  - time: "2024-01-15T15:32:00Z"
+  - id: evt-002
+    time: "2024-01-15T15:32:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'whoami' to identify current user context"
@@ -347,7 +349,8 @@ storyline:
         technique: "T1033 - System Owner/User Discovery"
         description: "LOLBin reconnaissance - identify privileges"
 
-  - time: "2024-01-15T15:33:00Z"
+  - id: evt-003
+    time: "2024-01-15T15:33:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'id' to enumerate user groups and privileges"
@@ -358,7 +361,8 @@ storyline:
         technique: "T1033 - System Owner/User Discovery"
         description: "LOLBin reconnaissance - enumerate group memberships"
 
-  - time: "2024-01-15T15:34:00Z"
+  - id: evt-004
+    time: "2024-01-15T15:34:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'uname -a' to identify OS version and kernel"
@@ -369,7 +373,8 @@ storyline:
         technique: "T1082 - System Information Discovery"
         description: "LOLBin reconnaissance - OS fingerprinting"
 
-  - time: "2024-01-15T15:35:00Z"
+  - id: evt-005
+    time: "2024-01-15T15:35:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'cat /etc/passwd' to enumerate local user accounts"
@@ -380,7 +385,8 @@ storyline:
         technique: "T1087.001 - Account Discovery: Local Account"
         description: "LOLBin reconnaissance - enumerate users"
 
-  - time: "2024-01-15T15:36:00Z"
+  - id: evt-006
+    time: "2024-01-15T15:36:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'cat /etc/group' to enumerate local groups"
@@ -391,7 +397,8 @@ storyline:
         technique: "T1069.001 - Permission Groups Discovery: Local Groups"
         description: "LOLBin reconnaissance - enumerate groups"
 
-  - time: "2024-01-15T15:37:00Z"
+  - id: evt-007
+    time: "2024-01-15T15:37:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'ps aux' to list running processes"
@@ -402,7 +409,8 @@ storyline:
         technique: "T1057 - Process Discovery"
         description: "LOLBin reconnaissance - identify running services"
 
-  - time: "2024-01-15T15:38:00Z"
+  - id: evt-008
+    time: "2024-01-15T15:38:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'netstat -tulpn' to enumerate network connections and listening ports"
@@ -413,7 +421,8 @@ storyline:
         technique: "T1049 - System Network Connections Discovery"
         description: "LOLBin reconnaissance - map network services"
 
-  - time: "2024-01-15T15:40:00Z"
+  - id: evt-009
+    time: "2024-01-15T15:40:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'ip addr' to identify network interfaces and IP configuration"
@@ -424,7 +433,8 @@ storyline:
         technique: "T1016 - System Network Configuration Discovery"
         description: "LOLBin reconnaissance - network configuration"
 
-  - time: "2024-01-15T15:42:00Z"
+  - id: evt-010
+    time: "2024-01-15T15:42:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'ip route' to enumerate routing table"
@@ -435,7 +445,8 @@ storyline:
         technique: "T1016 - System Network Configuration Discovery"
         description: "LOLBin reconnaissance - routing information"
 
-  - time: "2024-01-15T15:44:00Z"
+  - id: evt-011
+    time: "2024-01-15T15:44:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'cat /etc/resolv.conf' to identify DNS servers"
@@ -446,7 +457,8 @@ storyline:
         technique: "T1016 - System Network Configuration Discovery"
         description: "LOLBin reconnaissance - DNS configuration"
 
-  - time: "2024-01-15T15:46:00Z"
+  - id: evt-012
+    time: "2024-01-15T15:46:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'ls -la /home' to enumerate user home directories"
@@ -457,7 +469,8 @@ storyline:
         technique: "T1083 - File and Directory Discovery"
         description: "LOLBin reconnaissance - identify user directories"
 
-  - time: "2024-01-15T15:48:00Z"
+  - id: evt-013
+    time: "2024-01-15T15:48:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'find / -type f -name '*.conf' 2>/dev/null' to locate configuration files"
@@ -468,7 +481,8 @@ storyline:
         technique: "T1083 - File and Directory Discovery"
         description: "LOLBin reconnaissance - locate sensitive configs"
 
-  - time: "2024-01-15T15:50:00Z"
+  - id: evt-014
+    time: "2024-01-15T15:50:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'df -h' to view filesystem usage and mounted volumes"
@@ -479,7 +493,8 @@ storyline:
         technique: "T1082 - System Information Discovery"
         description: "LOLBin reconnaissance - storage enumeration"
 
-  - time: "2024-01-15T15:52:00Z"
+  - id: evt-015
+    time: "2024-01-15T15:52:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'cat /etc/hosts' to identify static host mappings"
@@ -490,7 +505,8 @@ storyline:
         technique: "T1018 - Remote System Discovery"
         description: "LOLBin reconnaissance - discover known hosts"
 
-  - time: "2024-01-15T15:54:00Z"
+  - id: evt-016
+    time: "2024-01-15T15:54:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'arp -a' to view ARP cache for local network discovery"
@@ -501,7 +517,8 @@ storyline:
         technique: "T1018 - Remote System Discovery"
         description: "LOLBin reconnaissance - local network mapping"
 
-  - time: "2024-01-15T15:56:00Z"
+  - id: evt-017
+    time: "2024-01-15T15:56:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Initiate ping sweep of 10.10.30.0/24 subnet"
@@ -512,7 +529,8 @@ storyline:
         technique: "T1018 - Remote System Discovery"
         description: "Network mapping - identify active hosts in back-office subnet"
 
-  - time: "2024-01-15T16:00:00Z"
+  - id: evt-018
+    time: "2024-01-15T16:00:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Initiate Nmap port scan of discovered hosts in 10.10.30.0/24"
@@ -523,7 +541,8 @@ storyline:
         technique: "T1046 - Network Service Discovery"
         description: "Port scanning to identify vulnerable services"
 
-  - time: "2024-01-15T16:05:00Z"
+  - id: evt-019
+    time: "2024-01-15T16:05:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Initiate Nmap service version detection scan on identified ports"
@@ -534,7 +553,8 @@ storyline:
         technique: "T1046 - Network Service Discovery"
         description: "Service fingerprinting for vulnerability identification"
 
-  - time: "2024-01-15T16:10:00Z"
+  - id: evt-020
+    time: "2024-01-15T16:10:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'cat /var/log/auth.log | tail -100' to review recent authentication logs"
@@ -545,7 +565,8 @@ storyline:
         technique: "T1005 - Data from Local System"
         description: "Review authentication logs for credential information"
 
-  - time: "2024-01-15T16:12:00Z"
+  - id: evt-021
+    time: "2024-01-15T16:12:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'history' to view bash command history"
@@ -556,7 +577,8 @@ storyline:
         technique: "T1005 - Data from Local System"
         description: "Search command history for credentials or sensitive information"
 
-  - time: "2024-01-15T16:14:00Z"
+  - id: evt-022
+    time: "2024-01-15T16:14:00Z"
     actor: attacker
     system: MUSIC-SRV-01
     activity: "Execute 'grep -r password /etc/ 2>/dev/null' to search for passwords in config files"

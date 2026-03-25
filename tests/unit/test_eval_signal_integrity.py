@@ -62,6 +62,7 @@ def _scenario_with_storyline(storyline_yaml: list[dict]) -> Scenario:
 class TestStorylineResolution:
     def test_iso_timestamp(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-1",
             "time": "2024-01-15T12:00:00Z",
             "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
@@ -74,6 +75,7 @@ class TestStorylineResolution:
 
     def test_relative_offset(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-2",
             "time": "+2h",
             "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
@@ -85,6 +87,7 @@ class TestStorylineResolution:
 
     def test_relative_seconds(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-3",
             "time": "+3600",
             "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
@@ -103,6 +106,7 @@ class TestStorylineResolution:
 
     def test_system_ip_resolved(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-4",
             "time": "+1h", "actor": "jsmith", "system": "WS-01",
             "activity": "Connect to server",
             "events": [{"type": "connection", "dst_ip": "10.0.20.10", "dst_port": 443}],
@@ -115,10 +119,10 @@ class TestStorylineResolution:
 class TestEventPresence:
     def test_all_events_found(self):
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-5", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
-            {"time": "+2h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-6", "time": "+2h", "actor": "jsmith", "system": "WS-01",
              "activity": "Execute command",
              "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
@@ -141,10 +145,10 @@ class TestEventPresence:
 
     def test_missing_events(self):
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-7", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
-            {"time": "+2h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-8", "time": "+2h", "actor": "jsmith", "system": "WS-01",
              "activity": "Execute command",
              "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
@@ -172,6 +176,7 @@ class TestEventPresence:
 class TestIndicatorAccuracy:
     def test_correct_indicators(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-9",
             "time": "+1h", "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
             "events": [{"type": "logon", "source_ip": "10.0.10.50"}],
@@ -191,6 +196,7 @@ class TestIndicatorAccuracy:
 
     def test_wrong_ip(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-10",
             "time": "+1h", "actor": "jsmith", "system": "WS-01",
             "activity": "Login to workstation",
             "events": [{"type": "logon", "source_ip": "10.0.10.50"}],
@@ -212,10 +218,10 @@ class TestIndicatorAccuracy:
 class TestPivotLinkability:
     def test_same_actor_is_linkable(self):
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-11", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
-            {"time": "+2h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-12", "time": "+2h", "actor": "jsmith", "system": "WS-01",
              "activity": "Execute command",
              "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
@@ -238,7 +244,7 @@ class TestPivotLinkability:
 
     def test_single_event_is_perfect(self):
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-13", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
         ])
@@ -259,10 +265,10 @@ class TestPivotLinkability:
 class TestTemporalIntegrity:
     def test_correct_order(self):
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-14", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
-            {"time": "+2h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-15", "time": "+2h", "actor": "jsmith", "system": "WS-01",
              "activity": "Execute command",
              "events": [{"type": "process", "process_name": "cmd.exe"}]},
         ])
@@ -286,7 +292,7 @@ class TestTemporalIntegrity:
     def test_out_of_tolerance(self):
         """Trace timestamp far from expected time should fail."""
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-16", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
         ])
@@ -308,6 +314,7 @@ class TestTemporalIntegrity:
 class TestBashHistoryMatching:
     def test_linux_process_matches_bash(self):
         scenario = _scenario_with_storyline([{
+            "id": "evt-test-17",
             "time": "+1h", "actor": "attacker", "system": "SRV-01",
             "activity": "Execute 'whoami' command",
             "events": [{"type": "process", "process_name": "whoami"}],
@@ -330,7 +337,7 @@ class TestEndToEnd:
     def test_returns_dimension_score(self):
         """Full scorer returns proper DimensionScore structure."""
         scenario = _scenario_with_storyline([
-            {"time": "+1h", "actor": "jsmith", "system": "WS-01",
+            {"id": "evt-test-18", "time": "+1h", "actor": "jsmith", "system": "WS-01",
              "activity": "Login to workstation",
              "events": [{"type": "logon"}]},
         ])

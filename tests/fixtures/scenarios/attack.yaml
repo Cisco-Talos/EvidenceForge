@@ -51,7 +51,8 @@ baseline_activity:
   variation: low
 
 storyline:
-  - time: "+15m"
+  - id: evt-001
+    time: "+15m"
     actor: attacker
     system: WS-ANALYST-01
     activity: "Attacker authenticates using stolen credentials for jsmith account"
@@ -60,7 +61,8 @@ storyline:
         source_ip: "203.0.113.50"
         logon_type: 3
 
-  - time: "+20m"
+  - id: evt-002
+    time: "+20m"
     actor: attacker
     system: WS-ANALYST-01
     activity: "Execute reconnaissance PowerShell script to enumerate domain users"
@@ -69,7 +71,8 @@ storyline:
         process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         command_line: "powershell.exe -enc JABkAGMAID0AIAAoAFsAUwB5AHMAdABlAG0ALgBEAGkAcgBlAGMAdABvAHIAeQBTAGUAcgB2AGkAYwBlAHMALgBBAGMAdABpAHYAZQBEAGkAcgBlAGMAdABvAHIAeQBdADoAOgBHAGUAdABDAHUAcgByAGUAbgB0AEQAbwBtAGEAaQBuACkAKQA7ACAAJABkAGMALgBHAGUAdABEAGkAcgBlAGMAdABvAHIAeQBFAG4AdAByAHkAKAApAC4AQwBoAGkAbABkAHIAZQBuACAAfAAgAD8AewAkAF8ALgBTAGMAaABlAG0AYQBDAGwAYQBzAHMATgBhAG0AZQAgAC0AZQBxACAAJwB1AHMAZQByACcAfQA="
 
-  - time: "+25m"
+  - id: evt-003
+    time: "+25m"
     actor: attacker
     system: WS-ANALYST-01
     activity: "Connect to external C2 server for command and control"
@@ -79,7 +82,8 @@ storyline:
         dst_port: 443
         service: "ssl"
 
-  - time: "+45m"
+  - id: evt-004
+    time: "+45m"
     actor: attacker
     system: WS-EXEC-01
     activity: "Lateral movement: Authenticate to executive workstation using pass-the-hash"
@@ -88,7 +92,8 @@ storyline:
         source_ip: "10.0.10.50"
         logon_type: 3
 
-  - time: "+50m"
+  - id: evt-005
+    time: "+50m"
     actor: attacker
     system: WS-EXEC-01
     activity: "Execute credential dumping tool to extract passwords"
@@ -97,7 +102,8 @@ storyline:
         process_name: "C:\\Windows\\Temp\\mimikatz.exe"
         command_line: "mimikatz.exe privilege::debug sekurlsa::logonpasswords exit"
 
-  - time: "+1h"
+  - id: evt-006
+    time: "+1h"
     actor: attacker
     system: WS-EXEC-01
     activity: "Exfiltrate sensitive documents to external server"
@@ -107,7 +113,8 @@ storyline:
         dst_port: 443
         service: "ssl"
 
-  - time: "+1h10m"
+  - id: evt-007
+    time: "+1h10m"
     actor: attacker
     system: SRV-DC-01
     activity: "Lateral movement: Authenticate to domain controller with elevated privileges"
@@ -116,7 +123,8 @@ storyline:
         source_ip: "10.0.10.100"
         logon_type: 3
 
-  - time: "+1h15m"
+  - id: evt-008
+    time: "+1h15m"
     actor: attacker
     system: SRV-DC-01
     activity: "Execute DCSync attack to dump domain credentials"

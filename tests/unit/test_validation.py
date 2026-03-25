@@ -290,6 +290,8 @@ class TestScenarioValidator:
             ),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-001",
                     time="2024-01-15T10:30:00Z",
                     actor="nonexistent_actor",  # Invalid
                     system="TEST-01",
@@ -348,6 +350,8 @@ class TestScenarioValidator:
             ),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-002",
                     time="2024-01-15T10:30:00Z",
                     actor="attacker",  # Not in users list — should fail
                     system="TEST-01",
@@ -405,6 +409,8 @@ class TestScenarioValidator:
             ),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-003",
                     time="2024-01-15T10:30:00Z",
                     actor="testuser",
                     system="NONEXISTENT-01",  # Invalid
@@ -912,12 +918,23 @@ class TestScenarioValidator:
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-004",
+                    time="2024-01-15T10:00:00Z",
+                    actor="testuser",
+                    system="TEST-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
+                StorylineEvent(
+
+                    id="evt-val-005",
                     time="2024-01-15T10:30:00Z",
                     actor="testuser",
                     system="TEST-01",
                     activity="simple attack",
                     events=[{"type": "process", "process_name": "cmd.exe"}],
-                )
+                ),
             ],
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
@@ -946,6 +963,8 @@ class TestScenarioValidator:
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-006",
                     time="2024-01-15T10:30:00Z",
                     actor=actor_name,
                     system="TEST-01",
@@ -981,6 +1000,8 @@ class TestScenarioValidator:
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-007",
                     time="2024-01-15T10:30:00Z",
                     actor="svc_backup",
                     system="TEST-01",
@@ -1016,6 +1037,8 @@ class TestScenarioValidator:
             baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
             storyline=[
                 StorylineEvent(
+
+                    id="evt-val-008",
                     time="2024-01-15T10:30:00Z",
                     actor="totally_unknown",
                     system="TEST-01",
@@ -1152,3 +1175,1244 @@ class TestNetworkValidation:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
         assert len(issues) == 0
+
+
+class TestFormatOsCompatibility:
+    """Tests for _validate_format_os_compatibility."""
+
+    def test_windows_format_no_windows_systems_error(self):
+        """Windows format with only Linux systems should error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu 22.04",
+                           type="server"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        errors = [i for i in issues if i.severity == "error"
+                  and "requires windows" in i.message.lower()]
+        assert len(errors) >= 1
+
+    def test_linux_format_no_linux_systems_error(self):
+        """Syslog format with only Windows systems should error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "syslog"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        errors = [i for i in issues if i.severity == "error"
+                  and "requires linux" in i.message.lower()]
+        assert len(errors) >= 1
+
+    def test_linux_system_no_linux_format_warning(self):
+        """Linux system with only Windows formats should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu",
+                           type="server"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if i.severity == "warning"
+                    and "LNX-01" in i.message and "linux" in i.message.lower()]
+        assert len(warnings) >= 1
+
+    def test_matching_os_and_formats_no_issues(self):
+        """Systems matching output formats should produce no OS compatibility issues."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu",
+                           type="server"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(
+                logs=[{"format": "windows"}, {"format": "syslog"},
+                      {"format": "bash_history"}],
+                destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        os_issues = [i for i in issues if "output.logs" == i.field_path
+                     and ("requires" in i.message or "no" in i.message)]
+        assert len(os_issues) == 0
+
+
+class TestSegmentSensorCoverage:
+    """Tests for _validate_segment_sensor_coverage."""
+
+    def test_segment_without_sensor_warning(self):
+        """Segment with systems but no sensor monitoring it should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="SRV-01", ip="10.0.1.1", os="Windows Server 2019",
+                           type="server"),
+                ],
+                network=NetworkConfig(
+                    segments=[
+                        NetworkSegment(name="workstations", cidr="10.0.0.0/24",
+                                       systems=["WS-01"]),
+                        NetworkSegment(name="servers", cidr="10.0.1.0/24",
+                                       systems=["SRV-01"]),
+                    ],
+                    sensors=[
+                        NetworkSensor(type="network", name="tap",
+                                      monitoring_segments=["servers"],
+                                      log_formats=["zeek"]),
+                    ],
+                ),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if i.severity == "warning"
+                    and "no sensor" in i.message.lower()]
+        assert len(warnings) == 1
+        assert "workstations" in warnings[0].message
+
+    def test_segment_with_sensor_no_warning(self):
+        """Segment monitored by sensor should produce no coverage warning."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+                network=NetworkConfig(
+                    segments=[
+                        NetworkSegment(name="workstations", cidr="10.0.0.0/24",
+                                       systems=["WS-01"]),
+                    ],
+                    sensors=[
+                        NetworkSensor(type="network", name="tap",
+                                      monitoring_segments=["workstations"],
+                                      log_formats=["zeek"]),
+                    ],
+                ),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        coverage_warnings = [i for i in issues if "no sensor" in i.message.lower()]
+        assert len(coverage_warnings) == 0
+
+
+class TestServiceAccountCollisions:
+    """Tests for _validate_service_account_collisions."""
+
+    def test_collision_warning(self):
+        """Service account name matching username should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="svc_backup", full_name="Backup", email="b@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+                service_accounts=["svc_backup", "svc_sql"],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "collides" in i.message.lower()]
+        assert len(warnings) == 1
+        assert "svc_backup" in warnings[0].message
+
+    def test_no_collision_no_warning(self):
+        """Non-overlapping service and user accounts should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J Doe", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+                service_accounts=["svc_sql"],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "collides" in i.message.lower()]
+        assert len(warnings) == 0
+
+
+class TestStorylineActorWorkHours:
+    """Tests for _validate_storyline_actor_work_hours."""
+
+    def test_unparseable_work_hours_warning(self):
+        """Storyline actor with unparseable work_hours should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com",
+                            persona="dev")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            personas=[
+                Persona(name="dev", description="Dev",
+                        typical_activities=["coding"],
+                        work_hours="whenever I feel like it"),
+            ],
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-009",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "work_hours" in i.message.lower()]
+        assert len(warnings) >= 1
+
+    def test_valid_work_hours_no_warning(self):
+        """Storyline actor with parseable work_hours should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com",
+                            persona="dev")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            personas=[
+                Persona(name="dev", description="Dev",
+                        typical_activities=["coding"],
+                        work_hours="9am-5pm"),
+            ],
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-010",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "work_hours" in i.message.lower()]
+        assert len(warnings) == 0
+
+
+class TestNoiseFeasibility:
+    """Tests for _validate_noise_feasibility."""
+
+    def test_low_intensity_many_events_warning(self):
+        """Low intensity with 51+ storyline events should warn."""
+        events = [
+            StorylineEvent(
+
+                id=f"evt-val-011-{i}",
+                time=f"2024-01-15T10:{i:02d}:00Z", actor="jdoe", system="WS-01",
+                activity=f"step {i}",
+                events=[{"type": "logon", "logon_type": 2}])
+            for i in range(51)
+        ]
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=events,
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "noise-to-signal" in i.message.lower()]
+        assert len(warnings) == 1
+
+    def test_high_intensity_many_events_no_warning(self):
+        """High intensity with many events should not warn about noise."""
+        events = [
+            StorylineEvent(
+
+                id=f"evt-val-012-{i}",
+                time=f"2024-01-15T10:{i:02d}:00Z", actor="jdoe", system="WS-01",
+                activity=f"step {i}",
+                events=[{"type": "logon", "logon_type": 2}])
+            for i in range(51)
+        ]
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=events,
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="high", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "noise-to-signal" in i.message.lower()]
+        assert len(warnings) == 0
+
+
+class TestStorylineFormatCoverage:
+    """Tests for _validate_storyline_format_coverage."""
+
+    def test_linux_system_no_linux_format_warning(self):
+        """Storyline Linux system with only Windows formats should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu",
+                           type="server"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-013",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="LNX-01",
+                    activity="ssh",
+                    events=[{"type": "ssh_session"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if i.severity == "warning"
+                    and "LNX-01" in i.message and "format" in i.message.lower()]
+        assert len(warnings) >= 1
+
+
+class TestStorylineOsPlausibility:
+    """Tests for _validate_storyline_os_plausibility."""
+
+    def test_windows_event_on_linux_warning(self):
+        """Windows-specific event type on Linux system should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu",
+                           type="server"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-014",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="LNX-01",
+                    activity="install service",
+                    events=[{"type": "service_installed",
+                             "service_name": "evil",
+                             "service_file_name": "C:\\evil.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "syslog"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "Windows-specific" in i.message]
+        assert len(warnings) >= 1
+
+    def test_ssh_on_windows_warning(self):
+        """SSH session on Windows system should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-015",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="ssh session",
+                    events=[{"type": "ssh_session"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "Linux-specific" in i.message]
+        assert len(warnings) >= 1
+
+    def test_powershell_on_linux_warning(self):
+        """Process with powershell.exe on Linux should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu",
+                           type="server"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-016",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="LNX-01",
+                    activity="run powershell",
+                    events=[{"type": "process", "process_name": "powershell.exe",
+                             "command_line": "powershell.exe -enc abc123"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "syslog"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "powershell.exe" in i.message]
+        assert len(warnings) >= 1
+
+    def test_linux_path_on_windows_warning(self):
+        """Process with /usr/ path on Windows should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-017",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="run linux binary",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-018",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    activity="run linux binary",
+                    events=[{"type": "process", "process_name": "ncat",
+                             "command_line": "/usr/bin/ncat -e /bin/sh"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "/usr/" in i.message]
+        assert len(warnings) >= 1
+
+    def test_correct_os_event_no_warning(self):
+        """Windows event on Windows system should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-019",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-020",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    activity="install service",
+                    events=[{"type": "service_installed",
+                             "service_name": "svc",
+                             "service_file_name": "C:\\svc.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        os_warnings = [i for i in issues if "specific" in i.message.lower()
+                       and ("Windows" in i.message or "Linux" in i.message)]
+        assert len(os_warnings) == 0
+
+
+class TestStorylineLinkability:
+    """Tests for _validate_storyline_linkability."""
+
+    def test_no_shared_indicator_warning(self):
+        """Consecutive events with no shared field should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="alice", full_name="A", email="a@test.com"),
+                    User(username="bob", full_name="B", email="b@test.com"),
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-021",
+                    time="2024-01-15T10:00:00Z", actor="alice", system="WS-01",
+                    activity="step 1",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-022",
+                    time="2024-01-15T10:01:00Z", actor="bob", system="WS-02",
+                    activity="step 2",
+                    events=[{"type": "logon", "logon_type": 2}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "pivot" in i.message.lower()]
+        assert len(warnings) >= 1
+
+    def test_shared_actor_no_warning(self):
+        """Consecutive events sharing an actor should not warn about linkability."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="alice", full_name="A", email="a@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-023",
+                    time="2024-01-15T10:00:00Z", actor="alice", system="WS-01",
+                    activity="step 1",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-024",
+                    time="2024-01-15T10:01:00Z", actor="alice", system="WS-02",
+                    activity="step 2",
+                    events=[{"type": "logon", "logon_type": 2}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "pivot" in i.message.lower()]
+        assert len(warnings) == 0
+
+    def test_shared_ip_no_warning(self):
+        """Consecutive events sharing an IP via connection should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="alice", full_name="A", email="a@test.com"),
+                    User(username="bob", full_name="B", email="b@test.com"),
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="SRV-01", ip="10.0.0.10", os="Windows Server 2019",
+                           type="server"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-025",
+                    time="2024-01-15T10:00:00Z", actor="alice", system="WS-01",
+                    activity="connect",
+                    events=[{"type": "connection", "dst_ip": "10.0.0.10",
+                             "dst_port": 443}]),
+                StorylineEvent(
+
+                    id="evt-val-026",
+                    time="2024-01-15T10:01:00Z", actor="bob", system="SRV-01",
+                    activity="execute",
+                    events=[{"type": "logon", "logon_type": 3}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "pivot" in i.message.lower()]
+        assert len(warnings) == 0
+
+
+class TestStorylineCausalOrder:
+    """Tests for _validate_storyline_causal_order."""
+
+    def test_process_without_logon_warning(self):
+        """Process event with no prior logon should warn (outside grace period)."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-027",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="run cmd",
+                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            logon_grace_period="0s",
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior logon" in i.message.lower()]
+        assert len(warnings) >= 1
+
+    def test_logon_then_process_no_warning(self):
+        """Process after logon on same system should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-028",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-029",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    activity="run cmd",
+                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior logon" in i.message.lower()]
+        assert len(warnings) == 0
+
+    def test_builtin_account_process_no_warning(self):
+        """SYSTEM process with no prior logon should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-030",
+                    time="2024-01-15T10:00:00Z", actor="SYSTEM", system="WS-01",
+                    activity="system process",
+                    events=[{"type": "process", "process_name": "svchost.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior logon" in i.message.lower()]
+        assert len(warnings) == 0
+
+    def test_logoff_without_logon_warning(self):
+        """Logoff with no prior logon should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-031",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="logoff",
+                    events=[{"type": "logoff"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            logon_grace_period="0s",
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior logon" in i.message.lower()]
+        assert len(warnings) >= 1
+
+    def test_account_deleted_without_created_warning(self):
+        """Account deletion without prior creation should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="DC-01", ip="10.0.0.1", os="Windows Server 2019",
+                           type="domain_controller"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-032",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="DC-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-033",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="DC-01",
+                    activity="delete account",
+                    events=[{"type": "account_deleted",
+                             "target_username": "ghost_user"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior account_created" in i.message.lower()]
+        assert len(warnings) >= 1
+
+    def test_account_created_then_deleted_no_warning(self):
+        """Account creation then deletion should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="DC-01", ip="10.0.0.1", os="Windows Server 2019",
+                           type="domain_controller"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+
+                    id="evt-val-034",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="DC-01",
+                    activity="logon",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+
+                    id="evt-val-035",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="DC-01",
+                    activity="create account",
+                    events=[{"type": "account_created",
+                             "target_username": "temp_user"}]),
+                StorylineEvent(
+
+                    id="evt-val-036",
+                    time="2024-01-15T10:02:00Z", actor="jdoe", system="DC-01",
+                    activity="delete account",
+                    events=[{"type": "account_deleted",
+                             "target_username": "temp_user"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior account_created" in i.message.lower()]
+        assert len(warnings) == 0
+
+
+class TestStorylineEventIds:
+    """Tests for _validate_storyline_event_ids."""
+
+    def test_duplicate_ids_error(self):
+        """Duplicate storyline event IDs should error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-dup",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="step 1",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+                    id="evt-dup",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    activity="step 2",
+                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        errors = [i for i in issues if i.severity == "error"
+                  and "Duplicate event ID" in i.message]
+        assert len(errors) == 1
+        assert "evt-dup" in errors[0].message
+
+    def test_unique_ids_no_error(self):
+        """Unique storyline event IDs should not error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-001",
+                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    activity="step 1",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+                    id="evt-002",
+                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    activity="step 2",
+                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        id_errors = [i for i in issues if "Duplicate event ID" in i.message]
+        assert len(id_errors) == 0
+
+
+class TestLogonGracePeriod:
+    """Tests for logon grace period in causal order check."""
+
+    def test_process_in_grace_period_no_warning(self):
+        """Process event within grace period should not warn about missing logon."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-001",
+                    time="+10m", actor="jdoe", system="WS-01",
+                    activity="run cmd",
+                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            logon_grace_period="30m",
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior logon" in i.message.lower()]
+        assert len(warnings) == 0
+
+    def test_process_after_grace_period_warning(self):
+        """Process event after grace period should warn about missing logon."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-001",
+                    time="+2h", actor="jdoe", system="WS-01",
+                    activity="run cmd",
+                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="4h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            logon_grace_period="30m",
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [i for i in issues if "no prior logon" in i.message.lower()]
+        assert len(warnings) >= 1
+
+
+class TestLinkabilityTimeGap:
+    """Tests for time-gap heuristic in linkability check."""
+
+    def test_large_time_gap_no_linkability_warning(self):
+        """Events with >4h gap should not trigger linkability warning."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="alice", full_name="A", email="a@test.com"),
+                    User(username="bob", full_name="B", email="b@test.com"),
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-001",
+                    time="+1h", actor="alice", system="WS-01",
+                    activity="step 1",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+                    id="evt-002",
+                    time="+27h", actor="bob", system="WS-02",
+                    activity="step 2 (next day)",
+                    events=[{"type": "logon", "logon_type": 2}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="48h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        link_issues = [i for i in issues if "pivot" in i.message.lower()]
+        assert len(link_issues) == 0
+
+    def test_linkability_issues_are_info_severity(self):
+        """Linkability issues should be info severity, not warning."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(username="alice", full_name="A", email="a@test.com"),
+                    User(username="bob", full_name="B", email="b@test.com"),
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
+                           type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
+                           type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-001",
+                    time="+1h", actor="alice", system="WS-01",
+                    activity="step 1",
+                    events=[{"type": "logon", "logon_type": 2}]),
+                StorylineEvent(
+                    id="evt-002",
+                    time="+1h30m", actor="bob", system="WS-02",
+                    activity="step 2",
+                    events=[{"type": "logon", "logon_type": 2}]),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="4h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        link_issues = [i for i in issues if "pivot" in i.message.lower()]
+        assert len(link_issues) >= 1
+        assert all(i.severity == "info" for i in link_issues)

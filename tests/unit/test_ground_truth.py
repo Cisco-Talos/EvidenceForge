@@ -37,6 +37,7 @@ class TestGroundTruthGenerator:
             personas=[],
             storyline=[
                 StorylineEvent(
+                    id="evt-test-1",
                     time="2024-01-15T10:30:00Z",
                     actor="attacker",
                     system="TEST-01",
@@ -44,6 +45,7 @@ class TestGroundTruthGenerator:
                     events=[{"type": "process", "process_name": "cmd.exe"}]
                 ),
                 StorylineEvent(
+                    id="evt-test-2",
                     time="2024-01-15T10:35:00Z",
                     actor="attacker",
                     system="TEST-01",

@@ -17,6 +17,7 @@ environment: ...
 personas: [...]               # Optional
 time_window: ...
 baseline_activity: ...
+logon_grace_period: "30m"    # Optional (default: "30m") — suppresses "no prior logon" warnings within this duration of time_window.start
 storyline: [...]              # Optional
 output: ...
 ```
@@ -189,7 +190,10 @@ Storyline events define specific actions at specific times. Each entry declares 
 
 ```yaml
 storyline:
-  - time: "+2h30m"             # Required: ISO 8601 or relative offset (d/h/m/s/ms)
+  - id: evt-lateral-pth        # Required: unique event identifier — must be unique across all storyline events.
+                               # Any string format is valid. Prefer descriptive labels (e.g., "evt-lateral-pth",
+                               # "evt-c2-beacon-day2") but sequential IDs (e.g., "evt-001") are also fine.
+    time: "+2h30m"             # Required: ISO 8601 or relative offset (d/h/m/s/ms)
     actor: john.doe            # Required: username, built-in account (SYSTEM/root), or service_account
     system: WS-01              # Required: system hostname
     activity: "lateral movement via pass-the-hash"  # Required: human-readable description (GROUND_TRUTH.md)

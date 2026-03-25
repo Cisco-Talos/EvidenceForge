@@ -228,7 +228,8 @@ baseline_activity:
 
 storyline:
   # --- Phase 1: Initial Access — Password spray against david.okonkwo ---
-  - time: "+30m"
+  - id: evt-001
+    time: "+30m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Failed logon attempt via password spray against david.okonkwo (wrong password)"
@@ -237,7 +238,8 @@ storyline:
         source_ip: "185.220.101.34"
         logon_type: 3
 
-  - time: "+31m"
+  - id: evt-002
+    time: "+31m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Failed logon attempt via password spray against david.okonkwo (account lockout threshold)"
@@ -246,7 +248,8 @@ storyline:
         source_ip: "185.220.101.34"
         logon_type: 3
 
-  - time: "+32m"
+  - id: evt-003
+    time: "+32m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Successful logon to david.okonkwo workstation with stolen credentials"
@@ -256,7 +259,8 @@ storyline:
         logon_type: 3
 
   # --- Phase 2: Reconnaissance ---
-  - time: "+35m"
+  - id: evt-004
+    time: "+35m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute domain enumeration via net.exe to list domain users"
@@ -265,7 +269,8 @@ storyline:
         process_name: "C:\\Windows\\System32\\net.exe"
         command_line: "net user /domain"
 
-  - time: "+36m"
+  - id: evt-005
+    time: "+36m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute reconnaissance to enumerate domain groups"
@@ -274,7 +279,8 @@ storyline:
         process_name: "C:\\Windows\\System32\\net.exe"
         command_line: "net group \"Domain Admins\" /domain"
 
-  - time: "+37m"
+  - id: evt-006
+    time: "+37m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute network share enumeration"
@@ -284,7 +290,8 @@ storyline:
         command_line: "net view \\\\FILE-SRV-01 /all"
 
   # --- Phase 3: Credential Dumping (Sysmon Event 8: CreateRemoteThread) ---
-  - time: "+42m"
+  - id: evt-007
+    time: "+42m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute credential dumping tool targeting LSASS memory"
@@ -294,7 +301,8 @@ storyline:
         command_line: "procdump64.exe -accepteula -ma lsass.exe C:\\Windows\\Temp\\lsass.dmp"
 
   # --- Phase 4: Lateral Movement via RDP to IT admin workstation ---
-  - time: "+55m"
+  - id: evt-008
+    time: "+55m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "RDP lateral movement to IT admin workstation using james.walker credentials"
@@ -302,7 +310,8 @@ storyline:
       - type: rdp_session
         source_ip: "10.20.10.11"
 
-  - time: "+57m"
+  - id: evt-009
+    time: "+57m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Logon with explicit credentials (RunAs) to access IT admin context"
@@ -312,7 +321,8 @@ storyline:
         command_line: "runas /user:HARTFIELD-LAW\\james.walker cmd.exe"
 
   # --- Phase 5: Privilege Escalation — Add attacker-controlled account to Domain Admins ---
-  - time: "+1h5m"
+  - id: evt-010
+    time: "+1h5m"
     actor: attacker
     system: DC-01
     activity: "Authenticate to domain controller with stolen admin credentials"
@@ -321,7 +331,8 @@ storyline:
         source_ip: "10.20.10.13"
         logon_type: 3
 
-  - time: "+1h7m"
+  - id: evt-011
+    time: "+1h7m"
     actor: attacker
     system: DC-01
     activity: "Execute command to create backdoor domain account"
@@ -330,7 +341,8 @@ storyline:
         process_name: "C:\\Windows\\System32\\net.exe"
         command_line: "net user svc-audit P@ssw0rd2024! /add /domain"
 
-  - time: "+1h8m"
+  - id: evt-012
+    time: "+1h8m"
     actor: attacker
     system: DC-01
     activity: "Execute command to add backdoor account to Domain Admins group"
@@ -340,7 +352,8 @@ storyline:
         command_line: "net group \"Domain Admins\" svc-audit /add /domain"
 
   # --- Phase 6: Persistence — Scheduled task + service install ---
-  - time: "+1h15m"
+  - id: evt-013
+    time: "+1h15m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Execute schtasks to create persistence scheduled task"
@@ -349,7 +362,8 @@ storyline:
         process_name: "C:\\Windows\\System32\\schtasks.exe"
         command_line: "schtasks /Create /SC DAILY /TN \"\\Microsoft\\Windows\\Maintenance\\SystemHealthCheck\" /TR \"C:\\ProgramData\\updater.exe\" /RU SYSTEM /F"
 
-  - time: "+1h17m"
+  - id: evt-014
+    time: "+1h17m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Execute sc.exe to install persistence service"
@@ -359,7 +373,8 @@ storyline:
         command_line: "sc create HealthMonitor binPath= \"C:\\ProgramData\\updater.exe\" start= auto DisplayName= \"System Health Monitor\""
 
   # --- Phase 7: SSH lateral movement to Linux web server ---
-  - time: "+1h30m"
+  - id: evt-015
+    time: "+1h30m"
     actor: attacker
     system: WEB-01
     activity: "SSH lateral movement to web server from IT admin workstation"
@@ -367,7 +382,8 @@ storyline:
       - type: ssh_session
         source_ip: "10.20.10.13"
 
-  - time: "+1h33m"
+  - id: evt-016
+    time: "+1h33m"
     actor: attacker
     system: WEB-01
     activity: "Execute reconnaissance commands on Linux web server"
@@ -376,7 +392,8 @@ storyline:
         process_name: "/usr/bin/find"
         command_line: "find /var/www -name '*.conf' -o -name '*.env' 2>/dev/null"
 
-  - time: "+1h35m"
+  - id: evt-017
+    time: "+1h35m"
     actor: attacker
     system: WEB-01
     activity: "Execute command to archive web application database credentials"
@@ -386,7 +403,8 @@ storyline:
         command_line: "tar czf /tmp/.backup.tar.gz /var/www/app/config/database.yml /var/www/app/.env"
 
   # --- Phase 8: Collection from file server ---
-  - time: "+2h"
+  - id: evt-018
+    time: "+2h"
     actor: attacker
     system: FILE-SRV-01
     activity: "Authenticate to file server to access privileged client data"
@@ -395,7 +413,8 @@ storyline:
         source_ip: "10.20.10.13"
         logon_type: 3
 
-  - time: "+2h5m"
+  - id: evt-019
+    time: "+2h5m"
     actor: attacker
     system: FILE-SRV-01
     activity: "Execute search for privileged client documents"
@@ -404,7 +423,8 @@ storyline:
         process_name: "C:\\Windows\\System32\\cmd.exe"
         command_line: "cmd.exe /c dir /s /b \\\\FILE-SRV-01\\cases$\\*.docx \\\\FILE-SRV-01\\cases$\\*.pdf > C:\\Windows\\Temp\\filelist.txt"
 
-  - time: "+2h10m"
+  - id: evt-020
+    time: "+2h10m"
     actor: attacker
     system: FILE-SRV-01
     activity: "Execute 7zip to archive collected client files for exfiltration"
@@ -414,7 +434,8 @@ storyline:
         command_line: "7z.exe a -p\"infected\" C:\\Windows\\Temp\\docs.7z @C:\\Windows\\Temp\\filelist.txt"
 
   # --- Phase 9: SQL server data query ---
-  - time: "+2h20m"
+  - id: evt-021
+    time: "+2h20m"
     actor: attacker
     system: SQL-SRV-01
     activity: "Authenticate to SQL server for data collection"
@@ -423,7 +444,8 @@ storyline:
         source_ip: "10.20.10.13"
         logon_type: 3
 
-  - time: "+2h25m"
+  - id: evt-022
+    time: "+2h25m"
     actor: attacker
     system: SQL-SRV-01
     activity: "Execute sqlcmd to query client billing records"
@@ -433,7 +455,8 @@ storyline:
         command_line: "sqlcmd -S SQL-SRV-01 -d ClientBilling -Q \"SELECT TOP 5000 client_id, name, ssn, case_number, billing_amount FROM dbo.ClientRecords\" -o C:\\Windows\\Temp\\billing.csv -s\",\" -W"
 
   # --- Phase 10: C2 communication + exfiltration ---
-  - time: "+3h"
+  - id: evt-023
+    time: "+3h"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Connect to C2 server for command and control communication"
@@ -443,7 +466,8 @@ storyline:
         dst_port: 443
         service: "https"
 
-  - time: "+3h10m"
+  - id: evt-024
+    time: "+3h10m"
     actor: attacker
     system: WS-JWALKER-01
     activity: "Exfiltrate archived client data to external cloud storage"
@@ -454,7 +478,8 @@ storyline:
         service: "https"
 
   # --- Phase 11: Defense evasion — clear logs ---
-  - time: "+3h20m"
+  - id: evt-025
+    time: "+3h20m"
     actor: attacker
     system: WS-DOKONKWO-01
     activity: "Execute wevtutil to clear Windows Security event log"
@@ -465,7 +490,8 @@ storyline:
       - type: log_cleared
 
   # --- Phase 12: Account cleanup ---
-  - time: "+3h25m"
+  - id: evt-026
+    time: "+3h25m"
     actor: attacker
     system: DC-01
     activity: "Execute command to delete backdoor account and remove evidence"

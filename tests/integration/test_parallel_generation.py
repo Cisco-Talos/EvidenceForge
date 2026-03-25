@@ -275,6 +275,7 @@ class TestParallelGeneration:
         # Add a storyline event
         scenario.storyline = [
             StorylineEvent(
+                id="evt-test-1",
                 time="2024-01-01T09:30:00",
                 actor="user0",
                 system="TEST-WS-01",

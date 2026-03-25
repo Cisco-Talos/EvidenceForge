@@ -321,6 +321,7 @@ class TestStorylineEvent:
     def test_storyline_event_valid(self):
         """Test valid storyline event."""
         event = StorylineEvent(
+            id="evt-test-1",
             time="2024-01-15T14:30:00Z",
             actor="attacker",
             system="WS-01",
@@ -334,6 +335,7 @@ class TestStorylineEvent:
     def test_storyline_event_with_events_list(self):
         """Test storyline event with events list."""
         event = StorylineEvent(
+            id="evt-test-2",
             time="+2h30m", actor="jdoe", system="WS-01", activity="Access file share",
             events=[{"type": "process", "process_name": "cmd.exe"}],
         )

@@ -136,10 +136,15 @@ def generate(
         if issues:
             console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
             for issue in issues:
-                color = "red" if issue.severity == "error" else "yellow"
-                icon = "✗" if issue.severity == "error" else "!"
+                if issue.severity == "error":
+                    color, icon = "red", "✗"
+                elif issue.severity == "warning":
+                    color, icon = "yellow", "!"
+                else:
+                    color, icon = "cyan", "ℹ"
                 console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
-                console.print(f"    {issue.message}", style=color)
+                from rich.text import Text
+                console.print(Text(f"    {issue.message}", style=color))
                 if issue.suggestion:
                     console.print(f"    💡 {issue.suggestion}", style="dim")
 
@@ -377,10 +382,15 @@ def validate(
     if issues:
         console.print(f"\n[yellow]Found {len(issues)} validation issue(s):[/yellow]")
         for issue in issues:
-            color = "red" if issue.severity == "error" else "yellow"
-            icon = "✗" if issue.severity == "error" else "!"
+            if issue.severity == "error":
+                color, icon = "red", "✗"
+            elif issue.severity == "warning":
+                color, icon = "yellow", "!"
+            else:
+                color, icon = "cyan", "ℹ"
             console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
-            console.print(f"    {issue.message}", style=color)
+            from rich.text import Text
+            console.print(Text(f"    {issue.message}", style=color))
             if issue.suggestion:
                 console.print(f"    💡 {issue.suggestion}", style="dim")
 
