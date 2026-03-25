@@ -268,7 +268,7 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 
 Claude Code Skills handle the interactive, creative aspects of scenario creation.
 
-**Location:** `skills/forge/` directory
+**Location:** `commands/eforge/` directory
 
 **Installation:**
 ```bash
@@ -279,14 +279,18 @@ eforge install-skills --project
 eforge install-skills --global
 ```
 
-**MVP Skills:**
+**Skills:**
 - `/eforge scenario` — Guided scenario creation through a structured interview, producing a validated YAML scenario file
 - `/eforge generate` — Generation workflow that validates a scenario and runs the deterministic engine
+- `/eforge validate` — Validate a scenario file for schema correctness and cross-reference integrity
+- `/eforge evaluate` — Run data quality evaluation on generated output
 
 Skills are markdown prompt files (`.md`), not Python code. They run inside Claude Code, not inside the `eforge` CLI process. They follow a hybrid interview pattern (structured questions first, then free-form refinement) and reference `docs/scenario-reference.md` for schema validity.
 
+**Important:** When modifying the scenario schema (adding/removing/changing fields in Pydantic models or `docs/scenario-reference.md`), always update the corresponding skills in `commands/eforge/` to reflect the changes — especially `scenario.md` (YAML templates and validation rules) and `validate.md` (error handling guidance).
+
 ### Adding a New Skill
-1. Create `skills/forge/{name}.md` with the skill prompt
+1. Create `commands/eforge/{name}.md` with the skill prompt
 2. Follow the hybrid interview pattern
 3. Reference `docs/scenario-reference.md` for output validity
 4. Test interactively in Claude Code

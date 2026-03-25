@@ -27,7 +27,9 @@ Exit codes:
 
 **If validation passes:** Tell the user the scenario is valid. Summarize what's in it (users, systems, personas, storyline events, network topology) based on the validator output.
 
-**If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR).
+**If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR, OS/format mismatches, missing logon events before process execution).
+
+**If validation passes with info-level notes:** Info-level issues (shown with ℹ) are informational observations, not problems. For example, consecutive storyline events that don't share an obvious pivot indicator. Mention them briefly but don't suggest fixes unless the user asks.
 
 **If validation fails:** Read the scenario file and the error output, then triage:
 
@@ -35,7 +37,8 @@ Exit codes:
 - Typos in hostnames, usernames, or persona names (cross-reference mismatches)
 - Missing required fields you can infer from context
 - YAML formatting issues (bad indentation, missing quotes)
-- Duplicate entries that can be trivially renamed
+- Duplicate entries that can be trivially renamed (including duplicate storyline event IDs)
+- Missing storyline event `id` fields
 - Typed event field errors (extra/missing fields caught by Pydantic validation)
 - Invalid IP addresses in connection events
 

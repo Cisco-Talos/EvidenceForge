@@ -214,8 +214,14 @@ baseline_activity:
   intensity: medium               # low (~5 events/user/hr) | medium (~15) | high (~40)
   variation: medium               # low (±10%) | medium (±25%) | high (±50%)
 
+logon_grace_period: "30m"         # Optional (default "30m") — suppresses "no prior logon"
+                                  # warnings for events within this duration of time_window.start
+
 storyline:                        # The attack events to bury in the data
-  - time: "+2h"                   # Relative offset from start, or absolute ISO 8601
+  - id: evt-recon-whoami          # Required: unique event ID. Use descriptive labels
+                                  # (e.g., "evt-lateral-ssh", "evt-c2-beacon-day2") or
+                                  # sequential IDs ("evt-001"). Must be unique across all events.
+    time: "+2h"                   # Relative offset from start, or absolute ISO 8601
     actor: marcus.chen            # Username of compromised account (or system account)
     system: WS-DEV-01             # Must reference existing hostname
     activity: "Recon: enumerate current user"  # Human-readable (for GROUND_TRUTH.md only)
@@ -255,6 +261,7 @@ The scenario is validated before generation. Common issues to avoid:
 - Every `system.assigned_user` must match a username
 - Every storyline `actor` must be a username defined in the users list, a well-known built-in account (e.g., `SYSTEM`, `root`), or listed in `environment.service_accounts`
 - Every storyline `system` must match a system hostname
+- Every storyline event must have a unique `id` field — no duplicates allowed
 - Usernames, hostnames, and IPs must all be unique
 - Network segment `systems` must reference existing hostnames
 - Network sensor `monitoring_segments` must reference existing segment names
