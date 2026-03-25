@@ -1,29 +1,35 @@
 """Thread-safe deterministic random number generation.
 
-Provides a thread-local RNG that ensures reproducible output across
-concurrent generation threads. Each thread gets its own Random instance
-seeded deterministically from the thread ID.
+Provides a thread-local RNG that ensures each thread gets its own
+Random instance, avoiding GIL contention on shared state.
 """
 
+import hashlib
 import random
-from threading import get_ident, local
+from threading import local
 
 _thread_local = local()
 
 
 def _get_rng() -> random.Random:
-    """Get thread-local Random instance with deterministic seed.
+    """Get thread-local Random instance.
 
-    Each thread gets its own RNG instance with a deterministic seed based on
-    the thread ID, preserving reproducibility without GIL contention.
+    Each thread gets its own RNG instance. Instances are seeded with 42
+    for the simplicity; thread-local storage ensures no cross-thread
+    interference.
 
     Returns:
         Thread-local Random instance
     """
     if not hasattr(_thread_local, "rng"):
-        thread_id = get_ident()
-        # Deterministic seed: combine thread ID with global seed
-        # Global seed could be made configurable in the future
-        seed = hash((thread_id, 42))  # 42 = global seed
-        _thread_local.rng = random.Random(seed)
+        _thread_local.rng = random.Random(42)
     return _thread_local.rng
+
+
+def _stable_seed(key: str) -> int:
+    """Create a deterministic integer seed from a string.
+
+    Uses SHA-256 instead of hash() to avoid PYTHONHASHSEED randomization.
+    Produces the same seed across processes and Python invocations.
+    """
+    return int(hashlib.sha256(key.encode()).hexdigest(), 16) % (2**32)

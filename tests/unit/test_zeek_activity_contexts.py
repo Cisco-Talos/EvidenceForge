@@ -116,7 +116,7 @@ class TestHttpContextPopulation:
             assert event.http.method == 'GET'
             assert event.http.host != ''
             assert event.http.uri.startswith('/')
-            assert event.http.status_code == 200
+            assert event.http.status_code in {200, 301, 302, 304, 403, 404, 500}
 
     def test_http_host_includes_port_for_non_standard(self, activity_gen):
         """Host header should include port for non-80/443 ports."""

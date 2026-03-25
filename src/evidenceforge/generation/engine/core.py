@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
@@ -168,7 +169,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         sid_registry = self._build_sid_registry()
 
         # Phase 5.5: Generate per-user timing and behavioral offsets
-        rng = random.Random(hash(self.scenario.name + "_offsets"))
+        rng = random.Random(_stable_seed(self.scenario.name + "_offsets"))
         self._user_time_offsets: dict[str, dict[str, float]] = {}
         for user in self.scenario.environment.users:
             self._user_time_offsets[user.username] = {

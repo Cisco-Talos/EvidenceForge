@@ -13,6 +13,7 @@ from threading import Lock
 from typing import Any, Optional
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.events.contexts import AuthContext, FileContext, HostContext, RegistryContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -2566,7 +2567,7 @@ class ActivityGenerator:
         """
         with self._counter_lock:
             if hostname not in self._event_record_counters:
-                rng = random.Random(hash(f"erid_{hostname}"))
+                rng = random.Random(_stable_seed(f"erid_{hostname}"))
                 self._event_record_counters[hostname] = rng.randint(1000, 50000)
             self._event_record_counters[hostname] += 1
             return self._event_record_counters[hostname]

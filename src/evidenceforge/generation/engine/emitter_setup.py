@@ -14,6 +14,7 @@ import random
 from datetime import timedelta
 
 from evidenceforge.formats import load_format
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
     EcarEmitter,
@@ -168,7 +169,7 @@ class EmitterSetupMixin:
         if not self.scenario.environment.network:
             return
         from evidenceforge.events.dispatcher import expand_formats
-        rng = random.Random(hash("sensor_startup"))
+        rng = random.Random(_stable_seed("sensor_startup"))
         for sensor in self.scenario.environment.network.sensors:
             sensor_fmts = expand_formats(sensor.log_formats)
             if not any(f.startswith("zeek_") for f in sensor_fmts):
@@ -212,7 +213,7 @@ class EmitterSetupMixin:
         """
         if 'zeek_dhcp' not in self.emitters:
             return
-        rng = random.Random(hash("dhcp_leases"))
+        rng = random.Random(_stable_seed("dhcp_leases"))
         from evidenceforge.utils.ids import generate_zeek_uid
         for system in self.scenario.environment.systems:
             ip_hash = hash(f"mac_{system.ip}")
@@ -241,7 +242,7 @@ class EmitterSetupMixin:
         Returns:
             Dict mapping username to full SID string
         """
-        rng = random.Random(hash(self.scenario.name))
+        rng = random.Random(_stable_seed(self.scenario.name))
         base_sid = (
             f"S-1-5-21-{rng.randint(1000000000, 3999999999)}"
             f"-{rng.randint(1000000000, 3999999999)}"
