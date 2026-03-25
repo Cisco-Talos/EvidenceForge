@@ -4,9 +4,24 @@ This module provides common fixtures used across unit, integration,
 and live test suites.
 """
 
+import random
 from pathlib import Path
 
 import pytest
+
+from evidenceforge.utils.rng import _thread_local
+
+
+@pytest.fixture(autouse=True)
+def _reset_rng():
+    """Reset all RNG state before each test for deterministic results.
+
+    The thread-local RNG in _get_rng() accumulates state across tests.
+    Deleting the attribute forces re-creation with the same seed on next call.
+    """
+    if hasattr(_thread_local, "rng"):
+        del _thread_local.rng
+    random.seed(42)
 
 
 @pytest.fixture

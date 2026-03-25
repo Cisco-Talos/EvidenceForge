@@ -1,8 +1,8 @@
 """Utility functions for generating log-specific identifiers."""
 
-import random
 import string
 
+from evidenceforge.utils.rng import _get_rng
 
 # Base62 alphabet (used by Zeek for UIDs)
 BASE62_CHARS = string.ascii_uppercase + string.ascii_lowercase + string.digits
@@ -37,7 +37,8 @@ def generate_zeek_uid(prefix: str = "C") -> str:
 
     # Real Zeek UIDs vary in length (17-19 chars total including prefix).
     # Weight distribution based on observed real Zeek traffic.
-    length = random.choices([17, 18, 19], weights=[10, 60, 30], k=1)[0]
-    random_chars = "".join(random.choices(BASE62_CHARS, k=length - 1))
+    rng = _get_rng()
+    length = rng.choices([17, 18, 19], weights=[10, 60, 30], k=1)[0]
+    random_chars = "".join(rng.choices(BASE62_CHARS, k=length - 1))
 
     return prefix + random_chars

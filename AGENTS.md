@@ -14,7 +14,7 @@ This architecture combines LLM flexibility/realism with deterministic speed, cos
 
 **Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation. LLM integration is not built-in; scenario creation uses Claude Code Skills.
 
-**Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). Process events auto-generate supplementary Windows audit events (4720, 4697, etc.) from command-line patterns unless `supplementary: none` is set. See `docs/scenario-reference.md` for the full event type reference.
+**Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). Process events auto-generate supplementary Windows audit events (4720, 4697, etc.) from command-line patterns unless `supplementary: none` is set. See `docs/reference/scenario-reference.md` for the full event type reference.
 
 ## MANDATORY: Implementation State Tracking
 
@@ -76,6 +76,10 @@ Use markdown checkboxes organized by phase/feature:
 
 **Never delete completed tasks** - they show the project's progress and help with debugging/context.
 
+### Changelog Workflow
+
+When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line summary and move the detailed task history to `CHANGELOG.md`. This keeps `TODO.md` focused on active/future work while preserving the full development record.
+
 ## Tech Stack
 
 **Core:**
@@ -96,9 +100,9 @@ Use markdown checkboxes organized by phase/feature:
 - Target coverage: 95%+ overall, 95%+ for core generation engine
 
 **Format Support:**
-- python-evtx (try first) or XML fallback for Windows Event Logs
-- json-logic-py for format definition validation rules
+- json-logic-qubit for format definition validation rules
 - Standard library json/csv for text formats
+- XML output via string templates (no python-evtx dependency)
 
 ## Dependency Management
 
@@ -173,18 +177,11 @@ uv run python -m evidenceforge --help
 - Resolve paths early at boundaries: `Path(user_input).resolve()`
 - Check paths before operations — fail fast with clear messages
 
-## Configuration & Secrets
+## Configuration
 
-**Configuration hierarchy** (later overrides earlier):
-1. Default values in code
-2. System-wide config: `~/.config/evidence-forge/config.yaml`
-3. `.env` file (search from CWD upward to home, stop at first found)
-4. Project config: `./config.yaml`
-5. Command-line arguments
+Configuration is primarily through scenario YAML files and CLI arguments. No config.yaml or .env file is needed.
 
-Config files support `${VAR_NAME}` and `${VAR_NAME:-default}` syntax for environment variable interpolation (implemented in `utils/config.py`).
-
-**Secrets:** Never store AWS credentials in config files — use boto3 credential chain. Never log credential values or include secrets in error messages. Use redaction in debug output.
+**Secrets:** Never log credential values or include secrets in error messages. Use redaction in debug output.
 
 ## Key Architecture Patterns
 
@@ -196,7 +193,7 @@ The generation engine uses a canonical event model — an intermediate represent
 
 **Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` is the escape hatch for simple, single-format log entries — use sparingly.
 
-Full design details: `docs/event-model-prd.md`. Key types: `src/evidenceforge/events/`.
+Full design details: `docs/design/event-model-prd.md`. Key types: `src/evidenceforge/events/`.
 
 ### State Management
 
@@ -241,10 +238,6 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 | 0 | Success | Operation completed successfully |
 | 1 | Input Error | Malformed YAML or file I/O error |
 | 2 | Schema Validation | Pydantic validation failure |
-| 3 | Semantic Validation | LLM-detected logical inconsistencies |
-| 10 | LLM API Failure | Persistent LLM API errors |
-| 11 | LLM Timeout | LLM operation exceeded timeout |
-| 20 | Resource Exhaustion | Insufficient disk space or memory |
 | 21 | Generation Error | Invalid state or unrecoverable generation failure |
 | 22 | Format Error | Format definition loading/validation error |
 | 130 | SIGINT | User interrupted (Ctrl+C) |
@@ -285,25 +278,25 @@ eforge install-skills --global
 - `/eforge validate` — Validate a scenario file for schema correctness and cross-reference integrity
 - `/eforge evaluate` — Run data quality evaluation on generated output
 
-Skills are markdown prompt files (`.md`), not Python code. They run inside Claude Code, not inside the `eforge` CLI process. They follow a hybrid interview pattern (structured questions first, then free-form refinement) and reference `docs/scenario-reference.md` for schema validity.
+Skills are markdown prompt files (`.md`), not Python code. They run inside Claude Code, not inside the `eforge` CLI process. They follow a hybrid interview pattern (structured questions first, then free-form refinement) and reference `docs/reference/scenario-reference.md` for schema validity.
 
-**Important:** When modifying the scenario schema (adding/removing/changing fields in Pydantic models or `docs/scenario-reference.md`), always update the corresponding skills in `commands/eforge/` to reflect the changes — especially `scenario.md` (YAML templates and validation rules) and `validate.md` (error handling guidance).
+**Important:** When modifying the scenario schema (adding/removing/changing fields in Pydantic models or `docs/reference/scenario-reference.md`), always update the corresponding skills in `commands/eforge/` to reflect the changes — especially `scenario.md` (YAML templates and validation rules) and `validate.md` (error handling guidance).
 
 ### Adding a New Skill
 1. Create `commands/eforge/{name}.md` with the skill prompt
 2. Follow the hybrid interview pattern
-3. Reference `docs/scenario-reference.md` for output validity
+3. Reference `docs/reference/scenario-reference.md` for output validity
 4. Test interactively in Claude Code
 5. Update `install-skills` command if needed
 
 ## Reference
 
 **Key docs:**
-- Full PRD: `docs/PRD.md`
-- Event model design: `docs/event-model-prd.md`
-- Scenario schema: `docs/scenario-reference.md`
-- Evidence formats: `docs/EVIDENCE_FORMATS.md`
-- Data quality: `docs/data-quality-prd.md`
+- Full PRD: `docs/design/PRD.md`
+- Event model design: `docs/design/event-model-prd.md`
+- Scenario schema: `docs/reference/scenario-reference.md`
+- Evidence formats: `docs/reference/EVIDENCE_FORMATS.md`
+- Data quality: `docs/design/data-quality-prd.md`
 
 **Getting Started:**
 ```bash

@@ -79,13 +79,13 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
         if source.exists():
             manifest[skill_file] = source
 
-    # Reference docs — installed: _data/references/, dev: docs/
+    # Reference docs — installed: _data/references/, dev: docs/reference/
     for ref_name, dev_name in [
         ("scenario-reference.md", "scenario-reference.md"),
         ("evidence-formats.md", "EVIDENCE_FORMATS.md"),
     ]:
         installed_ref = data_root / "references" / ref_name
-        dev_ref = data_root / "docs" / dev_name
+        dev_ref = data_root / "docs" / "reference" / dev_name
         if installed_ref.exists():
             manifest[f"references/{ref_name}"] = installed_ref
         elif dev_ref.exists():
