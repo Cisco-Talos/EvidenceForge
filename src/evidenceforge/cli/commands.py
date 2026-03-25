@@ -653,7 +653,7 @@ def install_skills_cmd(
 @app.command()
 def version() -> None:
     """Show version information."""
-    console.print("EvidenceForge v0.1.0 (Phase 1 MVP)")
+    console.print("EvidenceForge v0.1.0")
     console.print("Synthetic security log generator for threat hunting training")
 
 
