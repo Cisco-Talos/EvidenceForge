@@ -55,7 +55,7 @@ Output is organized per-host and per-sensor:
 | Snort Alert | Network | IDS alert format (fast alert) |
 | Web Access | Network | Apache/Nginx combined log format |
 
-See [Evidence Formats Reference](docs/EVIDENCE_FORMATS.md) for detailed field documentation, output paths, and known limitations.
+See [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for detailed field documentation, output paths, and known limitations.
 
 ## Key Features
 
@@ -143,7 +143,7 @@ output:
   destination: ./output
 ```
 
-See [docs/scenario-reference.md](docs/scenario-reference.md) for complete schema documentation.
+See [docs/reference/scenario-reference.md](docs/reference/scenario-reference.md) for complete schema documentation.
 
 ## Example Scenarios
 
@@ -187,10 +187,10 @@ src/evidenceforge/
 
 ## Documentation
 
-- [Evidence Formats Reference](docs/EVIDENCE_FORMATS.md) — All log types, output paths, field details, and known limitations
-- [Scenario Reference](docs/scenario-reference.md) — Complete YAML schema documentation
-- [PRD](docs/PRD.md) — Product requirements and specifications
-- [Research Report](docs/synthetic-log-generation-research.md) — Analysis of existing tools
+- [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) — All log types, output paths, field details, and known limitations
+- [Scenario Reference](docs/reference/scenario-reference.md) — Complete YAML schema documentation
+- [PRD](docs/design/PRD.md) — Product requirements and specifications
+- [Research Report](docs/design/synthetic-log-generation-research.md) — Analysis of existing tools
 - [AGENTS.md](AGENTS.md) — Coding conventions for AI agents
 
 ## License
