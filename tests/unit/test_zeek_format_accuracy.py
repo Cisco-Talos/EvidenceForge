@@ -5,6 +5,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 
 class TestZeekConnFormatAccuracy:
     """Verify synthetic Zeek conn.log matches real Zeek log structure."""
@@ -481,6 +483,7 @@ class TestZeekUidGeneration:
 SAMPLE_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
 
 
+@pytest.mark.skipif(not SAMPLE_DIR.exists(), reason="sample_data/ not available (gitignored)")
 class TestSampleDataFieldValidation:
     """Validate all Zeek sample data has correct field names and types."""
 

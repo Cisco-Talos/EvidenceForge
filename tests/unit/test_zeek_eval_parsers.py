@@ -100,6 +100,7 @@ class TestCanParsePerSensorPaths:
         assert parser.can_parse(Path(f"zeek-fw01/{filename}")) is True
 
 
+@pytest.mark.skipif(not SAMPLE_DATA_DIR.exists(), reason="sample_data/ not available (gitignored)")
 class TestParseSampleData:
     """Parse real Zeek sample data and verify correctness."""
 
