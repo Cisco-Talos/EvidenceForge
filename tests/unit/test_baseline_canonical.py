@@ -12,7 +12,7 @@ import pytest
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import System
+from evidenceforge.models import System, User
 
 
 @pytest.fixture
@@ -247,6 +247,10 @@ class TestSystemProcessCanonical:
 
         syslog = mock_emitters["syslog"]
         assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert event.syslog.app_name == "systemd"
+        assert "logrotate" in event.syslog.message
 
     def test_system_process_dispatches_to_ecar(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -271,6 +275,88 @@ class TestSystemProcessCanonical:
         assert ecar.emit.called
         event = ecar.emit.call_args[0][0]
         assert event.event_type == "system_process_create"
+
+
+class TestSyslogContext:
+    """Verify SyslogContext is attached to events for Linux hosts."""
+
+    def test_logon_attaches_syslog_context_on_linux(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """generate_logon() should attach SyslogContext for Linux hosts."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            source_ip="10.0.10.1",
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert event.syslog.app_name == "sshd"
+        assert "Accepted password for alice" in event.syslog.message
+
+    def test_logon_no_syslog_context_on_windows(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """generate_logon() should NOT attach SyslogContext for Windows hosts."""
+        win = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=win,
+            time=timestamp,
+        )
+
+        # Syslog emitter should NOT be called (no SyslogContext on Windows)
+        syslog = mock_emitters["syslog"]
+        if syslog.emit.called:
+            event = syslog.emit.call_args[0][0]
+            # If called, the event should NOT have syslog context
+            assert event.syslog is None
+
+    def test_failed_logon_attaches_syslog_context(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """generate_failed_logon() should attach SyslogContext for Linux hosts."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_failed_logon(
+            user=User(username="attacker", full_name="Attacker", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            source_ip="10.0.10.99",
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert "Failed password" in event.syslog.message
+        assert event.syslog.severity == 4  # Warning level
+
+    def test_generate_syslog_event_helper(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """generate_syslog_event() should dispatch with SyslogContext."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        activity_gen.generate_syslog_event(
+            system=linux,
+            time=timestamp,
+            app_name="systemd",
+            message="Starting logrotate.service - Logrotate.",
+            pid=1,
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog.app_name == "systemd"
+        assert event.syslog.pid == 1
 
 
 class TestSensorStartup:
