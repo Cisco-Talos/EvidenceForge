@@ -195,7 +195,7 @@ The generation engine uses a canonical event model — an intermediate represent
 
 **Core principle: consistency by construction, not by coordination.** Two emitters cannot disagree about a port number because there is only one port number — on the event object.
 
-**Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` is reserved for 2 legitimate use cases only: anonymous logon (DC) and kernel-level messages (UFW BLOCK, AppArmor). All other events — including baseline IDS alerts, web access, syslog daemon messages, and sensor startup — flow through canonical SecurityEvent.
+**Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively — including baseline IDS alerts, web access, syslog daemon messages, DHCP leases, anomaly records, anonymous logons, and sensor startup.
 
 Full design details: `docs/design/event-model-prd.md`. Key types: `src/evidenceforge/events/`.
 

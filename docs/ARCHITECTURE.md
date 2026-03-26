@@ -135,6 +135,7 @@ SecurityEvent
 ├── registry: RegistryContext (key, value, operation)
 ├── ids: IdsContext (signature, severity, classification)
 ├── syslog: SyslogContext (app_name, message, pid, facility, severity)
+├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command, exit_code)
 ├── ... (20+ context types total)
@@ -147,7 +148,7 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
 - Contexts are composable — a logon event has Host + Auth + Syslog contexts; a process event has Host + Process + Syslog contexts
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
-- `RawLogEntry` is the escape hatch reserved for anonymous logon (DC, Windows-only). All other events use canonical SecurityEvent dispatch
+- `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
 
 ### EventDispatcher
 
@@ -207,7 +208,7 @@ LogEmitter (ABC)
 ├── can_handle(event) → bool         # Format eligibility check
 ├── emit(event: SecurityEvent)       # New path: type-safe, context-aware
 ├── emit_event(data: dict)           # Legacy path: raw dict rendering
-├── emit_raw(entry: RawLogEntry)     # Escape hatch (anonymous logon DC only)
+├── emit_raw(entry: RawLogEntry)     # Escape hatch (user `raw` event type only)
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
@@ -232,7 +233,7 @@ LogEmitter (ABC)
 
 **Two rendering paths:**
 - `emit(SecurityEvent)` — primary path for all event types (storyline + baseline)
-- `emit_event(dict)` — legacy path for RawLogEntry escape hatch (anonymous logon DC only)
+- `emit_event(dict)` — legacy path for user `raw` event type in scenario YAML only
 
 ### Format Definition System
 

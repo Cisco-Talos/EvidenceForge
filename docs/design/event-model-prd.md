@@ -187,12 +187,11 @@ class SecurityEvent:
 
 @dataclass(slots=True)
 class RawLogEntry:
-    """Escape hatch -- bypass the event model for rare single-format entries.
+    """Escape hatch -- bypass the event model for user-defined raw events.
 
-    Reserved for 2 legitimate uses only:
-    1. Anonymous logon (DC) -- Windows auth event with no cross-source correlation
-    2. Kernel messages (UFW BLOCK, AppArmor) -- OS firewall/MAC logs
-    All other events must use SecurityEvent + EventDispatcher.
+    Used solely by the `raw` event type in scenario YAML, allowing users
+    to emit arbitrary fields to a specific log format. All internal engine
+    code uses canonical SecurityEvent dispatch exclusively.
     """
     timestamp: datetime
     target_emitter: str              # Emitter dict key (e.g., "syslog", "zeek_conn", "windows_event_security")
@@ -532,7 +531,7 @@ For each `generate_*` method:
 
 ### 5.3 Backward Compatibility
 
-- `emit_raw()` on emitters preserves the dict-based path for the `RawLogEntry` escape hatch (anonymous logon, kernel messages only). All activity types are now migrated to SecurityEvent + EventDispatcher.
+- `emit_raw()` on emitters preserves the dict-based path for the user-facing `raw` event type in scenario YAML. All internal engine code uses SecurityEvent + EventDispatcher exclusively.
 - StateManager's existing methods remain unchanged; `apply()` is purely additive.
 - Engine orchestration (`_generate_baseline()`, `_execute_storyline_events_in_hour()`, etc.) is unchanged -- only ActivityGenerator internals change.
 
