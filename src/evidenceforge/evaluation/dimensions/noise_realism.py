@@ -29,8 +29,11 @@ from evidenceforge.models.scenario import Scenario
 
 logger = logging.getLogger(__name__)
 
-# Target noise-to-signal ratios by baseline intensity
-_VOLUME_TARGETS = {"low": 500, "medium": 5000, "high": 10000}
+# Target noise-to-signal ratios by baseline intensity.
+# Signal count uses storyline entries (not individual records), so each
+# entry typically generates 5-10 records across formats. Targets reflect
+# the ratio of total records to storyline entry count.
+_VOLUME_TARGETS = {"low": 200, "medium": 2000, "high": 5000}
 
 
 def _process_category(process_path: str) -> str:
