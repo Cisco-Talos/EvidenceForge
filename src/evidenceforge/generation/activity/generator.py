@@ -2746,6 +2746,25 @@ class ActivityGenerator:
         if os_cat == 'windows':
             exe_name = process_name.rsplit('\\', 1)[-1].lower() if '\\' in process_name else process_name.lower()
 
+            # Check if the user's active session on this system is a network
+            # logon (type 3). Network logons never spawn explorer.exe — processes
+            # are parented by svchost.exe or services.exe instead.
+            sessions = self.state_manager.get_sessions_for_user(user.username)
+            active_session = next(
+                (s for s in sessions if s.system == system.hostname), None
+            ) if sessions else None
+            is_network_logon = active_session and active_session.logon_type == 3
+
+            if is_network_logon:
+                # Network logon: parent is services.exe or svchost.exe
+                # (processes arrive via PsExec, WMI, or SMB)
+                # CLI/script processes: check for a running shell as parent first
+                shells = [(pid, name) for pid, name in alive_history
+                          if name.rsplit('\\', 1)[-1].lower() in self._WINDOWS_SHELLS]
+                if shells and rng.random() < 0.6:
+                    return shells[-1][0]
+                return sys_pids.get('services', sys_pids.get('svchost_dcom', 4))
+
             # Prefer session-specific explorer PID over system-wide default
             session_explorer = self._get_session_explorer_pid(system, user)
             explorer_pid = session_explorer or sys_pids.get('explorer', 4)

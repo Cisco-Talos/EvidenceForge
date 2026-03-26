@@ -343,7 +343,20 @@ class StorylineMixin:
             malicious_event['service_name'] = spec.service_name
 
         elif spec.type == 'scheduled_task_created':
-            task_content = spec.task_content or ''
+            task_content = spec.task_content
+            if not task_content:
+                # Generate realistic XML task content from the task name
+                task_content = (
+                    f'<?xml version="1.0" encoding="UTF-16"?>\n'
+                    f'<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+                    f'  <Actions Context="Author">\n'
+                    f'    <Exec>\n'
+                    f'      <Command>C:\\Windows\\System32\\cmd.exe</Command>\n'
+                    f'      <Arguments>/c "{spec.task_name}"</Arguments>\n'
+                    f'    </Exec>\n'
+                    f'  </Actions>\n'
+                    f'</Task>'
+                )
             self.activity_generator.generate_scheduled_task(
                 user=actor, system=system, time=time,
                 task_name=spec.task_name, action='created', task_content=task_content,
@@ -356,10 +369,16 @@ class StorylineMixin:
         elif spec.type == 'create_remote_thread':
             source_pid = getattr(self, '_last_storyline_pid', 0) or 0
             source_image = getattr(self, '_last_storyline_image', '') or 'unknown'
+            # Use a realistic target PID — look up the process name from
+            # system PIDs or use a plausible default (not 4 = System kernel)
+            target_name = spec.target_process.rsplit('\\', 1)[-1].rsplit('/', 1)[-1].lower()
+            target_pid = self.activity_generator._get_system_pid(
+                system.hostname, target_name.replace('.exe', ''), 0x27c  # 636 default
+            )
             self.activity_generator.generate_create_remote_thread(
                 user=actor, system=system, time=time,
                 source_pid=source_pid, source_image=source_image,
-                target_pid=4, target_image=spec.target_process,
+                target_pid=target_pid, target_image=spec.target_process,
             )
             malicious_event['target_process'] = spec.target_process
 
