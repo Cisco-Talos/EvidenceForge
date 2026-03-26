@@ -1534,10 +1534,10 @@ class ActivityGenerator:
         if event.host and event.host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            # pam_unix session opened
+            # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             pam_event = SecurityEvent(
                 timestamp=time + timedelta(microseconds=rng.randint(1000, 50000)),
-                event_type="ssh_session",
+                event_type="syslog",
                 host=event.host,
                 syslog=SyslogContext(
                     app_name="sshd",
@@ -1552,10 +1552,10 @@ class ActivityGenerator:
             )
             self.dispatcher.dispatch(pam_event)
 
-            # systemd-logind new session
+            # systemd-logind new session (syslog-only)
             logind_event = SecurityEvent(
                 timestamp=time + timedelta(microseconds=rng.randint(50000, 80000)),
-                event_type="ssh_session",
+                event_type="syslog",
                 host=event.host,
                 syslog=SyslogContext(
                     app_name="systemd-logind",
@@ -3092,6 +3092,9 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import RawContext
 
         host_ctx = self._build_host_context(system) if system else None
+        # Inject timestamp if not provided (format templates need it for rendering)
+        if "timestamp" not in fields:
+            fields["timestamp"] = time
         # Inject host FQDN for HostMultiplexEmitter routing
         if host_ctx and "_host_fqdn" not in fields:
             fields["_host_fqdn"] = (
