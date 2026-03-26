@@ -490,6 +490,22 @@ class ActivityGenerator:
             ),
         )
 
+        # Attach SyslogContext for Linux hosts (sshd logon message)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            sshd_pid = 1000 + (hash(logon_id) % 59000)
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=sshd_pid,
+                facility=10,
+                severity=6,
+                message=(
+                    f"Accepted password for {user.username} from {source_ip} "
+                    f"port {_get_rng().randint(49152, 65535)} ssh2"
+                ),
+            )
+
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
@@ -598,6 +614,21 @@ class ActivityGenerator:
             ),
         )
 
+        # Attach SyslogContext for Linux hosts (sshd failed logon)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=_get_rng().randint(5000, 60000),
+                facility=10,
+                severity=4,
+                message=(
+                    f"Failed password for {effective_username} from {source_ip} "
+                    f"port {_get_rng().randint(49152, 65535)} ssh2"
+                ),
+            )
+
         self.dispatcher.dispatch(event)
 
         # Domain controller side: 4625 + 4776 for domain account authentication
@@ -671,6 +702,19 @@ class ActivityGenerator:
                 logon_type=logon_type,
             ),
         )
+
+        # Attach SyslogContext for Linux hosts (sshd session closed)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            sshd_pid = 1000 + (hash(logon_id) % 59000)
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=sshd_pid,
+                facility=10,
+                severity=6,
+                message=f"pam_unix(sshd:session): session closed for user {user.username}",
+            )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
@@ -1476,7 +1520,63 @@ class ActivityGenerator:
             ),
         )
 
+        # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
+            session_id = rng.randint(100, 99999)
+
+            # Primary event: sshd Accepted password
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=sshd_pid,
+                facility=10,
+                severity=6,
+                message=(
+                    f"Accepted password for {user.username} from {source_ip} port {src_port} ssh2"
+                ),
+            )
+
         self.dispatcher.dispatch(event)
+
+        # Emit follow-up syslog entries (pam_unix + systemd-logind)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            # pam_unix session opened
+            pam_event = SecurityEvent(
+                timestamp=time + timedelta(microseconds=rng.randint(1000, 50000)),
+                event_type="ssh_session",
+                host=event.host,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=sshd_pid,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        f"pam_unix(sshd:session): session opened for user "
+                        f"{user.username} by (uid=0)"
+                    ),
+                ),
+            )
+            self.dispatcher.dispatch(pam_event)
+
+            # systemd-logind new session
+            logind_event = SecurityEvent(
+                timestamp=time + timedelta(microseconds=rng.randint(50000, 80000)),
+                event_type="ssh_session",
+                host=event.host,
+                syslog=SyslogContext(
+                    app_name="systemd-logind",
+                    pid=1000 + (hash("logind") % 59000),
+                    facility=10,
+                    severity=6,
+                    message=f"New session {session_id} of user {user.username}.",
+                ),
+            )
+            self.dispatcher.dispatch(logind_event)
+
         logger.debug(
             f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})"
         )
@@ -1643,6 +1743,29 @@ class ActivityGenerator:
                 mandatory_label="S-1-16-16384",
             ),
         )
+
+        # Attach SyslogContext for Linux hosts
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            is_cron = "cron" in (process_name or "").lower()
+            if is_cron:
+                event.syslog = SyslogContext(
+                    app_name="CRON",
+                    pid=pid,
+                    facility=9,
+                    severity=6,
+                    message=f"({username}) CMD ({command_line})",
+                )
+            else:
+                app_name = process_name.split("/")[-1]
+                event.syslog = SyslogContext(
+                    app_name=app_name,
+                    pid=pid,
+                    facility=3,
+                    severity=6,
+                    message=f"started: {command_line}",
+                )
 
         self.dispatcher.dispatch(event)
 
@@ -2865,6 +2988,38 @@ class ActivityGenerator:
                 target_domain=host.netbios_domain,
                 target_sid=target_sid,
                 sam_account_name=target_username,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_syslog_event(
+        self,
+        system: "System",
+        time: datetime,
+        app_name: str,
+        message: str,
+        pid: int | None = None,
+        facility: int = 3,
+        severity: int = 6,
+    ) -> None:
+        """Generate a standalone syslog event via canonical SecurityEvent dispatch.
+
+        For daemon status messages, kernel logs, and other syslog-only entries
+        that don't correlate with other event types. The SecurityEvent carries
+        HostContext + SyslogContext and dispatches to the syslog emitter.
+        """
+        from evidenceforge.events.contexts import SyslogContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="syslog",
+            host=self._build_host_context(system),
+            syslog=SyslogContext(
+                app_name=app_name,
+                message=message,
+                pid=pid,
+                facility=facility,
+                severity=severity,
             ),
         )
         self.dispatcher.dispatch(event)

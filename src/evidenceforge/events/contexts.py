@@ -156,6 +156,21 @@ class IdsContext:
 
 
 @dataclass(slots=True)
+class SyslogContext:
+    """Syslog message fields for Linux system/daemon/kernel logs.
+
+    Used by the syslog emitter to render syslog-format log entries.
+    Callers provide the exact app_name, message, facility, and severity.
+    """
+
+    app_name: str  # "sshd", "kernel", "systemd", "snapd", etc.
+    message: str  # The syslog message body
+    pid: int | None = None  # None for kernel messages
+    facility: int = 3  # 3=daemon, 0=kernel, 10=auth/security
+    severity: int = 6  # 6=info, 5=notice, 4=warning
+
+
+@dataclass(slots=True)
 class KerberosContext:
     """Kerberos protocol details for DC events (4768 TGT, 4769 service ticket)."""
 

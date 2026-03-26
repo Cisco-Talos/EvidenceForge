@@ -1046,19 +1046,12 @@ class BaselineMixin:
                     ]
                     svc = rng.choice(services)
                     action = rng.choice(["Starting", "Finished"])
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd",
-                            "pid": sys_pids.get("systemd", 1),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
-                        },
+                        time=ts,
+                        app_name="systemd",
+                        message=f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
+                        pid=sys_pids.get("systemd", 1),
                     )
                 elif source_roll < 0.35:
                     cron_cmds = [
@@ -1091,6 +1084,9 @@ class BaselineMixin:
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
                         )
+                        # UFW block: connection (→ Zeek conn REJ) + syslog (→ kernel UFW)
+                        # Both on the same SecurityEvent for cross-source correlation
+
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=system.ip,
@@ -1101,7 +1097,18 @@ class BaselineMixin:
                             src_port=spt,
                             source_system=system,
                         )
+                        # Paired syslog via canonical dispatch
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts,
+                            app_name="kernel",
+                            message=msg,
+                            pid=None,
+                            facility=0,
+                            severity=5,
+                        )
                     else:
+                        # AppArmor audit: standalone kernel syslog
                         self._audit_serials[system.hostname] = self._audit_serials.get(
                             system.hostname, 1000
                         ) + rng.randint(1, 5)
@@ -1111,39 +1118,27 @@ class BaselineMixin:
                             f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
                             f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
                         )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
-                        system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "kernel",
-                            "pid": None,
-                            "facility": 0,
-                            "severity": 5,
-                            "message": msg,
-                        },
-                    )
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts,
+                            app_name="kernel",
+                            message=msg,
+                            pid=None,
+                            facility=0,
+                            severity=5,
+                        )
                 elif source_roll < 0.65:
                     sid = rng.randint(100, 9999)
                     user = rng.choice(["root", "admin", "www-data", "ubuntu"])
                     action = rng.choice(
                         [f"New session {sid} of user {user}.", f"Removed session {sid}."]
                     )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd-logind",
-                            "pid": sys_pids.get("logind", rng.randint(400, 800)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": action,
-                        },
+                        time=ts,
+                        app_name="systemd-logind",
+                        message=action,
+                        pid=sys_pids.get("logind", rng.randint(400, 800)),
                     )
                 elif source_roll < 0.80:
                     other_ips = [
@@ -1169,40 +1164,27 @@ class BaselineMixin:
                         f"Disconnected from user admin {ip} port {port}",
                         "pam_unix(sshd:session): session closed for user admin",
                     ]
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "sshd",
-                            "pid": rng.randint(5000, 60000),
-                            "facility": 10,
-                            "severity": 6,
-                            "message": rng.choice(msgs),
-                        },
+                        time=ts,
+                        app_name="sshd",
+                        message=rng.choice(msgs),
+                        pid=rng.randint(5000, 60000),
+                        facility=10,
                     )
                 elif source_roll < 0.90:
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "snapd",
-                            "pid": sys_pids.get("snapd", rng.randint(500, 2000)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": rng.choice(
-                                [
-                                    "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
-                                    "daemon.go:460: gracefully waiting for running hooks",
-                                    "stateengine.go:150: state ensure starting",
-                                ]
-                            ),
-                        },
+                        time=ts,
+                        app_name="snapd",
+                        message=rng.choice(
+                            [
+                                "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
+                                "daemon.go:460: gracefully waiting for running hooks",
+                                "stateengine.go:150: state ensure starting",
+                            ]
+                        ),
+                        pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
                 else:
                     ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
@@ -1219,19 +1201,12 @@ class BaselineMixin:
                                 f"Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).",
                             ]
                         )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd-timesyncd",
-                            "pid": sys_pids.get("timesyncd", rng.randint(400, 800)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": msg,
-                        },
+                        time=ts,
+                        app_name="systemd-timesyncd",
+                        message=msg,
+                        pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
 
         # ICMP ping between systems on same subnet
