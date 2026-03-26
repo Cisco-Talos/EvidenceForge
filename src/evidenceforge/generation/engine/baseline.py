@@ -1043,7 +1043,7 @@ class BaselineMixin:
                     )
                 elif source_roll < 0.50:
                     if is_dmz and rng.random() < 0.85:
-                        src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                        src_ip = self._generate_external_client_ip(rng)
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
                         msg = (
