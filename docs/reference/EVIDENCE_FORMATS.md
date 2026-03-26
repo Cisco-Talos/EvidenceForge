@@ -197,10 +197,9 @@ Per-user command history for Linux systems.
 **File:** `snort_alert.log`
 **Format:** Snort fast alert format
 
-Network intrusion detection alerts triggered by storyline activity.
+Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
 
 **Known Limitations:**
-- Alerts only fire for storyline (malicious) events, not false positives from baseline
 - Limited SID/classification variety
 
 ---

@@ -143,7 +143,7 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
 **Key design decisions:**
 - Contexts are composable — a logon event has Host + Auth contexts; a process event has Host + Process contexts
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
-- `RawLogEntry` is the escape hatch for single-format entries that don't fit the canonical model
+- `RawLogEntry` is the escape hatch reserved for 2 specific cases: anonymous logon (DC) and kernel messages (UFW BLOCK, AppArmor). All other events — including baseline IDS, web access, syslog daemons, and sensor startup — use canonical SecurityEvent dispatch
 
 ### EventDispatcher
 
@@ -203,7 +203,7 @@ LogEmitter (ABC)
 ├── can_handle(event) → bool         # Format eligibility check
 ├── emit(event: SecurityEvent)       # New path: type-safe, context-aware
 ├── emit_event(data: dict)           # Legacy path: raw dict rendering
-├── emit_raw(entry: RawLogEntry)     # Escape hatch for single-format entries
+├── emit_raw(entry: RawLogEntry)     # Escape hatch (anonymous logon, kernel msgs only)
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
@@ -227,10 +227,8 @@ LogEmitter (ABC)
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 
 **Two rendering paths:**
-- `emit(SecurityEvent)` — new, type-safe path (used by migrated event types)
-- `emit_event(dict)` — legacy path (still used by some emitters via RawLogEntry)
-
-Both paths coexist; the migration is incremental.
+- `emit(SecurityEvent)` — primary path for all event types (storyline + baseline)
+- `emit_event(dict)` — legacy path for RawLogEntry escape hatch (anonymous logon, kernel messages only)
 
 ### Format Definition System
 

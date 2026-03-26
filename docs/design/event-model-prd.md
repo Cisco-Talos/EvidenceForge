@@ -45,7 +45,7 @@ ActivityGenerator
 ### Goals
 - Eliminate cross-format consistency bugs structurally (no field can be generated twice with different values)
 - Migrate all ~14 existing activity types to the event model
-- Support a direct-emission escape hatch (`RawLogEntry`) for simple, single-format log entries from day one
+- Support a direct-emission escape hatch (`RawLogEntry`) for rare single-format log entries (anonymous logon, kernel messages only)
 - Maintain or improve eval framework scores (same scenario, same or better quality)
 - Make adding new log formats cheaper (write a renderer, not emission logic across every activity method)
 - Integrate with existing network visibility model (`NetworkVisibilityEngine`) in dispatcher
@@ -176,10 +176,12 @@ class SecurityEvent:
 
 @dataclass(slots=True)
 class RawLogEntry:
-    """Escape hatch -- bypass the event model for simple, single-format entries.
+    """Escape hatch -- bypass the event model for rare single-format entries.
 
-    Use for: background noise that only appears in one format, simple heartbeats,
-    or events that don't fit the current context model.
+    Reserved for 2 legitimate uses only:
+    1. Anonymous logon (DC) -- Windows auth event with no cross-source correlation
+    2. Kernel messages (UFW BLOCK, AppArmor) -- OS firewall/MAC logs
+    All other events must use SecurityEvent + EventDispatcher.
     """
     timestamp: datetime
     target_emitter: str              # Emitter dict key (e.g., "syslog", "zeek_conn", "windows_event_security")
@@ -517,13 +519,11 @@ For each `generate_*` method:
 4. **Run tests** -- All existing tests must pass. Run `eforge evaluate` on the reference scenario.
 5. **Commit** -- One commit per migrated method for clean git bisection.
 
-### 5.3 Backward Compatibility During Migration
+### 5.3 Backward Compatibility
 
-- `emit_raw()` on emitters preserves the old dict-based path for the `RawLogEntry` escape hatch and for any un-migrated methods during the transition period.
+- `emit_raw()` on emitters preserves the dict-based path for the `RawLogEntry` escape hatch (anonymous logon, kernel messages only). All activity types are now migrated to SecurityEvent + EventDispatcher.
 - StateManager's existing methods remain unchanged; `apply()` is purely additive.
 - Engine orchestration (`_generate_baseline()`, `_execute_storyline_events_in_hour()`, etc.) is unchanged -- only ActivityGenerator internals change.
-- `ActivityGenerator.network_visibility` attribute remains available during migration for any un-migrated methods that still do inline visibility checks. Removed only in Phase 3 cleanup after all methods are migrated.
-- `ActivityGenerator.emitters` convenience reference remains available during migration for un-migrated methods.
 
 ## 6. File Changes
 
