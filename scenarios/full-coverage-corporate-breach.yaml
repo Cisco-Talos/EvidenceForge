@@ -298,6 +298,10 @@ storyline:
       - type: logon
         logon_type: 10
         source_ip: "198.51.100.77"
+      - type: connection
+        dst_ip: "10.1.10.21"
+        dst_port: 3389
+        source_ip: "198.51.100.77"
 
   # ===== Phase 2: Reconnaissance (T+45m to T+1h30m) =====
   - id: recon-01
