@@ -103,6 +103,38 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [ ] **No port 135 (RPC/EPMAP) traffic in Zeek** (Network P2)
 - [ ] **Dual SSH syslog entries with mismatched PIDs/ports** (Threat Hunter P2)
 
+### Remaining Improvement Loop 6 Issues (full-coverage-corporate-breach)
+
+**P0:**
+- [ ] **LogonIDs leak across hosts** — remote processes on DC-01/FILE-SRV-01 use originating-host (WS-DEV-01) LogonIDs instead of the destination host's 4624 TargetLogonId. Process 4688 SubjectLogonId must match a 4624 on the same host. (DFIR, Detection Eng — 2 sources)
+- [ ] **2 ground truth Zeek UIDs missing from log files** — UIDs listed in GROUND_TRUTH.md IOC section not present in any Zeek log. Every UID in ground truth must appear in at least one sensor's conn.json. (Threat Hunter, Network Eng — 2 sources)
+- [ ] **No 4625 events on DC-01 for password spray** — password spray from WS-DEV-01 against domain accounts should produce 4625/4776 on the DC as well, not just the originating workstation. DC-focused detection rules won't fire. (Detection Eng)
+
+**P1:**
+- [ ] **Human Burstiness scoring at 54/100** — user inter-event CV averaging ~0.75, below the 1.0–3.0 target for realistic burst-and-idle. Baseline engine distributes events too uniformly within work hours. Need more clustering/idle periods. (Eval)
+- [ ] **Storyline Trace Coverage at 74/100** — 9 of 35 expected format-traces missing, mainly "no trace in syslog" for SSH sessions. Syslog records exist but eval hostname normalization may not match (bare vs FQDN). (Eval)
+- [ ] **Proxy log shows raw IPs instead of domain names** — CONNECT entries use bare IP addresses (e.g., `91.219.236.180:443`) instead of SNI domain names. Real proxies log the SNI header. (Threat Hunter, Network Eng)
+- [ ] **C2/exfiltration SNI values are auto-generated CDN names** — ssl.log shows `host-91-219-236-180.cdn-provider.net` instead of plausible domains. Real C2 uses legitimate-looking domains. (Threat Hunter, Network Eng — 2 sources)
+- [ ] **HTTPS exfiltration to 185.199.108.153 missing from proxy log** — the curl upload to storage.mega-upload.io has no corresponding CONNECT entry in proxy_access.log. (Threat Hunter, Network Eng)
+- [ ] **DMZ http.log shows favicon GET, not exfiltration POST** — the exfiltration `curl -X POST` to drop.exfil-node.net appears as a benign `GET /favicon.ico` in Zeek http.json. (Threat Hunter)
+- [ ] **Only 1 RDP connection visible in SENSOR-CORE** — zero legitimate RDP noise makes the attacker's single RDP session trivially detectable. Need 5-15 IT admin RDP sessions as background. (Threat Hunter, Network Eng)
+- [ ] **IP 10.0.2.50 appears in Zeek but is outside all defined subnets** — 51 MSSQL connections to an undeclared host. All internal IPs should fall within documented segments. (Network Eng)
+- [ ] **eCAR FLOW records all have pid: -1** — no process association on network connections, preventing process-to-network correlation. (Detection Eng)
+
+**P2:**
+- [ ] **Sysmon only emits Event 1 (ProcessCreate)** — missing Event 3 (Network), 10 (ProcessAccess), 11 (FileCreate), 13 (Registry). Limits Sysmon-based hunting workflows. (DFIR)
+- [ ] **No Sysmon Event 10 (ProcessAccess) for LSASS credential dump** — comsvcs MiniDump should trigger PROCESS_VM_READ access event. (DFIR)
+- [ ] **No 4634 logoff events for akovacs on DC-01** — three 4624 logons but zero corresponding logoffs. (DFIR)
+- [ ] **Process creation timestamp precedes logon on FILE-SRV-01** — 4688 at T-189ms before its authorizing 4624. (DFIR)
+- [ ] **weird.json has TCP-specific types on UDP sources** — `connection_originator_SYN_ack` and `bad_TCP_checksum` with `source: UDP`. (Network Eng)
+- [ ] **x509 cert validity unrealistic for Let's Encrypt** — LE certs show 280+ day validity instead of 90 days. (Network Eng)
+- [ ] **Ground truth File IOCs section truncated** — contains `50000)` fragment instead of actual file paths. (Threat Hunter)
+- [ ] **NTP targets external NIST servers instead of DC/internal NTP** — workstations should sync to the domain controller. (Network Eng)
+- [ ] **4648 (Explicit Credential) targets localhost instead of DC** — domain enumeration commands should target the DC. (DFIR)
+- [ ] **DHCP shows full DISCOVER-OFFER-REQUEST-ACK** — 12h window should mostly show renewals (REQUEST-ACK only). (Network Eng)
+- [ ] **Proxy format inconsistencies** — doesn't match standard Squid or Bluecoat; shows decrypted HTTPS content through CONNECT tunnel. (Network Eng)
+- [ ] **4728 MemberName field is "-"** — should contain the DN of the added member (`CN=svc-deploy,CN=Users,DC=...`). (Detection Eng)
+
 ---
 
 ## Phase 8: Cross-Source Correlation — PLANNED
