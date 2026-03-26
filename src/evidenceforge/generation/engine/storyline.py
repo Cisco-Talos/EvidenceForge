@@ -37,6 +37,11 @@ POWERSHELL_COMMANDS = [
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
 
+    def _ensure_account_sid_tracking(self) -> None:
+        """Initialize the account SID tracking dict if not already present."""
+        if not hasattr(self, '_created_account_sids'):
+            self._created_account_sids: dict[str, str] = {}
+
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
 
@@ -51,6 +56,7 @@ class StorylineMixin:
         """
         total_events = len(self.scenario.storyline)
         _prev_event_time = None
+        self._ensure_account_sid_tracking()
 
         for event_num, storyline_event in enumerate(self.scenario.storyline, start=1):
             event_time = self._parse_storyline_time(storyline_event.time)
@@ -104,6 +110,7 @@ class StorylineMixin:
 
     def _execute_single_storyline_event(self, event_idx: int) -> None:
         """Execute a single storyline event by index (used for interleaved generation)."""
+        self._ensure_account_sid_tracking()
         storyline_event = self.scenario.storyline[event_idx]
         event_num = event_idx + 1
 
@@ -294,6 +301,8 @@ class StorylineMixin:
                 actor=actor, system=dc, time=time,
                 target_username=spec.target_username, target_sid=target_sid,
             )
+            # Store SID for later reuse by group_member_added
+            self._created_account_sids[spec.target_username] = target_sid
             malicious_event['target_username'] = spec.target_username
 
         elif spec.type == 'account_deleted':
@@ -309,7 +318,12 @@ class StorylineMixin:
             dc = next((s for s in self.scenario.environment.systems if s.type == 'domain_controller'), system)
             group_rid = 512 if 'admin' in spec.group_name.lower() else rng.randint(1100, 9999)
             group_sid = self._make_domain_sid(group_rid)
-            member_sid = self._make_domain_sid()
+            # Reuse SID from earlier account_created event, or generate new
+            member_sid = (
+                self._created_account_sids.get(spec.member_name)
+                or self.activity_generator.sid_registry.get(spec.member_name)
+                or self._make_domain_sid()
+            )
             self.activity_generator.generate_group_membership_change(
                 actor=actor, system=dc, time=time,
                 action='add', scope=spec.scope,
@@ -412,6 +426,9 @@ class StorylineMixin:
                 target_username=target_name,
                 target_sid=target_sid,
             )
+            # Store SID for later group_member_added reuse
+            self._ensure_account_sid_tracking()
+            self._created_account_sids[target_name] = target_sid
 
         # net user <name> /delete /domain -> 4726 (account deleted)
         match = re.search(r'net\s+user\s+(\S+)\s+/delete', cmd_lower)
@@ -433,7 +450,13 @@ class StorylineMixin:
             member_name = match.group(2)
             group_rid = 512 if 'admin' in group_name.lower() else rng.randint(1100, 9999)
             group_sid = _make_sid(group_rid)
-            member_sid = _make_sid()
+            # Reuse SID from earlier account_created if available
+            self._ensure_account_sid_tracking()
+            member_sid = (
+                self._created_account_sids.get(member_name)
+                or self.activity_generator.sid_registry.get(member_name)
+                or _make_sid()
+            )
             self.activity_generator.generate_group_membership_change(
                 actor=actor, system=dc,
                 time=time + timedelta(seconds=delay_s),

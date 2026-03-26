@@ -2194,6 +2194,18 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def _get_user_logon_id(self, username: str, hostname: str) -> str:
+        """Look up the user's active session LogonID on the given host.
+
+        Returns the session LogonID if found, or '0x3e7' (SYSTEM) as fallback.
+        """
+        sessions = self.state_manager.get_sessions_for_user(username)
+        if sessions:
+            active = next((s for s in sessions if s.system == hostname), None)
+            if active:
+                return active.logon_id
+        return '0x3e7'
+
     def generate_log_cleared(
         self,
         user: User,
@@ -2210,7 +2222,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
             ),
         )
         self.dispatcher.dispatch(event)
@@ -2239,7 +2251,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             service=ServiceContext(
@@ -2274,7 +2286,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             scheduled_task=ScheduledTaskContext(
@@ -2316,7 +2328,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             group_membership=GroupMembershipContext(
@@ -2351,7 +2363,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -2388,7 +2400,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -2421,7 +2433,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -2452,7 +2464,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -2517,7 +2529,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id='0x3e7',
+                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(

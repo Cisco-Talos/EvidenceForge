@@ -1084,23 +1084,33 @@ class BaselineMixin:
                 monitored_systems = []
                 for seg_name in sensor.monitoring_segments:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
-                if len(monitored_systems) < 2:
+                if not monitored_systems:
                     continue
                 num_alerts = rng.randint(1, 3)
+                # For IDS sensors (typically perimeter), generate alerts with
+                # external source IPs targeting monitored systems.
+                _EXTERNAL_SCAN_IPS = [
+                    "45.33.32.156", "185.220.101.34", "91.240.118.172",
+                    "194.26.192.77", "162.247.74.27", "198.98.51.189",
+                ]
                 for _ in range(num_alerts):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     sig = rng.choice(_FP_SIGS)
-                    src_sys = rng.choice(monitored_systems)
                     dst_sys = rng.choice(monitored_systems)
-                    if src_sys.ip == dst_sys.ip:
-                        continue
+                    if sensor.direction == "inbound" or len(monitored_systems) < 2:
+                        src_ip = rng.choice(_EXTERNAL_SCAN_IPS)
+                    else:
+                        src_sys = rng.choice(monitored_systems)
+                        if src_sys.ip == dst_sys.ip:
+                            continue
+                        src_ip = src_sys.ip
                     self.activity_generator.generate_raw(
                         time=ts, target_format='snort_alert', fields={
                             'timestamp': ts, 'sid': sig[0], 'message': sig[1],
                             'classification': sig[2], 'priority': sig[3],
                             'protocol': rng.choice(['TCP', 'UDP', 'ICMP']),
-                            'src_ip': src_sys.ip, 'src_port': rng.randint(1024, 65535),
+                            'src_ip': src_ip, 'src_port': rng.randint(1024, 65535),
                             'dst_ip': dst_sys.ip, 'dst_port': rng.choice([22, 80, 443, 53, 8080]),
                             '_sensor_hostnames': [sensor_host],
                         },
