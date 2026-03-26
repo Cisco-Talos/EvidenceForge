@@ -65,9 +65,9 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 Data is *wrong* — a hunter hits dead ends. Fix these first; several unblock Tier 2 work.
 
 - [ ] **LogonIDs leak across hosts** — remote processes on DC/file server use the originating-host LogonID instead of the destination host's 4624 TargetLogonId. Breaks every pivot-based hunting workflow.
-- [ ] **services.exe PID changes within single boot session** — process tree references a parent PID that was replaced mid-scenario. Child processes become orphaned.
+- [x] **services.exe PID changes within single boot session** — process tree references a parent PID that was replaced mid-scenario. Child processes become orphaned.
 - [ ] **Extend canonical event model to baseline activity** — baseline noise uses RawLogEntry bypass, so a svchost process doesn't produce a correlated Zeek conn or eCAR FLOW record. Primary blocker for Baseline Coherence eval (43/100). Architectural prerequisite for many Tier 2 fixes.
-- [ ] **Migrate eCAR FLOW to SecurityEvent dispatch** — add `"connection"` to EcarEmitter._supported_types, implement `_render_connection()`, verify eCAR FLOW records carry Zeek UID. Fixes pid:-1 on all FLOW records and enables eCAR↔Zeek pivoting.
+- [x] **Migrate eCAR FLOW to SecurityEvent dispatch** — already complete: `"connection"` in `_supported_types`, `_render_connection()` implemented, all connections dispatch through SecurityEvent. `pid:-1` for system traffic is correct behavior.
 - [ ] **No 4625 on DC for password spray** — sprays against domain accounts should produce 4625/4776 on the DC, not just the originating workstation. DC-focused Sigma/Splunk rules won't fire.
 - [ ] **Ground truth Zeek UIDs missing from logs** — UIDs listed in GROUND_TRUTH.md IOC section don't exist in any sensor's conn.json. Answer key references evidence that isn't there.
 

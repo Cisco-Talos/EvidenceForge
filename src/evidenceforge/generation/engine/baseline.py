@@ -124,6 +124,7 @@ class BaselineMixin:
         - Other: 30min-2 hours
         """
         system_patterns = (
+            # Windows core
             "svchost",
             "lsass",
             "csrss",
@@ -133,25 +134,47 @@ class BaselineMixin:
             "wininit",
             "winlogon",
             "fontdrvhost",
+            "dwm.exe",
+            "userinit.exe",
+            "runtimebroker",
+            "taskhostw",
+            "searchindexer",
+            "msmpeng",
+            # Linux core
             "systemd",
             "cron",
+            "crond",
             "sshd",
             "rsyslogd",
-            "NetworkManager",
+            "journald",
+            "udevd",
+            "logind",
+            "snapd",
+            "timesyncd",
+            "networkmanager",
             "dbus-daemon",
             "bash",
             "agetty",
         )
         short_lived = ("msbuild", "gcc", "npm", "make", "dotnet", "cargo", "node.exe")
 
+        # Collect all seeded system PIDs for this system as a safety net
+        seeded_pids: dict[str, set[int]] = {}
+        for hostname, pid_map in self._system_pids.items():
+            seeded_pids[hostname] = set(pid_map.values())
+
         rng = _get_rng()
         for system in self.scenario.environment.systems:
+            protected_pids = seeded_pids.get(system.hostname, set())
             processes = self.state_manager.get_processes_on_system(system.hostname)
             for proc in list(processes):
                 proc_age_hours = (current_hour - proc.start_time).total_seconds() / 3600
                 image_lower = proc.image.lower()
 
+                # Never terminate seeded system processes (pattern match + PID safety net)
                 if any(p in image_lower for p in system_patterns):
+                    continue
+                if proc.pid in protected_pids:
                     continue
 
                 if any(p in image_lower for p in short_lived):
