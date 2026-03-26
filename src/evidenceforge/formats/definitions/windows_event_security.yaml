@@ -1236,6 +1236,7 @@ output:
         <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
         <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
+        <Data Name="Status">{{ Status | default('0x0') }}</Data>
         {% elif EventID == 4776 %}
         <Data Name="PackageName">{{ PackageName }}</Data>
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
