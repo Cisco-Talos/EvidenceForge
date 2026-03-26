@@ -96,7 +96,7 @@ When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line su
 
 **Testing:**
 - pytest with pytest-cov, pytest-asyncio, pytest-mock, pytest-benchmark
-- Separate test markers: `@pytest.mark.live` for tests requiring LLM API (not run by default)
+- Separate test markers: `@pytest.mark.slow` for large dataset tests (not run by default)
 - Target coverage: 95%+ overall, 95%+ for core generation engine
 
 **Format Support:**
@@ -248,7 +248,7 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 
 ## Testing Requirements
 
-**Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/live/` (`@pytest.mark.live`, requires LLM API), `tests/fixtures/` (shared data)
+**Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/fixtures/` (shared data)
 
 **Coverage targets:** 95%+ overall, 95%+ core engine, 90%+ formats, 85%+ CLI. Exclude: `__main__.py`, type stubs, test fixtures.
 
@@ -256,7 +256,7 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 - Test naming: `test_<function>_<scenario>_<expected_result>`
 - Use Arrange/Act/Assert pattern
 - Use `tmp_path` for all file I/O in tests
-- Mock LLM API calls in non-live tests
+- No LLM calls during generation — all tests are deterministic
 - Write deterministic tests: seed randomness, mock time, use fixed test data
 - Use Hypothesis for property-based testing where appropriate (e.g., unique PIDs)
 - Never use mutable default arguments
