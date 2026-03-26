@@ -496,6 +496,7 @@ class WindowsEventEmitter(LogEmitter):
             "TicketEncryptionType": krb.encryption_type,
             "IpAddress": krb.source_ip,
             "IpPort": krb.source_port,
+            "Status": "0x0",
         }
         self.emit_event(event_data)
 
