@@ -137,6 +137,7 @@ Typed `events` list on storyline entries with per-type Pydantic models, suppleme
 
 ### Immediate-term (priority fixes)
 - [ ] The `eforge validate` command correctly finds defined personas when run as an installed tool, but is unable to find them when run in dev mode (`uv run eforge validate [...]`).
+- [ ] **Extend canonical event model to baseline activity for cross-source coherence.** Currently, baseline noise events are generated independently per format (RawLogEntry), so a svchost process on WS-01 doesn't produce a correlated Zeek conn record. Storyline events use SecurityEvent dispatch (Phase 7) which handles this. Baseline activity should use the same SecurityEvent dispatch path so background noise correlates across Windows/Zeek/eCAR/syslog — this is the primary blocker for Baseline Coherence (Sampled) eval scores (currently ~43/100).
 
 ### Short-term
 - [ ] Story line events are too perfect. Have the threat actor(s) fumble and make mistakes (e.g., use the wrong commands, make typos and correct them, enumerate systems/accounts/files, perform local recon, try attack paths that lead to dead ends, etc)
