@@ -338,13 +338,22 @@ class TemporalRealismScorer(DimensionScorer):
 
         avg_cv = statistics.mean(cv_scores)
 
-        # Score: CV < 0.1 → 100 (very periodic), CV > 0.5 → 0 (random)
-        if avg_cv <= 0.1:
+        # Trapezoidal "goldilocks" scoring — neither metronomic nor random.
+        #   CV < 0.05  → 50 (too regular, synthetic tell)
+        #   CV 0.05–0.15 → ramp 50→100
+        #   CV 0.15–1.0  → 100 (natural system variance)
+        #   CV 1.0–2.0   → ramp 100→0
+        #   CV > 2.0     → 0 (random/broken)
+        if avg_cv < 0.05:
+            score = 50.0
+        elif avg_cv < 0.15:
+            score = 50.0 + 50.0 * (avg_cv - 0.05) / 0.10
+        elif avg_cv <= 1.0:
             score = 100.0
-        elif avg_cv >= 0.5:
-            score = 0.0
+        elif avg_cv <= 2.0:
+            score = 100.0 * (2.0 - avg_cv)
         else:
-            score = 100.0 * (0.5 - avg_cv) / 0.4
+            score = 0.0
 
         return SubScore(
             name="System Process Regularity", key="system_regularity", weight=0.20,
