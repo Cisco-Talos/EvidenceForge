@@ -308,6 +308,22 @@ events:
     technique: "T1071.001 - Web Protocols"
 ```
 
+**HTTP requests (web attacks, web shell access):**
+Use `connection` with `service: http` for web-based attacks. This produces correlated web_access + zeek_http + zeek_conn records. Do NOT use `raw` with `target_format: web_access` — that bypasses cross-source correlation.
+```yaml
+events:
+  - type: connection
+    dst_ip: "10.10.20.10"
+    dst_port: 80
+    service: http
+    source_ip: "203.0.113.45"
+    method: "GET"
+    uri: "/ehr/login.php?id=1' OR 1=1--"
+    status_code: 200
+    user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
+    technique: "T1190 - Exploit Public-Facing Application"
+```
+
 **Authentication (logon/failed logon):**
 ```yaml
 events:

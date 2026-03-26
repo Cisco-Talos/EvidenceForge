@@ -839,10 +839,6 @@ class BaselineMixin:
             if os_cat_svc != "windows" or "windows_event_security" not in self.emitters:
                 continue
 
-            ad_domain = getattr(self.activity_generator, "_ad_domain", "corp.local")
-            getattr(self.activity_generator, "_netbios_domain", "CORP")
-            computer_fqdn = f"{system.hostname}.{ad_domain}"
-
             sys_type_svc = (system.type or "workstation").lower()
             num_svc = rng.randint(2, 5) if sys_type_svc != "workstation" else rng.randint(1, 2)
             for _ in range(num_svc):
@@ -861,37 +857,10 @@ class BaselineMixin:
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="windows_event_security",
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_anonymous_logon(
                         system=system,
-                        fields={
-                            "EventID": 4624,
-                            "TimeCreated": ts,
-                            "Computer": computer_fqdn,
-                            "Channel": "Security",
-                            "Level": 0,
-                            "ExecutionProcessID": 4,
-                            "ExecutionThreadID": rng.randint(100, 500),
-                            "SubjectUserSid": "S-1-0-0",
-                            "SubjectUserName": "-",
-                            "SubjectDomainName": "-",
-                            "SubjectLogonId": "0x0",
-                            "TargetUserSid": "S-1-5-7",
-                            "TargetUserName": "ANONYMOUS LOGON",
-                            "TargetDomainName": "NT AUTHORITY",
-                            "TargetLogonId": f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
-                            "LogonType": 3,
-                            "LogonProcessName": "NtLmSsp",
-                            "AuthenticationPackageName": "NTLM",
-                            "LmPackageName": "NTLM V2",
-                            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
-                            "WorkstationName": "-",
-                            "ProcessId": "0x0",
-                            "ProcessName": "-",
-                            "IpAddress": "-",
-                            "IpPort": 0,
-                        },
+                        time=ts,
                     )
 
         # Machine account ($) authentication to DCs
@@ -1046,19 +1015,12 @@ class BaselineMixin:
                     ]
                     svc = rng.choice(services)
                     action = rng.choice(["Starting", "Finished"])
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd",
-                            "pid": sys_pids.get("systemd", 1),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
-                        },
+                        time=ts,
+                        app_name="systemd",
+                        message=f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
+                        pid=sys_pids.get("systemd", 1),
                     )
                 elif source_roll < 0.35:
                     cron_cmds = [
@@ -1081,7 +1043,7 @@ class BaselineMixin:
                     )
                 elif source_roll < 0.50:
                     if is_dmz and rng.random() < 0.85:
-                        src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                        src_ip = self._generate_external_client_ip(rng)
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
                         msg = (
@@ -1091,6 +1053,9 @@ class BaselineMixin:
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
                         )
+                        # UFW block: connection (→ Zeek conn REJ) + syslog (→ kernel UFW)
+                        # Both on the same SecurityEvent for cross-source correlation
+
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=system.ip,
@@ -1101,7 +1066,18 @@ class BaselineMixin:
                             src_port=spt,
                             source_system=system,
                         )
+                        # Paired syslog via canonical dispatch
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts,
+                            app_name="kernel",
+                            message=msg,
+                            pid=None,
+                            facility=0,
+                            severity=5,
+                        )
                     else:
+                        # AppArmor audit: standalone kernel syslog
                         self._audit_serials[system.hostname] = self._audit_serials.get(
                             system.hostname, 1000
                         ) + rng.randint(1, 5)
@@ -1111,39 +1087,27 @@ class BaselineMixin:
                             f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
                             f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
                         )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
-                        system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "kernel",
-                            "pid": None,
-                            "facility": 0,
-                            "severity": 5,
-                            "message": msg,
-                        },
-                    )
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts,
+                            app_name="kernel",
+                            message=msg,
+                            pid=None,
+                            facility=0,
+                            severity=5,
+                        )
                 elif source_roll < 0.65:
                     sid = rng.randint(100, 9999)
                     user = rng.choice(["root", "admin", "www-data", "ubuntu"])
                     action = rng.choice(
                         [f"New session {sid} of user {user}.", f"Removed session {sid}."]
                     )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd-logind",
-                            "pid": sys_pids.get("logind", rng.randint(400, 800)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": action,
-                        },
+                        time=ts,
+                        app_name="systemd-logind",
+                        message=action,
+                        pid=sys_pids.get("logind", rng.randint(400, 800)),
                     )
                 elif source_roll < 0.80:
                     other_ips = [
@@ -1169,40 +1133,27 @@ class BaselineMixin:
                         f"Disconnected from user admin {ip} port {port}",
                         "pam_unix(sshd:session): session closed for user admin",
                     ]
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "sshd",
-                            "pid": rng.randint(5000, 60000),
-                            "facility": 10,
-                            "severity": 6,
-                            "message": rng.choice(msgs),
-                        },
+                        time=ts,
+                        app_name="sshd",
+                        message=rng.choice(msgs),
+                        pid=rng.randint(5000, 60000),
+                        facility=10,
                     )
                 elif source_roll < 0.90:
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "snapd",
-                            "pid": sys_pids.get("snapd", rng.randint(500, 2000)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": rng.choice(
-                                [
-                                    "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
-                                    "daemon.go:460: gracefully waiting for running hooks",
-                                    "stateengine.go:150: state ensure starting",
-                                ]
-                            ),
-                        },
+                        time=ts,
+                        app_name="snapd",
+                        message=rng.choice(
+                            [
+                                "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
+                                "daemon.go:460: gracefully waiting for running hooks",
+                                "stateengine.go:150: state ensure starting",
+                            ]
+                        ),
+                        pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
                 else:
                     ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
@@ -1219,19 +1170,12 @@ class BaselineMixin:
                                 f"Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).",
                             ]
                         )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_syslog_event(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd-timesyncd",
-                            "pid": sys_pids.get("timesyncd", rng.randint(400, 800)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": msg,
-                        },
+                        time=ts,
+                        app_name="systemd-timesyncd",
+                        message=msg,
+                        pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
 
         # ICMP ping between systems on same subnet
@@ -1289,7 +1233,6 @@ class BaselineMixin:
             for sensor in self.scenario.environment.network.sensors:
                 if "snort_alert" not in expand_formats(sensor.log_formats):
                     continue
-                sensor_host = sensor.hostname or sensor.name
                 monitored_systems = []
                 for seg_name in sensor.monitoring_segments:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
@@ -1318,22 +1261,29 @@ class BaselineMixin:
                         if src_sys.ip == dst_sys.ip:
                             continue
                         src_ip = src_sys.ip
-                    self.activity_generator.generate_raw(
+                    from evidenceforge.events.contexts import IdsContext
+
+                    alert_proto_str = rng.choice(["TCP", "UDP", "ICMP"])
+                    alert_proto = alert_proto_str.lower()
+                    alert_dst_port = rng.choice([22, 80, 443, 53, 8080])
+                    self.activity_generator.generate_connection(
+                        src_ip=src_ip,
+                        dst_ip=dst_sys.ip,
                         time=ts,
-                        target_format="snort_alert",
-                        fields={
-                            "timestamp": ts,
-                            "sid": sig[0],
-                            "message": sig[1],
-                            "classification": sig[2],
-                            "priority": sig[3],
-                            "protocol": rng.choice(["TCP", "UDP", "ICMP"]),
-                            "src_ip": src_ip,
-                            "src_port": rng.randint(1024, 65535),
-                            "dst_ip": dst_sys.ip,
-                            "dst_port": rng.choice([22, 80, 443, 53, 8080]),
-                            "_sensor_hostnames": [sensor_host],
-                        },
+                        dst_port=alert_dst_port,
+                        proto=alert_proto,
+                        service={22: "ssh", 80: "http", 443: "ssl", 53: "dns"}.get(
+                            alert_dst_port, ""
+                        ),
+                        duration=rng.uniform(0.001, 5.0),
+                        orig_bytes=rng.randint(40, 2000),
+                        resp_bytes=rng.randint(0, 1000),
+                        ids=IdsContext(
+                            sid=sig[0],
+                            message=sig[1],
+                            classification=sig[2],
+                            priority=sig[3],
+                        ),
                     )
 
         # Web access logs
@@ -1380,21 +1330,43 @@ class BaselineMixin:
                             client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     else:
                         client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
-                    self.activity_generator.generate_raw(
+                    from evidenceforge.events.contexts import HttpContext
+
+                    resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
+                    _URI_MIME = {
+                        "/": "text/html",
+                        "/index.html": "text/html",
+                        "/api/v1/health": "application/json",
+                        "/favicon.ico": "image/x-icon",
+                        "/robots.txt": "text/plain",
+                        "/assets/main.css": "text/css",
+                        "/assets/app.js": "application/javascript",
+                        "/images/logo.png": "image/png",
+                    }
+                    mime = _URI_MIME.get(path, "text/html")
+                    self.activity_generator.generate_connection(
+                        src_ip=client_ip,
+                        dst_ip=sys_obj.ip,
                         time=ts,
-                        target_format="web_access",
-                        system=sys_obj,
-                        fields={
-                            "timestamp": ts,
-                            "client_ip": client_ip,
-                            "method": method,
-                            "path": path,
-                            "protocol": "HTTP/1.1",
-                            "status_code": status,
-                            "bytes_sent": rng.randint(200, 50000)
-                            if status == 200
-                            else rng.randint(100, 500),
-                            "referer": "-",
-                            "user_agent": rng.choice(_WEB_UAS),
-                        },
+                        dst_port=80,
+                        proto="tcp",
+                        service="http",
+                        duration=rng.uniform(0.01, 2.0),
+                        orig_bytes=rng.randint(200, 2000),
+                        resp_bytes=resp_bytes,
+                        http=HttpContext(
+                            method=method,
+                            host=sys_obj.hostname,
+                            uri=path,
+                            version="1.1",
+                            user_agent=rng.choice(_WEB_UAS),
+                            request_body_len=rng.randint(0, 500) if method == "POST" else 0,
+                            response_body_len=resp_bytes,
+                            status_code=status,
+                            status_msg={200: "OK", 403: "Forbidden", 404: "Not Found"}.get(
+                                status, "OK"
+                            ),
+                            resp_mime_types=[mime] if status == 200 else [],
+                            tags=[],
+                        ),
                     )

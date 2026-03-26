@@ -216,7 +216,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `logon` | 4624, 4672, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
-| `connection` | Zeek conn, eCAR FLOW | `dst_ip` | `dst_port` (default 443), `service`, `source_ip` |
+| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
 | `ssh_session` | Zeek conn + syslog sshd + eCAR | | `source_ip` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -230,29 +230,51 @@ Each event in the `events` list has a `type` field that selects a validated sche
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
+### HTTP Connection Events
+
+For web-based attack steps (SQL injection, web shell access, etc.), use `connection` with `service: http` and `dst_port: 80` instead of `raw`. This produces **correlated records** across web_access + zeek_http + zeek_conn — a `raw` event only targets one format.
+
+```yaml
+- time: "+1h10m"
+  actor: attacker
+  system: WEB-01
+  activity: "SQL injection probe against EHR portal"
+  events:
+    - type: connection
+      dst_ip: "10.10.20.10"
+      dst_port: 80
+      service: http
+      source_ip: "203.0.113.45"
+      method: "GET"
+      uri: "/ehr/login.php?id=1%27%20OR%201=1--"
+      status_code: 200
+      user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
+```
+
+HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent.
+
 ### Raw Events
 
-The `raw` event type targets a specific output format with arbitrary field data. Use it for events not covered by the typed event specs above (e.g., custom syslog messages, specific Windows events).
+The `raw` event type targets a specific output format with arbitrary field data. Use it **only** for events not covered by the typed event specs above. Prefer typed events (especially `connection` for web access) because `raw` events bypass cross-source correlation — they produce a single log entry with no matching records in other formats.
 
 ```yaml
 - time: "+2h"
   actor: attacker
   system: WEB-01
-  activity: "Web shell access logged in Apache"
+  activity: "Custom syslog entry"
   events:
     - type: raw
       target_format: syslog
       fields:
-        timestamp: "+2h"
         hostname: WEB-01
         app_name: "apache2"
         pid: 1234
         facility: 3
         severity: 6
-        message: "192.0.2.50 - - [15/Jan/2024:12:00:00 +0000] \"GET /uploads/cmd.php?c=id HTTP/1.1\" 200 45"
+        message: "custom message here"
 ```
 
-`target_format` must be a supported format name (e.g., `syslog`, `windows_event_security`, `ecar`, `zeek_conn`). The `fields` dict is passed directly to the target emitter without schema validation — ensure field names match the format's expected structure.
+`target_format` must be a supported format name (e.g., `syslog`, `windows_event_security`, `ecar`, `zeek_conn`). The `fields` dict is passed directly to the target emitter without schema validation — ensure field names match the format's expected structure. The event's timestamp is automatically injected if not provided in `fields`.
 
 ### Correlated Events for Process Commands
 

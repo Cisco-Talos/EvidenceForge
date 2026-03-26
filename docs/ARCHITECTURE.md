@@ -79,7 +79,7 @@ This separation means scenario creation benefits from LLM reasoning about attack
 
 The core architectural principle is that **two emitters cannot disagree about shared fields because there is only one source of truth.**
 
-A single `SecurityEvent` object carries all the data for one logical security event. When a user logs in, ActivityGenerator creates one SecurityEvent with authentication details, and the EventDispatcher routes it to every relevant emitter. The Windows emitter renders it as a 4624 XML event, the syslog emitter renders it as an auth.info message, and the eCAR emitter renders it as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
+A single `SecurityEvent` object carries all the data for one logical security event. When a user logs into a Linux system, ActivityGenerator creates one SecurityEvent with AuthContext + SyslogContext, and the EventDispatcher routes it to every relevant emitter. The syslog emitter renders from SyslogContext ("Accepted password for alice from ..."), and the eCAR emitter renders from AuthContext as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
 
 ```
             ActivityGenerator
@@ -87,19 +87,21 @@ A single `SecurityEvent` object carries all the data for one logical security ev
                    ▼
         ┌─── SecurityEvent ───┐
         │ timestamp: 09:15:23 │
-        │ host: WS-001        │
+        │ host: LNX-001       │
         │ auth:               │
         │   user: john.doe    │
         │   logon_id: 0x4A2B  │
-        │   logon_type: 10    │
+        │ syslog:             │
+        │   app: sshd         │
+        │   msg: Accepted ... │
         └─────────┬───────────┘
                   │
       ┌───────────┼───────────┐
       ▼           ▼           ▼
-  Windows      Syslog      eCAR
-  4624 XML    auth.info   USER_SESSION
-  (same       (same       (same
-   data)       data)       data)
+  Syslog      eCAR        Zeek
+  sshd msg   LOGIN       conn.log
+  (from       (from       (from
+  syslog)     auth)       network)
 ```
 
 ### Network Visibility Modeling
@@ -132,6 +134,8 @@ SecurityEvent
 ├── file: FileContext (path, hash, operation)
 ├── registry: RegistryContext (key, value, operation)
 ├── ids: IdsContext (signature, severity, classification)
+├── syslog: SyslogContext (app_name, message, pid, facility, severity)
+├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command, exit_code)
 ├── ... (20+ context types total)
@@ -141,9 +145,10 @@ SecurityEvent
 All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined in `src/evidenceforge/events/contexts.py`.
 
 **Key design decisions:**
-- Contexts are composable — a logon event has Host + Auth contexts; a process event has Host + Process contexts
+- Contexts are composable — a logon event has Host + Auth + Syslog contexts; a process event has Host + Process + Syslog contexts
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
-- `RawLogEntry` is the escape hatch for single-format entries that don't fit the canonical model
+- The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
+- `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
 
 ### EventDispatcher
 
@@ -203,7 +208,7 @@ LogEmitter (ABC)
 ├── can_handle(event) → bool         # Format eligibility check
 ├── emit(event: SecurityEvent)       # New path: type-safe, context-aware
 ├── emit_event(data: dict)           # Legacy path: raw dict rendering
-├── emit_raw(entry: RawLogEntry)     # Escape hatch for single-format entries
+├── emit_raw(entry: RawLogEntry)     # Escape hatch (user `raw` event type only)
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
@@ -227,10 +232,8 @@ LogEmitter (ABC)
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 
 **Two rendering paths:**
-- `emit(SecurityEvent)` — new, type-safe path (used by migrated event types)
-- `emit_event(dict)` — legacy path (still used by some emitters via RawLogEntry)
-
-Both paths coexist; the migration is incremental.
+- `emit(SecurityEvent)` — primary path for all event types (storyline + baseline)
+- `emit_event(dict)` — legacy path for user `raw` event type in scenario YAML only
 
 ### Format Definition System
 

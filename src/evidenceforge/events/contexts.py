@@ -156,6 +156,31 @@ class IdsContext:
 
 
 @dataclass(slots=True)
+class SyslogContext:
+    """Syslog message fields for Linux system/daemon/kernel logs.
+
+    Used by the syslog emitter to render syslog-format log entries.
+    Callers provide the exact app_name, message, facility, and severity.
+    """
+
+    app_name: str  # "sshd", "kernel", "systemd", "snapd", etc.
+    message: str  # The syslog message body
+    pid: int | None = None  # None for kernel messages
+    facility: int = 3  # 3=daemon, 0=kernel, 10=auth/security
+    severity: int = 6  # 6=info, 5=notice, 4=warning
+
+
+@dataclass(slots=True)
+class WeirdContext:
+    """Zeek weird.log anomaly details."""
+
+    name: str  # e.g., "truncated_header", "bad_TCP_checksum"
+    notice: bool = False
+    peer: str = ""
+    source: str = "TCP"  # "TCP", "UDP"
+
+
+@dataclass(slots=True)
 class KerberosContext:
     """Kerberos protocol details for DC events (4768 TGT, 4769 service ticket)."""
 
@@ -313,10 +338,14 @@ class DhcpContext:
     """DHCP transaction details for Zeek dhcp.log."""
 
     client_addr: str = ""
+    server_addr: str = ""
     mac: str = ""
     host_name: str = ""
     domain: str = ""
-    msg_types: list[str] = field(default_factory=list)  # ["REQUEST", "ACK"]
+    assigned_addr: str = ""
+    lease_time: float = 0.0
+    uids: list[str] = field(default_factory=list)
+    msg_types: list[str] = field(default_factory=list)  # ["DISCOVER", "OFFER", "REQUEST", "ACK"]
     duration: float = 0.0
 
 

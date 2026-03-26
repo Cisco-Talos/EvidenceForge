@@ -18,6 +18,8 @@ from evidenceforge.events.contexts import (
     DnsContext,
     FileContext,
     HostContext,
+    HttpContext,
+    IdsContext,
     KerberosContext,
     RegistryContext,
 )
@@ -488,6 +490,22 @@ class ActivityGenerator:
             ),
         )
 
+        # Attach SyslogContext for Linux hosts (sshd logon message)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            sshd_pid = 1000 + (hash(logon_id) % 59000)
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=sshd_pid,
+                facility=10,
+                severity=6,
+                message=(
+                    f"Accepted password for {user.username} from {source_ip} "
+                    f"port {_get_rng().randint(49152, 65535)} ssh2"
+                ),
+            )
+
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
@@ -596,6 +614,21 @@ class ActivityGenerator:
             ),
         )
 
+        # Attach SyslogContext for Linux hosts (sshd failed logon)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=_get_rng().randint(5000, 60000),
+                facility=10,
+                severity=4,
+                message=(
+                    f"Failed password for {effective_username} from {source_ip} "
+                    f"port {_get_rng().randint(49152, 65535)} ssh2"
+                ),
+            )
+
         self.dispatcher.dispatch(event)
 
         # Domain controller side: 4625 + 4776 for domain account authentication
@@ -669,6 +702,19 @@ class ActivityGenerator:
                 logon_type=logon_type,
             ),
         )
+
+        # Attach SyslogContext for Linux hosts (sshd session closed)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            sshd_pid = 1000 + (hash(logon_id) % 59000)
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=sshd_pid,
+                facility=10,
+                severity=6,
+                message=f"pam_unix(sshd:session): session closed for user {user.username}",
+            )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
@@ -867,12 +913,18 @@ class ActivityGenerator:
         source_system: Optional["System"] = None,
         conn_state: str | None = None,
         dns: Optional["DnsContext"] = None,
+        ids: Optional["IdsContext"] = None,
+        http: Optional["HttpContext"] = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
         Opens connection in StateManager, builds a SecurityEvent with
         NetworkContext, and dispatches to matching emitters (Zeek conn,
         Snort, eCAR FLOW). Dispatcher handles network visibility filtering.
+
+        Optional context overrides (ids, http) are attached to the
+        SecurityEvent, enabling correlated rendering by format-specific
+        emitters (e.g., Snort from IdsContext, web_access from HttpContext).
 
         Args:
             src_ip: Source IP address
@@ -886,6 +938,8 @@ class ActivityGenerator:
             resp_bytes: Bytes sent by responder
             src_port: Source port (auto-assigned ephemeral if None)
             emit_dns: If True, emit a DNS lookup for dst_ip before the connection
+            ids: Optional IdsContext for IDS alert correlation (Snort emitter)
+            http: Optional HttpContext override (skips auto-generation)
 
         Returns:
             Zeek UID (18-character string)
@@ -1079,6 +1133,12 @@ class ActivityGenerator:
             ),
         )
 
+        # Caller-provided context overrides
+        if ids is not None:
+            event.ids = ids
+        if http is not None:
+            event.http = http
+
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
             event.dns = dns
@@ -1214,7 +1274,13 @@ class ActivityGenerator:
                     next_update=now_epoch + rng.randint(86400, 86400 * 7),
                 )
 
-        elif not local_only and service == "http" and proto == "tcp" and conn_state == "SF":
+        elif (
+            not local_only
+            and service == "http"
+            and proto == "tcp"
+            and conn_state == "SF"
+            and event.http is None  # Skip auto-generation if caller provided HttpContext
+        ):
             from evidenceforge.events.contexts import HttpContext
 
             _USER_AGENTS_WINDOWS = [
@@ -1328,12 +1394,10 @@ class ActivityGenerator:
                 ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
             )
 
-        # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
-        self.dispatcher.dispatch(event)
-        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
-
         # Zeek weird.log: probabilistic network anomalies (~3% of connections)
         if not local_only and rng.random() < 0.03:
+            from evidenceforge.events.contexts import WeirdContext
+
             _WEIRD_NAMES = [
                 "window_recision",
                 "possible_split_routing",
@@ -1344,22 +1408,14 @@ class ActivityGenerator:
                 "inappropriate_FIN",
                 "bad_TCP_checksum",
             ]
-            self.generate_raw(
-                time=time,
-                target_format="zeek_weird",
-                fields={
-                    "ts": time,
-                    "uid": uid,
-                    "id.orig_h": src_ip,
-                    "id.orig_p": src_port,
-                    "id.resp_h": dst_ip,
-                    "id.resp_p": dst_port,
-                    "name": rng.choice(_WEIRD_NAMES),
-                    "notice": False,
-                    "peer": "",
-                    "source": "TCP" if proto == "tcp" else "UDP",
-                },
+            event.weird = WeirdContext(
+                name=rng.choice(_WEIRD_NAMES),
+                source="TCP" if proto == "tcp" else "UDP",
             )
+
+        # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
+        self.dispatcher.dispatch(event)
+        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # Emit 5156 (WFP connection) on Windows source hosts
         if source_system and _get_os_category(source_system.os) == "windows":
@@ -1454,7 +1510,63 @@ class ActivityGenerator:
             ),
         )
 
+        # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
+            session_id = rng.randint(100, 99999)
+
+            # Primary event: sshd Accepted password
+            event.syslog = SyslogContext(
+                app_name="sshd",
+                pid=sshd_pid,
+                facility=10,
+                severity=6,
+                message=(
+                    f"Accepted password for {user.username} from {source_ip} port {src_port} ssh2"
+                ),
+            )
+
         self.dispatcher.dispatch(event)
+
+        # Emit follow-up syslog entries (pam_unix + systemd-logind)
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
+            pam_event = SecurityEvent(
+                timestamp=time + timedelta(microseconds=rng.randint(1000, 50000)),
+                event_type="syslog",
+                host=event.host,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=sshd_pid,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        f"pam_unix(sshd:session): session opened for user "
+                        f"{user.username} by (uid=0)"
+                    ),
+                ),
+            )
+            self.dispatcher.dispatch(pam_event)
+
+            # systemd-logind new session (syslog-only)
+            logind_event = SecurityEvent(
+                timestamp=time + timedelta(microseconds=rng.randint(50000, 80000)),
+                event_type="syslog",
+                host=event.host,
+                syslog=SyslogContext(
+                    app_name="systemd-logind",
+                    pid=1000 + (hash("logind") % 59000),
+                    facility=10,
+                    severity=6,
+                    message=f"New session {session_id} of user {user.username}.",
+                ),
+            )
+            self.dispatcher.dispatch(logind_event)
+
         logger.debug(
             f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})"
         )
@@ -1621,6 +1733,29 @@ class ActivityGenerator:
                 mandatory_label="S-1-16-16384",
             ),
         )
+
+        # Attach SyslogContext for Linux hosts
+        if event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            is_cron = "cron" in (process_name or "").lower()
+            if is_cron:
+                event.syslog = SyslogContext(
+                    app_name="CRON",
+                    pid=pid,
+                    facility=9,
+                    severity=6,
+                    message=f"({username}) CMD ({command_line})",
+                )
+            else:
+                app_name = process_name.split("/")[-1]
+                event.syslog = SyslogContext(
+                    app_name=app_name,
+                    pid=pid,
+                    facility=3,
+                    severity=6,
+                    message=f"started: {command_line}",
+                )
 
         self.dispatcher.dispatch(event)
 
@@ -2847,6 +2982,100 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_dhcp_lease(
+        self,
+        system: "System",
+        time: datetime,
+        mac: str,
+        server_addr: str = "10.0.0.1",
+        lease_time: float = 3600.0,
+        uid: str = "",
+    ) -> None:
+        """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
+        from evidenceforge.events.contexts import DhcpContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="dhcp_lease",
+            host=self._build_host_context(system),
+            dhcp=DhcpContext(
+                client_addr=system.ip,
+                server_addr=server_addr,
+                mac=mac,
+                host_name=system.hostname,
+                assigned_addr=system.ip,
+                lease_time=lease_time,
+                uids=[uid] if uid else [],
+                msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+                duration=_get_rng().uniform(0.01, 0.5),
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_anonymous_logon(
+        self,
+        system: "System",
+        time: datetime,
+    ) -> None:
+        """Generate an anonymous logon event (4624 type 3) without creating a session.
+
+        Used for Windows server/DC background SMB enumeration traffic.
+        """
+        rng = _get_rng()
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logon",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username="ANONYMOUS LOGON",
+                user_sid="S-1-5-7",
+                logon_id=f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
+                logon_type=3,
+                auth_package="NTLM",
+                logon_process="NtLmSsp",
+                lm_package="NTLM V2",
+                logon_guid="{00000000-0000-0000-0000-000000000000}",
+                subject_sid="S-1-0-0",
+                subject_username="-",
+                subject_domain="-",
+                subject_logon_id="0x0",
+                source_ip="-",
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_syslog_event(
+        self,
+        system: "System",
+        time: datetime,
+        app_name: str,
+        message: str,
+        pid: int | None = None,
+        facility: int = 3,
+        severity: int = 6,
+    ) -> None:
+        """Generate a standalone syslog event via canonical SecurityEvent dispatch.
+
+        For daemon status messages, kernel logs, and other syslog-only entries
+        that don't correlate with other event types. The SecurityEvent carries
+        HostContext + SyslogContext and dispatches to the syslog emitter.
+        """
+        from evidenceforge.events.contexts import SyslogContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="syslog",
+            host=self._build_host_context(system),
+            syslog=SyslogContext(
+                app_name=app_name,
+                message=message,
+                pid=pid,
+                facility=facility,
+                severity=severity,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
     def generate_raw(
         self,
         time: datetime,
@@ -2863,6 +3092,9 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import RawContext
 
         host_ctx = self._build_host_context(system) if system else None
+        # Inject timestamp if not provided (format templates need it for rendering)
+        if "timestamp" not in fields:
+            fields["timestamp"] = time
         # Inject host FQDN for HostMultiplexEmitter routing
         if host_ctx and "_host_fqdn" not in fields:
             fields["_host_fqdn"] = (
@@ -2875,6 +3107,55 @@ class ActivityGenerator:
             raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
+
+    def generate_sensor_startup(
+        self,
+        sensor_hostname: str,
+        time: datetime,
+        reporter_messages: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Generate sensor startup events (packet_filter.log + reporter.log).
+
+        Emits a SecurityEvent with event_type="sensor_startup" that routes
+        to ZeekPacketFilterEmitter and ZeekReporterEmitter.
+
+        Args:
+            sensor_hostname: Hostname of the sensor
+            time: Startup timestamp
+            reporter_messages: Optional list of (level, message) tuples for reporter.log
+        """
+        from evidenceforge.events.contexts import ShellContext
+
+        # Packet filter startup
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="sensor_startup",
+            host=HostContext(
+                hostname=sensor_hostname,
+                ip="",
+                os="",
+                os_category="",
+                system_type="sensor",
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+        # Reporter startup messages
+        if reporter_messages:
+            for i, (level, msg) in enumerate(reporter_messages):
+                reporter_event = SecurityEvent(
+                    timestamp=time + timedelta(milliseconds=i * 50),
+                    event_type="sensor_startup",
+                    host=HostContext(
+                        hostname=sensor_hostname,
+                        ip="",
+                        os="",
+                        os_category="",
+                        system_type="sensor",
+                    ),
+                    shell=ShellContext(command=f"{level}|{msg}"),
+                )
+                self.dispatcher.dispatch(reporter_event)
 
     def _get_next_event_record_id(self, hostname: str = "") -> int:
         """Get next EventRecordID for a specific computer (thread-safe).

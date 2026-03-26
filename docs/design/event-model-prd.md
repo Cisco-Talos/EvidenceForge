@@ -45,7 +45,7 @@ ActivityGenerator
 ### Goals
 - Eliminate cross-format consistency bugs structurally (no field can be generated twice with different values)
 - Migrate all ~14 existing activity types to the event model
-- Support a direct-emission escape hatch (`RawLogEntry`) for simple, single-format log entries from day one
+- Support a direct-emission escape hatch (`RawLogEntry`) for rare single-format log entries (anonymous logon, kernel messages only)
 - Maintain or improve eval framework scores (same scenario, same or better quality)
 - Make adding new log formats cheaper (write a renderer, not emission logic across every activity method)
 - Integrate with existing network visibility model (`NetworkVisibilityEngine`) in dispatcher
@@ -153,6 +153,17 @@ class IdsContext:
     message: str                     # Alert message
     classification: str              # Alert classification
     priority: int = 2                # 1=high, 2=medium, 3=low
+
+@dataclass(slots=True)
+class SyslogContext:
+    """Syslog message fields for Linux system/daemon/kernel logs.
+    Callers provide the exact app_name, message, facility, and severity.
+    The syslog emitter renders directly from this context."""
+    app_name: str                    # "sshd", "kernel", "systemd", "snapd", etc.
+    message: str                     # The syslog message body
+    pid: int | None = None           # None for kernel messages
+    facility: int = 3                # 3=daemon, 0=kernel, 10=auth/security
+    severity: int = 6                # 6=info, 5=notice, 4=warning
 ```
 
 ### 3.2 Security Event (Base + Escape Hatch)
@@ -176,10 +187,11 @@ class SecurityEvent:
 
 @dataclass(slots=True)
 class RawLogEntry:
-    """Escape hatch -- bypass the event model for simple, single-format entries.
+    """Escape hatch -- bypass the event model for user-defined raw events.
 
-    Use for: background noise that only appears in one format, simple heartbeats,
-    or events that don't fit the current context model.
+    Used solely by the `raw` event type in scenario YAML, allowing users
+    to emit arbitrary fields to a specific log format. All internal engine
+    code uses canonical SecurityEvent dispatch exclusively.
     """
     timestamp: datetime
     target_emitter: str              # Emitter dict key (e.g., "syslog", "zeek_conn", "windows_event_security")
@@ -517,13 +529,11 @@ For each `generate_*` method:
 4. **Run tests** -- All existing tests must pass. Run `eforge evaluate` on the reference scenario.
 5. **Commit** -- One commit per migrated method for clean git bisection.
 
-### 5.3 Backward Compatibility During Migration
+### 5.3 Backward Compatibility
 
-- `emit_raw()` on emitters preserves the old dict-based path for the `RawLogEntry` escape hatch and for any un-migrated methods during the transition period.
+- `emit_raw()` on emitters preserves the dict-based path for the user-facing `raw` event type in scenario YAML. All internal engine code uses SecurityEvent + EventDispatcher exclusively.
 - StateManager's existing methods remain unchanged; `apply()` is purely additive.
 - Engine orchestration (`_generate_baseline()`, `_execute_storyline_events_in_hour()`, etc.) is unchanged -- only ActivityGenerator internals change.
-- `ActivityGenerator.network_visibility` attribute remains available during migration for any un-migrated methods that still do inline visibility checks. Removed only in Phase 3 cleanup after all methods are migrated.
-- `ActivityGenerator.emitters` convenience reference remains available during migration for un-migrated methods.
 
 ## 6. File Changes
 

@@ -156,7 +156,7 @@ MITRE CAR-based endpoint detection and response telemetry. Represents what an ED
 **File:** `syslog.log`
 **Format:** BSD syslog (RFC 3164 text format)
 
-Authentication and system logs from Linux hosts.
+Authentication and system logs from Linux hosts. All syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
 
 | Program | Description | Notes |
 |---------|-------------|-------|
@@ -197,10 +197,9 @@ Per-user command history for Linux systems.
 **File:** `snort_alert.log`
 **Format:** Snort fast alert format
 
-Network intrusion detection alerts triggered by storyline activity.
+Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
 
 **Known Limitations:**
-- Alerts only fire for storyline (malicious) events, not false positives from baseline
 - Limited SID/classification variety
 
 ---

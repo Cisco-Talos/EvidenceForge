@@ -96,7 +96,7 @@ When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line su
 
 **Testing:**
 - pytest with pytest-cov, pytest-asyncio, pytest-mock, pytest-benchmark
-- Separate test markers: `@pytest.mark.live` for tests requiring LLM API (not run by default)
+- Separate test markers: `@pytest.mark.slow` for large dataset tests (not run by default)
 - Target coverage: 95%+ overall, 95%+ for core generation engine
 
 **Format Support:**
@@ -191,11 +191,11 @@ Configuration is primarily through scenario YAML files and CLI arguments. No con
 
 ### Canonical Event Model
 
-The generation engine uses a canonical event model — an intermediate representation between activity generation and log rendering. ActivityGenerator builds `SecurityEvent` objects carrying composable context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`). An `EventDispatcher` routes each event to `StateManager.apply()` and to matching emitters based on `can_handle()` and network visibility.
+The generation engine uses a canonical event model — an intermediate representation between activity generation and log rendering. ActivityGenerator builds `SecurityEvent` objects carrying composable context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`, `SyslogContext`). An `EventDispatcher` routes each event to `StateManager.apply()` and to matching emitters based on `can_handle()` and network visibility.
 
 **Core principle: consistency by construction, not by coordination.** Two emitters cannot disagree about a port number because there is only one port number — on the event object.
 
-**Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` is the escape hatch for simple, single-format log entries — use sparingly.
+**Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively — including baseline IDS alerts, web access, syslog daemon messages, DHCP leases, anomaly records, anonymous logons, and sensor startup.
 
 Full design details: `docs/design/event-model-prd.md`. Key types: `src/evidenceforge/events/`.
 
@@ -248,7 +248,7 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 
 ## Testing Requirements
 
-**Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/live/` (`@pytest.mark.live`, requires LLM API), `tests/fixtures/` (shared data)
+**Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/fixtures/` (shared data)
 
 **Coverage targets:** 95%+ overall, 95%+ core engine, 90%+ formats, 85%+ CLI. Exclude: `__main__.py`, type stubs, test fixtures.
 
@@ -256,7 +256,7 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 - Test naming: `test_<function>_<scenario>_<expected_result>`
 - Use Arrange/Act/Assert pattern
 - Use `tmp_path` for all file I/O in tests
-- Mock LLM API calls in non-live tests
+- No LLM calls during generation — all tests are deterministic
 - Write deterministic tests: seed randomness, mock time, use fixed test data
 - Use Hypothesis for property-based testing where appropriate (e.g., unique PIDs)
 - Never use mutable default arguments

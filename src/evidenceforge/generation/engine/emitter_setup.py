@@ -199,40 +199,23 @@ class EmitterSetupMixin:
             hostname = sensor.hostname or sensor.name
             ts = self.start_time + timedelta(seconds=rng.uniform(0.1, 2.0))
 
-            if "zeek_packet_filter" in self.emitters:
-                self.activity_generator.generate_raw(
-                    time=ts,
-                    target_format="zeek_packet_filter",
-                    fields={
-                        "ts": ts,
-                        "node": hostname,
-                        "filter": "ip or not ip",
-                        "init": True,
-                        "success": True,
-                        "_sensor_hostnames": [hostname],
-                    },
-                )
-
+            reporter_msgs: list[tuple[str, str]] = []
             if "zeek_reporter" in self.emitters:
-                msgs = [
+                reporter_msgs = [
                     ("Reporter::INFO", "zeek_init() called"),
                     ("Reporter::INFO", f"listening on {rng.choice(['eth0', 'ens160', 'ens192'])}"),
                     ("Reporter::INFO", "loaded base/frameworks/notice/main.zeek"),
                 ]
                 if rng.random() < 0.5:
-                    msgs.append(("Reporter::WARNING", "Zeek compiled without GeoIP support"))
-                for i, (level, msg) in enumerate(msgs):
-                    self.activity_generator.generate_raw(
-                        time=ts + timedelta(milliseconds=i * 50),
-                        target_format="zeek_reporter",
-                        fields={
-                            "ts": ts + timedelta(milliseconds=i * 50),
-                            "level": level,
-                            "message": msg,
-                            "location": "",
-                            "_sensor_hostnames": [hostname],
-                        },
+                    reporter_msgs.append(
+                        ("Reporter::WARNING", "Zeek compiled without GeoIP support")
                     )
+
+            self.activity_generator.generate_sensor_startup(
+                sensor_hostname=hostname,
+                time=ts,
+                reporter_messages=reporter_msgs if reporter_msgs else None,
+            )
 
     def _emit_dhcp_leases(self) -> None:
         """Emit DHCP lease records for each system at scenario start.
@@ -250,22 +233,13 @@ class EmitterSetupMixin:
             mac = f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}:{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
             ts = self.start_time + timedelta(seconds=rng.uniform(0.5, 5.0))
             uid = generate_zeek_uid("C")
-            self.activity_generator.generate_raw(
-                time=ts,
-                target_format="zeek_dhcp",
+            self.state_manager.set_current_time(ts)
+            self.activity_generator.generate_dhcp_lease(
                 system=system,
-                fields={
-                    "ts": ts,
-                    "uids": [uid],
-                    "client_addr": system.ip,
-                    "server_addr": "10.0.0.1",
-                    "mac": mac,
-                    "host_name": system.hostname,
-                    "assigned_addr": system.ip,
-                    "lease_time": float(rng.choice([3600, 7200, 14400, 86400])),
-                    "msg_types": ["DISCOVER", "OFFER", "REQUEST", "ACK"],
-                    "duration": round(rng.uniform(0.01, 0.5), 6),
-                },
+                time=ts,
+                mac=mac,
+                lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
+                uid=uid,
             )
 
     def _build_sid_registry(self) -> dict[str, str]:
