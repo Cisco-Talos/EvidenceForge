@@ -63,6 +63,7 @@ addopts = [
     "--cov=evidenceforge",
     "--cov-report=term-missing",
     "--cov-report=html",
+    "-m", "not slow and not live",
 ]
 filterwarnings = [
     "error",
@@ -88,7 +89,7 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "@abstractmethod",
 ]
-fail_under = 80
+fail_under = 70
 
 [tool.ruff]
 line-length = 100

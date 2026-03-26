@@ -18,6 +18,9 @@ from evidenceforge.models.scenario import (
 )
 
 
+pytestmark = pytest.mark.slow
+
+
 def create_test_scenario(users: int = 2, hours: int = 3) -> Scenario:
     """Create a test scenario with specified users and duration.
 

@@ -34,146 +34,139 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ---
 
-## Phase 6: Expert-Identified Realism Fixes — IN PROGRESS
+## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
-**Goal:** Address findings from blind expert panel review. Four domain experts (threat hunter, detection engineer, Windows sysadmin, Linux/network admin) identified synthetic tells. Fix organized by severity.
+**Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
-**Progress:** 5 improvement loops completed, 60 issues resolved, ~30 remaining.
+### Recently Resolved
 
-### Remaining P0/P1 Issues
+- [x] SubjectLogonId hardcoded to SYSTEM (0x3e7) on 4720/4728/4697/4698/1102
+- [x] 4728 MemberSid doesn't match 4720 TargetSid across storyline events
+- [x] 4648 SubjectLogonId is SYSTEM (0x3e7) for domain user
+- [x] Missing Snort IDS baseline alerts for single-system segments
+- [x] Sysmon 8 TargetProcessId hardcoded to 4 (System kernel PID)
+- [x] Network logon (type 3) processes parented by explorer.exe instead of services/svchost
+- [x] 4698 TaskContent empty when not specified in scenario
+- [x] System Process Regularity eval penalized realistic variance (CV scoring)
+- [x] Volume Adequacy eval targets miscalibrated for storyline-based signal counting
+- [x] Slow tests (medium dataset, parallel generation) excluded from default `uv run pytest`; run explicitly with `-m slow`
 
-- [ ] **No TXT DNS queries** (SPF/DKIM/DMARC checks)
-- [ ] **DNS query set too curated — no Windows telemetry noise** (Expert Panel #EP12)
-- [ ] **NTP server mismatch: Zeek shows NIST, syslog shows Ubuntu pool** (Expert Panel #EP13)
-- [ ] **UFW BLOCK entries don't appear in Zeek conn.log** (Expert Panel #EP14)
-- [ ] **No 4778/4779 (RDP reconnect/disconnect) events** (Expert Panel #EP17)
-- [ ] **Volume Adequacy 0/100 — noise:signal ratio ~730:1 vs 5000:1 target**
-- [ ] **Storyline Trace Coverage stuck at 50% (14/28 expected format-traces)**
-- [ ] **Parsability stuck at ~95% (5% records fail structure validation)**
-- [ ] **No SSH protocol negotiation messages in syslog**
-- [ ] **Limited syslog program variety (9 programs vs 30+ real)**
-- [ ] **Bash history still too sparse for SSH session duration**
-- [ ] **DLL file as NewProcessName in 4688 event**
-- [ ] **OTH/"Cc" Zeek conn_state over-represented** (Network Engineer)
-- [ ] **DNS TTL distribution too uniform** (Network Engineer)
-- [ ] **HTTP connections without preceding DNS queries** (Network Engineer)
-- [ ] **TLSv13 ratio too low for 2024 timeframe** (Network Engineer)
-- [ ] **Limited eCAR object diversity on Linux** (Linux Admin)
-- [ ] **explorer.exe parent for RDP sessions** (Threat Hunter)
-- [ ] **All Linux processes share same ppid** (Linux Admin)
-- [ ] **Per-host syslog has only 1-3 programs** (Linux Admin)
-- [ ] **Missing 4672 (special privileges) on DC-01**
-- [ ] **Low 4689:4688 process termination ratio** (57% vs 80-90% expected)
-- [ ] **Missing eCAR USER_SESSION events on server-side of RDP lateral movement**
-- [ ] **Inconsistent Zeek sensor coverage for SSH pivot**
-- [ ] **Only 1-2 RDP connections in Zeek over 6 hours**
-- [ ] **No SSL certificate subject/issuer data in Zeek ssl.log**
-- [ ] **Logrotate runs every 15 minutes** (should be daily at ~6:25am)
-- [ ] **Only 4 User-Agents across HTTP requests** (need 10-15 for 5 workstations)
-- [ ] **100% HTTP 200 status codes** (need 301/302/404/500 mix)
-- [ ] **Only 52 SMB connections over 6 hours** (need 200-400 for Windows file server)
-- [ ] **60 DNS UIDs (7%) missing from conn.log**
-- [ ] **EventRecordID gaps too regular** (need more irregular gap sizes 5-20)
-- [ ] **Vary filenames in eCAR file operations** (Assessment #36)
+### Tier 0: Infrastructure
 
-### Remaining Improvement Loop 5 Issues (healthcare-supply-chain)
+- [ ] **`eforge validate` can't find personas in dev mode** — works when installed (`eforge validate`) but not via `uv run eforge validate`. Blocks dev workflow.
 
-- [ ] **4769 TargetUserName double-realm format** (DFIR P1)
-- [ ] **4648 SubjectLogonId is SYSTEM (0x3e7) for domain user** (DFIR P1)
-- [ ] **TLS version/cipher suite mismatch** (Network P0, Threat Hunter P0)
-- [ ] **services.exe PID changes within single boot session** (DFIR P0)
-- [ ] **No 4672 (Special Privileges) on Domain Controller** (DFIR P0, Detection Eng)
-- [ ] **Centralized syslog timestamps not chronologically sorted** (Network P0)
-- [ ] **100% HTTP 200 status codes** (Network P0)
-- [ ] **User-Agent OS mismatch with source hosts** (Network P0)
-- [ ] **RDP lateral movement completely invisible** (Detection Eng P0, Threat Hunter P1)
-- [ ] **No DC Kerberos events for compromised user** (Threat Hunter P1, Detection Eng P0)
-- [ ] **EMR-DB-01 LogonID discontinuity — process chain orphaned from logon** (Threat Hunter P1)
-- [ ] **KeyLength always 0 for NTLM logons** (DFIR P1)
-- [ ] **No LSASS access events (4656/4663) for credential dumping** (Detection Eng P0)
-- [ ] **No eCAR FILE events on attack hosts** (Detection Eng P1)
-- [ ] **DNS queries use corp.local instead of scenario domain** (Network P1)
-- [ ] **SSL SNI values are fabricated reverse-DNS/cdn-provider.net names** (Network P1)
-- [ ] **Process tree has no RadView parent for supply chain attack** (Threat Hunter P1)
-- [ ] **Credential dump chain implausible** (Threat Hunter P1, Detection Eng P1)
-- [ ] **Service-inappropriate logs on MAIL-01/FILE-SRV-01** (Network P1)
-- [ ] **HTTP MIME type mismatches with URI** (Network P1)
-- [ ] **Exfiltration Zeek connections show 0 bytes transferred** (Detection Eng P2)
-- [ ] **No 4698 (Scheduled Task Created) for schtasks.exe /Create** (Detection Eng P2)
-- [ ] **No port 135 (RPC/EPMAP) traffic in Zeek** (Network P2)
-- [ ] **Dual SSH syslog entries with mismatched PIDs/ports** (Threat Hunter P2)
+### Tier 1: Foundational Correctness
 
-### Remaining Improvement Loop 6 Issues (full-coverage-corporate-breach)
+Data is *wrong* — a hunter hits dead ends. Fix these first; several unblock Tier 2 work.
 
-**P0:**
-- [ ] **LogonIDs leak across hosts** — remote processes on DC-01/FILE-SRV-01 use originating-host (WS-DEV-01) LogonIDs instead of the destination host's 4624 TargetLogonId. Process 4688 SubjectLogonId must match a 4624 on the same host. (DFIR, Detection Eng — 2 sources)
-- [ ] **2 ground truth Zeek UIDs missing from log files** — UIDs listed in GROUND_TRUTH.md IOC section not present in any Zeek log. Every UID in ground truth must appear in at least one sensor's conn.json. (Threat Hunter, Network Eng — 2 sources)
-- [ ] **No 4625 events on DC-01 for password spray** — password spray from WS-DEV-01 against domain accounts should produce 4625/4776 on the DC as well, not just the originating workstation. DC-focused detection rules won't fire. (Detection Eng)
+- [ ] **LogonIDs leak across hosts** — remote processes on DC/file server use the originating-host LogonID instead of the destination host's 4624 TargetLogonId. Breaks every pivot-based hunting workflow.
+- [ ] **services.exe PID changes within single boot session** — process tree references a parent PID that was replaced mid-scenario. Child processes become orphaned.
+- [ ] **Extend canonical event model to baseline activity** — baseline noise uses RawLogEntry bypass, so a svchost process doesn't produce a correlated Zeek conn or eCAR FLOW record. Primary blocker for Baseline Coherence eval (43/100). Architectural prerequisite for many Tier 2 fixes.
+- [ ] **Migrate eCAR FLOW to SecurityEvent dispatch** — add `"connection"` to EcarEmitter._supported_types, implement `_render_connection()`, verify eCAR FLOW records carry Zeek UID. Fixes pid:-1 on all FLOW records and enables eCAR↔Zeek pivoting.
+- [ ] **No 4625 on DC for password spray** — sprays against domain accounts should produce 4625/4776 on the DC, not just the originating workstation. DC-focused Sigma/Splunk rules won't fire.
+- [ ] **Ground truth Zeek UIDs missing from logs** — UIDs listed in GROUND_TRUTH.md IOC section don't exist in any sensor's conn.json. Answer key references evidence that isn't there.
 
-**P1:**
-- [ ] **Human Burstiness scoring at 54/100** — user inter-event CV averaging ~0.75, below the 1.0–3.0 target for realistic burst-and-idle. Baseline engine distributes events too uniformly within work hours. Need more clustering/idle periods. (Eval)
-- [ ] **Storyline Trace Coverage at 74/100** — 9 of 35 expected format-traces missing, mainly "no trace in syslog" for SSH sessions. Syslog records exist but eval hostname normalization may not match (bare vs FQDN). (Eval)
-- [ ] **Proxy log shows raw IPs instead of domain names** — CONNECT entries use bare IP addresses (e.g., `91.219.236.180:443`) instead of SNI domain names. Real proxies log the SNI header. (Threat Hunter, Network Eng)
-- [ ] **C2/exfiltration SNI values are auto-generated CDN names** — ssl.log shows `host-91-219-236-180.cdn-provider.net` instead of plausible domains. Real C2 uses legitimate-looking domains. (Threat Hunter, Network Eng — 2 sources)
-- [ ] **HTTPS exfiltration to 185.199.108.153 missing from proxy log** — the curl upload to storage.mega-upload.io has no corresponding CONNECT entry in proxy_access.log. (Threat Hunter, Network Eng)
-- [ ] **DMZ http.log shows favicon GET, not exfiltration POST** — the exfiltration `curl -X POST` to drop.exfil-node.net appears as a benign `GET /favicon.ico` in Zeek http.json. (Threat Hunter)
-- [ ] **Only 1 RDP connection visible in SENSOR-CORE** — zero legitimate RDP noise makes the attacker's single RDP session trivially detectable. Need 5-15 IT admin RDP sessions as background. (Threat Hunter, Network Eng)
-- [ ] **IP 10.0.2.50 appears in Zeek but is outside all defined subnets** — 51 MSSQL connections to an undeclared host. All internal IPs should fall within documented segments. (Network Eng)
-- [ ] **eCAR FLOW records all have pid: -1** — no process association on network connections, preventing process-to-network correlation. (Detection Eng)
+### Tier 2: Huntability & Detection
 
-**P2:**
-- [ ] **Sysmon only emits Event 1 (ProcessCreate)** — missing Event 3 (Network), 10 (ProcessAccess), 11 (FileCreate), 13 (Registry). Limits Sysmon-based hunting workflows. (DFIR)
-- [ ] **No Sysmon Event 10 (ProcessAccess) for LSASS credential dump** — comsvcs MiniDump should trigger PROCESS_VM_READ access event. (DFIR)
-- [ ] **No 4634 logoff events for akovacs on DC-01** — three 4624 logons but zero corresponding logoffs. (DFIR)
-- [ ] **Process creation timestamp precedes logon on FILE-SRV-01** — 4688 at T-189ms before its authorizing 4624. (DFIR)
-- [ ] **weird.json has TCP-specific types on UDP sources** — `connection_originator_SYN_ack` and `bad_TCP_checksum` with `source: UDP`. (Network Eng)
-- [ ] **x509 cert validity unrealistic for Let's Encrypt** — LE certs show 280+ day validity instead of 90 days. (Network Eng)
-- [ ] **Ground truth File IOCs section truncated** — contains `50000)` fragment instead of actual file paths. (Threat Hunter)
-- [ ] **NTP targets external NIST servers instead of DC/internal NTP** — workstations should sync to the domain controller. (Network Eng)
-- [ ] **4648 (Explicit Credential) targets localhost instead of DC** — domain enumeration commands should target the DC. (DFIR)
-- [ ] **DHCP shows full DISCOVER-OFFER-REQUEST-ACK** — 12h window should mostly show renewals (REQUEST-ACK only). (Network Eng)
-- [ ] **Proxy format inconsistencies** — doesn't match standard Squid or Bluecoat; shows decrypted HTTPS content through CONNECT tunnel. (Network Eng)
-- [ ] **4728 MemberName field is "-"** — should contain the DN of the added member (`CN=svc-deploy,CN=Users,DC=...`). (Detection Eng)
+Data is structurally correct but the hunt doesn't work — key attack steps are undetectable or trivially obvious.
 
----
+- [ ] **RDP lateral movement invisible + zero RDP noise** — storyline RDP sessions don't produce Zeek conn records, and there are no background IT admin RDP connections. The most common lateral movement technique is either undetectable or (if 1 conn appears) trivially obvious.
+- [ ] **No DC Kerberos events for compromised user** — domain logon chain incomplete; no TGT/TGS (4768/4769) events to correlate with 4624 on target hosts.
+- [ ] **No LSASS access events (4656/4663/Sysmon 10)** — primary credential-dumping detection is missing. Sysmon 8 (CreateRemoteThread) is present but Event 10 (ProcessAccess) is not.
+- [ ] **No 4672 (Special Privileges) on Domain Controller** — standard privilege-escalation detection missing on the DC.
+- [ ] **Storyline events too perfect** — real attacks are messy. Add attacker fumbles, typos, dead-end paths, unnecessary recon, and corrected mistakes to make hunting more realistic.
+- [ ] **C2/exfiltration SNI values are auto-generated CDN names** — ssl.log shows `host-x-x-x-x.cdn-provider.net` pattern, trivially identifiable. Should use plausible domains.
+- [ ] **Proxy log issues** — CONNECT entries use raw IPs instead of SNI domain names; storyline exfiltration connections missing from proxy_access.log entirely.
+- [ ] **Zeek http.log doesn't reflect storyline HTTP activity** — exfiltration POST appears as a benign favicon GET; engine doesn't use storyline connection metadata for HTTP rendering.
+- [ ] **Vastly expand canned data** — syslog has only 1-3 programs per host (need 30+), only 4 User-Agents (need 10-15), only ~8 Snort SIDs. Audit all formats and expand template pools.
 
-## Phase 8: Cross-Source Correlation — PLANNED
+### Tier 3: Realism Polish
 
-**Goal:** Eliminate systemic cross-source correlation gaps caused by `RawLogEntry` bypass of the canonical event model. Background noise events should correlate across log formats the same way storyline events do.
+Data works but experienced analysts spot tells. Grouped by format for efficient fix passes.
 
-### 8.1 Migrate eCAR FLOW to canonical SecurityEvent dispatch
+**DNS:**
+- [ ] No TXT queries (SPF/DKIM/DMARC checks)
+- [ ] No Windows telemetry noise in query set
+- [ ] TTL distribution too uniform
+- [ ] HTTP connections without preceding DNS queries
+- [ ] Queries default to corp.local instead of scenario domain
 
-- [ ] Add `"connection"` to `EcarEmitter._supported_types`
-- [ ] Implement `EcarEmitter._render_connection()` from `SecurityEvent.network`
-- [ ] Remove `_emit_ecar_flow_event()` helper
-- [ ] Verify eCAR FLOW records carry Zeek UID for analyst pivoting
+**TLS/SSL:**
+- [ ] TLSv13 ratio too low for 2024 timeframe
+- [ ] TLS version/cipher suite mismatches
+- [ ] x509 Let's Encrypt certs show 280+ day validity (should be 90)
+- [ ] No SSL certificate subject/issuer data in ssl.log
 
-### 8.2 Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch
+**Syslog:**
+- [ ] NTP server mismatch (Zeek shows NIST, syslog shows Ubuntu pool)
+- [ ] No SSH protocol negotiation messages
+- [ ] Logrotate runs every 15 minutes (should be daily)
+- [ ] Centralized syslog timestamps not chronologically sorted
+- [ ] Dual SSH syslog entries with mismatched PIDs/ports
 
-- [ ] **Phase A:** Add file_create, file_modify, registry_modify, module_load event types
-- [ ] **Phase B:** Implement Windows 4663 + Sysmon 11/12/13 renderers for cross-source correlation
+**Windows Events:**
+- [ ] DLL file as NewProcessName in 4688
+- [ ] Low 4689:4688 process termination ratio (57% vs 80-90%)
+- [ ] EventRecordID gaps too regular
+- [ ] 4769 TargetUserName double-realm format
+- [ ] KeyLength always 0 for NTLM logons
+- [ ] 4648 targets localhost instead of DC for domain commands
+- [ ] 4728 MemberName is "-" (should be DN of added member)
+- [ ] No 4778/4779 (RDP reconnect/disconnect)
+- [ ] Process creation timestamp can precede its authorizing logon
+- [ ] Missing 4634 logoff events for network logon sessions
 
-### 8.3 Migrate syslog system messages to SecurityEvent where applicable
+**Process Trees:**
+- [ ] explorer.exe parent for RDP sessions (should be per-session userinit→explorer)
+- [ ] All Linux user processes share same ppid
+- [ ] Human Burstiness at 54/100 — events too uniformly distributed, need more clustering/idle
 
-- [ ] CRON executions: correlate with eCAR PROCESS
-- [ ] Kernel UFW BLOCK: correlate with Zeek conn.log
-- [ ] systemd service start/stop: evaluate eCAR PROCESS correlation
+**Zeek:**
+- [ ] OTH/"Cc" conn_state over-represented
+- [ ] SMB volume too low for Windows file server environments
+- [ ] DNS UIDs missing from conn.log (~7%)
+- [ ] UFW BLOCK entries don't appear in conn.log
+- [ ] weird.json TCP-specific types attributed to UDP sources
+- [ ] Exfiltration connections show 0 bytes transferred
+- [ ] No port 135 (RPC/EPMAP) traffic
+- [ ] Inconsistent sensor coverage for SSH pivot
 
-### 8.4 Replace keyword matching with typed event declarations — COMPLETE
+**HTTP/Proxy:**
+- [ ] User-Agent OS mismatch with source hosts
+- [ ] 100% HTTP 200 status codes (need 301/302/404/500 mix)
+- [ ] HTTP MIME type mismatches with URI
+- [ ] Proxy format doesn't match standard Squid or Bluecoat output
+- [ ] DHCP shows full discovery instead of renewals in mid-scenario windows
 
-Typed `events` list on storyline entries with per-type Pydantic models, supplementary inference, load-time validation. See `docs/reference/scenario-reference.md` for event type reference.
+**eCAR:**
+- [ ] Limited object diversity on Linux
+- [ ] No FILE events on attack hosts
+- [ ] No USER_SESSION events for server-side RDP lateral movement
+- [ ] Vary filenames in file operations
+
+**Other:**
+- [ ] Bash history too sparse for SSH session duration
+- [ ] Baseline generates IPs outside defined network segments
+- [ ] Parsability at ~95% (5% records fail structure validation)
+
+### Tier 4: Eval Fixes
+
+- [ ] Storyline Trace Coverage hostname normalization bug (traces exist but bare vs FQDN mismatch)
+- [ ] Ground truth File IOCs section truncated in GROUND_TRUTH.md output
+
+### Cross-Source Correlation (depends on Tier 1 baseline migration)
+
+Once baseline activity uses SecurityEvent dispatch, these become straightforward:
+
+- [ ] Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch (enables 4663 + Sysmon 11/12/13 correlation)
+- [ ] Migrate syslog system messages: CRON↔eCAR PROCESS, UFW BLOCK↔Zeek conn, systemd↔eCAR PROCESS
+- [ ] Sysmon Event 3 (Network), 11 (FileCreate), 13 (Registry) emission
 
 ---
 
 ## Post-MVP Enhancements (Future)
 
-### Immediate-term (priority fixes)
-- [ ] The `eforge validate` command correctly finds defined personas when run as an installed tool, but is unable to find them when run in dev mode (`uv run eforge validate [...]`).
-- [ ] **Extend canonical event model to baseline activity for cross-source coherence.** Currently, baseline noise events are generated independently per format (RawLogEntry), so a svchost process on WS-01 doesn't produce a correlated Zeek conn record. Storyline events use SecurityEvent dispatch (Phase 7) which handles this. Baseline activity should use the same SecurityEvent dispatch path so background noise correlates across Windows/Zeek/eCAR/syslog — this is the primary blocker for Baseline Coherence (Sampled) eval scores (currently ~43/100).
-
 ### Short-term
-- [ ] Story line events are too perfect. Have the threat actor(s) fumble and make mistakes (e.g., use the wrong commands, make typos and correct them, enumerate systems/accounts/files, perform local recon, try attack paths that lead to dead ends, etc)
-- [ ] Vastly expand options available for 'canned' data such as syslog messages, snort alerts, and other items (first discover what other items apply)
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation
