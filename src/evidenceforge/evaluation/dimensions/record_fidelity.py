@@ -315,6 +315,13 @@ class RecordFidelityScorer(DimensionScorer):
 
         # eCAR timestamp_ms: already an int, validator handles it
 
+        # web_access/syslog/snort_alert: parser extracts timestamp into
+        # ParsedRecord.timestamp but not into fields dict. Inject it so
+        # the format validator sees the required timestamp field.
+        if format_name in ("web_access", "syslog", "snort_alert", "bash_history"):
+            if "timestamp" not in normalized and parsed_timestamp is not None:
+                normalized["timestamp"] = parsed_timestamp
+
         return normalized
 
     @staticmethod
