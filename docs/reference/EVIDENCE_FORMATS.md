@@ -156,7 +156,7 @@ MITRE CAR-based endpoint detection and response telemetry. Represents what an ED
 **File:** `syslog.log`
 **Format:** BSD syslog (RFC 3164 text format)
 
-Authentication and system logs from Linux hosts.
+Authentication and system logs from Linux hosts. All syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
 
 | Program | Description | Notes |
 |---------|-------------|-------|

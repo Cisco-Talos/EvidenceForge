@@ -153,6 +153,17 @@ class IdsContext:
     message: str                     # Alert message
     classification: str              # Alert classification
     priority: int = 2                # 1=high, 2=medium, 3=low
+
+@dataclass(slots=True)
+class SyslogContext:
+    """Syslog message fields for Linux system/daemon/kernel logs.
+    Callers provide the exact app_name, message, facility, and severity.
+    The syslog emitter renders directly from this context."""
+    app_name: str                    # "sshd", "kernel", "systemd", "snapd", etc.
+    message: str                     # The syslog message body
+    pid: int | None = None           # None for kernel messages
+    facility: int = 3                # 3=daemon, 0=kernel, 10=auth/security
+    severity: int = 6                # 6=info, 5=notice, 4=warning
 ```
 
 ### 3.2 Security Event (Base + Escape Hatch)

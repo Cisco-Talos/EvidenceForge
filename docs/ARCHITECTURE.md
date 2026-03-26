@@ -132,6 +132,7 @@ SecurityEvent
 ├── file: FileContext (path, hash, operation)
 ├── registry: RegistryContext (key, value, operation)
 ├── ids: IdsContext (signature, severity, classification)
+├── syslog: SyslogContext (app_name, message, pid, facility, severity)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command, exit_code)
 ├── ... (20+ context types total)
@@ -141,9 +142,10 @@ SecurityEvent
 All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined in `src/evidenceforge/events/contexts.py`.
 
 **Key design decisions:**
-- Contexts are composable — a logon event has Host + Auth contexts; a process event has Host + Process contexts
+- Contexts are composable — a logon event has Host + Auth + Syslog contexts; a process event has Host + Process + Syslog contexts
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
-- `RawLogEntry` is the escape hatch reserved for 2 specific cases: anonymous logon (DC) and kernel messages (UFW BLOCK, AppArmor). All other events — including baseline IDS, web access, syslog daemons, and sensor startup — use canonical SecurityEvent dispatch
+- The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
+- `RawLogEntry` is the escape hatch reserved for anonymous logon (DC, Windows-only). All other events use canonical SecurityEvent dispatch
 
 ### EventDispatcher
 
