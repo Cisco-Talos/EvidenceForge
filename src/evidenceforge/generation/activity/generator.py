@@ -18,6 +18,8 @@ from evidenceforge.events.contexts import (
     DnsContext,
     FileContext,
     HostContext,
+    HttpContext,
+    IdsContext,
     KerberosContext,
     RegistryContext,
 )
@@ -867,12 +869,18 @@ class ActivityGenerator:
         source_system: Optional["System"] = None,
         conn_state: str | None = None,
         dns: Optional["DnsContext"] = None,
+        ids: Optional["IdsContext"] = None,
+        http: Optional["HttpContext"] = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
         Opens connection in StateManager, builds a SecurityEvent with
         NetworkContext, and dispatches to matching emitters (Zeek conn,
         Snort, eCAR FLOW). Dispatcher handles network visibility filtering.
+
+        Optional context overrides (ids, http) are attached to the
+        SecurityEvent, enabling correlated rendering by format-specific
+        emitters (e.g., Snort from IdsContext, web_access from HttpContext).
 
         Args:
             src_ip: Source IP address
@@ -886,6 +894,8 @@ class ActivityGenerator:
             resp_bytes: Bytes sent by responder
             src_port: Source port (auto-assigned ephemeral if None)
             emit_dns: If True, emit a DNS lookup for dst_ip before the connection
+            ids: Optional IdsContext for IDS alert correlation (Snort emitter)
+            http: Optional HttpContext override (skips auto-generation)
 
         Returns:
             Zeek UID (18-character string)
@@ -1079,6 +1089,12 @@ class ActivityGenerator:
             ),
         )
 
+        # Caller-provided context overrides
+        if ids is not None:
+            event.ids = ids
+        if http is not None:
+            event.http = http
+
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
             event.dns = dns
@@ -1214,7 +1230,13 @@ class ActivityGenerator:
                     next_update=now_epoch + rng.randint(86400, 86400 * 7),
                 )
 
-        elif not local_only and service == "http" and proto == "tcp" and conn_state == "SF":
+        elif (
+            not local_only
+            and service == "http"
+            and proto == "tcp"
+            and conn_state == "SF"
+            and event.http is None  # Skip auto-generation if caller provided HttpContext
+        ):
             from evidenceforge.events.contexts import HttpContext
 
             _USER_AGENTS_WINDOWS = [

@@ -1289,7 +1289,6 @@ class BaselineMixin:
             for sensor in self.scenario.environment.network.sensors:
                 if "snort_alert" not in expand_formats(sensor.log_formats):
                     continue
-                sensor_host = sensor.hostname or sensor.name
                 monitored_systems = []
                 for seg_name in sensor.monitoring_segments:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
@@ -1318,22 +1317,29 @@ class BaselineMixin:
                         if src_sys.ip == dst_sys.ip:
                             continue
                         src_ip = src_sys.ip
-                    self.activity_generator.generate_raw(
+                    from evidenceforge.events.contexts import IdsContext
+
+                    alert_proto_str = rng.choice(["TCP", "UDP", "ICMP"])
+                    alert_proto = alert_proto_str.lower()
+                    alert_dst_port = rng.choice([22, 80, 443, 53, 8080])
+                    self.activity_generator.generate_connection(
+                        src_ip=src_ip,
+                        dst_ip=dst_sys.ip,
                         time=ts,
-                        target_format="snort_alert",
-                        fields={
-                            "timestamp": ts,
-                            "sid": sig[0],
-                            "message": sig[1],
-                            "classification": sig[2],
-                            "priority": sig[3],
-                            "protocol": rng.choice(["TCP", "UDP", "ICMP"]),
-                            "src_ip": src_ip,
-                            "src_port": rng.randint(1024, 65535),
-                            "dst_ip": dst_sys.ip,
-                            "dst_port": rng.choice([22, 80, 443, 53, 8080]),
-                            "_sensor_hostnames": [sensor_host],
-                        },
+                        dst_port=alert_dst_port,
+                        proto=alert_proto,
+                        service={22: "ssh", 80: "http", 443: "ssl", 53: "dns"}.get(
+                            alert_dst_port, ""
+                        ),
+                        duration=rng.uniform(0.001, 5.0),
+                        orig_bytes=rng.randint(40, 2000),
+                        resp_bytes=rng.randint(0, 1000),
+                        ids=IdsContext(
+                            sid=sig[0],
+                            message=sig[1],
+                            classification=sig[2],
+                            priority=sig[3],
+                        ),
                     )
 
         # Web access logs
@@ -1380,21 +1386,43 @@ class BaselineMixin:
                             client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     else:
                         client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
-                    self.activity_generator.generate_raw(
+                    from evidenceforge.events.contexts import HttpContext
+
+                    resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
+                    _URI_MIME = {
+                        "/": "text/html",
+                        "/index.html": "text/html",
+                        "/api/v1/health": "application/json",
+                        "/favicon.ico": "image/x-icon",
+                        "/robots.txt": "text/plain",
+                        "/assets/main.css": "text/css",
+                        "/assets/app.js": "application/javascript",
+                        "/images/logo.png": "image/png",
+                    }
+                    mime = _URI_MIME.get(path, "text/html")
+                    self.activity_generator.generate_connection(
+                        src_ip=client_ip,
+                        dst_ip=sys_obj.ip,
                         time=ts,
-                        target_format="web_access",
-                        system=sys_obj,
-                        fields={
-                            "timestamp": ts,
-                            "client_ip": client_ip,
-                            "method": method,
-                            "path": path,
-                            "protocol": "HTTP/1.1",
-                            "status_code": status,
-                            "bytes_sent": rng.randint(200, 50000)
-                            if status == 200
-                            else rng.randint(100, 500),
-                            "referer": "-",
-                            "user_agent": rng.choice(_WEB_UAS),
-                        },
+                        dst_port=80,
+                        proto="tcp",
+                        service="http",
+                        duration=rng.uniform(0.01, 2.0),
+                        orig_bytes=rng.randint(200, 2000),
+                        resp_bytes=resp_bytes,
+                        http=HttpContext(
+                            method=method,
+                            host=sys_obj.hostname,
+                            uri=path,
+                            version="1.1",
+                            user_agent=rng.choice(_WEB_UAS),
+                            request_body_len=rng.randint(0, 500) if method == "POST" else 0,
+                            response_body_len=resp_bytes,
+                            status_code=status,
+                            status_msg={200: "OK", 403: "Forbidden", 404: "Not Found"}.get(
+                                status, "OK"
+                            ),
+                            resp_mime_types=[mime] if status == 200 else [],
+                            tags=[],
+                        ),
                     )
