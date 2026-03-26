@@ -77,7 +77,7 @@ class WindowsEventParser(LogParser):
                     if tid:
                         fields["ExecutionThreadID"] = int(tid)
 
-            # EventData fields
+            # EventData fields (most event types)
             event_data = root.find(f"{{{NS}}}EventData")
             if event_data is not None:
                 for data_el in event_data.findall(f"{{{NS}}}Data"):
@@ -104,6 +104,18 @@ class WindowsEventParser(LogParser):
                                 fields[name] = value
                         else:
                             fields[name] = value
+
+            # UserData fields (1102 LogFileCleared and similar)
+            user_data = root.find(f"{{{NS}}}UserData")
+            if user_data is not None:
+                # UserData contains a wrapper element (e.g., LogFileCleared)
+                # with child elements as fields
+                for wrapper in user_data:
+                    for child in wrapper:
+                        # Strip namespace from tag name
+                        tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                        if child.text:
+                            fields[tag] = child.text
 
         except ET.ParseError as e:
             errors.append(f"XML parse error: {e}")
