@@ -79,7 +79,7 @@ This separation means scenario creation benefits from LLM reasoning about attack
 
 The core architectural principle is that **two emitters cannot disagree about shared fields because there is only one source of truth.**
 
-A single `SecurityEvent` object carries all the data for one logical security event. When a user logs in, ActivityGenerator creates one SecurityEvent with authentication details, and the EventDispatcher routes it to every relevant emitter. The Windows emitter renders it as a 4624 XML event, the syslog emitter renders it as an auth.info message, and the eCAR emitter renders it as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
+A single `SecurityEvent` object carries all the data for one logical security event. When a user logs into a Linux system, ActivityGenerator creates one SecurityEvent with AuthContext + SyslogContext, and the EventDispatcher routes it to every relevant emitter. The syslog emitter renders from SyslogContext ("Accepted password for alice from ..."), and the eCAR emitter renders from AuthContext as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
 
 ```
             ActivityGenerator
@@ -87,19 +87,21 @@ A single `SecurityEvent` object carries all the data for one logical security ev
                    ▼
         ┌─── SecurityEvent ───┐
         │ timestamp: 09:15:23 │
-        │ host: WS-001        │
+        │ host: LNX-001       │
         │ auth:               │
         │   user: john.doe    │
         │   logon_id: 0x4A2B  │
-        │   logon_type: 10    │
+        │ syslog:             │
+        │   app: sshd         │
+        │   msg: Accepted ... │
         └─────────┬───────────┘
                   │
       ┌───────────┼───────────┐
       ▼           ▼           ▼
-  Windows      Syslog      eCAR
-  4624 XML    auth.info   USER_SESSION
-  (same       (same       (same
-   data)       data)       data)
+  Syslog      eCAR        Zeek
+  sshd msg   LOGIN       conn.log
+  (from       (from       (from
+  syslog)     auth)       network)
 ```
 
 ### Network Visibility Modeling
@@ -205,7 +207,7 @@ LogEmitter (ABC)
 ├── can_handle(event) → bool         # Format eligibility check
 ├── emit(event: SecurityEvent)       # New path: type-safe, context-aware
 ├── emit_event(data: dict)           # Legacy path: raw dict rendering
-├── emit_raw(entry: RawLogEntry)     # Escape hatch (anonymous logon, kernel msgs only)
+├── emit_raw(entry: RawLogEntry)     # Escape hatch (anonymous logon DC only)
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
@@ -230,7 +232,7 @@ LogEmitter (ABC)
 
 **Two rendering paths:**
 - `emit(SecurityEvent)` — primary path for all event types (storyline + baseline)
-- `emit_event(dict)` — legacy path for RawLogEntry escape hatch (anonymous logon, kernel messages only)
+- `emit_event(dict)` — legacy path for RawLogEntry escape hatch (anonymous logon DC only)
 
 ### Format Definition System
 
