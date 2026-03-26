@@ -285,13 +285,18 @@ class LogoffEventSpec(_EventSpecBase):
 
 
 class ConnectionEventSpec(_EventSpecBase):
-    """Network connection event (generates Zeek conn, eCAR FLOW, optionally Snort)."""
+    """Network connection event (generates Zeek conn, eCAR FLOW, optionally web_access/zeek_http)."""
 
     type: Literal["connection"] = "connection"
     dst_ip: str
     dst_port: int = 443
     service: str | None = None  # ssl, http, etc.
     source_ip: str | None = None
+    # HTTP fields (when service=http, produces correlated web_access + zeek_http)
+    method: str | None = None  # GET, POST, etc.
+    uri: str | None = None  # Request URI path
+    status_code: int | None = None  # HTTP response status
+    user_agent: str | None = None  # Client User-Agent string
 
 
 class SshSessionEventSpec(_EventSpecBase):

@@ -317,6 +317,33 @@ class StorylineMixin:
             service = spec.service or (
                 "ssl" if dst_port == 443 else "http" if dst_port == 80 else "ssl"
             )
+            # Build HttpContext if HTTP fields are provided
+            http_ctx = None
+            if spec.method or spec.uri:
+                from evidenceforge.events.contexts import HttpContext
+
+                resp_bytes = rng.randint(5000, 50000)
+                http_ctx = HttpContext(
+                    method=spec.method or "GET",
+                    host=dst_ip,
+                    uri=spec.uri or "/",
+                    version="1.1",
+                    user_agent=spec.user_agent or "Mozilla/5.0",
+                    request_body_len=rng.randint(0, 500) if spec.method == "POST" else 0,
+                    response_body_len=resp_bytes,
+                    status_code=spec.status_code or 200,
+                    status_msg={
+                        200: "OK",
+                        301: "Moved Permanently",
+                        302: "Found",
+                        403: "Forbidden",
+                        404: "Not Found",
+                        500: "Internal Server Error",
+                    }.get(spec.status_code or 200, "OK"),
+                    resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                    tags=[],
+                )
+
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -328,6 +355,7 @@ class StorylineMixin:
                 resp_bytes=rng.randint(5000, 50000),
                 emit_dns=True,
                 source_system=system,
+                http=http_ctx,
             )
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port
