@@ -246,6 +246,59 @@ class TestGroundTruthGenerator:
         assert "Connection to 159.65.43.201:443" in details
         assert "UID: C12345" in details
 
+    def test_format_event_details_rdp_session(self, minimal_scenario, malicious_events):
+        """_format_event_details() should include UID for RDP sessions."""
+        event = {"type": "rdp_session", "dst_ip": "10.0.10.5", "uid": "Cabcd1234"}
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "RDP session to 10.0.10.5:3389" in details
+        assert "UID: Cabcd1234" in details
+
+    def test_format_event_details_ssh_session(self, minimal_scenario, malicious_events):
+        """_format_event_details() should include UID for SSH sessions."""
+        event = {"type": "ssh_session", "dst_ip": "10.0.20.3", "uid": "Cxyz9876"}
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "SSH session to 10.0.20.3:22" in details
+        assert "UID: Cxyz9876" in details
+
+    def test_extract_iocs_rdp_session_uid(self, minimal_scenario):
+        """_extract_iocs() should include RDP session UIDs in network IOCs."""
+        events = [
+            {
+                "time": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "actor": "attacker",
+                "system": "TEST-01",
+                "type": "rdp_session",
+                "dst_ip": "10.0.10.5",
+                "dst_port": 3389,
+                "uid": "Cabcd1234",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        network_iocs = iocs.get("network", set())
+        assert "Zeek UID: Cabcd1234" in network_iocs
+        assert "10.0.10.5:3389 (Lateral Movement)" in network_iocs
+
+    def test_extract_iocs_filtered_uid_excluded(self, minimal_scenario):
+        """_extract_iocs() should NOT include filtered UIDs."""
+        events = [
+            {
+                "time": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "actor": "attacker",
+                "system": "TEST-01",
+                "type": "ssh_session",
+                "dst_ip": "10.0.20.3",
+                "dst_port": 22,
+                "uid": "(filtered by sensor placement)",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        network_iocs = iocs.get("network", set())
+        assert not any("Zeek UID" in ioc for ioc in network_iocs)
+
     def test_format_event_details_unknown_type(self, minimal_scenario, malicious_events):
         """_format_event_details() should handle unknown event types."""
         event = {"type": "unknown", "activity": "Some activity"}

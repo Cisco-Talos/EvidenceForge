@@ -153,6 +153,16 @@ class GroundTruthGenerator:
             uid = event.get("uid", "N/A")
             return f"Connection to {dst_ip}:{dst_port} (UID: {uid})"
 
+        elif event_type == "rdp_session":
+            dst_ip = event.get("dst_ip", "N/A")
+            uid = event.get("uid", "N/A")
+            return f"RDP session to {dst_ip}:3389 (UID: {uid})"
+
+        elif event_type == "ssh_session":
+            dst_ip = event.get("dst_ip", "N/A")
+            uid = event.get("uid", "N/A")
+            return f"SSH session to {dst_ip}:22 (UID: {uid})"
+
         else:
             return event.get("activity", "N/A")
 
@@ -209,6 +219,15 @@ class GroundTruthGenerator:
                     uid = event.get("uid", "")
                     if uid and uid != "(filtered by sensor placement)":
                         iocs["network"].add(f"Zeek UID: {uid}")
+
+            elif event["type"] in ("rdp_session", "ssh_session"):
+                dst_ip = event.get("dst_ip", "")
+                dst_port = event.get("dst_port", "")
+                if dst_ip:
+                    iocs["network"].add(f"{dst_ip}:{dst_port} (Lateral Movement)")
+                uid = event.get("uid", "")
+                if uid and uid != "(filtered by sensor placement)":
+                    iocs["network"].add(f"Zeek UID: {uid}")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

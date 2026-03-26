@@ -195,6 +195,10 @@ class StorylineMixin:
         elif spec.type == "failed_logon":
             _attacker_ips = ["45.33.32.156", "185.220.101.34", "91.219.236.174"]
             source_ip = spec.source_ip or rng.choice(_attacker_ips)
+            dc = next(
+                (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
+                None,
+            )
             self.activity_generator.generate_failed_logon(
                 user=actor,
                 system=system,
@@ -202,24 +206,28 @@ class StorylineMixin:
                 logon_type=spec.logon_type,
                 source_ip=source_ip,
                 target_username=getattr(spec, "target_username", None),
+                dc_system=dc,
             )
             malicious_event["source_ip"] = source_ip
 
         elif spec.type == "logoff":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
-            if sessions:
-                logon_id = sessions[0].logon_id
-                self.activity_generator.generate_logoff(actor, system, time, logon_id)
+            target_session = next((s for s in sessions if s.system == system.hostname), None)
+            if target_session:
+                self.activity_generator.generate_logoff(
+                    actor, system, time, target_session.logon_id
+                )
 
         elif spec.type == "process":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
-            if not sessions:
+            target_session = next((s for s in sessions if s.system == system.hostname), None)
+            if not target_session:
                 logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
                 logon_id = self.activity_generator.generate_logon(
                     actor, system, logon_time, logon_type=3
                 )
             else:
-                logon_id = sessions[0].logon_id
+                logon_id = target_session.logon_id
 
             from evidenceforge.generation.activity import _get_os_category
 

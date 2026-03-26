@@ -194,3 +194,78 @@ class TestFailedLogonRate:
         assert total > 0
         failure_rate = failed / total
         assert 0.03 < failure_rate < 0.25, f"Failure rate {failure_rate:.2%} outside expected range"
+
+
+class TestFailedLogonDC:
+    """Test failed logon events are also emitted on the domain controller."""
+
+    def test_failed_logon_emits_on_dc(self, state_manager, mock_emitters, timestamp):
+        """Failed logon with dc_system should emit on both workstation and DC."""
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        dc = System(
+            hostname="DC-01", ip="10.0.10.100", os="Windows Server 2019", type="domain_controller"
+        )
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        ag.generate_failed_logon(
+            user=user,
+            system=wks,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.10.1",
+            dc_system=dc,
+        )
+
+        # Windows emitter should receive multiple events (workstation + DC)
+        win_emitter = mock_emitters["windows_event_security"]
+        assert win_emitter.emit.call_count >= 2
+
+        # Collect all emitted events
+        events = [call[0][0] for call in win_emitter.emit.call_args_list]
+        hosts = {e.host.hostname for e in events}
+
+        # Both workstation and DC should have events
+        assert "WKS-01" in hosts, "Missing 4625 on workstation"
+        assert "DC-01" in hosts, "Missing 4625/4776 on DC"
+
+    def test_failed_logon_dc_gets_4776(self, state_manager, mock_emitters, timestamp):
+        """DC should receive an NTLM validation (4776) event."""
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        dc = System(
+            hostname="DC-01", ip="10.0.10.100", os="Windows Server 2019", type="domain_controller"
+        )
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        ag.generate_failed_logon(
+            user=user, system=wks, time=timestamp, source_ip="10.0.10.1", dc_system=dc
+        )
+
+        # Check for ntlm_validation event type on DC
+        win_emitter = mock_emitters["windows_event_security"]
+        dc_events = [
+            call[0][0]
+            for call in win_emitter.emit.call_args_list
+            if call[0][0].host.hostname == "DC-01"
+        ]
+        event_types = {e.event_type for e in dc_events}
+        assert "ntlm_validation" in event_types, "Missing 4776 on DC"
+
+    def test_no_dc_no_extra_events(self, state_manager, mock_emitters, timestamp):
+        """Without dc_system, only workstation events are emitted."""
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        ag.generate_failed_logon(user=user, system=wks, time=timestamp, source_ip="10.0.10.1")
+
+        win_emitter = mock_emitters["windows_event_security"]
+        hosts = {call[0][0].host.hostname for call in win_emitter.emit.call_args_list}
+        assert hosts == {"WKS-01"}, "Should only emit on workstation without DC"

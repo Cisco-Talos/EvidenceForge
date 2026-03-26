@@ -529,12 +529,16 @@ class ActivityGenerator:
         logon_type: int = 2,
         source_ip: str | None = None,
         target_username: str | None = None,
+        dc_system: "System | None" = None,
     ) -> None:
         """Generate a failed logon event.
 
         Does NOT create a session in StateManager. Builds a SecurityEvent with
         result="failure" and dispatches to matching emitters (Windows 4625,
         syslog "Failed password", eCAR LOGIN with failure_reason).
+
+        When dc_system is provided, also emits 4625 and 4776 (NTLM validation)
+        on the domain controller, matching real AD authentication flow.
 
         Args:
             user: User attempting to log on (or performing the test)
@@ -543,6 +547,7 @@ class ActivityGenerator:
             logon_type: Logon type attempted
             source_ip: Source IP (defaults to system IP for interactive)
             target_username: If set, the logon targets this user instead of the actor
+            dc_system: Domain controller to also emit 4625/4776 on (optional)
         """
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
@@ -592,6 +597,38 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
+
+        # Domain controller side: 4625 + 4776 for domain account authentication
+        if dc_system and dc_system.hostname != system.hostname:
+            dc_event = SecurityEvent(
+                timestamp=time,
+                event_type="failed_logon",
+                host=self._build_dc_host_context(dc_system.hostname),
+                auth=AuthContext(
+                    username=effective_username,
+                    user_sid=user_sid,
+                    logon_type=3,  # Network logon on DC
+                    auth_package="Negotiate",
+                    result="failure",
+                    failure_reason=failure_reason,
+                    failure_status="0xc000006d",
+                    failure_substatus=substatus,
+                    source_ip=source_ip,
+                    subject_sid=self._get_sid("SYSTEM"),
+                    subject_username="SYSTEM",
+                    subject_domain="NT AUTHORITY",
+                    subject_logon_id="0x3e7",
+                ),
+            )
+            self.dispatcher.dispatch(dc_event)
+
+            # 4776 NTLM credential validation on DC
+            self.generate_ntlm_validation(
+                username=effective_username,
+                workstation=system.hostname,
+                dc_hostname=dc_system.hostname,
+                time=time,
+            )
 
         logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
 
