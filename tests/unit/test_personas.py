@@ -24,10 +24,17 @@ def personas_dir(tmp_path, monkeypatch):
 
 
 class TestGetBuiltinPersonasDir:
-    def test_returns_path_under_data(self):
+    def test_returns_personas_directory(self):
         path = get_builtin_personas_dir()
         assert path.name == "personas"
-        assert "_data" in str(path)
+        assert path.is_dir()
+
+    def test_dev_mode_finds_project_root_personas(self):
+        """In dev mode, _data/personas doesn't exist so it finds project root personas/."""
+        path = get_builtin_personas_dir()
+        # Should find actual persona files
+        yaml_files = list(path.glob("*.yaml"))
+        assert len(yaml_files) > 0
 
 
 class TestLoadBuiltinPersonas:

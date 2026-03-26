@@ -107,22 +107,24 @@ def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
 
 
 # Import parsers to trigger registration
+from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.web import WebAccessParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.windows import WindowsEventParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek import ZeekConnParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_dns import ZeekDnsParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_http import ZeekHttpParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_files import ZeekFilesParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_dhcp import ZeekDhcpParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_dns import ZeekDnsParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_files import ZeekFilesParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_http import ZeekHttpParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_ntp import ZeekNtpParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_ocsp import ZeekOcspParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_packet_filter import (  # noqa: E402
+    ZeekPacketFilterParser,  # noqa: F401
+)
+from evidenceforge.evaluation.parsers.zeek_pe import ZeekPeParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_reporter import ZeekReporterParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_weird import ZeekWeirdParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_x509 import ZeekX509Parser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_ocsp import ZeekOcspParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_pe import ZeekPeParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_packet_filter import ZeekPacketFilterParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.zeek_reporter import ZeekReporterParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.web import WebAccessParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser  # noqa: E402,F401

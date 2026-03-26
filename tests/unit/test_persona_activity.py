@@ -4,12 +4,10 @@ Phase 2.6: Tests that persona data (work hours, risk profile, activity intensity
 flows into event generation for realistic temporal distributions.
 """
 
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch
+from datetime import datetime
+from unittest.mock import Mock
 
-import pytest
-
-from evidenceforge.generation.activity import ActivityGenerator, BASELINE_PATTERNS
+from evidenceforge.generation.activity import BASELINE_PATTERNS, ActivityGenerator
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
@@ -23,8 +21,9 @@ from evidenceforge.models.scenario import (
 )
 
 
-def _make_persona(name="developer", work_hours="9am-5pm", risk_profile="medium",
-                  activity_intensity=None):
+def _make_persona(
+    name="developer", work_hours="9am-5pm", risk_profile="medium", activity_intensity=None
+):
     """Helper to create a Persona with auto-parsed work hours."""
     return Persona(
         name=name,
@@ -45,8 +44,12 @@ def _make_scenario(personas=None, intensity="medium"):
         environment=Environment(
             description="Test env",
             users=[
-                User(username="testuser", full_name="Test User",
-                     email="test@example.com", persona="developer"),
+                User(
+                    username="testuser",
+                    full_name="Test User",
+                    email="test@example.com",
+                    persona="developer",
+                ),
             ],
             systems=[
                 System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
@@ -81,8 +84,12 @@ class TestPersonaResolution:
         """Should return None for undefined persona."""
         scenario = _make_scenario()
         engine = GenerationEngine(scenario, "/tmp/test")
-        user = User(username="nopersona", full_name="No Persona",
-                    email="no@example.com", persona="nonexistent")
+        user = User(
+            username="nopersona",
+            full_name="No Persona",
+            email="no@example.com",
+            persona="nonexistent",
+        )
 
         persona = engine._get_user_persona(user)
         assert persona is None
@@ -91,8 +98,7 @@ class TestPersonaResolution:
         """Should return None when user has no persona."""
         scenario = _make_scenario()
         engine = GenerationEngine(scenario, "/tmp/test")
-        user = User(username="nopersona", full_name="No Persona",
-                    email="no@example.com")
+        user = User(username="nopersona", full_name="No Persona", email="no@example.com")
 
         persona = engine._get_user_persona(user)
         assert persona is None
@@ -109,11 +115,13 @@ class TestWorkHoursModulation:
         user = scenario.environment.users[0]
 
         # Hour 10 is within 9am-5pm
-        count = engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
+        engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
         # With medium intensity (15 base), should be > 0 most of the time
         # Run multiple times to be statistically confident
-        counts = [engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
-                  for _ in range(20)]
+        counts = [
+            engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
+            for _ in range(20)
+        ]
         assert sum(counts) > 0, "Should generate events during work hours"
 
     def test_no_activity_outside_work_hours(self):
@@ -137,7 +145,7 @@ class TestWorkHoursModulation:
 
         # Hour 12 is lunch — should get ~50% of normal (soft dip, not 0)
         lunch_events = engine._calculate_events_for_hour(user, current_hour=12, persona=persona)
-        normal_events = engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
+        engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
         # Lunch should be significantly less than peak but not zero
         assert lunch_events >= 0  # Could be 0 from Gaussian jitter, but usually > 0
 
@@ -150,10 +158,14 @@ class TestWorkHoursModulation:
 
         # work_hours_parsed for "9am-5pm": peak_hours = [10, 11, 14, 15]
         # Normal hour: 9, 13, 16. Peak hour: 10, 11.
-        normal_counts = [engine._calculate_events_for_hour(user, current_hour=9, persona=persona)
-                         for _ in range(100)]
-        peak_counts = [engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
-                       for _ in range(100)]
+        normal_counts = [
+            engine._calculate_events_for_hour(user, current_hour=9, persona=persona)
+            for _ in range(100)
+        ]
+        peak_counts = [
+            engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
+            for _ in range(100)
+        ]
 
         avg_normal = sum(normal_counts) / len(normal_counts)
         avg_peak = sum(peak_counts) / len(peak_counts)
@@ -170,8 +182,9 @@ class TestWorkHoursModulation:
         user = scenario.environment.users[0]
 
         # No persona passed — should generate regardless of hour
-        counts = [engine._calculate_events_for_hour(user, current_hour=3, persona=None)
-                  for _ in range(20)]
+        counts = [
+            engine._calculate_events_for_hour(user, current_hour=3, persona=None) for _ in range(20)
+        ]
         assert sum(counts) > 0, "No persona should allow activity at any hour"
 
 
@@ -193,10 +206,14 @@ class TestRiskProfileScaling:
         persona_low = scenario_low.personas[0]
         user = scenario_high.environment.users[0]
 
-        high_counts = [engine_high._calculate_events_for_hour(user, current_hour=10, persona=persona_high)
-                       for _ in range(200)]
-        low_counts = [engine_low._calculate_events_for_hour(user, current_hour=10, persona=persona_low)
-                      for _ in range(200)]
+        high_counts = [
+            engine_high._calculate_events_for_hour(user, current_hour=10, persona=persona_high)
+            for _ in range(200)
+        ]
+        low_counts = [
+            engine_low._calculate_events_for_hour(user, current_hour=10, persona=persona_low)
+            for _ in range(200)
+        ]
 
         avg_high = sum(high_counts) / len(high_counts)
         avg_low = sum(low_counts) / len(low_counts)
@@ -212,8 +229,10 @@ class TestRiskProfileScaling:
         engine = GenerationEngine(scenario, "/tmp/test")
         user = scenario.environment.users[0]
 
-        counts = [engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
-                  for _ in range(100)]
+        counts = [
+            engine._calculate_events_for_hour(user, current_hour=10, persona=persona)
+            for _ in range(100)
+        ]
         avg = sum(counts) / len(counts)
 
         # Medium intensity = 15 base, medium risk = 1.0x
@@ -226,8 +245,7 @@ class TestActivityIntensityOverrides:
     def test_activity_intensity_overrides_pattern(self):
         """activity_intensity should override hardcoded patterns."""
         persona = _make_persona(
-            name="developer",
-            activity_intensity={"process_code": 20, "connection_web": 5}
+            name="developer", activity_intensity={"process_code": 20, "connection_web": 5}
         )
         emitters = {}
         generator = ActivityGenerator(

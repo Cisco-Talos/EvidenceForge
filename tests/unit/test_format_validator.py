@@ -2,14 +2,12 @@
 
 from datetime import datetime
 
-import pytest
-
 from evidenceforge.formats.format_def import (
+    EventVariant,
     FieldConstraint,
     FieldDefinition,
     FieldType,
     FormatDefinition,
-    EventVariant,
     OutputTemplate,
 )
 from evidenceforge.formats.validator import (
@@ -117,9 +115,7 @@ class TestValidateFieldType:
 
     def test_timestamp_iso8601_with_timezone(self):
         """Test ISO 8601 string with timezone."""
-        result = validate_field_type(
-            "field", "2024-01-15T10:00:00+05:00", FieldType.TIMESTAMP
-        )
+        result = validate_field_type("field", "2024-01-15T10:00:00+05:00", FieldType.TIMESTAMP)
         assert result.valid is True
 
     def test_timestamp_invalid_format(self):
@@ -412,9 +408,7 @@ class TestValidateEvent:
             name="test",
             description="Test",
             category="host",
-            fields=[
-                FieldDefinition(name="field1", type=FieldType.STRING, required=True)
-            ],
+            fields=[FieldDefinition(name="field1", type=FieldType.STRING, required=True)],
             output=OutputTemplate(format="text", template="t", file_extension=".txt"),
         )
         event_data = {}
@@ -428,9 +422,7 @@ class TestValidateEvent:
             name="test",
             description="Test",
             category="host",
-            fields=[
-                FieldDefinition(name="field1", type=FieldType.STRING, required=False)
-            ],
+            fields=[FieldDefinition(name="field1", type=FieldType.STRING, required=False)],
             output=OutputTemplate(format="text", template="t", file_extension=".txt"),
         )
         event_data = {}
@@ -474,9 +466,7 @@ class TestValidateEvent:
             variants=[
                 EventVariant(
                     name="variant1",
-                    fields=[
-                        FieldDefinition(name="variant_field", type=FieldType.INTEGER)
-                    ],
+                    fields=[FieldDefinition(name="variant_field", type=FieldType.INTEGER)],
                 )
             ],
             output=OutputTemplate(format="text", template="t", file_extension=".txt"),
@@ -496,9 +486,7 @@ class TestValidateEvent:
                 EventVariant(
                     name="variant1",
                     fields=[
-                        FieldDefinition(
-                            name="variant_field", type=FieldType.STRING, required=True
-                        )
+                        FieldDefinition(name="variant_field", type=FieldType.STRING, required=True)
                     ],
                 )
             ],

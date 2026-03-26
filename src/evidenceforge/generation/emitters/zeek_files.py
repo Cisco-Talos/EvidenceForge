@@ -28,32 +28,36 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         net = event.network
         ft = event.file_transfer
         event_data: dict[str, Any] = {
-            'ts': event.timestamp,
-            'fuid': ft.fuid,
-            'uid': net.zeek_uid,
-            'id.orig_h': net.src_ip,
-            'id.orig_p': net.src_port,
-            'id.resp_h': net.dst_ip,
-            'id.resp_p': net.dst_port,
-            'source': ft.source,
-            'depth': ft.depth,
-            'analyzers': ft.analyzers if ft.analyzers else None,
-            'mime_type': ft.mime_type or None,
-            'duration': ft.duration,
-            'local_orig': ft.local_orig,
-            'is_orig': ft.is_orig,
-            'seen_bytes': ft.seen_bytes,
-            'total_bytes': ft.total_bytes,
-            'missing_bytes': ft.missing_bytes,
-            'overflow_bytes': ft.overflow_bytes,
-            'timedout': ft.timedout,
-            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            "ts": event.timestamp,
+            "fuid": ft.fuid,
+            "uid": net.zeek_uid,
+            "id.orig_h": net.src_ip,
+            "id.orig_p": net.src_port,
+            "id.resp_h": net.dst_ip,
+            "id.resp_p": net.dst_port,
+            "source": ft.source,
+            "depth": ft.depth,
+            "analyzers": ft.analyzers if ft.analyzers else None,
+            "mime_type": ft.mime_type or None,
+            "duration": ft.duration,
+            "local_orig": ft.local_orig,
+            "is_orig": ft.is_orig,
+            "seen_bytes": ft.seen_bytes,
+            "total_bytes": ft.total_bytes,
+            "missing_bytes": ft.missing_bytes,
+            "overflow_bytes": ft.overflow_bytes,
+            "timedout": ft.timedout,
+            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = [
-            "analyzers", "mime_type", "duration", "local_orig", "total_bytes",
+            "analyzers",
+            "mime_type",
+            "duration",
+            "local_orig",
+            "total_bytes",
         ]
         for f in optional_fields:
             if f not in event_data:

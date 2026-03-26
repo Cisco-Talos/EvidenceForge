@@ -3,10 +3,9 @@
 Tests concurrent access patterns, counter uniqueness, and lock behavior.
 """
 
-import pytest
-from datetime import datetime
-from threading import Thread, Barrier
 from collections import Counter
+from datetime import datetime
+from threading import Barrier, Thread
 
 from evidenceforge.generation.state_manager import StateManager
 
@@ -28,7 +27,7 @@ class TestStateManagerThreadSafety:
                     username=f"user{thread_id}_{i}",
                     system="WS-01",
                     logon_type=2,
-                    source_ip="192.168.1.1"
+                    source_ip="192.168.1.1",
                 )
                 created_logon_ids.append(logon_id)
 
@@ -50,7 +49,7 @@ class TestStateManagerThreadSafety:
         logon_id_values = [int(lid, 16) for lid in created_logon_ids]
         assert all(v >= 0x10000 for v in logon_id_values), "LogonIDs should be high-entropy"
         # Not in reserved range
-        assert all(v not in {0x3e4, 0x3e5, 0x3e6, 0x3e7} for v in logon_id_values)
+        assert all(v not in {0x3E4, 0x3E5, 0x3E6, 0x3E7} for v in logon_id_values)
 
     def test_concurrent_reads_during_writes(self):
         """Test readers see consistent state during concurrent writes."""
@@ -60,10 +59,7 @@ class TestStateManagerThreadSafety:
         # Pre-create 50 sessions
         for i in range(50):
             sm.create_session(
-                username=f"user{i}",
-                system="WS-01",
-                logon_type=2,
-                source_ip="192.168.1.1"
+                username=f"user{i}", system="WS-01", logon_type=2, source_ip="192.168.1.1"
             )
 
         read_counts = []
@@ -74,10 +70,7 @@ class TestStateManagerThreadSafety:
             barrier.wait()  # Synchronize start
             for i in range(50, 100):
                 sm.create_session(
-                    username=f"user{i}",
-                    system="WS-01",
-                    logon_type=2,
-                    source_ip="192.168.1.1"
+                    username=f"user{i}", system="WS-01", logon_type=2, source_ip="192.168.1.1"
                 )
 
         def reader_thread():
@@ -108,7 +101,7 @@ class TestStateManagerThreadSafety:
         # Verify: Read counts are monotonically increasing or stable
         # (readers never see state go backwards)
         for i in range(1, len(read_counts)):
-            assert read_counts[i] >= read_counts[i-1] or read_counts[i] >= 50
+            assert read_counts[i] >= read_counts[i - 1] or read_counts[i] >= 50
 
     def test_pid_counter_uniqueness(self):
         """Test 10 threads creating processes on same system, verify unique PIDs."""
@@ -127,7 +120,7 @@ class TestStateManagerThreadSafety:
                     image=f"C:\\test{thread_id}_{i}.exe",
                     command_line=f"test{thread_id}_{i}.exe",
                     username="SYSTEM",
-                    integrity_level="System"
+                    integrity_level="System",
                 )
                 created_pids.append(pid)
 
@@ -168,7 +161,7 @@ class TestStateManagerThreadSafety:
                     src_port=50000 + i,
                     dst_ip="8.8.8.8",
                     dst_port=443,
-                    protocol="tcp"
+                    protocol="tcp",
                 )
                 created_conn_ids.append(conn_id)
 
@@ -195,10 +188,7 @@ class TestStateManagerThreadSafety:
         initial_sessions = []
         for i in range(50):
             logon_id = sm.create_session(
-                username=f"user{i}",
-                system="WS-01",
-                logon_type=2,
-                source_ip="192.168.1.1"
+                username=f"user{i}", system="WS-01", logon_type=2, source_ip="192.168.1.1"
             )
             initial_sessions.append(logon_id)
 
@@ -212,10 +202,7 @@ class TestStateManagerThreadSafety:
             barrier.wait()
             for i in range(50, 80):
                 sm.create_session(
-                    username=f"user{i}",
-                    system="WS-01",
-                    logon_type=2,
-                    source_ip="192.168.1.1"
+                    username=f"user{i}", system="WS-01", logon_type=2, source_ip="192.168.1.1"
                 )
                 create_count[0] += 1
 
@@ -268,7 +255,7 @@ class TestStateManagerThreadSafety:
             image="C:\\parent.exe",
             command_line="parent.exe",
             username="SYSTEM",
-            integrity_level="System"
+            integrity_level="System",
         )
 
         # Create child process (calls get_process to validate parent)
@@ -278,7 +265,7 @@ class TestStateManagerThreadSafety:
             image="C:\\child.exe",
             command_line="child.exe",
             username="user1",
-            integrity_level="Medium"
+            integrity_level="Medium",
         )
 
         # Verify both processes exist
@@ -287,16 +274,13 @@ class TestStateManagerThreadSafety:
 
     def test_stress_1000_iterations(self):
         """Stress test: 1000 iterations of concurrent session creation."""
-        for iteration in range(1000):
+        for _iteration in range(1000):
             sm = StateManager()
             sm.set_current_time(datetime.now())
 
-            def create_session_pair(idx):
+            def create_session_pair(idx, sm=sm):
                 sm.create_session(
-                    username=f"user{idx}",
-                    system="WS-01",
-                    logon_type=2,
-                    source_ip="192.168.1.1"
+                    username=f"user{idx}", system="WS-01", logon_type=2, source_ip="192.168.1.1"
                 )
 
             # Create 10 sessions concurrently

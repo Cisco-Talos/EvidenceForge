@@ -10,7 +10,7 @@ Sub-scores (0.25 each):
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from evidenceforge.evaluation.dimensions import (
@@ -30,19 +30,53 @@ TIME_TOLERANCE = timedelta(seconds=120)
 
 # Keyword map for activity-to-event-type matching (mirrors generation/engine.py)
 ACTIVITY_KEYWORDS: dict[str, list[str]] = {
-    "logon": ["logon", "log in", "login", "authenticate", "sign in", "exploit",
-              "ssh", "rdp", "remote", "pivot", "credential"],
+    "logon": [
+        "logon",
+        "log in",
+        "login",
+        "authenticate",
+        "sign in",
+        "exploit",
+        "ssh",
+        "rdp",
+        "remote",
+        "pivot",
+        "credential",
+    ],
     "logoff": ["logoff", "log off", "logout", "sign out"],
     "process": [
-        "execute", "run", "launch", "start", "spawn",
-        "powershell", "cmd", "command", "search", "read",
-        "enumerate", "dump", "query", "list", "archive",
-        "compress", "delete", "remove", "clean",
+        "execute",
+        "run",
+        "launch",
+        "start",
+        "spawn",
+        "powershell",
+        "cmd",
+        "command",
+        "search",
+        "read",
+        "enumerate",
+        "dump",
+        "query",
+        "list",
+        "archive",
+        "compress",
+        "delete",
+        "remove",
+        "clean",
     ],
     "connection": [
-        "connect", "access", "download", "upload",
-        "communicate", "c2", "exfiltrate",
-        "ssh", "rdp", "remote", "pivot",
+        "connect",
+        "access",
+        "download",
+        "upload",
+        "communicate",
+        "c2",
+        "exfiltrate",
+        "ssh",
+        "rdp",
+        "remote",
+        "pivot",
     ],
 }
 
@@ -90,7 +124,9 @@ class SignalIntegrityScorer(DimensionScorer):
 
         progress("sub_score_start", {"name": "Indicator Accuracy", "step": 2, "total": 4})
         indicator_accuracy = self._score_indicator_accuracy(resolved)
-        progress("sub_score_done", {"name": "Indicator Accuracy", "score": indicator_accuracy.score})
+        progress(
+            "sub_score_done", {"name": "Indicator Accuracy", "score": indicator_accuracy.score}
+        )
 
         progress("sub_score_start", {"name": "Pivot Linkability", "step": 3, "total": 4})
         pivot_linkability = self._score_pivot_linkability(resolved)
@@ -98,7 +134,10 @@ class SignalIntegrityScorer(DimensionScorer):
 
         progress("sub_score_start", {"name": "Storyline Temporal Integrity", "step": 4, "total": 4})
         temporal_integrity = self._score_temporal_integrity(resolved)
-        progress("sub_score_done", {"name": "Storyline Temporal Integrity", "score": temporal_integrity.score})
+        progress(
+            "sub_score_done",
+            {"name": "Storyline Temporal Integrity", "score": temporal_integrity.score},
+        )
 
         sub_scores = [event_presence, indicator_accuracy, pivot_linkability, temporal_integrity]
         dim_score = sum(s.score * s.weight for s in sub_scores if s.score is not None)
@@ -113,21 +152,31 @@ class SignalIntegrityScorer(DimensionScorer):
 
     def _empty_score(self) -> DimensionScore:
         """Return a perfect score when there's no storyline to check."""
-        sub = SubScore(name="N/A", key="no_storyline", weight=1.0, score=100.0,
-                       details="No storyline events to evaluate")
+        sub = SubScore(
+            name="N/A",
+            key="no_storyline",
+            weight=1.0,
+            score=100.0,
+            details="No storyline events to evaluate",
+        )
         return DimensionScore(
-            number=self.number, name=self.name, weight=self.weight,
-            score=100.0, sub_scores=[sub],
+            number=self.number,
+            name=self.name,
+            weight=self.weight,
+            score=100.0,
+            sub_scores=[sub],
         )
 
     # --- Step 1: Resolve storyline ---
 
     def _resolve_storyline(
-        self, storyline: list[StorylineEvent], scenario: Scenario,
+        self,
+        storyline: list[StorylineEvent],
+        scenario: Scenario,
     ) -> list[ResolvedEvent]:
         start_time = scenario.time_window.start
         if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
+            start_time = start_time.replace(tzinfo=UTC)
 
         system_ips = {s.hostname: s.ip for s in scenario.environment.systems}
         resolved: list[ResolvedEvent] = []
@@ -139,19 +188,23 @@ class SignalIntegrityScorer(DimensionScorer):
             # Phase 8.4: extract flat details dict from typed EventSpec objects
             details: dict[str, Any] = {}
             for spec in event.events:
-                spec_dict = spec.model_dump(exclude_none=True, exclude={"type", "technique", "description", "supplementary"})
+                spec_dict = spec.model_dump(
+                    exclude_none=True, exclude={"type", "technique", "description", "supplementary"}
+                )
                 details.update(spec_dict)
 
-            resolved.append(ResolvedEvent(
-                index=i,
-                time=event_time,
-                actor=event.actor,
-                system=event.system,
-                system_ip=system_ips.get(event.system),
-                activity=event.activity,
-                details=details,
-                event_types=event_types,
-            ))
+            resolved.append(
+                ResolvedEvent(
+                    index=i,
+                    time=event_time,
+                    actor=event.actor,
+                    system=event.system,
+                    system_ip=system_ips.get(event.system),
+                    activity=event.activity,
+                    details=details,
+                    event_types=event_types,
+                )
+            )
 
         return resolved
 
@@ -161,7 +214,7 @@ class SignalIntegrityScorer(DimensionScorer):
         if time_str[0].isdigit() and len(time_str) > 10:
             ts = parse_iso8601(time_str)
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
             return ts
 
         if time_str.startswith("+"):
@@ -179,7 +232,8 @@ class SignalIntegrityScorer(DimensionScorer):
         """Match activity description to event types via keywords."""
         activity_lower = activity.lower()
         matched = [
-            etype for etype, keywords in ACTIVITY_KEYWORDS.items()
+            etype
+            for etype, keywords in ACTIVITY_KEYWORDS.items()
             if any(kw in activity_lower for kw in keywords)
         ]
         return matched if matched else ["process"]
@@ -205,15 +259,15 @@ class SignalIntegrityScorer(DimensionScorer):
                     continue
                 # Extract hostname from various field names
                 hostname = None
-                for field in ("Computer", "hostname"):
-                    val = rec.fields.get(field)
+                for field_name in ("Computer", "hostname"):
+                    val = rec.fields.get(field_name)
                     if val and isinstance(val, str):
                         hostname = val
                         break
                 # For zeek/snort, index by originator IP too
                 ts = rec.timestamp
                 if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
+                    ts = ts.replace(tzinfo=UTC)
                 bucket = int(ts.timestamp()) // 60
                 if hostname:
                     host_time_index[f"{hostname.lower()}|{bucket}"][format_name].append(rec)
@@ -223,9 +277,7 @@ class SignalIntegrityScorer(DimensionScorer):
 
         for event in resolved:
             for event_type in event.event_types:
-                traces = self._search_for_event_indexed(
-                    event, event_type, host_time_index
-                )
+                traces = self._search_for_event_indexed(event, event_type, host_time_index)
                 event.traces.extend(traces)
 
     def _search_for_event_indexed(
@@ -238,7 +290,7 @@ class SignalIntegrityScorer(DimensionScorer):
         found: list[ParsedRecord] = []
         evt_time = event.time
         if evt_time.tzinfo is None:
-            evt_time = evt_time.replace(tzinfo=timezone.utc)
+            evt_time = evt_time.replace(tzinfo=UTC)
         evt_bucket = int(evt_time.timestamp()) // 60
 
         # Lookup keys: system hostname + system IP
@@ -260,7 +312,7 @@ class SignalIntegrityScorer(DimensionScorer):
                         if ts is None:
                             continue
                         if ts.tzinfo is None:
-                            ts = ts.replace(tzinfo=timezone.utc)
+                            ts = ts.replace(tzinfo=UTC)
                         if abs((ts - evt_time).total_seconds()) > TIME_TOLERANCE.total_seconds():
                             continue
                         if self._record_matches(record, format_name, event, event_type):
@@ -287,9 +339,8 @@ class SignalIntegrityScorer(DimensionScorer):
                     and self._host_matches(f.get("Computer"), event.system)
                 )
             if format_name == "syslog":
-                return (
-                    self._host_matches(f.get("hostname"), event.system)
-                    and event.actor in f.get("message", "")
+                return self._host_matches(f.get("hostname"), event.system) and event.actor in f.get(
+                    "message", ""
                 )
             if format_name == "ecar":
                 return (
@@ -310,9 +361,8 @@ class SignalIntegrityScorer(DimensionScorer):
                     )
                 )
             if format_name == "bash_history":
-                return (
-                    self._host_matches(f.get("hostname"), event.system)
-                    and self._user_matches(f.get("username"), event.actor)
+                return self._host_matches(f.get("hostname"), event.system) and self._user_matches(
+                    f.get("username"), event.actor
                 )
             if format_name == "ecar":
                 return (
@@ -381,11 +431,14 @@ class SignalIntegrityScorer(DimensionScorer):
         found = sum(1 for e in resolved if e.traces)
         failures = [
             f"Event {e.index}: {e.actor}@{e.system} '{e.activity[:60]}' — no traces"
-            for e in resolved if not e.traces
+            for e in resolved
+            if not e.traces
         ]
         score = (100.0 * found / total) if total > 0 else 100.0
         return SubScore(
-            name="Event Presence", key="event_presence", weight=0.25,
+            name="Event Presence",
+            key="event_presence",
+            weight=0.25,
             score=score,
             details=f"{found}/{total} storyline events have traces in logs",
             sample_failures=failures[:10],
@@ -414,14 +467,18 @@ class SignalIntegrityScorer(DimensionScorer):
 
         score = (100.0 * correct_checks / total_checks) if total_checks > 0 else 100.0
         return SubScore(
-            name="Indicator Accuracy", key="indicator_accuracy", weight=0.25,
+            name="Indicator Accuracy",
+            key="indicator_accuracy",
+            weight=0.25,
             score=score,
             details=f"{correct_checks}/{total_checks} indicator checks correct",
             sample_failures=failures,
         )
 
     def _check_indicators(
-        self, event: ResolvedEvent, trace: ParsedRecord,
+        self,
+        event: ResolvedEvent,
+        trace: ParsedRecord,
     ) -> list[tuple[str, bool]]:
         """Check expected indicators against a trace record. Returns (name, correct) pairs."""
         checks: list[tuple[str, bool]] = []
@@ -463,8 +520,11 @@ class SignalIntegrityScorer(DimensionScorer):
     def _score_pivot_linkability(self, resolved: list[ResolvedEvent]) -> SubScore:
         if len(resolved) < 2:
             return SubScore(
-                name="Pivot Linkability", key="pivot_linkability", weight=0.25,
-                score=100.0, details="Fewer than 2 events — nothing to link",
+                name="Pivot Linkability",
+                key="pivot_linkability",
+                weight=0.25,
+                score=100.0,
+                details="Fewer than 2 events — nothing to link",
             )
 
         total_pairs = len(resolved) - 1
@@ -480,13 +540,15 @@ class SignalIntegrityScorer(DimensionScorer):
                 linkable += 1
             elif len(failures) < 10:
                 failures.append(
-                    f"Events {i}→{i+1}: no shared indicator "
+                    f"Events {i}→{i + 1}: no shared indicator "
                     f"({a.actor}@{a.system} → {b.actor}@{b.system})"
                 )
 
         score = (100.0 * linkable / total_pairs) if total_pairs > 0 else 100.0
         return SubScore(
-            name="Pivot Linkability", key="pivot_linkability", weight=0.25,
+            name="Pivot Linkability",
+            key="pivot_linkability",
+            weight=0.25,
             score=score,
             details=f"{linkable}/{total_pairs} consecutive pairs share a pivotable indicator",
             sample_failures=failures,
@@ -508,10 +570,19 @@ class SignalIntegrityScorer(DimensionScorer):
         # Also extract from actual traces
         for trace in event.traces:
             f = trace.fields
-            for field_name in ("TargetUserName", "SubjectUserName", "principal",
-                               "username", "Computer", "hostname",
-                               "IpAddress", "id.orig_h", "id.resp_h",
-                               "src_ip", "dst_ip"):
+            for field_name in (
+                "TargetUserName",
+                "SubjectUserName",
+                "principal",
+                "username",
+                "Computer",
+                "hostname",
+                "IpAddress",
+                "id.orig_h",
+                "id.resp_h",
+                "src_ip",
+                "dst_ip",
+            ):
                 val = f.get(field_name)
                 if val and val != "-":
                     values.add(str(val).lower())
@@ -531,9 +602,7 @@ class SignalIntegrityScorer(DimensionScorer):
             if not event.traces:
                 # No traces = can't verify timing; count as incorrect
                 if len(failures) < 10:
-                    failures.append(
-                        f"Event {event.index}: no traces to verify timing"
-                    )
+                    failures.append(f"Event {event.index}: no traces to verify timing")
                 continue
 
             # Find earliest trace timestamp for this event
@@ -542,7 +611,7 @@ class SignalIntegrityScorer(DimensionScorer):
                 if t.timestamp:
                     ts = t.timestamp
                     if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
+                        ts = ts.replace(tzinfo=UTC)
                     trace_times.append(ts)
 
             if not trace_times:
@@ -564,15 +633,15 @@ class SignalIntegrityScorer(DimensionScorer):
                         f"Event {event.index}: trace at {delta:+.0f}s from expected (tolerance ±{TIME_TOLERANCE.total_seconds():.0f}s)"
                     )
                 if not order_ok:
-                    failures.append(
-                        f"Event {event.index}: out of order relative to previous event"
-                    )
+                    failures.append(f"Event {event.index}: out of order relative to previous event")
 
             prev_earliest = earliest
 
         score = (100.0 * correct / total) if total > 0 else 100.0
         return SubScore(
-            name="Storyline Temporal Integrity", key="temporal_integrity", weight=0.25,
+            name="Storyline Temporal Integrity",
+            key="temporal_integrity",
+            weight=0.25,
             score=score,
             details=f"{correct}/{total} events correctly timed and ordered",
             sample_failures=failures,

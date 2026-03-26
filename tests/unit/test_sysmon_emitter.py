@@ -1,7 +1,6 @@
 """Unit tests for Sysmon event emitter."""
 
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 
@@ -28,7 +27,7 @@ class TestSysmonEventEmitter:
 
         event_data = {
             "EventID": 1,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -72,7 +71,7 @@ class TestSysmonEventEmitter:
 
         event_data = {
             "EventID": 8,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -104,7 +103,7 @@ class TestSysmonEventEmitter:
 
     def test_process_guid_deterministic(self):
         """Test that ProcessGuid generation is deterministic."""
-        ts = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
         guid1 = SysmonEventEmitter._generate_process_guid("WKS-01", 1234, ts)
         guid2 = SysmonEventEmitter._generate_process_guid("WKS-01", 1234, ts)
         guid3 = SysmonEventEmitter._generate_process_guid("WKS-01", 5678, ts)

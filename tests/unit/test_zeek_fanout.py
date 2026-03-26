@@ -2,14 +2,15 @@
 
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
-import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
-    FileTransferContext, HttpContext, NetworkContext, SslContext,
+    FileTransferContext,
+    HttpContext,
+    NetworkContext,
+    SslContext,
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -29,24 +30,41 @@ class TestSslFanOut:
             ssl_emitter = ZeekSslEmitter(load_format("zeek_ssl"), base, sensor_hostnames=["s1"])
 
             event = SecurityEvent(
-                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
                 network=NetworkContext(
-                    src_ip='10.0.10.50', src_port=54321, dst_ip='93.184.216.34',
-                    dst_port=443, protocol='tcp', service='ssl',
-                    zeek_uid='CTestFanout12345',
-                    conn_state='SF', history='ShADadfF',
-                    duration=2.5, orig_bytes=1024, resp_bytes=4096,
-                    orig_pkts=10, resp_pkts=8,
-                    orig_ip_bytes=1500, resp_ip_bytes=4500, ip_proto=6,
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CTestFanout12345",
+                    conn_state="SF",
+                    history="ShADadfF",
+                    duration=2.5,
+                    orig_bytes=1024,
+                    resp_bytes=4096,
+                    orig_pkts=10,
+                    resp_pkts=8,
+                    orig_ip_bytes=1500,
+                    resp_ip_bytes=4500,
+                    ip_proto=6,
                 ),
                 ssl=SslContext(
-                    version='TLSv12',
-                    cipher='TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
-                    server_name='www.example.com',
-                    resumed=False, established=True, ssl_history='CsiI',
+                    version="TLSv12",
+                    cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    server_name="www.example.com",
+                    resumed=False,
+                    established=True,
+                    ssl_history="CsiI",
                 ),
-                _sensor_hostnames_by_format={'zeek_conn': ['s1'], 'zeek_ssl': ['s1'], 'zeek_http': ['s1'], 'zeek_files': ['s1']},
+                _sensor_hostnames_by_format={
+                    "zeek_conn": ["s1"],
+                    "zeek_ssl": ["s1"],
+                    "zeek_http": ["s1"],
+                    "zeek_files": ["s1"],
+                },
             )
 
             # Simulate dispatcher fan-out
@@ -68,7 +86,7 @@ class TestSslFanOut:
             with open(base / "s1" / "ssl.json") as f:
                 ssl_data = json.loads(f.readline())
 
-            assert conn_data['uid'] == ssl_data['uid'] == 'CTestFanout12345'
+            assert conn_data["uid"] == ssl_data["uid"] == "CTestFanout12345"
 
 
 class TestHttpFilesFanOut:
@@ -80,36 +98,64 @@ class TestHttpFilesFanOut:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(load_format("zeek_conn"), base, sensor_hostnames=["s1"])
             http_emitter = ZeekHttpEmitter(load_format("zeek_http"), base, sensor_hostnames=["s1"])
-            files_emitter = ZeekFilesEmitter(load_format("zeek_files"), base, sensor_hostnames=["s1"])
+            files_emitter = ZeekFilesEmitter(
+                load_format("zeek_files"), base, sensor_hostnames=["s1"]
+            )
 
             event = SecurityEvent(
-                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
                 network=NetworkContext(
-                    src_ip='10.0.10.50', src_port=54321, dst_ip='93.184.216.34',
-                    dst_port=80, protocol='tcp', service='http',
-                    zeek_uid='CTestHttpFiles01',
-                    conn_state='SF', duration=1.0,
-                    orig_bytes=512, resp_bytes=2048,
-                    orig_pkts=5, resp_pkts=4,
-                    orig_ip_bytes=800, resp_ip_bytes=2400, ip_proto=6,
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CTestHttpFiles01",
+                    conn_state="SF",
+                    duration=1.0,
+                    orig_bytes=512,
+                    resp_bytes=2048,
+                    orig_pkts=5,
+                    resp_pkts=4,
+                    orig_ip_bytes=800,
+                    resp_ip_bytes=2400,
+                    ip_proto=6,
                 ),
                 http=HttpContext(
-                    method='GET', host='example.com', uri='/page.html',
-                    version='1.1', user_agent='Mozilla/5.0',
-                    request_body_len=0, response_body_len=2048,
-                    status_code=200, status_msg='OK', tags=[],
-                    resp_fuids=['FTestFile01234567'],
-                    resp_mime_types=['text/html'],
+                    method="GET",
+                    host="example.com",
+                    uri="/page.html",
+                    version="1.1",
+                    user_agent="Mozilla/5.0",
+                    request_body_len=0,
+                    response_body_len=2048,
+                    status_code=200,
+                    status_msg="OK",
+                    tags=[],
+                    resp_fuids=["FTestFile01234567"],
+                    resp_mime_types=["text/html"],
                 ),
                 file_transfer=FileTransferContext(
-                    fuid='FTestFile01234567', source='HTTP',
-                    depth=0, analyzers=[], mime_type='text/html',
-                    seen_bytes=2048, total_bytes=2048,
-                    is_orig=False, missing_bytes=0, overflow_bytes=0,
+                    fuid="FTestFile01234567",
+                    source="HTTP",
+                    depth=0,
+                    analyzers=[],
+                    mime_type="text/html",
+                    seen_bytes=2048,
+                    total_bytes=2048,
+                    is_orig=False,
+                    missing_bytes=0,
+                    overflow_bytes=0,
                     timedout=False,
                 ),
-                _sensor_hostnames_by_format={'zeek_conn': ['s1'], 'zeek_ssl': ['s1'], 'zeek_http': ['s1'], 'zeek_files': ['s1']},
+                _sensor_hostnames_by_format={
+                    "zeek_conn": ["s1"],
+                    "zeek_ssl": ["s1"],
+                    "zeek_http": ["s1"],
+                    "zeek_files": ["s1"],
+                },
             )
 
             for emitter in [conn_emitter, http_emitter, files_emitter]:
@@ -130,11 +176,11 @@ class TestHttpFilesFanOut:
                 files_data = json.loads(f.readline())
 
             # UID consistency
-            assert conn_data['uid'] == http_data['uid'] == files_data['uid'] == 'CTestHttpFiles01'
+            assert conn_data["uid"] == http_data["uid"] == files_data["uid"] == "CTestHttpFiles01"
 
             # File cross-reference: files fuid appears in http resp_fuids
-            assert files_data['fuid'] == 'FTestFile01234567'
-            assert 'FTestFile01234567' in http_data['resp_fuids']
+            assert files_data["fuid"] == "FTestFile01234567"
+            assert "FTestFile01234567" in http_data["resp_fuids"]
 
 
 class TestNoFanOutWithoutContext:
@@ -148,11 +194,15 @@ class TestNoFanOutWithoutContext:
         files_emitter = ZeekFilesEmitter(load_format("zeek_files"), Path("/tmp/test.json"))
 
         event = SecurityEvent(
-            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip='10.0.0.1', src_port=50000, dst_ip='8.8.8.8',
-                dst_port=443, protocol='tcp', zeek_uid='CTest123456789ab',
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTest123456789ab",
             ),
         )
 
@@ -169,19 +219,31 @@ class TestMultiSensorFanOut:
         """Both sensors get correlated conn + ssl records."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
-            conn_emitter = ZeekEmitter(load_format("zeek_conn"), base, sensor_hostnames=["fw01", "fw02"])
-            ssl_emitter = ZeekSslEmitter(load_format("zeek_ssl"), base, sensor_hostnames=["fw01", "fw02"])
+            conn_emitter = ZeekEmitter(
+                load_format("zeek_conn"), base, sensor_hostnames=["fw01", "fw02"]
+            )
+            ssl_emitter = ZeekSslEmitter(
+                load_format("zeek_ssl"), base, sensor_hostnames=["fw01", "fw02"]
+            )
 
             event = SecurityEvent(
-                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
                 network=NetworkContext(
-                    src_ip='10.0.0.1', src_port=50000, dst_ip='8.8.8.8',
-                    dst_port=443, protocol='tcp', zeek_uid='CMultiSensor1234',
-                    conn_state='SF', ip_proto=6,
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CMultiSensor1234",
+                    conn_state="SF",
+                    ip_proto=6,
                 ),
-                ssl=SslContext(version='TLSv13', cipher='TLS_AES_256_GCM_SHA384'),
-                _sensor_hostnames_by_format={'zeek_conn': ['fw01', 'fw02'], 'zeek_ssl': ['fw01', 'fw02']},
+                ssl=SslContext(version="TLSv13", cipher="TLS_AES_256_GCM_SHA384"),
+                _sensor_hostnames_by_format={
+                    "zeek_conn": ["fw01", "fw02"],
+                    "zeek_ssl": ["fw01", "fw02"],
+                },
             )
 
             conn_emitter.emit(event)
@@ -190,8 +252,8 @@ class TestMultiSensorFanOut:
             ssl_emitter.close()
 
             # Both sensor dirs have both log types
-            for sensor in ['fw01', 'fw02']:
+            for sensor in ["fw01", "fw02"]:
                 assert (base / sensor / "conn.json").exists()
                 assert (base / sensor / "ssl.json").exists()
                 with open(base / sensor / "conn.json") as f:
-                    assert json.loads(f.readline())['uid'] == 'CMultiSensor1234'
+                    assert json.loads(f.readline())["uid"] == "CMultiSensor1234"

@@ -1,19 +1,14 @@
 """Tests for Dimension 3: Background Noise Realism scoring."""
 
-from collections import Counter
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
-import pytest
-
-from evidenceforge.evaluation.anomaly import detect_anomalies
 from evidenceforge.evaluation.dimensions.noise_realism import (
     NoiseRealismScorer,
     _extract_event_type,
 )
 from evidenceforge.evaluation.parsers import ParsedRecord
 
-T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
 
 def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
@@ -22,15 +17,22 @@ def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
 
 def _make_scenario(intensity="high", storyline_count=5):
     from evidenceforge.models.scenario import (
-        BaselineActivity, Environment, OutputSpec,
-        StorylineEvent, System, TimeWindow, User,
+        BaselineActivity,
+        Environment,
+        OutputSpec,
+        Scenario,
+        StorylineEvent,
+        System,
+        TimeWindow,
+        User,
     )
-    from evidenceforge.models.scenario import Scenario
 
     storyline = [
         StorylineEvent(
-            id=f"evt-test-{i+1}",
-            time=f"+{i+1}h", actor="jsmith", system="WS-01",
+            id=f"evt-test-{i + 1}",
+            time=f"+{i + 1}h",
+            actor="jsmith",
+            system="WS-01",
             activity="Execute command",
             events=[{"type": "process", "process_name": "cmd.exe"}],
         )
@@ -43,10 +45,20 @@ def _make_scenario(intensity="high", storyline_count=5):
         environment=Environment(
             description="Test",
             users=[
-                User(username="jsmith", full_name="J", email="j@x.com",
-                     persona="", primary_system="WS-01"),
-                User(username="admin", full_name="A", email="a@x.com",
-                     persona="", primary_system="SRV-01"),
+                User(
+                    username="jsmith",
+                    full_name="J",
+                    email="j@x.com",
+                    persona="",
+                    primary_system="WS-01",
+                ),
+                User(
+                    username="admin",
+                    full_name="A",
+                    email="a@x.com",
+                    persona="",
+                    primary_system="SRV-01",
+                ),
             ],
             systems=[
                 System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
@@ -55,7 +67,9 @@ def _make_scenario(intensity="high", storyline_count=5):
         ),
         time_window=TimeWindow(start=T0, duration="8h"),
         baseline_activity=BaselineActivity(
-            description="Normal", intensity=intensity, variation="low",
+            description="Normal",
+            intensity=intensity,
+            variation="low",
         ),
         storyline=storyline if storyline_count > 0 else [],
         output=OutputSpec(
@@ -70,10 +84,12 @@ class TestVolumeAdequacy:
         """High noise-to-signal ratio should score well."""
         scenario = _make_scenario(intensity="high", storyline_count=2)
         # 2 storyline events, 20000+ noise records → ratio ~10000:1
-        records = {"windows_event_security": [
-            _record("windows_event_security", {"EventID": 4624}, ts=T0 + timedelta(seconds=i))
-            for i in range(20000)
-        ]}
+        records = {
+            "windows_event_security": [
+                _record("windows_event_security", {"EventID": 4624}, ts=T0 + timedelta(seconds=i))
+                for i in range(20000)
+            ]
+        }
         scorer = NoiseRealismScorer()
         result = scorer._score_volume_adequacy(records, scenario)
         assert result.score >= 90.0
@@ -82,19 +98,21 @@ class TestVolumeAdequacy:
         """Very low noise-to-signal ratio should score poorly."""
         scenario = _make_scenario(intensity="high", storyline_count=10)
         # 10 storyline + only 50 records → ratio ~4:1 (target 10000:1)
-        records = {"windows_event_security": [
-            _record("windows_event_security", {"EventID": 4624}, ts=T0 + timedelta(seconds=i))
-            for i in range(50)
-        ]}
+        records = {
+            "windows_event_security": [
+                _record("windows_event_security", {"EventID": 4624}, ts=T0 + timedelta(seconds=i))
+                for i in range(50)
+            ]
+        }
         scorer = NoiseRealismScorer()
         result = scorer._score_volume_adequacy(records, scenario)
         assert result.score < 10.0
 
     def test_no_storyline(self):
         scenario = _make_scenario(storyline_count=0)
-        records = {"windows_event_security": [
-            _record("windows_event_security", {"EventID": 4624}, ts=T0)
-        ]}
+        records = {
+            "windows_event_security": [_record("windows_event_security", {"EventID": 4624}, ts=T0)]
+        }
         scorer = NoiseRealismScorer()
         result = scorer._score_volume_adequacy(records, scenario)
         assert result.score == 100.0
@@ -106,11 +124,20 @@ class TestUserDiversity:
         records = {
             "windows_event_security": [
                 # jsmith: mostly logons
-                _record("windows_event_security", {"TargetUserName": "jsmith", "EventID": 4624}, ts=T0 + timedelta(seconds=i))
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "jsmith", "EventID": 4624},
+                    ts=T0 + timedelta(seconds=i),
+                )
                 for i in range(20)
-            ] + [
+            ]
+            + [
                 # admin: mostly processes
-                _record("windows_event_security", {"TargetUserName": "admin", "EventID": 4688}, ts=T0 + timedelta(seconds=i))
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "admin", "EventID": 4688},
+                    ts=T0 + timedelta(seconds=i),
+                )
                 for i in range(20)
             ],
         }
@@ -123,10 +150,19 @@ class TestUserDiversity:
         """Users with identical event-type distributions should score poorly."""
         records = {
             "windows_event_security": [
-                _record("windows_event_security", {"TargetUserName": "jsmith", "EventID": 4624}, ts=T0 + timedelta(seconds=i))
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "jsmith", "EventID": 4624},
+                    ts=T0 + timedelta(seconds=i),
+                )
                 for i in range(20)
-            ] + [
-                _record("windows_event_security", {"TargetUserName": "admin", "EventID": 4624}, ts=T0 + timedelta(seconds=i))
+            ]
+            + [
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "admin", "EventID": 4624},
+                    ts=T0 + timedelta(seconds=i),
+                )
                 for i in range(20)
             ],
         }
@@ -142,11 +178,15 @@ class TestActivityPlausibility:
         scenario = _make_scenario()
         records = {
             "windows_event_security": [
-                _record("windows_event_security", {
-                    "Computer": "WS-01",
-                    "EventID": 4688,
-                    "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
-                }, ts=T0),
+                _record(
+                    "windows_event_security",
+                    {
+                        "Computer": "WS-01",
+                        "EventID": 4688,
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
+                    },
+                    ts=T0,
+                ),
             ],
         }
         scorer = NoiseRealismScorer()
@@ -158,11 +198,15 @@ class TestActivityPlausibility:
         scenario = _make_scenario()
         records = {
             "windows_event_security": [
-                _record("windows_event_security", {
-                    "Computer": "WS-01",
-                    "EventID": 4688,
-                    "NewProcessName": "/usr/bin/python3",
-                }, ts=T0),
+                _record(
+                    "windows_event_security",
+                    {
+                        "Computer": "WS-01",
+                        "EventID": 4688,
+                        "NewProcessName": "/usr/bin/python3",
+                    },
+                    ts=T0,
+                ),
             ],
         }
         scorer = NoiseRealismScorer()
@@ -177,8 +221,14 @@ class TestAnomalyRate:
         # Create records where ~3% have failed operations
         records = {
             "web_access": (
-                [_record("web_access", {"status_code": 200}, ts=T0 + timedelta(seconds=i)) for i in range(97)]
-                + [_record("web_access", {"status_code": 403}, ts=T0 + timedelta(seconds=i + 97)) for i in range(3)]
+                [
+                    _record("web_access", {"status_code": 200}, ts=T0 + timedelta(seconds=i))
+                    for i in range(97)
+                ]
+                + [
+                    _record("web_access", {"status_code": 403}, ts=T0 + timedelta(seconds=i + 97))
+                    for i in range(3)
+                ]
             ),
         }
         scorer = NoiseRealismScorer()
@@ -210,10 +260,13 @@ class TestEventTypeExtraction:
         assert _extract_event_type(r) == "win_4624_type3"
 
     def test_windows_4688_categorized(self):
-        r = _record("windows_event_security", {
-            "EventID": 4688,
-            "NewProcessName": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        })
+        r = _record(
+            "windows_event_security",
+            {
+                "EventID": 4688,
+                "NewProcessName": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            },
+        )
         assert _extract_event_type(r) == "win_4688_browser"
 
     def test_ecar(self):
@@ -234,9 +287,15 @@ class TestEndToEnd:
         scenario = _make_scenario()
         records = {
             "windows_event_security": [
-                _record("windows_event_security", {
-                    "Computer": "WS-01", "EventID": 4624, "TargetUserName": "jsmith",
-                }, ts=T0 + timedelta(minutes=i))
+                _record(
+                    "windows_event_security",
+                    {
+                        "Computer": "WS-01",
+                        "EventID": 4624,
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=T0 + timedelta(minutes=i),
+                )
                 for i in range(20)
             ],
         }

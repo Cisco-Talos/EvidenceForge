@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,9 +45,7 @@ class EcarParser(LogParser):
             ts_ms = data.get("timestamp_ms")
             if ts_ms is not None:
                 try:
-                    timestamp = datetime.fromtimestamp(
-                        int(ts_ms) / 1000.0, tz=timezone.utc
-                    )
+                    timestamp = datetime.fromtimestamp(int(ts_ms) / 1000.0, tz=UTC)
                 except (ValueError, TypeError, OSError):
                     errors.append(f"Invalid timestamp_ms: {ts_ms}")
 

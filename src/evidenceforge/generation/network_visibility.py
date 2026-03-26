@@ -8,7 +8,6 @@ If no network config is provided, all connections are visible (backward compat).
 
 import ipaddress
 import logging
-from typing import Optional
 
 from evidenceforge.models.scenario import NetworkConfig, NetworkSensor, System
 
@@ -24,7 +23,7 @@ class NetworkVisibilityEngine:
 
     def __init__(
         self,
-        network_config: Optional[NetworkConfig],
+        network_config: NetworkConfig | None,
         systems: list[System],
     ):
         """Initialize visibility engine.
@@ -42,9 +41,7 @@ class NetworkVisibilityEngine:
         if self._enabled:
             self._build_topology(network_config, systems)
 
-    def _build_topology(
-        self, config: NetworkConfig, systems: list[System]
-    ) -> None:
+    def _build_topology(self, config: NetworkConfig, systems: list[System]) -> None:
         """Build internal lookup structures from config.
 
         1. Parse each segment's CIDR into an ip_network
@@ -72,9 +69,7 @@ class NetworkVisibilityEngine:
                 for system in systems:
                     try:
                         if ipaddress.ip_address(system.ip) in network:
-                            self._ip_to_segments.setdefault(system.ip, set()).add(
-                                segment.name
-                            )
+                            self._ip_to_segments.setdefault(system.ip, set()).add(segment.name)
                     except ValueError:
                         pass
 
@@ -168,13 +163,10 @@ class NetworkVisibilityEngine:
         dst_segments = self._resolve_ip_segments(dst_ip)
 
         return any(
-            self._sensor_can_observe(sensor, src_segments, dst_segments)
-            for sensor in self._sensors
+            self._sensor_can_observe(sensor, src_segments, dst_segments) for sensor in self._sensors
         )
 
-    def get_observing_sensors(
-        self, src_ip: str, dst_ip: str
-    ) -> list[NetworkSensor]:
+    def get_observing_sensors(self, src_ip: str, dst_ip: str) -> list[NetworkSensor]:
         """Return list of sensors that would observe this connection.
 
         If no network config, returns empty list (caller uses default behavior).
@@ -186,20 +178,19 @@ class NetworkVisibilityEngine:
         dst_segments = self._resolve_ip_segments(dst_ip)
 
         return [
-            sensor for sensor in self._sensors
+            sensor
+            for sensor in self._sensors
             if self._sensor_can_observe(sensor, src_segments, dst_segments)
         ]
 
-    def get_log_formats_for_connection(
-        self, src_ip: str, dst_ip: str
-    ) -> set[str]:
+    def get_log_formats_for_connection(self, src_ip: str, dst_ip: str) -> set[str]:
         """Return the expanded union of log_formats from all observing sensors.
 
         If no network config (backward compat), returns all Zeek formats
         so all emitters receive events when there's no network topology.
         Format group names (e.g., 'zeek') are expanded to individual emitter names.
         """
-        from evidenceforge.events.dispatcher import expand_formats, FORMAT_GROUPS
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
 
         if not self._enabled:
             return set(FORMAT_GROUPS["zeek"])

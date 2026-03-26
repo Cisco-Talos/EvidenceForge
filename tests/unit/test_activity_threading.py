@@ -3,17 +3,15 @@
 Tests deterministic seeding and RNG isolation between threads.
 """
 
-import pytest
-from threading import Thread, Barrier
-from datetime import datetime
-import time
-
-from evidenceforge.generation.activity import _get_rng, ActivityGenerator
-from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
-from evidenceforge.formats import load_format
-from pathlib import Path
 import tempfile
+from datetime import datetime
+from pathlib import Path
+from threading import Barrier, Thread
+
+from evidenceforge.formats import load_format
+from evidenceforge.generation.activity import ActivityGenerator, _get_rng
+from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.state_manager import StateManager
 
 
 class TestThreadLocalRNG:
@@ -23,6 +21,7 @@ class TestThreadLocalRNG:
         """Verify _get_rng() returns a Random instance."""
         rng = _get_rng()
         import random
+
         assert isinstance(rng, random.Random)
 
     def test_rng_reproducibility_within_thread(self):
@@ -88,7 +87,7 @@ class TestThreadLocalRNG:
         assert len(results) == 5
 
         # Verify: Each thread generated 100 values
-        for thread_id, values in results:
+        for _thread_id, values in results:
             assert len(values) == 100
 
         # Each thread should have good internal uniqueness (no corrupted state).
@@ -135,37 +134,32 @@ class TestThreadLocalRNG:
             zeek_fmt = load_format("zeek_conn")
 
             emitters = {
-                'windows_event_security': WindowsEventEmitter(
-                    windows_fmt,
-                    output_dir / "windows.log"
+                "windows_event_security": WindowsEventEmitter(
+                    windows_fmt, output_dir / "windows.log"
                 ),
-                'zeek_conn': ZeekEmitter(
-                    zeek_fmt,
-                    output_dir / "zeek.log"
-                )
+                "zeek_conn": ZeekEmitter(zeek_fmt, output_dir / "zeek.log"),
             }
 
             # Create state manager, dispatcher, and activity generator
             from evidenceforge.events.dispatcher import EventDispatcher
+
             sm = StateManager()
             sm.set_current_time(datetime.now())
             dispatcher = EventDispatcher(state_manager=sm, emitters=emitters)
             ag = ActivityGenerator(sm, emitters, dispatcher=dispatcher)
 
             # Create dummy user and system with all required fields
-            from evidenceforge.models.scenario import User, System
+            from evidenceforge.models.scenario import System, User
+
             user = User(
                 username="testuser",
                 full_name="Test User",
                 email="test@example.com",
                 persona=None,
-                enabled=True
+                enabled=True,
             )
             system = System(
-                hostname="TEST-WS-01",
-                ip="10.0.10.1",
-                os="Windows 10",
-                type="workstation"
+                hostname="TEST-WS-01", ip="10.0.10.1", os="Windows 10", type="workstation"
             )
 
             # Generate events from main thread

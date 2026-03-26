@@ -6,7 +6,6 @@ from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
 
-
 # Relative paths within the installed eforge/ directory that we expect to exist.
 # Used both to copy files and to identify stale files for cleanup.
 SKILL_FILES = [

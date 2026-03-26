@@ -4,19 +4,25 @@ Tests end-to-end parallel generation with threaded emitters, verifying temporal
 consistency, cross-log referential integrity, and data correctness.
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime, timedelta
-import tempfile
 import json
+import tempfile
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
 
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
-    Scenario, TimeWindow, Environment, User, System,
-    BaselineActivity, StorylineEvent, OutputSpec
+    BaselineActivity,
+    Environment,
+    OutputSpec,
+    Scenario,
+    StorylineEvent,
+    System,
+    TimeWindow,
+    User,
 )
-
 
 pytestmark = pytest.mark.slow
 
@@ -37,53 +43,34 @@ def create_test_scenario(users: int = 2, hours: int = 3) -> Scenario:
     # Create users
     user_list = []
     for i in range(users):
-        user_list.append(User(
-            username=f"user{i}",
-            full_name=f"Test User {i}",
-            email=f"user{i}@test.com",
-            persona=None,
-            enabled=True
-        ))
+        user_list.append(
+            User(
+                username=f"user{i}",
+                full_name=f"Test User {i}",
+                email=f"user{i}@test.com",
+                persona=None,
+                enabled=True,
+            )
+        )
 
     # Create systems
     system_list = [
-        System(
-            hostname="TEST-WS-01",
-            ip="10.0.10.1",
-            os="Windows 10",
-            type="workstation"
-        ),
-        System(
-            hostname="TEST-WS-02",
-            ip="10.0.10.2",
-            os="Windows 10",
-            type="workstation"
-        )
+        System(hostname="TEST-WS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
+        System(hostname="TEST-WS-02", ip="10.0.10.2", os="Windows 10", type="workstation"),
     ]
 
     environment = Environment(
-        description="Test environment for parallel generation",
-        users=user_list,
-        systems=system_list
+        description="Test environment for parallel generation", users=user_list, systems=system_list
     )
 
-    time_window = TimeWindow(
-        start=start_time,
-        end=end_time
-    )
+    time_window = TimeWindow(start=start_time, end=end_time)
 
     baseline = BaselineActivity(
-        description="Low intensity baseline activity",
-        intensity="low",
-        variation="low"
+        description="Low intensity baseline activity", intensity="low", variation="low"
     )
 
     output = OutputSpec(
-        logs=[
-            {"format": "windows_event_security"},
-            {"format": "zeek_conn"}
-        ],
-        destination="./output"
+        logs=[{"format": "windows_event_security"}, {"format": "zeek_conn"}], destination="./output"
     )
 
     return Scenario(
@@ -93,7 +80,7 @@ def create_test_scenario(users: int = 2, hours: int = 3) -> Scenario:
         environment=environment,
         baseline_activity=baseline,
         output=output,
-        storyline=[]
+        storyline=[],
     )
 
 
@@ -111,39 +98,37 @@ def parse_windows_log(file_path: Path) -> list[dict]:
         content = f.read()
 
     # If file already has <Events> root, parse directly; otherwise wrap
-    if '<Events>' in content:
+    if "<Events>" in content:
         root = ET.fromstring(content)
     else:
         wrapped_content = f"<Events>{content}</Events>"
         root = ET.fromstring(wrapped_content)
 
     # Define namespace
-    ns = {'ns': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+    ns = {"ns": "http://schemas.microsoft.com/win/2004/08/events/event"}
 
     events = []
     # Find all Event elements
-    for event_elem in root.findall('ns:Event', ns):
+    for event_elem in root.findall("ns:Event", ns):
         event = {}
 
         # Extract System data
-        system = event_elem.find('ns:System', ns)
+        system = event_elem.find("ns:System", ns)
         if system is not None:
-            event['EventID'] = system.findtext('ns:EventID', namespaces=ns)
-            time_created = system.find('ns:TimeCreated', ns)
+            event["EventID"] = system.findtext("ns:EventID", namespaces=ns)
+            time_created = system.find("ns:TimeCreated", ns)
             if time_created is not None:
-                time_str = time_created.get('SystemTime')
+                time_str = time_created.get("SystemTime")
                 if time_str:
-                    event['TimeCreated'] = datetime.fromisoformat(
-                        time_str.replace('Z', '+00:00')
-                    )
-            event['Computer'] = system.findtext('ns:Computer', namespaces=ns)
-            event['EventRecordID'] = system.findtext('ns:EventRecordID', namespaces=ns)
+                    event["TimeCreated"] = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+            event["Computer"] = system.findtext("ns:Computer", namespaces=ns)
+            event["EventRecordID"] = system.findtext("ns:EventRecordID", namespaces=ns)
 
         # Extract EventData
-        event_data = event_elem.find('ns:EventData', ns)
+        event_data = event_elem.find("ns:EventData", ns)
         if event_data is not None:
-            for data in event_data.findall('ns:Data', ns):
-                name = data.get('Name')
+            for data in event_data.findall("ns:Data", ns):
+                name = data.get("Name")
                 if name:
                     event[name] = data.text
 
@@ -165,10 +150,10 @@ def parse_zeek_log(file_path: Path) -> list[dict]:
     with open(file_path) as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith('#'):
+            if line and not line.startswith("#"):
                 event = json.loads(line)
                 # Convert timestamp to datetime
-                event['ts'] = float(event['ts'])
+                event["ts"] = float(event["ts"])
                 events.append(event)
     return events
 
@@ -192,16 +177,22 @@ class TestParallelGeneration:
             assert len(zeek_files) > 0, "No Zeek files found"
 
             # Parse and verify events were generated
-            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
-            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
+            windows_events = parse_windows_log(
+                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
+            )
+            zeek_events = parse_zeek_log(
+                list(Path(tmpdir).rglob("conn.json"))[0]
+                if list(Path(tmpdir).rglob("conn.json"))
+                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
+            )
 
             # Check Windows events exist
-            windows_timestamps = [e['TimeCreated'] for e in windows_events if 'TimeCreated' in e]
+            windows_timestamps = [e["TimeCreated"] for e in windows_events if "TimeCreated" in e]
             assert len(windows_timestamps) > 0, "No Windows events generated"
 
             # Check Zeek events exist (may be 0 if no connections generated)
             # This is OK for low-intensity baseline
-            zeek_timestamps = [e['ts'] for e in zeek_events]
+            [e["ts"] for e in zeek_events]
             # assert len(zeek_timestamps) >= 0  # Always true, just checking it parses
 
     def test_parallel_generation_cross_log_consistency(self):
@@ -213,30 +204,40 @@ class TestParallelGeneration:
             engine.generate()
 
             # Extract cross-references
-            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
+            windows_events = parse_windows_log(
+                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
+            )
 
             # Verify LogonID uniqueness (only in logon events; logoff events reuse the same ID)
-            logon_ids = [e.get('TargetLogonId') for e in windows_events
-                         if e.get('TargetLogonId') and e.get('EventID') == '4624']
+            logon_ids = [
+                e.get("TargetLogonId")
+                for e in windows_events
+                if e.get("TargetLogonId") and e.get("EventID") == "4624"
+            ]
             assert len(logon_ids) > 0
-            assert len(logon_ids) == len(set(logon_ids)), "Duplicate LogonIDs found in logon events!"
+            assert len(logon_ids) == len(set(logon_ids)), (
+                "Duplicate LogonIDs found in logon events!"
+            )
 
             # Verify PID uniqueness per system
             pids_per_system = {}
             for e in windows_events:
-                if e.get('EventID') == '4688':  # Process creation
-                    system = e.get('Computer')
-                    pid = e.get('NewProcessId')
+                if e.get("EventID") == "4688":  # Process creation
+                    system = e.get("Computer")
+                    pid = e.get("NewProcessId")
                     if system and pid:
                         pids_per_system.setdefault(system, []).append(pid)
 
             for system, pids in pids_per_system.items():
-                assert len(pids) == len(set(pids)), \
-                    f"Duplicate PIDs found on {system}!"
+                assert len(pids) == len(set(pids)), f"Duplicate PIDs found on {system}!"
 
             # Verify Zeek UID uniqueness
-            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
-            uids = [e['uid'] for e in zeek_events]
+            zeek_events = parse_zeek_log(
+                list(Path(tmpdir).rglob("conn.json"))[0]
+                if list(Path(tmpdir).rglob("conn.json"))
+                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
+            )
+            uids = [e["uid"] for e in zeek_events]
             assert len(uids) > 0
             assert len(uids) == len(set(uids)), "Duplicate Zeek UIDs found!"
 
@@ -249,8 +250,14 @@ class TestParallelGeneration:
             engine.generate()
 
             # Parse both log files (will raise exception if corrupted)
-            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
-            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
+            windows_events = parse_windows_log(
+                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
+            )
+            zeek_events = parse_zeek_log(
+                list(Path(tmpdir).rglob("conn.json"))[0]
+                if list(Path(tmpdir).rglob("conn.json"))
+                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
+            )
 
             # Verify events parsed successfully
             assert len(windows_events) > 0, "No Windows events generated"
@@ -258,18 +265,18 @@ class TestParallelGeneration:
 
             # Verify all Windows events have required fields
             for event in windows_events:
-                assert 'EventID' in event
-                assert 'TimeCreated' in event
-                assert 'Computer' in event
-                assert 'EventRecordID' in event
+                assert "EventID" in event
+                assert "TimeCreated" in event
+                assert "Computer" in event
+                assert "EventRecordID" in event
 
             # Verify all Zeek events have required fields
             for event in zeek_events:
-                assert 'ts' in event
-                assert 'uid' in event
-                assert 'id.orig_h' in event
-                assert 'id.resp_h' in event
-                assert 'proto' in event
+                assert "ts" in event
+                assert "uid" in event
+                assert "id.orig_h" in event
+                assert "id.resp_h" in event
+                assert "proto" in event
 
     def test_parallel_generation_with_storyline(self):
         """Test storyline events maintain correct ordering with threading."""
@@ -283,7 +290,7 @@ class TestParallelGeneration:
                 actor="user0",
                 system="TEST-WS-01",
                 activity="suspicious logon from external IP",
-                events=[{"type": "logon", "source_ip": "203.0.113.10", "logon_type": 3}]
+                events=[{"type": "logon", "source_ip": "203.0.113.10", "logon_type": 3}],
             )
         ]
 
@@ -302,14 +309,15 @@ class TestParallelGeneration:
 
             # Verify storyline event present in logs
             # Look for logon event around 9:30 AM
-            from datetime import timezone as tz
-            storyline_time = datetime(2024, 1, 1, 9, 30, 0, tzinfo=tz.utc)
+            storyline_time = datetime(2024, 1, 1, 9, 30, 0, tzinfo=UTC)
             tolerance = timedelta(minutes=1)
 
             storyline_events = [
-                e for e in windows_events
-                if 'TimeCreated' in e and
-                abs((e['TimeCreated'] - storyline_time).total_seconds()) < tolerance.total_seconds()
+                e
+                for e in windows_events
+                if "TimeCreated" in e
+                and abs((e["TimeCreated"] - storyline_time).total_seconds())
+                < tolerance.total_seconds()
             ]
 
             assert len(storyline_events) > 0, "Storyline event not found in logs"
@@ -341,8 +349,14 @@ class TestParallelGeneration:
             assert duration < 30, f"Generation took too long: {duration:.2f}s"
 
             # Verify events were generated
-            windows_events = parse_windows_log(list(Path(tmpdir).rglob("windows_event_security.xml"))[0])
-            zeek_events = parse_zeek_log(list(Path(tmpdir).rglob("conn.json"))[0] if list(Path(tmpdir).rglob("conn.json")) else list(Path(tmpdir).rglob("zeek_conn.json"))[0])
+            windows_events = parse_windows_log(
+                list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
+            )
+            zeek_events = parse_zeek_log(
+                list(Path(tmpdir).rglob("conn.json"))[0]
+                if list(Path(tmpdir).rglob("conn.json"))
+                else list(Path(tmpdir).rglob("zeek_conn.json"))[0]
+            )
 
             # With 10 users, 2 hours, low intensity: events distributed across 7 formats
             assert len(windows_events) > 10, "Too few Windows events generated"

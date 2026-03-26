@@ -18,25 +18,23 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        return (
-            event.event_type in self._supported_types
-            and event.ocsp is not None
-        )
+        return event.event_type in self._supported_types and event.ocsp is not None
 
     def emit(self, event: SecurityEvent) -> None:
         ocsp = event.ocsp
         event_data: dict[str, Any] = {
-            'ts': event.timestamp,
-            'id': ocsp.id,
-            'hashAlgorithm': ocsp.hash_algorithm,
-            'issuerNameHash': ocsp.issuer_name_hash,
-            'issuerKeyHash': ocsp.issuer_key_hash,
-            'serialNumber': ocsp.serial_number,
-            'certStatus': ocsp.cert_status,
-            'thisUpdate': ocsp.this_update,
-            'nextUpdate': ocsp.next_update,
-            '_sensor_hostnames': event._sensor_hostnames_by_format.get(
-                self.format_def.name if self.format_def else 'zeek_ocsp', []),
+            "ts": event.timestamp,
+            "id": ocsp.id,
+            "hashAlgorithm": ocsp.hash_algorithm,
+            "issuerNameHash": ocsp.issuer_name_hash,
+            "issuerKeyHash": ocsp.issuer_key_hash,
+            "serialNumber": ocsp.serial_number,
+            "certStatus": ocsp.cert_status,
+            "thisUpdate": ocsp.this_update,
+            "nextUpdate": ocsp.next_update,
+            "_sensor_hostnames": event._sensor_hostnames_by_format.get(
+                self.format_def.name if self.format_def else "zeek_ocsp", []
+            ),
         }
         self.emit_event(event_data)
 

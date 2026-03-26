@@ -22,10 +22,7 @@ class SnortEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry an IdsContext."""
-        return (
-            event.event_type in self._supported_types
-            and event.ids is not None
-        )
+        return event.event_type in self._supported_types and event.ids is not None
 
     def emit(self, event: SecurityEvent) -> None:
         """Render IdsContext to Snort fast alert format."""
@@ -33,22 +30,22 @@ class SnortEmitter(SensorMultiplexEmitter):
         net = event.network
 
         event_data = {
-            'timestamp': event.timestamp,
-            'sid': ids.sid,
-            'message': ids.message,
-            'classification': ids.classification,
-            'priority': ids.priority,
-            'protocol': (net.protocol or 'TCP').upper() if net else 'TCP',
-            'src_ip': net.src_ip if net else '',
-            'src_port': net.src_port if net else 0,
-            'dst_ip': net.dst_ip if net else '',
-            'dst_port': net.dst_port if net else 0,
+            "timestamp": event.timestamp,
+            "sid": ids.sid,
+            "message": ids.message,
+            "classification": ids.classification,
+            "priority": ids.priority,
+            "protocol": (net.protocol or "TCP").upper() if net else "TCP",
+            "src_ip": net.src_ip if net else "",
+            "src_port": net.src_port if net else 0,
+            "dst_ip": net.dst_ip if net else "",
+            "dst_port": net.dst_port if net else 0,
         }
         # Get sensor routing from the event's visibility metadata
-        if hasattr(event, '_sensor_hostnames_by_format'):
-            sensor_hosts = event._sensor_hostnames_by_format.get('snort_alert', [])
+        if hasattr(event, "_sensor_hostnames_by_format"):
+            sensor_hosts = event._sensor_hostnames_by_format.get("snort_alert", [])
             if sensor_hosts:
-                event_data['_sensor_hostnames'] = sensor_hosts
+                event_data["_sensor_hostnames"] = sensor_hosts
 
         self._dispatch(event_data)
 
@@ -59,22 +56,22 @@ class SnortEmitter(SensorMultiplexEmitter):
         which means it's a plain connection event that should not generate an
         IDS alert. The caller must handle None returns.
         """
-        if not event_data.get('sid') and not event_data.get('message'):
+        if not event_data.get("sid") and not event_data.get("message"):
             return None
 
-        proto = event_data.get('protocol') or event_data.get('proto')
+        proto = event_data.get("protocol") or event_data.get("proto")
 
         context = {
-            'timestamp': event_data.get('timestamp') or event_data.get('ts'),
-            'sid': event_data.get('sid'),
-            'classification': event_data.get('classification'),
-            'priority': event_data.get('priority'),
-            'protocol': proto.upper() if proto else None,
-            'src_ip': event_data.get('src_ip') or event_data.get('id.orig_h'),
-            'src_port': event_data.get('src_port') or event_data.get('id.orig_p'),
-            'dst_ip': event_data.get('dst_ip') or event_data.get('id.resp_h'),
-            'dst_port': event_data.get('dst_port') or event_data.get('id.resp_p'),
-            'message': event_data.get('message'),
+            "timestamp": event_data.get("timestamp") or event_data.get("ts"),
+            "sid": event_data.get("sid"),
+            "classification": event_data.get("classification"),
+            "priority": event_data.get("priority"),
+            "protocol": proto.upper() if proto else None,
+            "src_ip": event_data.get("src_ip") or event_data.get("id.orig_h"),
+            "src_port": event_data.get("src_port") or event_data.get("id.orig_p"),
+            "dst_ip": event_data.get("dst_ip") or event_data.get("id.resp_h"),
+            "dst_port": event_data.get("dst_port") or event_data.get("id.resp_p"),
+            "message": event_data.get("message"),
         }
 
         rendered = self._template.render(**context)

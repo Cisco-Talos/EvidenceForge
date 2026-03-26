@@ -2,7 +2,7 @@
 
 import fnmatch
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytz
 
@@ -69,9 +69,9 @@ def parse_iso8601(timestamp_str: str) -> datetime:
 
         # Ensure UTC timezone
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         else:
-            dt = dt.astimezone(timezone.utc)
+            dt = dt.astimezone(UTC)
 
         return dt
     except ValueError as e:
@@ -182,7 +182,7 @@ def parse_work_hours(work_hours_str: str) -> dict:
         }
     """
     # Extract lunch break if present
-    lunch_pattern = r'\(lunch\s+([\d:]+(?:am|pm)?)\s*-\s*([\d:]+(?:am|pm)?)\)'
+    lunch_pattern = r"\(lunch\s+([\d:]+(?:am|pm)?)\s*-\s*([\d:]+(?:am|pm)?)\)"
     lunch_match = re.search(lunch_pattern, work_hours_str, re.IGNORECASE)
 
     lunch_start = None
@@ -193,10 +193,10 @@ def parse_work_hours(work_hours_str: str) -> dict:
         lunch_start = _parse_time_to_hour(lunch_start_str)
         lunch_end = _parse_time_to_hour(lunch_end_str)
         # Remove lunch portion from main string
-        work_hours_str = work_hours_str[:lunch_match.start()] + work_hours_str[lunch_match.end():]
+        work_hours_str = work_hours_str[: lunch_match.start()] + work_hours_str[lunch_match.end() :]
 
     # Parse main work hours range
-    main_pattern = r'([\d:]+(?:am|pm)?)\s*-\s*([\d:]+(?:am|pm)?)'
+    main_pattern = r"([\d:]+(?:am|pm)?)\s*-\s*([\d:]+(?:am|pm)?)"
     main_match = re.search(main_pattern, work_hours_str, re.IGNORECASE)
 
     if not main_match:
@@ -242,11 +242,11 @@ def parse_work_hours(work_hours_str: str) -> dict:
             peak_hours.append(hour)
 
     return {
-        'start': start,
-        'end': end,
-        'lunch': (lunch_start, lunch_end) if lunch_start is not None else None,
-        'hours': hours,
-        'peak_hours': peak_hours
+        "start": start,
+        "end": end,
+        "lunch": (lunch_start, lunch_end) if lunch_start is not None else None,
+        "hours": hours,
+        "peak_hours": peak_hours,
     }
 
 
@@ -267,16 +267,16 @@ def _parse_time_to_hour(time_str: str) -> float:
     time_str = time_str.strip().lower()
 
     # Check for am/pm
-    is_pm = 'pm' in time_str
-    is_am = 'am' in time_str
+    is_pm = "pm" in time_str
+    is_am = "am" in time_str
 
     # Remove am/pm suffix
-    time_str = time_str.replace('am', '').replace('pm', '').strip()
+    time_str = time_str.replace("am", "").replace("pm", "").strip()
 
     # Parse hour and optional minutes
     try:
-        if ':' in time_str:
-            parts = time_str.split(':')
+        if ":" in time_str:
+            parts = time_str.split(":")
             if len(parts) != 2:
                 raise ValueError(f"Invalid time format: {time_str}")
             hour = int(parts[0])

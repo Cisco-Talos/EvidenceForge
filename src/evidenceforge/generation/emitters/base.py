@@ -4,9 +4,9 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from queue import Queue, Empty, Full
-from threading import Thread, Event, Lock
-from typing import Any, Optional
+from queue import Empty, Full, Queue
+from threading import Event, Lock, Thread
+from typing import Any
 
 from jinja2 import Template
 
@@ -60,20 +60,16 @@ class LogEmitter(ABC):
 
         # Threading support (Phase 2.1)
         self.threaded = threaded
-        self._event_queue: Optional[Queue] = None
-        self._flush_barrier: Optional[Event] = None
-        self._stop_event: Optional[Event] = None
-        self._thread: Optional[Thread] = None
+        self._event_queue: Queue | None = None
+        self._flush_barrier: Event | None = None
+        self._stop_event: Event | None = None
+        self._thread: Thread | None = None
 
         if self.threaded:
             self._event_queue = Queue(maxsize=50000)  # Bounded queue for backpressure
             self._flush_barrier = Event()
             self._stop_event = Event()
-            self._thread = Thread(
-                target=self._run,
-                daemon=True,
-                name=f"Emitter-{format_def.name}"
-            )
+            self._thread = Thread(target=self._run, daemon=True, name=f"Emitter-{format_def.name}")
             self._thread.start()
             logger.debug(f"Started emitter thread for {format_def.name}")
 
@@ -171,8 +167,7 @@ class LogEmitter(ABC):
         except Full:
             # Queue is full - apply backpressure by blocking
             logger.warning(
-                f"Event queue full for {self.format_def.name} emitter, "
-                f"applying backpressure"
+                f"Event queue full for {self.format_def.name} emitter, applying backpressure"
             )
             self._event_queue.put(event_data, block=True)
 
@@ -213,8 +208,7 @@ class LogEmitter(ABC):
 
             if self._thread.is_alive():
                 logger.warning(
-                    f"Emitter thread for {self.format_def.name} did not stop "
-                    f"within timeout"
+                    f"Emitter thread for {self.format_def.name} did not stop within timeout"
                 )
 
     def _write_header(self) -> None:
@@ -296,9 +290,10 @@ class LogEmitter(ABC):
 
     def _write_footer(self) -> None:
         """Write footer to output file if format has one."""
-        footer_template = getattr(self.format_def.output, 'footer_template', None)
+        footer_template = getattr(self.format_def.output, "footer_template", None)
         if footer_template and self._header_written:
             from jinja2 import Template
+
             tmpl = Template(footer_template)
             footer = tmpl.render()
             with self._file_lock:

@@ -2,7 +2,7 @@
 
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,7 +11,6 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import NetworkContext, SslContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
-
 
 SAMPLE_DATA_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
 
@@ -45,32 +44,37 @@ class TestSslFormatAccuracy:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "ssl.json"
             emitter = ZeekSslEmitter(fmt, output)
-            emitter.emit_event({
-                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
-                'uid': 'CTest123456789ab',
-                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
-                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
-                'version': 'TLSv12',
-                'cipher': 'TLS_AES_128_GCM_SHA256',
-                'server_name': 'example.com',
-                'resumed': False, 'established': True,
-                'ssl_history': 'CsiI',
-            })
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "version": "TLSv12",
+                    "cipher": "TLS_AES_128_GCM_SHA256",
+                    "server_name": "example.com",
+                    "resumed": False,
+                    "established": True,
+                    "ssl_history": "CsiI",
+                }
+            )
             emitter.close()
 
             with open(output) as f:
                 data = json.loads(f.readline())
 
-            assert data['ts'] == pytest.approx(1705312800.0, abs=1)
-            assert data['uid'] == 'CTest123456789ab'
-            assert data['id.orig_h'] == '10.0.0.1'
-            assert data['id.resp_p'] == 443
-            assert data['version'] == 'TLSv12'
-            assert data['cipher'] == 'TLS_AES_128_GCM_SHA256'
-            assert data['server_name'] == 'example.com'
-            assert data['resumed'] is False
-            assert data['established'] is True
-            assert data['ssl_history'] == 'CsiI'
+            assert data["ts"] == pytest.approx(1705312800.0, abs=1)
+            assert data["uid"] == "CTest123456789ab"
+            assert data["id.orig_h"] == "10.0.0.1"
+            assert data["id.resp_p"] == 443
+            assert data["version"] == "TLSv12"
+            assert data["cipher"] == "TLS_AES_128_GCM_SHA256"
+            assert data["server_name"] == "example.com"
+            assert data["resumed"] is False
+            assert data["established"] is True
+            assert data["ssl_history"] == "CsiI"
 
     def test_compact_ndjson(self):
         """Output is compact NDJSON (no whitespace after separators)."""
@@ -78,37 +82,55 @@ class TestSslFormatAccuracy:
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "ssl.json"
             emitter = ZeekSslEmitter(fmt, output)
-            emitter.emit_event({
-                'ts': datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
-                'uid': 'CTest123456789ab',
-                'id.orig_h': '10.0.0.1', 'id.orig_p': 50000,
-                'id.resp_h': '8.8.8.8', 'id.resp_p': 443,
-                'version': 'TLSv12', 'cipher': 'TLS_AES_128_GCM_SHA256',
-                'server_name': 'example.com',
-                'resumed': True, 'established': True, 'ssl_history': 'CsiI',
-            })
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "version": "TLSv12",
+                    "cipher": "TLS_AES_128_GCM_SHA256",
+                    "server_name": "example.com",
+                    "resumed": True,
+                    "established": True,
+                    "ssl_history": "CsiI",
+                }
+            )
             emitter.close()
             with open(output) as f:
                 line = f.readline().strip()
             # Compact: no spaces after : or ,
-            assert ': ' not in line or '": ' not in line.replace('": ', '')
+            assert ": " not in line or '": ' not in line.replace('": ', "")
 
 
 class TestSslCanHandle:
     """Verify can_handle() filtering logic."""
 
     def _make_event(self, event_type="connection", network=True, ssl=True):
-        net = NetworkContext(
-            src_ip='10.0.0.1', src_port=50000, dst_ip='8.8.8.8',
-            dst_port=443, protocol='tcp', zeek_uid='CTest123456789ab'
-        ) if network else None
-        ssl_ctx = SslContext(
-            version='TLSv12', cipher='TLS_AES_128_GCM_SHA256',
-            server_name='example.com'
-        ) if ssl else None
+        net = (
+            NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTest123456789ab",
+            )
+            if network
+            else None
+        )
+        ssl_ctx = (
+            SslContext(version="TLSv12", cipher="TLS_AES_128_GCM_SHA256", server_name="example.com")
+            if ssl
+            else None
+        )
         return SecurityEvent(
-            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
-            event_type=event_type, network=net, ssl=ssl_ctx,
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type=event_type,
+            network=net,
+            ssl=ssl_ctx,
         )
 
     def test_accepts_connection_with_ssl(self):
@@ -143,17 +165,21 @@ class TestSslUidCorrelation:
             emitter = ZeekSslEmitter(fmt, output)
 
             event = SecurityEvent(
-                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
                 network=NetworkContext(
-                    src_ip='10.0.0.1', src_port=50000, dst_ip='8.8.8.8',
-                    dst_port=443, protocol='tcp', zeek_uid='CMySpecificUID123',
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
                 ),
-                ssl=SslContext(version='TLSv12', cipher='TLS_AES_128_GCM_SHA256'),
+                ssl=SslContext(version="TLSv12", cipher="TLS_AES_128_GCM_SHA256"),
             )
             emitter.emit(event)
             emitter.close()
 
             with open(output) as f:
                 data = json.loads(f.readline())
-            assert data['uid'] == 'CMySpecificUID123'
+            assert data["uid"] == "CMySpecificUID123"

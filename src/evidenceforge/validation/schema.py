@@ -11,7 +11,7 @@ This module provides validation beyond Pydantic's schema validation:
 import ipaddress
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from datetime import UTC
 
 from evidenceforge.models import Scenario
 
@@ -21,11 +21,20 @@ logger = logging.getLogger(__name__)
 # without needing to be defined in the environment users list.
 BUILTIN_ACCOUNTS = {
     # Windows
-    "SYSTEM", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE",
+    "SYSTEM",
+    "NT AUTHORITY\\SYSTEM",
+    "LOCAL SERVICE",
+    "NETWORK SERVICE",
     # Linux/macOS
-    "root", "nobody", "daemon", "www-data",
+    "root",
+    "nobody",
+    "daemon",
+    "www-data",
     # Common service accounts
-    "mysql", "postgres", "apache", "nginx",
+    "mysql",
+    "postgres",
+    "apache",
+    "nginx",
 }
 
 # OS detection patterns (mirrors evaluation/visibility.py)
@@ -48,7 +57,9 @@ _OS_EXPECTED_FORMATS: dict[str, set[str]] = {
 
 # Event types that are Windows-specific
 _WINDOWS_EVENT_TYPES = {
-    "service_installed", "scheduled_task_created", "log_cleared",
+    "service_installed",
+    "scheduled_task_created",
+    "log_cleared",
     "create_remote_thread",
 }
 
@@ -94,7 +105,7 @@ class ValidationIssue:
     severity: str  # "error" | "warning" | "info"
     field_path: str
     message: str
-    suggestion: Optional[str] = None
+    suggestion: str | None = None
 
 
 class ScenarioValidator:
@@ -115,9 +126,7 @@ class ScenarioValidator:
     def _build_lookups(self) -> None:
         """Build lookup dictionaries for users, systems, personas, groups."""
         self.usernames = {user.username for user in self.scenario.environment.users}
-        self.hostnames = {
-            system.hostname for system in self.scenario.environment.systems
-        }
+        self.hostnames = {system.hostname for system in self.scenario.environment.systems}
         self.ips = {system.ip for system in self.scenario.environment.systems}
         self.persona_names = {persona.name for persona in self.scenario.personas}
         self.group_names = (
@@ -176,9 +185,7 @@ class ScenarioValidator:
         for idx, user in enumerate(self.scenario.environment.users):
             if user.persona and user.persona not in self.persona_names:
                 available = (
-                    ", ".join(sorted(self.persona_names))
-                    if self.persona_names
-                    else "none defined"
+                    ", ".join(sorted(self.persona_names)) if self.persona_names else "none defined"
                 )
                 self.issues.append(
                     ValidationIssue(
@@ -348,19 +355,36 @@ class ScenarioValidator:
             return
 
         _KNOWN_FORMATS = {
-            'windows_event_security', 'windows_event_sysmon',
-            'zeek_conn', 'zeek_dns', 'zeek_http', 'zeek_ssl', 'zeek_files',
-            'zeek_dhcp', 'zeek_ntp', 'zeek_weird', 'zeek_x509',
-            'zeek_ocsp', 'zeek_pe', 'zeek_packet_filter', 'zeek_reporter',
-            'ecar', 'syslog', 'bash_history', 'snort_alert', 'web_access', 'proxy_access',
+            "windows_event_security",
+            "windows_event_sysmon",
+            "zeek_conn",
+            "zeek_dns",
+            "zeek_http",
+            "zeek_ssl",
+            "zeek_files",
+            "zeek_dhcp",
+            "zeek_ntp",
+            "zeek_weird",
+            "zeek_x509",
+            "zeek_ocsp",
+            "zeek_pe",
+            "zeek_packet_filter",
+            "zeek_reporter",
+            "ecar",
+            "syslog",
+            "bash_history",
+            "snort_alert",
+            "web_access",
+            "proxy_access",
         }
 
         for idx, event in enumerate(self.scenario.storyline):
             for spec_idx, spec in enumerate(event.events):
                 # Validate connection dst_ip is a valid IP
-                if hasattr(spec, 'dst_ip') and spec.dst_ip:
+                if hasattr(spec, "dst_ip") and spec.dst_ip:
                     try:
                         import ipaddress
+
                         ipaddress.ip_address(spec.dst_ip)
                     except ValueError:
                         self.issues.append(
@@ -373,7 +397,7 @@ class ScenarioValidator:
                         )
 
                 # Validate raw event target_format
-                if hasattr(spec, 'target_format') and spec.target_format:
+                if hasattr(spec, "target_format") and spec.target_format:
                     if spec.target_format not in _KNOWN_FORMATS:
                         self.issues.append(
                             ValidationIssue(
@@ -465,10 +489,14 @@ class ScenarioValidator:
         """Validate output.logs format names."""
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
 
-        known_output_formats = (
-            set(FORMAT_GROUPS.keys())
-            | {"ecar", "syslog", "bash_history", "snort_alert", "web_access", "proxy_access"}
-        )
+        known_output_formats = set(FORMAT_GROUPS.keys()) | {
+            "ecar",
+            "syslog",
+            "bash_history",
+            "snort_alert",
+            "web_access",
+            "proxy_access",
+        }
         _group_members = {}
         for group, members in FORMAT_GROUPS.items():
             for member in members:
@@ -539,12 +567,10 @@ class ScenarioValidator:
                         severity="error",
                         field_path="output.logs",
                         message=(
-                            f"Format '{fmt}' requires {required_os} systems "
-                            f"but none are defined"
+                            f"Format '{fmt}' requires {required_os} systems but none are defined"
                         ),
                         suggestion=(
-                            f"Add a {required_os} system or remove '{fmt}' "
-                            f"from output formats"
+                            f"Add a {required_os} system or remove '{fmt}' from output formats"
                         ),
                     )
                 )
@@ -560,12 +586,10 @@ class ScenarioValidator:
                         severity="warning",
                         field_path="output.logs",
                         message=(
-                            f"System '{hostname}' is {os_cat} but no "
-                            f"{os_cat} log formats in output"
+                            f"System '{hostname}' is {os_cat} but no {os_cat} log formats in output"
                         ),
                         suggestion=(
-                            f"Add a {os_cat} format group "
-                            f"(e.g., {', '.join(sorted(expected))})"
+                            f"Add a {os_cat} format group (e.g., {', '.join(sorted(expected))})"
                         ),
                     )
                 )
@@ -586,8 +610,7 @@ class ScenarioValidator:
                         severity="warning",
                         field_path=f"environment.network.segments.{idx}",
                         message=(
-                            f"Segment '{segment.name}' has systems but no "
-                            f"sensor monitoring it"
+                            f"Segment '{segment.name}' has systems but no sensor monitoring it"
                         ),
                         suggestion="Add a sensor with this segment in monitoring_segments",
                     )
@@ -602,8 +625,7 @@ class ScenarioValidator:
                     severity="warning",
                     field_path="environment.service_accounts",
                     message=(
-                        f"Service account '{name}' collides with a "
-                        f"user account of the same name"
+                        f"Service account '{name}' collides with a user account of the same name"
                     ),
                     suggestion="Rename one to avoid ambiguity in log attribution",
                 )
@@ -615,13 +637,12 @@ class ScenarioValidator:
             return
 
         user_persona_map: dict[str, str | None] = {
-            user.username: user.persona
-            for user in self.scenario.environment.users
+            user.username: user.persona for user in self.scenario.environment.users
         }
         persona_map = {p.name: p for p in self.scenario.personas}
         checked_actors: set[str] = set()
 
-        for idx, event in enumerate(self.scenario.storyline):
+        for _idx, event in enumerate(self.scenario.storyline):
             actor = event.actor
             if actor in checked_actors or actor in BUILTIN_ACCOUNTS:
                 continue
@@ -643,8 +664,7 @@ class ScenarioValidator:
                             f"'{persona_name}' but work_hours could not be parsed"
                         ),
                         suggestion=(
-                            "Use a format like '9am-5pm' or "
-                            "'8:30am-5:30pm (lunch 12pm-1pm)'"
+                            "Use a format like '9am-5pm' or '8:30am-5:30pm (lunch 12pm-1pm)'"
                         ),
                     )
                 )
@@ -660,7 +680,7 @@ class ScenarioValidator:
 
         # With very many storyline events and low intensity, the ratio can't
         # be met. Warn if signal > 10% of target total volume.
-        target_total = signal_count * target_ratio
+        signal_count * target_ratio
         # A rough check: if the time window can't support this volume
         # we warn. Simpler: just warn if signal count is very high for low
         # intensity.
@@ -747,9 +767,7 @@ class ScenarioValidator:
                     self.issues.append(
                         ValidationIssue(
                             severity="warning",
-                            field_path=(
-                                f"storyline.{idx}.events.{spec_idx}"
-                            ),
+                            field_path=(f"storyline.{idx}.events.{spec_idx}"),
                             message=(
                                 f"[{event.id}] Event type '{event_type}' is Windows-specific "
                                 f"but system '{event.system}' is {os_cat}"
@@ -766,9 +784,7 @@ class ScenarioValidator:
                     self.issues.append(
                         ValidationIssue(
                             severity="warning",
-                            field_path=(
-                                f"storyline.{idx}.events.{spec_idx}"
-                            ),
+                            field_path=(f"storyline.{idx}.events.{spec_idx}"),
                             message=(
                                 f"[{event.id}] Event type '{event_type}' is Linux-specific "
                                 f"but system '{event.system}' is {os_cat}"
@@ -792,8 +808,7 @@ class ScenarioValidator:
                                     ValidationIssue(
                                         severity="warning",
                                         field_path=(
-                                            f"storyline.{idx}.events"
-                                            f".{spec_idx}.command_line"
+                                            f"storyline.{idx}.events.{spec_idx}.command_line"
                                         ),
                                         message=(
                                             f"[{event.id}] Command contains Windows "
@@ -816,8 +831,7 @@ class ScenarioValidator:
                                     ValidationIssue(
                                         severity="warning",
                                         field_path=(
-                                            f"storyline.{idx}.events"
-                                            f".{spec_idx}.command_line"
+                                            f"storyline.{idx}.events.{spec_idx}.command_line"
                                         ),
                                         message=(
                                             f"[{event.id}] Command starts with Linux "
@@ -850,8 +864,11 @@ class ScenarioValidator:
             # Skip if large time gap (natural break)
             curr_secs = self._resolve_event_time(curr)
             nxt_secs = self._resolve_event_time(nxt)
-            if (curr_secs is not None and nxt_secs is not None
-                    and (nxt_secs - curr_secs) > _GAP_THRESHOLD_SECS):
+            if (
+                curr_secs is not None
+                and nxt_secs is not None
+                and (nxt_secs - curr_secs) > _GAP_THRESHOLD_SECS
+            ):
                 continue
 
             # Shared if same actor, same system, or overlapping IPs
@@ -911,6 +928,7 @@ class ScenarioValidator:
 
         # Parse grace period
         from evidenceforge.utils.time import parse_duration
+
         try:
             grace_td = parse_duration(self.scenario.logon_grace_period)
             grace_seconds = grace_td.total_seconds()
@@ -980,8 +998,13 @@ class ScenarioValidator:
             event_secs = self._resolve_event_time(event)
             in_grace = event_secs is not None and event_secs < grace_seconds
 
-            if (has_process and not has_logon and key not in logons
-                    and not skip_actor and not in_grace):
+            if (
+                has_process
+                and not has_logon
+                and key not in logons
+                and not skip_actor
+                and not in_grace
+            ):
                 self.issues.append(
                     ValidationIssue(
                         severity="warning",
@@ -991,26 +1014,26 @@ class ScenarioValidator:
                             f"'{system}' with no prior logon"
                         ),
                         suggestion=(
-                            "Add a logon/ssh_session/rdp_session "
-                            "event before this process event"
+                            "Add a logon/ssh_session/rdp_session event before this process event"
                         ),
                     )
                 )
 
-            if (has_logoff and not has_logon and key not in logons
-                    and not skip_actor and not in_grace):
+            if (
+                has_logoff
+                and not has_logon
+                and key not in logons
+                and not skip_actor
+                and not in_grace
+            ):
                 self.issues.append(
                     ValidationIssue(
                         severity="warning",
                         field_path=f"storyline.{idx}",
                         message=(
-                            f"[{event.id}] Logoff for '{actor}' on "
-                            f"'{system}' with no prior logon"
+                            f"[{event.id}] Logoff for '{actor}' on '{system}' with no prior logon"
                         ),
-                        suggestion=(
-                            "Add a logon event before this "
-                            "logoff event"
-                        ),
+                        suggestion=("Add a logon event before this logoff event"),
                     )
                 )
 
@@ -1054,13 +1077,14 @@ class ScenarioValidator:
         else:
             # Absolute ISO 8601
             try:
-                from datetime import datetime, timezone
+                from datetime import datetime
+
                 dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
                 start = self.scenario.time_window.start
                 if start.tzinfo is None:
-                    start = start.replace(tzinfo=timezone.utc)
+                    start = start.replace(tzinfo=UTC)
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=UTC)
                 return (dt - start).total_seconds()
             except (ValueError, TypeError):
                 return None

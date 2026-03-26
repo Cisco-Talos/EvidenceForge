@@ -5,8 +5,6 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 
 class TestZeekConnFormatAccuracy:
     """Verify synthetic Zeek conn.log matches real Zeek log structure."""
@@ -130,11 +128,11 @@ class TestZeekConnFormatAccuracy:
 
     def test_timestamp_precision(self):
         """Verify Zeek timestamps have exactly 6 decimal places (microseconds)."""
-        from evidenceforge.generation.emitters.zeek import ZeekEmitter
         from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
-        format_def = load_format('zeek_conn')
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        format_def = load_format("zeek_conn")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             output_file = Path(f.name)
 
         try:
@@ -142,27 +140,27 @@ class TestZeekConnFormatAccuracy:
             test_time = datetime(2024, 1, 15, 10, 30, 45, 123456)
 
             event_data = {
-                'ts': test_time,
-                'uid': 'C1234567890ABCDE',
-                'id.orig_h': '10.0.10.5',
-                'id.orig_p': 50000,
-                'id.resp_h': '93.184.216.34',
-                'id.resp_p': 443,
-                'proto': 'tcp',
-                'service': 'ssl',
-                'duration': 1.5,
-                'orig_bytes': 1000,
-                'resp_bytes': 5000,
-                'conn_state': 'SF',
-                'local_orig': True,
-                'local_resp': False,
-                'missed_bytes': 0,
-                'history': 'ShADadfF',
-                'orig_pkts': 10,
-                'orig_ip_bytes': 1400,
-                'resp_pkts': 12,
-                'resp_ip_bytes': 5480,
-                'ip_proto': 6,
+                "ts": test_time,
+                "uid": "C1234567890ABCDE",
+                "id.orig_h": "10.0.10.5",
+                "id.orig_p": 50000,
+                "id.resp_h": "93.184.216.34",
+                "id.resp_p": 443,
+                "proto": "tcp",
+                "service": "ssl",
+                "duration": 1.5,
+                "orig_bytes": 1000,
+                "resp_bytes": 5000,
+                "conn_state": "SF",
+                "local_orig": True,
+                "local_resp": False,
+                "missed_bytes": 0,
+                "history": "ShADadfF",
+                "orig_pkts": 10,
+                "orig_ip_bytes": 1400,
+                "resp_pkts": 12,
+                "resp_ip_bytes": 5480,
+                "ip_proto": 6,
             }
 
             emitter.emit_event(event_data)
@@ -172,16 +170,15 @@ class TestZeekConnFormatAccuracy:
                 line = f.readline()
                 generated = json.loads(line)
 
-            ts_str = str(generated['ts'])
-            assert '.' in ts_str, f"Timestamp missing decimal point: {ts_str}"
-            integer_part, decimal_part = ts_str.split('.')
+            ts_str = str(generated["ts"])
+            assert "." in ts_str, f"Timestamp missing decimal point: {ts_str}"
+            integer_part, decimal_part = ts_str.split(".")
             assert len(decimal_part) == 6, (
-                f"Timestamp must have exactly 6 decimal places, "
-                f"got {len(decimal_part)}: {ts_str}"
+                f"Timestamp must have exactly 6 decimal places, got {len(decimal_part)}: {ts_str}"
             )
 
             expected_ts = test_time.timestamp()
-            actual_ts = float(generated['ts'])
+            actual_ts = float(generated["ts"])
             assert abs(actual_ts - expected_ts) < 0.000001
 
         finally:
@@ -193,11 +190,11 @@ class TestZeekConnFormatAccuracy:
 
         Real Zeek duration example: 0.0002410411834716797 (19 decimal digits).
         """
-        from evidenceforge.generation.emitters.zeek import ZeekEmitter
         from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
-        format_def = load_format('zeek_conn')
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        format_def = load_format("zeek_conn")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             output_file = Path(f.name)
 
         try:
@@ -207,26 +204,26 @@ class TestZeekConnFormatAccuracy:
             test_duration = 0.0002410411834716797
 
             event_data = {
-                'ts': datetime(2024, 1, 15, 10, 30, 45, 123456),
-                'uid': 'C1234567890ABCDE',
-                'id.orig_h': '10.0.10.5',
-                'id.orig_p': 50000,
-                'id.resp_h': '93.184.216.34',
-                'id.resp_p': 443,
-                'proto': 'tcp',
-                'duration': test_duration,
-                'orig_bytes': 0,
-                'resp_bytes': 0,
-                'conn_state': 'SHR',
-                'local_orig': True,
-                'local_resp': False,
-                'missed_bytes': 0,
-                'history': '^fA',
-                'orig_pkts': 1,
-                'orig_ip_bytes': 40,
-                'resp_pkts': 1,
-                'resp_ip_bytes': 40,
-                'ip_proto': 6,
+                "ts": datetime(2024, 1, 15, 10, 30, 45, 123456),
+                "uid": "C1234567890ABCDE",
+                "id.orig_h": "10.0.10.5",
+                "id.orig_p": 50000,
+                "id.resp_h": "93.184.216.34",
+                "id.resp_p": 443,
+                "proto": "tcp",
+                "duration": test_duration,
+                "orig_bytes": 0,
+                "resp_bytes": 0,
+                "conn_state": "SHR",
+                "local_orig": True,
+                "local_resp": False,
+                "missed_bytes": 0,
+                "history": "^fA",
+                "orig_pkts": 1,
+                "orig_ip_bytes": 40,
+                "resp_pkts": 1,
+                "resp_ip_bytes": 40,
+                "ip_proto": 6,
             }
 
             emitter.emit_event(event_data)
@@ -237,14 +234,14 @@ class TestZeekConnFormatAccuracy:
                 generated = json.loads(raw_line)
 
             # Duration must NOT be rounded to 6 decimal places
-            assert generated['duration'] == test_duration, (
+            assert generated["duration"] == test_duration, (
                 f"Duration should preserve full precision: "
                 f"expected {test_duration}, got {generated['duration']}"
             )
 
             # Verify the raw JSON string has more than 6 decimal digits for duration
-            duration_str = raw_line.split('"duration":')[1].split(',')[0]
-            decimal_part = duration_str.split('.')[1]
+            duration_str = raw_line.split('"duration":')[1].split(",")[0]
+            decimal_part = duration_str.split(".")[1]
             assert len(decimal_part) > 6, (
                 f"Duration should have >6 decimal digits in JSON, got: {duration_str}"
             )
@@ -288,43 +285,43 @@ class TestZeekDnsFormatAccuracy:
 
     def test_dns_emitter_output_fields(self):
         """Verify ZeekDnsEmitter produces correct field names and types."""
-        from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
         from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
-        format_def = load_format('zeek_dns')
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        format_def = load_format("zeek_dns")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             output_file = Path(f.name)
 
         try:
             emitter = ZeekDnsEmitter(format_def, output_file)
 
             event_data = {
-                'ts': datetime(2024, 1, 15, 10, 30, 45, 123456),
-                'uid': 'C4pjsbfcqTgsdsok7',
-                'id.orig_h': '10.0.10.50',
-                'id.orig_p': 54321,
-                'id.resp_h': '10.0.20.10',
-                'id.resp_p': 53,
-                'proto': 'udp',
-                'trans_id': 12345,
-                'rtt': 0.001638174057006836,
-                'query': 'www.example.com',
-                'qclass': 1,
-                'qclass_name': 'C_INTERNET',
-                'qtype': 1,
-                'qtype_name': 'A',
-                'rcode': 0,
-                'rcode_name': 'NOERROR',
-                'AA': False,
-                'TC': False,
-                'RD': True,
-                'RA': True,
-                'Z': 0,
-                'answers': ['93.184.216.34'],
-                'TTLs': [300.0],
-                'rejected': False,
-                'opcode': 0,
-                'opcode_name': 'query',
+                "ts": datetime(2024, 1, 15, 10, 30, 45, 123456),
+                "uid": "C4pjsbfcqTgsdsok7",
+                "id.orig_h": "10.0.10.50",
+                "id.orig_p": 54321,
+                "id.resp_h": "10.0.20.10",
+                "id.resp_p": 53,
+                "proto": "udp",
+                "trans_id": 12345,
+                "rtt": 0.001638174057006836,
+                "query": "www.example.com",
+                "qclass": 1,
+                "qclass_name": "C_INTERNET",
+                "qtype": 1,
+                "qtype_name": "A",
+                "rcode": 0,
+                "rcode_name": "NOERROR",
+                "AA": False,
+                "TC": False,
+                "RD": True,
+                "RA": True,
+                "Z": 0,
+                "answers": ["93.184.216.34"],
+                "TTLs": [300.0],
+                "rejected": False,
+                "opcode": 0,
+                "opcode_name": "query",
             }
 
             emitter.emit_event(event_data)
@@ -336,29 +333,53 @@ class TestZeekDnsFormatAccuracy:
 
             # Verify all required fields present
             required_fields = {
-                'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p',
-                'proto', 'trans_id', 'query', 'qclass', 'qclass_name',
-                'qtype', 'qtype_name', 'rcode', 'rcode_name',
-                'AA', 'TC', 'RD', 'RA', 'Z', 'answers', 'TTLs',
-                'rejected', 'opcode', 'opcode_name', 'rtt',
+                "ts",
+                "uid",
+                "id.orig_h",
+                "id.orig_p",
+                "id.resp_h",
+                "id.resp_p",
+                "proto",
+                "trans_id",
+                "query",
+                "qclass",
+                "qclass_name",
+                "qtype",
+                "qtype_name",
+                "rcode",
+                "rcode_name",
+                "AA",
+                "TC",
+                "RD",
+                "RA",
+                "Z",
+                "answers",
+                "TTLs",
+                "rejected",
+                "opcode",
+                "opcode_name",
+                "rtt",
             }
             missing = required_fields - set(generated.keys())
             assert not missing, f"Missing fields in dns.log output: {missing}"
 
             # Verify array types
-            assert isinstance(generated['answers'], list), \
+            assert isinstance(generated["answers"], list), (
                 f"answers must be array, got {type(generated['answers']).__name__}"
-            assert isinstance(generated['TTLs'], list), \
+            )
+            assert isinstance(generated["TTLs"], list), (
                 f"TTLs must be array, got {type(generated['TTLs']).__name__}"
-            assert all(isinstance(t, float) for t in generated['TTLs']), \
+            )
+            assert all(isinstance(t, float) for t in generated["TTLs"]), (
                 "TTLs entries must be floats"
+            )
 
             # Verify integer fields
-            assert isinstance(generated['Z'], int)
-            assert isinstance(generated['opcode'], int)
+            assert isinstance(generated["Z"], int)
+            assert isinstance(generated["opcode"], int)
 
             # Verify rtt is float
-            assert isinstance(generated['rtt'], float)
+            assert isinstance(generated["rtt"], float)
 
         finally:
             if output_file.exists():
@@ -366,40 +387,40 @@ class TestZeekDnsFormatAccuracy:
 
     def test_nxdomain_omits_answers_and_ttls(self):
         """NXDOMAIN records should NOT include answers or TTLs fields."""
-        from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
         from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
-        format_def = load_format('zeek_dns')
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        format_def = load_format("zeek_dns")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             output_file = Path(f.name)
 
         try:
             emitter = ZeekDnsEmitter(format_def, output_file)
 
             event_data = {
-                'ts': datetime(2024, 1, 15, 10, 30, 45, 123456),
-                'uid': 'C4pjsbfcqTgsdsok7',
-                'id.orig_h': '10.0.10.50',
-                'id.orig_p': 54321,
-                'id.resp_h': '10.0.20.10',
-                'id.resp_p': 53,
-                'proto': 'udp',
-                'trans_id': 12345,
-                'query': 'nonexistent.example.com',
-                'qclass': 1,
-                'qclass_name': 'C_INTERNET',
-                'qtype': 1,
-                'qtype_name': 'A',
-                'rcode': 3,
-                'rcode_name': 'NXDOMAIN',
-                'AA': True,
-                'TC': False,
-                'RD': True,
-                'RA': True,
-                'Z': 0,
-                'rejected': False,
-                'opcode': 0,
-                'opcode_name': 'query',
+                "ts": datetime(2024, 1, 15, 10, 30, 45, 123456),
+                "uid": "C4pjsbfcqTgsdsok7",
+                "id.orig_h": "10.0.10.50",
+                "id.orig_p": 54321,
+                "id.resp_h": "10.0.20.10",
+                "id.resp_p": 53,
+                "proto": "udp",
+                "trans_id": 12345,
+                "query": "nonexistent.example.com",
+                "qclass": 1,
+                "qclass_name": "C_INTERNET",
+                "qtype": 1,
+                "qtype_name": "A",
+                "rcode": 3,
+                "rcode_name": "NXDOMAIN",
+                "AA": True,
+                "TC": False,
+                "RD": True,
+                "RA": True,
+                "Z": 0,
+                "rejected": False,
+                "opcode": 0,
+                "opcode_name": "query",
                 # No answers, TTLs, or rtt keys
             }
 
@@ -410,12 +431,11 @@ class TestZeekDnsFormatAccuracy:
                 line = f.readline()
                 generated = json.loads(line)
 
-            assert 'answers' not in generated, \
-                "NXDOMAIN records should not have 'answers' field"
-            assert 'TTLs' not in generated, \
-                "NXDOMAIN records should not have 'TTLs' field"
-            assert 'rtt' not in generated, \
+            assert "answers" not in generated, "NXDOMAIN records should not have 'answers' field"
+            assert "TTLs" not in generated, "NXDOMAIN records should not have 'TTLs' field"
+            assert "rtt" not in generated, (
                 "NXDOMAIN records without rtt should not have 'rtt' field"
+            )
 
         finally:
             if output_file.exists():
@@ -436,9 +456,7 @@ class TestZeekUidGeneration:
             lengths.add(len(uid))
 
         # Should produce at least 2 different lengths in 1000 samples
-        assert len(lengths) >= 2, (
-            f"Expected variable UID lengths, but all were same: {lengths}"
-        )
+        assert len(lengths) >= 2, f"Expected variable UID lengths, but all were same: {lengths}"
 
     def test_uid_prefix(self):
         """UIDs should start with the specified prefix character."""
@@ -449,8 +467,9 @@ class TestZeekUidGeneration:
 
     def test_uid_base62_chars(self):
         """UIDs should only contain base62 characters."""
-        from evidenceforge.utils.ids import generate_zeek_uid
         import string
+
+        from evidenceforge.utils.ids import generate_zeek_uid
 
         base62 = set(string.ascii_uppercase + string.ascii_lowercase + string.digits)
         for _ in range(100):
@@ -559,5 +578,6 @@ class TestSampleDataFieldValidation:
     def test_all_formats_load(self):
         """All format YAMLs load successfully."""
         from evidenceforge.formats import load_all_formats
+
         formats = load_all_formats()
         assert len(formats) == 21

@@ -7,18 +7,17 @@ Provides commands for initialization, log generation, and validation.
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from pydantic import ValidationError
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
-    BarColumn,
     TaskProgressColumn,
+    TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
@@ -61,7 +60,7 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
     logging.basicConfig(
         level=level,
         format="%(message)s",
-        handlers=[RichHandler(console=console, rich_tracebacks=True)]
+        handlers=[RichHandler(console=console, rich_tracebacks=True)],
     )
 
 
@@ -75,24 +74,16 @@ def generate(
         dir_okay=False,
         readable=True,
     ),
-    output: Optional[Path] = typer.Option(
+    output: Path | None = typer.Option(
         None,
         "--output",
         "-o",
         help="Output directory for generated logs (overrides scenario setting)",
     ),
     verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Enable verbose (INFO level) logging"
+        False, "--verbose", "-v", help="Enable verbose (INFO level) logging"
     ),
-    debug: bool = typer.Option(
-        False,
-        "--debug",
-        "-d",
-        help="Enable debug (DEBUG level) logging"
-    ),
+    debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug (DEBUG level) logging"),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -117,6 +108,7 @@ def generate(
         console.print("\n[bold]Loading scenario...[/bold]")
         scenario_data = load_yaml(scenario_file)
         from evidenceforge.utils.personas import merge_builtin_personas
+
         scenario_data = merge_builtin_personas(scenario_data)
         scenario = Scenario(**scenario_data)
         console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
@@ -144,12 +136,15 @@ def generate(
                     color, icon = "cyan", "ℹ"
                 console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
                 from rich.text import Text
+
                 console.print(Text(f"    {issue.message}", style=color))
                 if issue.suggestion:
                     console.print(f"    💡 {issue.suggestion}", style="dim")
 
             if validator.has_errors():
-                console.print("\n[bold red]Validation failed with errors. Cannot proceed with generation.[/bold red]")
+                console.print(
+                    "\n[bold red]Validation failed with errors. Cannot proceed with generation.[/bold red]"
+                )
                 raise typer.Exit(EXIT_SCHEMA_VALIDATION)
             else:
                 console.print("\n[yellow]Warnings found but proceeding with generation...[/yellow]")
@@ -162,27 +157,20 @@ def generate(
 
     except FileNotFoundError:
         console.print(
-            f"[bold red]Error:[/bold red] Scenario file not found: {scenario_file}",
-            style="red"
+            f"[bold red]Error:[/bold red] Scenario file not found: {scenario_file}", style="red"
         )
         raise typer.Exit(EXIT_INPUT_ERROR)
 
     except ValidationError as e:
-        console.print(
-            "[bold red]Error:[/bold red] Schema validation failed",
-            style="red"
-        )
+        console.print("[bold red]Error:[/bold red] Schema validation failed", style="red")
         console.print("\nValidation errors:")
         for error in e.errors():
-            field = " -> ".join(str(loc) for loc in error['loc'])
+            field = " -> ".join(str(loc) for loc in error["loc"])
             console.print(f"  • {field}: {error['msg']}", style="red")
         raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
     except Exception as e:
-        console.print(
-            f"[bold red]Error:[/bold red] Failed to load scenario: {e}",
-            style="red"
-        )
+        console.print(f"[bold red]Error:[/bold red] Failed to load scenario: {e}", style="red")
         if verbose or debug:
             console.print_exception()
         raise typer.Exit(EXIT_INPUT_ERROR)
@@ -205,6 +193,7 @@ def generate(
     # Clear previous data on re-generation
     if data_dir.exists():
         import shutil
+
         shutil.rmtree(data_dir)
         console.print("[dim]Cleared previous data[/dim]")
 
@@ -223,7 +212,6 @@ def generate(
             console=console,
             transient=False,  # Keep progress bars visible after completion
         ) as progress:
-
             # Progress tracking state
             phase_task = progress.add_task("Initializing...", total=None)
             hour_task = None
@@ -240,30 +228,30 @@ def generate(
                     if data["phase"] == "baseline" and hour_task is not None:
                         progress.update(hour_task, completed=progress.tasks[hour_task].total)
                     elif data["phase"] == "storyline" and storyline_task is not None:
-                        progress.update(storyline_task, completed=progress.tasks[storyline_task].total)
+                        progress.update(
+                            storyline_task, completed=progress.tasks[storyline_task].total
+                        )
 
                 elif event_type == "hour_progress":
                     if hour_task is None:
                         hour_task = progress.add_task(
-                            "Processing hours...",
-                            total=data["total_hours"]
+                            "Processing hours...", total=data["total_hours"]
                         )
                     progress.update(
                         hour_task,
                         completed=data["hour"],
-                        description=f"Hour {data['hour']}/{data['total_hours']}"
+                        description=f"Hour {data['hour']}/{data['total_hours']}",
                     )
 
                 elif event_type == "storyline_progress":
                     if storyline_task is None:
                         storyline_task = progress.add_task(
-                            "Storyline events...",
-                            total=data["total_events"]
+                            "Storyline events...", total=data["total_events"]
                         )
                     progress.update(
                         storyline_task,
                         completed=data["event_num"],
-                        description=f"Event {data['event_num']}/{data['total_events']}: {data['actor']} on {data['system']}"
+                        description=f"Event {data['event_num']}/{data['total_events']}: {data['actor']} on {data['system']}",
                     )
 
             # Generate logs with progress reporting
@@ -276,7 +264,7 @@ def generate(
             engine.generate()
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")
-        console.print(f"\nGenerated files:")
+        console.print("\nGenerated files:")
         console.print(f"  Scenario directory: {ground_truth_dir}")
 
         # List files in scenario root (GROUND_TRUTH.md)
@@ -305,10 +293,7 @@ def generate(
         raise typer.Exit(EXIT_SIGINT)
 
     except Exception as e:
-        console.print(
-            f"\n[bold red]Error:[/bold red] Generation failed: {e}",
-            style="red"
-        )
+        console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
         if verbose or debug:
             console.print_exception()
         logger.exception("Generation failed")
@@ -348,6 +333,7 @@ def validate(
 
     # Step 1.5: Merge pre-built personas
     from evidenceforge.utils.personas import merge_builtin_personas
+
     scenario_data = merge_builtin_personas(scenario_data)
 
     # Step 2: Pydantic schema validation
@@ -390,6 +376,7 @@ def validate(
                 color, icon = "cyan", "ℹ"
             console.print(f"  [{color}]{icon} {issue.field_path}[/{color}]")
             from rich.text import Text
+
             console.print(Text(f"    {issue.message}", style=color))
             if issue.suggestion:
                 console.print(f"    💡 {issue.suggestion}", style="dim")
@@ -462,6 +449,7 @@ def eval_cmd(
     try:
         scenario_data = load_yaml(scenario_file)
         from evidenceforge.utils.personas import merge_builtin_personas
+
         scenario_data = merge_builtin_personas(scenario_data)
         scenario = Scenario(**scenario_data)
         status_console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
@@ -497,7 +485,6 @@ def eval_cmd(
             console=status_console,
             transient=False,
         ) as progress:
-
             overall_task = progress.add_task("Evaluating...", total=None)
             detail_task: int | None = None
 
@@ -511,9 +498,7 @@ def eval_cmd(
                     fmt = data["format"]
                     step, total = data["step"], data["total"]
                     if detail_task is None:
-                        detail_task = progress.add_task(
-                            f"Parsing {fmt}", total=total
-                        )
+                        detail_task = progress.add_task(f"Parsing {fmt}", total=total)
                     progress.update(
                         detail_task,
                         completed=step,

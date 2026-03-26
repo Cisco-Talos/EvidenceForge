@@ -34,9 +34,7 @@ def get_definitions_directory() -> Path:
     definitions_dir = package_root / "formats" / "definitions"
 
     if not definitions_dir.exists():
-        raise ConfigurationError(
-            f"Format definitions directory not found: {definitions_dir}"
-        )
+        raise ConfigurationError(f"Format definitions directory not found: {definitions_dir}")
 
     return definitions_dir
 
@@ -74,9 +72,7 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
     format_file = definitions_dir / f"{name}.yaml"
 
     if not format_file.exists():
-        raise ConfigurationError(
-            f"Format definition not found: {name} (expected at {format_file})"
-        )
+        raise ConfigurationError(f"Format definition not found: {name} (expected at {format_file})")
 
     try:
         # Load YAML
@@ -92,13 +88,9 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
         return format_def
 
     except ValidationError as e:
-        raise ConfigurationError(
-            f"Invalid format definition in {format_file}: {e}"
-        ) from e
+        raise ConfigurationError(f"Invalid format definition in {format_file}: {e}") from e
     except Exception as e:
-        raise ConfigurationError(
-            f"Failed to load format definition {name}: {e}"
-        ) from e
+        raise ConfigurationError(f"Failed to load format definition {name}: {e}") from e
 
 
 def load_all_formats() -> dict[str, FormatDefinition]:

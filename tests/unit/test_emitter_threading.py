@@ -3,15 +3,14 @@
 Tests thread safety of emitter file I/O, buffer integrity, and barrier synchronization.
 """
 
-import pytest
-from pathlib import Path
-from threading import Thread, Barrier
-from datetime import datetime
 import tempfile
 import time
+from datetime import datetime
+from pathlib import Path
+from threading import Barrier, Thread
 
-from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 
 
 class TestEmitterThreadSafety:
@@ -25,7 +24,7 @@ class TestEmitterThreadSafety:
                 fmt,
                 Path(tmpdir) / "test.xml",
                 buffer_size=10000,
-                threaded=False  # Test buffer thread-safety directly
+                threaded=False,  # Test buffer thread-safety directly
             )
 
             events_per_thread = 1000
@@ -35,21 +34,21 @@ class TestEmitterThreadSafety:
                 """Append events from a single thread."""
                 for i in range(events_per_thread):
                     event = {
-                        'EventID': 4624,
-                        'TimeCreated': datetime.now(),
-                        'Computer': f'TEST-{thread_id}-{i}',
-                        'EventRecordID': thread_id * 10000 + i,
-                        'Channel': 'Security',
-                        'Level': 'Information',
-                        'TargetUserName': f'user{thread_id}',
-                        'TargetDomainName': 'TESTDOMAIN',
-                        'TargetLogonId': f'0x{(thread_id * 1000 + i):x}',
-                        'LogonType': 2,
-                        'IpAddress': '192.168.1.1',
-                        'IpPort': 50000 + i,
-                        'SubjectUserName': 'SYSTEM',
-                        'SubjectDomainName': 'NT AUTHORITY',
-                        'SubjectLogonId': '0x3e7',
+                        "EventID": 4624,
+                        "TimeCreated": datetime.now(),
+                        "Computer": f"TEST-{thread_id}-{i}",
+                        "EventRecordID": thread_id * 10000 + i,
+                        "Channel": "Security",
+                        "Level": "Information",
+                        "TargetUserName": f"user{thread_id}",
+                        "TargetDomainName": "TESTDOMAIN",
+                        "TargetLogonId": f"0x{(thread_id * 1000 + i):x}",
+                        "LogonType": 2,
+                        "IpAddress": "192.168.1.1",
+                        "IpPort": 50000 + i,
+                        "SubjectUserName": "SYSTEM",
+                        "SubjectDomainName": "NT AUTHORITY",
+                        "SubjectLogonId": "0x3e7",
                     }
                     rendered = emitter._render_event(event)
                     emitter._buffer_event(rendered)
@@ -76,7 +75,7 @@ class TestEmitterThreadSafety:
                 fmt,
                 Path(tmpdir) / "test.log",
                 buffer_size=100,  # Small buffer to trigger flushes
-                threaded=False
+                threaded=False,
             )
 
             events_per_thread = 50
@@ -88,26 +87,26 @@ class TestEmitterThreadSafety:
                 barrier.wait()  # Synchronize start
                 for i in range(events_per_thread):
                     event = {
-                        'ts': datetime.now(),
-                        'uid': f'C{thread_id}{i:010d}',
-                        'id.orig_h': f'10.0.{thread_id}.1',
-                        'id.orig_p': 50000 + i,
-                        'id.resp_h': '8.8.8.8',
-                        'id.resp_p': 443,
-                        'proto': 'tcp',
-                        'service': '-',
-                        'duration': 1.234,
-                        'orig_bytes': 1024,
-                        'resp_bytes': 2048,
-                        'conn_state': 'SF',
-                        'local_orig': True,
-                        'local_resp': False,
-                        'missed_bytes': 0,
-                        'history': 'ShADadfF',
-                        'orig_pkts': 10,
-                        'orig_ip_bytes': 1500,
-                        'resp_pkts': 10,
-                        'resp_ip_bytes': 2500,
+                        "ts": datetime.now(),
+                        "uid": f"C{thread_id}{i:010d}",
+                        "id.orig_h": f"10.0.{thread_id}.1",
+                        "id.orig_p": 50000 + i,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "service": "-",
+                        "duration": 1.234,
+                        "orig_bytes": 1024,
+                        "resp_bytes": 2048,
+                        "conn_state": "SF",
+                        "local_orig": True,
+                        "local_resp": False,
+                        "missed_bytes": 0,
+                        "history": "ShADadfF",
+                        "orig_pkts": 10,
+                        "orig_ip_bytes": 1500,
+                        "resp_pkts": 10,
+                        "resp_ip_bytes": 2500,
                     }
                     rendered = emitter._render_event(event)
                     emitter._buffer_event(rendered)  # May trigger flush
@@ -127,7 +126,7 @@ class TestEmitterThreadSafety:
             assert output_file.exists()
 
             with open(output_file) as f:
-                lines = [l for l in f if l.strip() and not l.startswith('#')]
+                lines = [line for line in f if line.strip() and not line.startswith("#")]
 
             assert len(lines) == num_threads * events_per_thread
 
@@ -138,7 +137,7 @@ class TestEmitterThreadSafety:
             emitter = ZeekEmitter(
                 fmt,
                 Path(tmpdir) / "zeek.log",
-                threaded=True  # Enable threaded mode
+                threaded=True,  # Enable threaded mode
             )
 
             events_per_thread = 500
@@ -150,26 +149,26 @@ class TestEmitterThreadSafety:
                 barrier.wait()  # Synchronize start
                 for i in range(events_per_thread):
                     event = {
-                        'ts': datetime.now(),
-                        'uid': f'C{thread_id}{i:010d}',
-                        'id.orig_h': f'10.0.{thread_id}.1',
-                        'id.orig_p': 50000 + i,
-                        'id.resp_h': '8.8.8.8',
-                        'id.resp_p': 443,
-                        'proto': 'tcp',
-                        'service': '-',
-                        'duration': 1.234,
-                        'orig_bytes': 1024,
-                        'resp_bytes': 2048,
-                        'conn_state': 'SF',
-                        'local_orig': True,
-                        'local_resp': False,
-                        'missed_bytes': 0,
-                        'history': 'ShADadfF',
-                        'orig_pkts': 10,
-                        'orig_ip_bytes': 1500,
-                        'resp_pkts': 10,
-                        'resp_ip_bytes': 2500,
+                        "ts": datetime.now(),
+                        "uid": f"C{thread_id}{i:010d}",
+                        "id.orig_h": f"10.0.{thread_id}.1",
+                        "id.orig_p": 50000 + i,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "service": "-",
+                        "duration": 1.234,
+                        "orig_bytes": 1024,
+                        "resp_bytes": 2048,
+                        "conn_state": "SF",
+                        "local_orig": True,
+                        "local_resp": False,
+                        "missed_bytes": 0,
+                        "history": "ShADadfF",
+                        "orig_pkts": 10,
+                        "orig_ip_bytes": 1500,
+                        "resp_pkts": 10,
+                        "resp_ip_bytes": 2500,
                     }
                     emitter.emit_event(event)
 
@@ -189,7 +188,7 @@ class TestEmitterThreadSafety:
             assert output_file.exists()
 
             with open(output_file) as f:
-                lines = [l for l in f if l.strip() and not l.startswith('#')]
+                lines = [line for line in f if line.strip() and not line.startswith("#")]
 
             assert len(lines) == num_threads * events_per_thread
 
@@ -197,34 +196,30 @@ class TestEmitterThreadSafety:
         """Test barrier_flush() waits for all queued events to be processed."""
         with tempfile.TemporaryDirectory() as tmpdir:
             fmt = load_format("windows_event_security")
-            emitter = WindowsEventEmitter(
-                fmt,
-                Path(tmpdir) / "windows.xml",
-                threaded=True
-            )
+            emitter = WindowsEventEmitter(fmt, Path(tmpdir) / "windows.xml", threaded=True)
 
             # Post many events
             for i in range(1000):
                 event = {
-                    'EventID': 4688,
-                    'TimeCreated': datetime.now(),
-                    'Computer': f'TEST-WS-01',
-                    'EventRecordID': 10000 + i,
-                    'Channel': 'Security',
-                    'Level': 'Information',
-                    'SubjectUserName': 'user1',
-                    'SubjectDomainName': 'TESTDOMAIN',
-                    'SubjectLogonId': '0x12345',
-                    'NewProcessId': 1000 + i,
-                    'NewProcessName': f'C:\\test{i}.exe',
-                    'TokenElevationType': '%%1936',
-                    'ProcessId': 4,
-                    'CommandLine': f'test{i}.exe',
-                    'TargetUserName': 'user1',
-                    'TargetDomainName': 'TESTDOMAIN',
-                    'TargetLogonId': '0x12345',
-                    'ParentProcessName': 'C:\\Windows\\System32\\cmd.exe',
-                    'MandatoryLabel': 'S-1-16-8192',
+                    "EventID": 4688,
+                    "TimeCreated": datetime.now(),
+                    "Computer": "TEST-WS-01",
+                    "EventRecordID": 10000 + i,
+                    "Channel": "Security",
+                    "Level": "Information",
+                    "SubjectUserName": "user1",
+                    "SubjectDomainName": "TESTDOMAIN",
+                    "SubjectLogonId": "0x12345",
+                    "NewProcessId": 1000 + i,
+                    "NewProcessName": f"C:\\test{i}.exe",
+                    "TokenElevationType": "%%1936",
+                    "ProcessId": 4,
+                    "CommandLine": f"test{i}.exe",
+                    "TargetUserName": "user1",
+                    "TargetDomainName": "TESTDOMAIN",
+                    "TargetLogonId": "0x12345",
+                    "ParentProcessName": "C:\\Windows\\System32\\cmd.exe",
+                    "MandatoryLabel": "S-1-16-8192",
                 }
                 emitter.emit_event(event)
 
@@ -248,7 +243,7 @@ class TestEmitterThreadSafety:
                 fmt,
                 Path(tmpdir) / "zeek.log",
                 buffer_size=10,  # Small buffer to trigger frequent flushes
-                threaded=False
+                threaded=False,
             )
 
             num_threads = 5
@@ -258,26 +253,26 @@ class TestEmitterThreadSafety:
                 """Append events that will trigger flushes."""
                 for i in range(events_per_thread):
                     event = {
-                        'ts': datetime.now(),
-                        'uid': f'C{thread_id}{i:010d}',
-                        'id.orig_h': f'10.0.{thread_id}.1',
-                        'id.orig_p': 50000 + i,
-                        'id.resp_h': '8.8.8.8',
-                        'id.resp_p': 443,
-                        'proto': 'tcp',
-                        'service': '-',
-                        'duration': 1.234,
-                        'orig_bytes': 1024,
-                        'resp_bytes': 2048,
-                        'conn_state': 'SF',
-                        'local_orig': True,
-                        'local_resp': False,
-                        'missed_bytes': 0,
-                        'history': 'ShADadfF',
-                        'orig_pkts': 10,
-                        'orig_ip_bytes': 1500,
-                        'resp_pkts': 10,
-                        'resp_ip_bytes': 2500,
+                        "ts": datetime.now(),
+                        "uid": f"C{thread_id}{i:010d}",
+                        "id.orig_h": f"10.0.{thread_id}.1",
+                        "id.orig_p": 50000 + i,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "service": "-",
+                        "duration": 1.234,
+                        "orig_bytes": 1024,
+                        "resp_bytes": 2048,
+                        "conn_state": "SF",
+                        "local_orig": True,
+                        "local_resp": False,
+                        "missed_bytes": 0,
+                        "history": "ShADadfF",
+                        "orig_pkts": 10,
+                        "orig_ip_bytes": 1500,
+                        "resp_pkts": 10,
+                        "resp_ip_bytes": 2500,
                     }
                     rendered = emitter._render_event(event)
                     emitter._buffer_event(rendered)  # May trigger flush
@@ -298,6 +293,6 @@ class TestEmitterThreadSafety:
             assert output_file.exists()
 
             with open(output_file) as f:
-                lines = [l for l in f if l.strip()]
+                lines = [line for line in f if line.strip()]
 
             assert len(lines) == num_threads * events_per_thread

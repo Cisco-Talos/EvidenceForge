@@ -23,12 +23,23 @@ logger = logging.getLogger(__name__)
 # Sensors and output.logs declare groups; the engine expands to individual emitters.
 FORMAT_GROUPS: dict[str, set[str]] = {
     "zeek": {
-        "zeek_conn", "zeek_dns", "zeek_http", "zeek_ssl", "zeek_files",
-        "zeek_x509", "zeek_dhcp", "zeek_ntp", "zeek_weird",
-        "zeek_ocsp", "zeek_pe", "zeek_packet_filter", "zeek_reporter",
+        "zeek_conn",
+        "zeek_dns",
+        "zeek_http",
+        "zeek_ssl",
+        "zeek_files",
+        "zeek_x509",
+        "zeek_dhcp",
+        "zeek_ntp",
+        "zeek_weird",
+        "zeek_ocsp",
+        "zeek_pe",
+        "zeek_packet_filter",
+        "zeek_reporter",
     },
     "windows": {
-        "windows_event_security", "windows_event_sysmon",
+        "windows_event_security",
+        "windows_event_sysmon",
     },
 }
 

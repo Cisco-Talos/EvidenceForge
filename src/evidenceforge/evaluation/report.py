@@ -3,11 +3,7 @@
 Supports Rich text (terminal) and JSON output formats.
 """
 
-import json
-
 from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 
 from evidenceforge.evaluation.models import QualityReport
 
@@ -23,7 +19,9 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
     source_parts = ", ".join(
         f"{name}: {count:,}" for name, count in sorted(report.source_counts.items())
     )
-    console.print(f"Total records: {report.total_records:,} across {len(report.source_counts)} sources")
+    console.print(
+        f"Total records: {report.total_records:,} across {len(report.source_counts)} sources"
+    )
     if verbose and source_parts:
         console.print(f"  ({source_parts})")
 
@@ -37,7 +35,9 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
             f"[{score_color}]{report.overall_score:.0f}/100[/{score_color}]"
         )
     else:
-        console.print("[bold]Overall Quality Score:[/bold] [dim]N/A (insufficient dimensions)[/dim]")
+        console.print(
+            "[bold]Overall Quality Score:[/bold] [dim]N/A (insufficient dimensions)[/dim]"
+        )
 
     console.print()
 
@@ -47,23 +47,26 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
         if dim.score is not None:
             color = _score_color(dim.score)
             console.print(
-                f"  {dim.number}. {dim.name}:".ljust(42)
-                + f"[{color}]{dim.score:.0f}/100[/{color}]"
+                f"  {dim.number}. {dim.name}:".ljust(42) + f"[{color}]{dim.score:.0f}/100[/{color}]"
             )
         else:
-            console.print(
-                f"  {dim.number}. {dim.name}:".ljust(42)
-                + "[dim]not implemented[/dim]"
-            )
+            console.print(f"  {dim.number}. {dim.name}:".ljust(42) + "[dim]not implemented[/dim]")
 
         for sub in dim.sub_scores:
             if sub.score is not None:
                 sub_color = _score_color(sub.score)
-                line = f"     {sub.name}:".ljust(42) + f"[{sub_color}]{sub.score:.0f}/100[/{sub_color}]"
+                line = (
+                    f"     {sub.name}:".ljust(42)
+                    + f"[{sub_color}]{sub.score:.0f}/100[/{sub_color}]"
+                )
 
                 # Check for acceptance criterion
                 for ac in report.acceptance_criteria:
-                    if ac.dimension == dim.number and ac.sub_score_key == sub.key and ac.passed is not None:
+                    if (
+                        ac.dimension == dim.number
+                        and ac.sub_score_key == sub.key
+                        and ac.passed is not None
+                    ):
                         tag = "[green]PASS[/green]" if ac.passed else "[red]FAIL[/red]"
                         line += f"  [Accept: >={ac.threshold:.0f} {tag}]"
                         break
@@ -76,8 +79,10 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
                 # Show failure summary when there are failures (always, not just verbose)
                 if sub.failure_summary:
                     for fmt, counts in sorted(sub.failure_summary.items()):
-                        parts = [f"{n} {cat.replace('_', ' ')}{'s' if n > 1 else ''}"
-                                 for cat, n in sorted(counts.items())]
+                        parts = [
+                            f"{n} {cat.replace('_', ' ')}{'s' if n > 1 else ''}"
+                            for cat, n in sorted(counts.items())
+                        ]
                         console.print(f"       [yellow]{fmt}[/yellow]: {', '.join(parts)}")
             else:
                 console.print(f"     {sub.name}:".ljust(42) + "[dim]N/A[/dim]")

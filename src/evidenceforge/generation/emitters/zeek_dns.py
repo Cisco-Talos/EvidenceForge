@@ -33,40 +33,40 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
         net = event.network
         dns = event.dns
         event_data: dict[str, Any] = {
-            'ts': event.timestamp,
-            'uid': net.zeek_uid,
-            'id.orig_h': net.src_ip,
-            'id.orig_p': net.src_port,
-            'id.resp_h': net.dst_ip,
-            'id.resp_p': net.dst_port,
-            'proto': net.protocol,
-            'trans_id': dns.trans_id,
-            'query': dns.query,
-            'qclass': dns.qclass,
-            'qclass_name': dns.qclass_name,
-            'qtype': dns.qtype,
-            'qtype_name': dns.query_type,
-            'rcode': dns.rcode_num,
-            'rcode_name': dns.rcode,
-            'AA': dns.AA,
-            'TC': dns.TC,
-            'RD': dns.RD,
-            'RA': dns.RA,
-            'Z': dns.Z,
-            'rejected': dns.rejected,
-            'opcode': dns.opcode,
-            'opcode_name': dns.opcode_name,
+            "ts": event.timestamp,
+            "uid": net.zeek_uid,
+            "id.orig_h": net.src_ip,
+            "id.orig_p": net.src_port,
+            "id.resp_h": net.dst_ip,
+            "id.resp_p": net.dst_port,
+            "proto": net.protocol,
+            "trans_id": dns.trans_id,
+            "query": dns.query,
+            "qclass": dns.qclass,
+            "qclass_name": dns.qclass_name,
+            "qtype": dns.qtype,
+            "qtype_name": dns.query_type,
+            "rcode": dns.rcode_num,
+            "rcode_name": dns.rcode,
+            "AA": dns.AA,
+            "TC": dns.TC,
+            "RD": dns.RD,
+            "RA": dns.RA,
+            "Z": dns.Z,
+            "rejected": dns.rejected,
+            "opcode": dns.opcode,
+            "opcode_name": dns.opcode_name,
         }
         if dns.rtt is not None:
-            event_data['rtt'] = dns.rtt
+            event_data["rtt"] = dns.rtt
         if dns.answers:
-            event_data['answers'] = dns.answers
+            event_data["answers"] = dns.answers
         if dns.TTLs:
-            event_data['TTLs'] = dns.TTLs
+            event_data["TTLs"] = dns.TTLs
 
         # Sensor hostname routing (set by dispatcher for network visibility)
-        event_data['_sensor_hostnames'] = event._sensor_hostnames_by_format.get(
-            self.format_def.name if self.format_def else 'zeek_dns', []
+        event_data["_sensor_hostnames"] = event._sensor_hostnames_by_format.get(
+            self.format_def.name if self.format_def else "zeek_dns", []
         )
 
         self.emit_event(event_data)

@@ -3,7 +3,7 @@
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from . import LogParser, ParsedRecord, register_parser
@@ -12,9 +12,7 @@ from . import LogParser, ParsedRecord, register_parser
 NS = "http://schemas.microsoft.com/win/2004/08/events/event"
 
 # Regex to split XML into individual <Event> blocks
-EVENT_PATTERN = re.compile(
-    r"<Event\s[^>]*>.*?</Event>", re.DOTALL
-)
+EVENT_PATTERN = re.compile(r"<Event\s[^>]*>.*?</Event>", re.DOTALL)
 
 
 @register_parser
@@ -50,9 +48,7 @@ class WindowsEventParser(LogParser):
                     ts_str = tc_el.get("SystemTime", "")
                     fields["TimeCreated"] = ts_str
                     try:
-                        timestamp = datetime.fromisoformat(
-                            ts_str.replace("Z", "+00:00")
-                        )
+                        timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                     except ValueError:
                         errors.append(f"Invalid timestamp: {ts_str}")
 
@@ -89,10 +85,19 @@ class WindowsEventParser(LogParser):
                     value = data_el.text or ""
                     if name:
                         # Try to coerce known integer fields
-                        if name in ("LogonType", "IpPort", "KeyLength", "PreAuthType",
-                                    "NetworkPort", "SourcePort", "DestPort",
-                                    "Protocol", "FilterRTID", "LayerRTID",
-                                    "ProcessID"):
+                        if name in (
+                            "LogonType",
+                            "IpPort",
+                            "KeyLength",
+                            "PreAuthType",
+                            "NetworkPort",
+                            "SourcePort",
+                            "DestPort",
+                            "Protocol",
+                            "FilterRTID",
+                            "LayerRTID",
+                            "ProcessID",
+                        ):
                             try:
                                 fields[name] = int(value)
                             except ValueError:

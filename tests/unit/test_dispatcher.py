@@ -1,23 +1,24 @@
 """Tests for EventDispatcher routing, visibility filtering, and StateManager.apply()."""
 
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+
 import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
 
 from evidenceforge.events import (
-    SecurityEvent,
-    RawLogEntry,
-    HostContext,
     AuthContext,
-    ProcessContext,
+    HostContext,
     NetworkContext,
+    ProcessContext,
+    RawLogEntry,
+    SecurityEvent,
 )
-from evidenceforge.events.dispatcher import EventDispatcher, _NETWORK_FORMATS, FORMAT_GROUPS
+from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
 from evidenceforge.generation.state_manager import StateManager
 
 
 def _make_ts():
-    return datetime(2026, 3, 19, 10, 0, 0, tzinfo=timezone.utc)
+    return datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
 
 
 def _make_mock_emitter(name: str, handles: bool = False):
@@ -94,8 +95,11 @@ class TestNetworkVisibilityFiltering:
             timestamp=_make_ts(),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.0.1.50", src_port=54321,
-                dst_ip="10.0.1.100", dst_port=443, protocol="tcp",
+                src_ip="10.0.1.50",
+                src_port=54321,
+                dst_ip="10.0.1.100",
+                dst_port=443,
+                protocol="tcp",
             ),
         )
         dispatcher.dispatch(event)
@@ -120,8 +124,11 @@ class TestNetworkVisibilityFiltering:
             timestamp=_make_ts(),
             event_type="logon",
             host=HostContext(
-                hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-                os_category="windows", system_type="workstation",
+                hostname="WS-01",
+                ip="10.0.1.50",
+                os="Windows 10",
+                os_category="windows",
+                system_type="workstation",
             ),
         )
         dispatcher.dispatch(event)
@@ -145,8 +152,11 @@ class TestNetworkVisibilityFiltering:
             timestamp=_make_ts(),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.0.1.50", src_port=54321,
-                dst_ip="10.0.1.100", dst_port=443, protocol="tcp",
+                src_ip="10.0.1.50",
+                src_port=54321,
+                dst_ip="10.0.1.100",
+                dst_port=443,
+                protocol="tcp",
             ),
         )
         dispatcher.dispatch(event)
@@ -197,7 +207,10 @@ class TestStateManagerApply:
         sm = StateManager()
         sm.set_current_time(_make_ts())
         logon_id = sm.create_session(
-            username="alice", system="WS-01", logon_type=2, source_ip="10.0.1.50",
+            username="alice",
+            system="WS-01",
+            logon_type=2,
+            source_ip="10.0.1.50",
         )
 
         # Session should exist
@@ -219,8 +232,12 @@ class TestStateManagerApply:
         sm = StateManager()
         sm.set_current_time(_make_ts())
         pid = sm.create_process(
-            system="WS-01", parent_pid=4, image="cmd.exe",
-            command_line="cmd.exe", username="alice", integrity_level="Medium",
+            system="WS-01",
+            parent_pid=4,
+            image="cmd.exe",
+            command_line="cmd.exe",
+            username="alice",
+            integrity_level="Medium",
         )
 
         # Process should exist
@@ -231,12 +248,18 @@ class TestStateManagerApply:
             timestamp=_make_ts(),
             event_type="process_terminate",
             host=HostContext(
-                hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-                os_category="windows", system_type="workstation",
+                hostname="WS-01",
+                ip="10.0.1.50",
+                os="Windows 10",
+                os_category="windows",
+                system_type="workstation",
             ),
             process=ProcessContext(
-                pid=pid, parent_pid=4, image="cmd.exe",
-                command_line="cmd.exe", username="alice",
+                pid=pid,
+                parent_pid=4,
+                image="cmd.exe",
+                command_line="cmd.exe",
+                username="alice",
             ),
         )
         sm.apply(event)
@@ -260,17 +283,25 @@ class TestStateManagerApply:
         sm = StateManager()
         sm.set_current_time(_make_ts())
         conn_id = sm.open_connection(
-            src_ip="10.0.1.50", src_port=54321,
-            dst_ip="10.0.1.100", dst_port=443, protocol="tcp",
+            src_ip="10.0.1.50",
+            src_port=54321,
+            dst_ip="10.0.1.100",
+            dst_port=443,
+            protocol="tcp",
         )
 
         event = SecurityEvent(
             timestamp=_make_ts(),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.0.1.50", src_port=54321,
-                dst_ip="10.0.1.100", dst_port=443, protocol="tcp",
-                conn_id=conn_id, orig_bytes=1024, resp_bytes=2048,
+                src_ip="10.0.1.50",
+                src_port=54321,
+                dst_ip="10.0.1.100",
+                dst_port=443,
+                protocol="tcp",
+                conn_id=conn_id,
+                orig_bytes=1024,
+                resp_bytes=2048,
             ),
         )
         sm.apply(event)
@@ -286,17 +317,17 @@ class TestCanHandleDefault:
 
     def test_base_can_handle_returns_false(self):
         """Base LogEmitter.can_handle() returns False for any event."""
-        from evidenceforge.generation.emitters.base import LogEmitter
 
         event = SecurityEvent(timestamp=_make_ts(), event_type="logon")
 
         # Can't instantiate ABC directly, but we can test via a concrete subclass
         # All current subclasses inherit the default can_handle() which returns False
         # Let's test via a real emitter
-        from evidenceforge.generation.emitters.syslog import SyslogEmitter
-        from evidenceforge.formats import load_format
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
 
         format_def = load_format("syslog")
         with tempfile.NamedTemporaryFile(suffix=".log") as f:
@@ -306,26 +337,39 @@ class TestCanHandleDefault:
     def test_all_emitters_have_supported_types(self):
         """All emitter subclasses have _supported_types attribute."""
         from evidenceforge.generation.emitters import (
-            WindowsEventEmitter, ZeekEmitter, ZeekDnsEmitter,
-            EcarEmitter, SyslogEmitter, BashHistoryEmitter,
-            SnortEmitter, WebEmitter,
+            BashHistoryEmitter,
+            EcarEmitter,
+            SnortEmitter,
+            SyslogEmitter,
+            WebEmitter,
+            WindowsEventEmitter,
+            ZeekDnsEmitter,
+            ZeekEmitter,
         )
 
         emitter_classes = [
-            WindowsEventEmitter, ZeekEmitter, ZeekDnsEmitter,
-            EcarEmitter, SyslogEmitter, BashHistoryEmitter,
-            SnortEmitter, WebEmitter,
+            WindowsEventEmitter,
+            ZeekEmitter,
+            ZeekDnsEmitter,
+            EcarEmitter,
+            SyslogEmitter,
+            BashHistoryEmitter,
+            SnortEmitter,
+            WebEmitter,
         ]
         for cls in emitter_classes:
-            assert hasattr(cls, '_supported_types'), f"{cls.__name__} missing _supported_types"
-            assert isinstance(cls._supported_types, set), f"{cls.__name__}._supported_types is not a set"
+            assert hasattr(cls, "_supported_types"), f"{cls.__name__} missing _supported_types"
+            assert isinstance(cls._supported_types, set), (
+                f"{cls.__name__}._supported_types is not a set"
+            )
 
     def test_emit_raises_not_implemented(self):
         """emit() raises NotImplementedError for unsupported event types."""
-        from evidenceforge.generation.emitters.syslog import SyslogEmitter
-        from evidenceforge.formats import load_format
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
 
         format_def = load_format("syslog")
         with tempfile.NamedTemporaryFile(suffix=".log") as f:
@@ -336,17 +380,19 @@ class TestCanHandleDefault:
 
     def test_emit_raw_delegates_to_emit_event(self):
         """emit_raw() delegates to emit_event()."""
-        from evidenceforge.generation.emitters.syslog import SyslogEmitter
-        from evidenceforge.formats import load_format
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
 
         format_def = load_format("syslog")
         with tempfile.NamedTemporaryFile(suffix=".log") as f:
             emitter = SyslogEmitter(format_def, Path(f.name))
             # Mock emit_event to verify delegation
             from unittest.mock import patch as mock_patch
-            with mock_patch.object(emitter, 'emit_event') as mock_emit:
+
+            with mock_patch.object(emitter, "emit_event") as mock_emit:
                 data = {"message": "test", "hostname": "srv-01"}
                 emitter.emit_raw(data)
                 mock_emit.assert_called_once_with(data)
@@ -357,10 +403,11 @@ class TestBuildHostContext:
 
     def test_build_host_context(self):
         """_build_host_context() creates a HostContext from a System model."""
+        from unittest.mock import MagicMock
+
+        from evidenceforge.events.contexts import HostContext
         from evidenceforge.generation.activity import ActivityGenerator
         from evidenceforge.generation.state_manager import StateManager
-        from evidenceforge.events.contexts import HostContext
-        from unittest.mock import MagicMock
 
         sm = StateManager()
         gen = ActivityGenerator(state_manager=sm, emitters={})
@@ -385,9 +432,10 @@ class TestBuildHostContext:
 
     def test_build_host_context_with_domain(self):
         """_build_host_context() precomputes FQDN and NetBIOS when domain is set."""
+        from unittest.mock import MagicMock
+
         from evidenceforge.generation.activity import ActivityGenerator
         from evidenceforge.generation.state_manager import StateManager
-        from unittest.mock import MagicMock
 
         sm = StateManager()
         gen = ActivityGenerator(state_manager=sm, emitters={})
@@ -407,9 +455,10 @@ class TestBuildHostContext:
 
     def test_build_host_context_linux(self):
         """_build_host_context() correctly detects Linux OS."""
+        from unittest.mock import MagicMock
+
         from evidenceforge.generation.activity import ActivityGenerator
         from evidenceforge.generation.state_manager import StateManager
-        from unittest.mock import MagicMock
 
         sm = StateManager()
         gen = ActivityGenerator(state_manager=sm, emitters={})

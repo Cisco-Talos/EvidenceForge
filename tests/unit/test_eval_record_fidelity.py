@@ -76,11 +76,14 @@ class TestTierB:
     def test_missing_field_fails_rule(self):
         """A record missing a required co-occurrence field should fail."""
         records = [
-            _make_record("zeek_conn", {
-                "proto": "tcp",
-                "conn_state": "SF",
-                # Missing duration, orig_bytes, resp_bytes
-            }),
+            _make_record(
+                "zeek_conn",
+                {
+                    "proto": "tcp",
+                    "conn_state": "SF",
+                    # Missing duration, orig_bytes, resp_bytes
+                },
+            ),
         ]
         scorer = RecordFidelityScorer()
         tier_b = scorer._score_tier_b({"zeek_conn": records})

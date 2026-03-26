@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import LogParser, ParsedRecord, register_parser
@@ -15,7 +15,7 @@ class BashHistoryParser(LogParser):
     format_name = "bash_history"
 
     def can_parse(self, path: Path) -> bool:
-        return (path.suffix in (".history", ".bash_history") and "bash_history" in str(path))
+        return path.suffix in (".history", ".bash_history") and "bash_history" in str(path)
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         """Parse a single bash history file.
@@ -56,7 +56,7 @@ class BashHistoryParser(LogParser):
                 timestamp = None
                 errors: list[str] = []
                 try:
-                    timestamp = datetime.fromtimestamp(epoch, tz=timezone.utc)
+                    timestamp = datetime.fromtimestamp(epoch, tz=UTC)
                 except (ValueError, OSError):
                     errors.append(f"Invalid epoch: {epoch}")
 

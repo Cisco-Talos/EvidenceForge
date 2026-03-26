@@ -9,10 +9,9 @@ Sub-scores (0.20 each):
 """
 
 import logging
-import math
 import statistics
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -65,7 +64,7 @@ def _extract_username(record: ParsedRecord) -> str | None:
         for pattern_prefix in ["for ", "user="]:
             idx = msg.find(pattern_prefix)
             if idx >= 0:
-                rest = msg[idx + len(pattern_prefix):]
+                rest = msg[idx + len(pattern_prefix) :]
                 user = rest.split()[0].strip("'\"") if rest else None
                 if user:
                     return user.lower()
@@ -155,8 +154,11 @@ class TemporalRealismScorer(DimensionScorer):
         dim_score = sum(s.score * s.weight for s in sub_scores if s.score is not None)
 
         return DimensionScore(
-            number=self.number, name=self.name, weight=self.weight,
-            score=dim_score, sub_scores=sub_scores,
+            number=self.number,
+            name=self.name,
+            weight=self.weight,
+            score=dim_score,
+            sub_scores=sub_scores,
         )
 
     # --- Sub-score 1: Work Hour Distribution ---
@@ -176,12 +178,17 @@ class TemporalRealismScorer(DimensionScorer):
             if user.persona and user.persona in persona_map:
                 persona = persona_map[user.persona]
                 if persona.work_hours_parsed:
-                    user_to_hours[user.username.lower()] = persona.work_hours_parsed.get("hours", [])
+                    user_to_hours[user.username.lower()] = persona.work_hours_parsed.get(
+                        "hours", []
+                    )
 
         if not user_to_hours:
             return SubScore(
-                name="Work Hour Distribution", key="work_hours", weight=0.20,
-                score=100.0, details="No persona work hours defined — skipped",
+                name="Work Hour Distribution",
+                key="work_hours",
+                weight=0.20,
+                score=100.0,
+                details="No persona work hours defined — skipped",
             )
 
         # Resolve scenario timezone (work hours are in local time)
@@ -191,7 +198,7 @@ class TemporalRealismScorer(DimensionScorer):
         try:
             scenario_tz = ZoneInfo(tz_name)
         except (KeyError, ValueError):
-            scenario_tz = timezone.utc
+            scenario_tz = UTC
 
         # Check work hour adherence using pre-computed user events
         user_scores: list[float] = []
@@ -215,7 +222,9 @@ class TemporalRealismScorer(DimensionScorer):
 
         score = statistics.mean(user_scores) if user_scores else 100.0
         return SubScore(
-            name="Work Hour Distribution", key="work_hours", weight=0.20,
+            name="Work Hour Distribution",
+            key="work_hours",
+            weight=0.20,
             score=score,
             details=f"Scored {len(user_scores)} users with persona work hours",
         )
@@ -245,10 +254,7 @@ class TemporalRealismScorer(DimensionScorer):
             if len(deduped) < 10:
                 continue
 
-            gaps = [
-                (deduped[i + 1] - deduped[i]).total_seconds()
-                for i in range(len(deduped) - 1)
-            ]
+            gaps = [(deduped[i + 1] - deduped[i]).total_seconds() for i in range(len(deduped) - 1)]
             if len(gaps) < 5:
                 continue
 
@@ -270,7 +276,9 @@ class TemporalRealismScorer(DimensionScorer):
 
         score = statistics.mean(cv_scores) if cv_scores else 100.0
         return SubScore(
-            name="Human Burstiness", key="burstiness", weight=0.20,
+            name="Human Burstiness",
+            key="burstiness",
+            weight=0.20,
             score=score,
             details=f"CV scores for {len(cv_scores)} users (target CV 1.0-3.0)",
         )
@@ -284,7 +292,7 @@ class TemporalRealismScorer(DimensionScorer):
         service_timestamps: dict[tuple[str, str], list[datetime]] = defaultdict(list)
         total_system_events = 0
 
-        for format_name, record_list in records.items():
+        for _format_name, record_list in records.items():
             for record in record_list:
                 if record.timestamp is None:
                     continue
@@ -300,13 +308,15 @@ class TemporalRealismScorer(DimensionScorer):
                         continue
                     ts = record.timestamp
                     if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
+                        ts = ts.replace(tzinfo=UTC)
                     service_timestamps[(hostname, service)].append(ts)
                     total_system_events += 1
 
         if total_system_events < 20:
             return SubScore(
-                name="System Process Regularity", key="system_regularity", weight=0.20,
+                name="System Process Regularity",
+                key="system_regularity",
+                weight=0.20,
                 score=100.0,
                 details=f"Only {total_system_events} system events — insufficient for analysis",
             )
@@ -317,11 +327,10 @@ class TemporalRealismScorer(DimensionScorer):
         # because independent jitter on a fixed period gives near-zero autocorrelation
         # but very low CV.
         cv_scores: list[float] = []
-        for key, timestamps in service_timestamps.items():
+        for _key, timestamps in service_timestamps.items():
             sorted_ts = sorted(timestamps)
             intervals = [
-                (sorted_ts[i + 1] - sorted_ts[i]).total_seconds()
-                for i in range(len(sorted_ts) - 1)
+                (sorted_ts[i + 1] - sorted_ts[i]).total_seconds() for i in range(len(sorted_ts) - 1)
             ]
             intervals = [iv for iv in intervals if iv > 0]
             if len(intervals) >= 10:
@@ -332,8 +341,11 @@ class TemporalRealismScorer(DimensionScorer):
 
         if not cv_scores:
             return SubScore(
-                name="System Process Regularity", key="system_regularity", weight=0.20,
-                score=100.0, details="Insufficient per-service interval data",
+                name="System Process Regularity",
+                key="system_regularity",
+                weight=0.20,
+                score=100.0,
+                details="Insufficient per-service interval data",
             )
 
         avg_cv = statistics.mean(cv_scores)
@@ -356,7 +368,9 @@ class TemporalRealismScorer(DimensionScorer):
             score = 0.0
 
         return SubScore(
-            name="System Process Regularity", key="system_regularity", weight=0.20,
+            name="System Process Regularity",
+            key="system_regularity",
+            weight=0.20,
             score=score,
             details=f"Interval CV: {avg_cv:.3f} (avg of {len(cv_scores)} service groups, {total_system_events} events)",
         )
@@ -368,8 +382,11 @@ class TemporalRealismScorer(DimensionScorer):
         pairs_list = causal_rules.get("pairs", [])
         if not pairs_list:
             return SubScore(
-                name="Causal Ordering", key="causal_ordering", weight=0.20,
-                score=100.0, details="No causal pair rules defined",
+                name="Causal Ordering",
+                key="causal_ordering",
+                weight=0.20,
+                score=100.0,
+                details="No causal pair rules defined",
             )
 
         total_pairs = 0
@@ -427,8 +444,13 @@ class TemporalRealismScorer(DimensionScorer):
 
                 # Skip built-in/machine accounts from causal checks
                 if exclude_accounts:
-                    subject = rec.fields.get("SubjectUserName", "") or rec.fields.get("principal", "")
-                    if any(subject.upper() == ea.upper() or subject.endswith("$") for ea in exclude_accounts):
+                    subject = rec.fields.get("SubjectUserName", "") or rec.fields.get(
+                        "principal", ""
+                    )
+                    if any(
+                        subject.upper() == ea.upper() or subject.endswith("$")
+                        for ea in exclude_accounts
+                    ):
                         continue
                 if after_field:
                     key_val = rec.fields.get(after_field)
@@ -460,7 +482,9 @@ class TemporalRealismScorer(DimensionScorer):
 
         score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
         return SubScore(
-            name="Causal Ordering", key="causal_ordering", weight=0.20,
+            name="Causal Ordering",
+            key="causal_ordering",
+            weight=0.20,
             score=score,
             details=f"{correct_pairs}/{total_pairs} causal pairs correctly ordered",
             sample_failures=failures,
@@ -528,7 +552,9 @@ class TemporalRealismScorer(DimensionScorer):
 
         score = (100.0 * plausible / total_checks) if total_checks > 0 else 100.0
         return SubScore(
-            name="Timing Plausibility", key="timing_plausibility", weight=0.20,
+            name="Timing Plausibility",
+            key="timing_plausibility",
+            weight=0.20,
             score=score,
             details=f"{plausible}/{total_checks} timing checks plausible",
             sample_failures=failures,
@@ -540,16 +566,17 @@ class TemporalRealismScorer(DimensionScorer):
     def _normalize_ts(ts: datetime) -> datetime:
         """Ensure a datetime is timezone-aware (UTC)."""
         if ts.tzinfo is None:
-            return ts.replace(tzinfo=timezone.utc)
+            return ts.replace(tzinfo=UTC)
         return ts
 
     @staticmethod
     def _get_user_events(
-        records: dict[str, list[ParsedRecord]], username: str,
+        records: dict[str, list[ParsedRecord]],
+        username: str,
     ) -> list[datetime]:
         """Get all timestamped events for a specific user."""
         timestamps: list[datetime] = []
-        for format_name, record_list in records.items():
+        for _format_name, record_list in records.items():
             for record in record_list:
                 if record.timestamp is None:
                     continue
@@ -557,7 +584,7 @@ class TemporalRealismScorer(DimensionScorer):
                 if user and user == username:
                     ts = record.timestamp
                     if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
+                        ts = ts.replace(tzinfo=UTC)
                     timestamps.append(ts)
         return timestamps
 
@@ -567,7 +594,7 @@ class TemporalRealismScorer(DimensionScorer):
     ) -> dict[str, list[datetime]]:
         """Group record timestamps by extracted username."""
         user_events: dict[str, list[datetime]] = defaultdict(list)
-        for format_name, record_list in records.items():
+        for _format_name, record_list in records.items():
             for record in record_list:
                 if record.timestamp is None:
                     continue
@@ -575,7 +602,7 @@ class TemporalRealismScorer(DimensionScorer):
                 if user:
                     ts = record.timestamp
                     if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
+                        ts = ts.replace(tzinfo=UTC)
                     user_events[user].append(ts)
         return dict(user_events)
 
@@ -606,5 +633,5 @@ class TemporalRealismScorer(DimensionScorer):
 
         x = values[:-1]
         y = values[1:]
-        cov = sum((xi - mean_val) * (yi - mean_val) for xi, yi in zip(x, y)) / (n - 1)
+        cov = sum((xi - mean_val) * (yi - mean_val) for xi, yi in zip(x, y, strict=True)) / (n - 1)
         return cov / var_val

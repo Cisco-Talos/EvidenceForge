@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
 
 

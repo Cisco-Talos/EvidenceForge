@@ -131,11 +131,15 @@ uv run python -m evidenceforge --help
 - **Fail fast** — validate inputs early, fail with clear error messages
 - **No magic** — avoid metaclasses, dynamic imports, or other "clever" patterns unless absolutely necessary
 
+### Linting
+- **Before committing:** always run `uv run ruff check .` and `uv run ruff format --check .` and fix any errors. A `pre-commit` hook enforces this, but verify manually when in doubt.
+- Ruff configuration is in `pyproject.toml` — do not add `# noqa` comments without justification.
+
 ### Formatting
 - Line length: 100 characters
 - Indentation: 4 spaces
 - Double quotes for strings (except to avoid escaping)
-- Import order: stdlib, third-party, local (use `isort` with black profile)
+- Import order: stdlib, third-party, local (enforced by ruff's `I` rules)
 
 ### Type Hints
 - Use modern Python 3.11+ built-in types: `list[User]`, `dict[int, str]` — not `typing.List`, `typing.Dict`

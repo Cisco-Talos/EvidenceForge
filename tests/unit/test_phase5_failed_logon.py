@@ -1,14 +1,15 @@
 """Unit tests for Phase 5.2.2: Failed logon generation."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock
+
+import pytest
 
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import User, System
+from evidenceforge.models import System, User
 
 
 @pytest.fixture
@@ -19,10 +20,10 @@ def state_manager():
 @pytest.fixture
 def mock_emitters():
     return {
-        'windows_event_security': Mock(),
-        'zeek_conn': Mock(),
-        'syslog': Mock(),
-        'ecar': Mock(),
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "syslog": Mock(),
+        "ecar": Mock(),
     }
 
 
@@ -48,63 +49,80 @@ def linux_system():
 
 @pytest.fixture
 def timestamp():
-    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
 class TestFailedLogonWindows:
     """Test failed logon event generation on Windows."""
 
-    def test_emits_failed_logon(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_emits_failed_logon(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         activity_gen.generate_failed_logon(test_user, win_system, timestamp)
 
-        assert mock_emitters['windows_event_security'].emit.called
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert mock_emitters["windows_event_security"].emit.called
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "failed_logon"
-        assert event.auth.username == 'alice.smith'
-        assert event.auth.failure_status == '0xc000006d'
-        assert event.auth.failure_substatus in ('0xc000006a', '0xc0000064', '0xc0000234', '0xc0000072')
+        assert event.auth.username == "alice.smith"
+        assert event.auth.failure_status == "0xc000006d"
+        assert event.auth.failure_substatus in (
+            "0xc000006a",
+            "0xc0000064",
+            "0xc0000234",
+            "0xc0000072",
+        )
 
-    def test_no_session_created(self, activity_gen, test_user, win_system, timestamp, state_manager):
+    def test_no_session_created(
+        self, activity_gen, test_user, win_system, timestamp, state_manager
+    ):
         state_manager.set_current_time(timestamp)
         activity_gen.generate_failed_logon(test_user, win_system, timestamp)
 
-        sessions = state_manager.get_sessions_for_user('alice.smith')
+        sessions = state_manager.get_sessions_for_user("alice.smith")
         assert len(sessions) == 0
 
-    def test_subject_is_system(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_subject_is_system(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         activity_gen.generate_failed_logon(test_user, win_system, timestamp)
 
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
-        assert event.auth.subject_sid == 'S-1-5-18'
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.subject_sid == "S-1-5-18"
 
 
 class TestFailedLogonLinux:
     """Test failed logon on Linux."""
 
-    def test_emits_syslog_failed_password(self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters):
+    def test_emits_syslog_failed_password(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
-        activity_gen.generate_failed_logon(test_user, linux_system, timestamp, logon_type=3, source_ip="203.0.113.50")
+        activity_gen.generate_failed_logon(
+            test_user, linux_system, timestamp, logon_type=3, source_ip="203.0.113.50"
+        )
 
-        assert mock_emitters['syslog'].emit.called
-        event = mock_emitters['syslog'].emit.call_args[0][0]
+        assert mock_emitters["syslog"].emit.called
+        event = mock_emitters["syslog"].emit.call_args[0][0]
         assert event.event_type == "failed_logon"
-        assert event.auth.username == 'alice.smith'
-        assert event.auth.source_ip == '203.0.113.50'
+        assert event.auth.username == "alice.smith"
+        assert event.auth.source_ip == "203.0.113.50"
 
 
 class TestFailedLogonEcar:
     """Test eCAR emission for failed logon."""
 
-    def test_emits_ecar_failed_logon(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_emits_ecar_failed_logon(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         activity_gen.generate_failed_logon(test_user, win_system, timestamp)
 
-        assert mock_emitters['ecar'].emit.called
-        event = mock_emitters['ecar'].emit.call_args[0][0]
+        assert mock_emitters["ecar"].emit.called
+        event = mock_emitters["ecar"].emit.call_args[0][0]
         assert event.event_type == "failed_logon"
-        assert event.auth.result == 'failure'
+        assert event.auth.result == "failure"
 
 
 class TestFailedLogonFormatValidation:
@@ -114,37 +132,37 @@ class TestFailedLogonFormatValidation:
         """A 4625 event with TransmittedServices, LmPackageName, KeyLength, ProcessId, ProcessName should validate."""
         fmt_def = load_format("windows_event_security")
         event = {
-            'EventID': 4625,
-            'TimeCreated': '2024-03-15T10:00:00Z',
-            'Computer': 'WKS-01.corp.local',
-            'Channel': 'Security',
-            'Level': 0,
-            'EventRecordID': 1001,
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': 64,
-            'SubjectUserSid': 'S-1-5-18',
-            'SubjectUserName': '-',
-            'SubjectDomainName': '-',
-            'SubjectLogonId': '0x0',
-            'TargetUserSid': 'S-1-0-0',
-            'TargetUserName': 'alice.smith',
-            'TargetDomainName': 'CORP',
-            'Status': '0xc000006d',
-            'SubStatus': '0xc0000064',
-            'FailureReason': '%%2313',
-            'LogonType': 3,
-            'LogonProcessName': 'NtLmSsp',
-            'AuthenticationPackageName': 'NTLM',
-            'WorkstationName': 'WKS-02',
-            'IpAddress': '10.0.10.2',
-            'IpPort': 49152,
-            'TransmittedServices': '-',
-            'LmPackageName': '-',
-            'KeyLength': 0,
-            'ProcessId': '0x0',
-            'ProcessName': '-',
+            "EventID": 4625,
+            "TimeCreated": "2024-03-15T10:00:00Z",
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "EventRecordID": 1001,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 64,
+            "SubjectUserSid": "S-1-5-18",
+            "SubjectUserName": "-",
+            "SubjectDomainName": "-",
+            "SubjectLogonId": "0x0",
+            "TargetUserSid": "S-1-0-0",
+            "TargetUserName": "alice.smith",
+            "TargetDomainName": "CORP",
+            "Status": "0xc000006d",
+            "SubStatus": "0xc0000064",
+            "FailureReason": "%%2313",
+            "LogonType": 3,
+            "LogonProcessName": "NtLmSsp",
+            "AuthenticationPackageName": "NTLM",
+            "WorkstationName": "WKS-02",
+            "IpAddress": "10.0.10.2",
+            "IpPort": 49152,
+            "TransmittedServices": "-",
+            "LmPackageName": "-",
+            "KeyLength": 0,
+            "ProcessId": "0x0",
+            "ProcessName": "-",
         }
-        result = validate_event(fmt_def, event, variant_name='failed_logon')
+        result = validate_event(fmt_def, event, variant_name="failed_logon")
         assert result.valid, f"Validation errors: {result.errors}"
 
 
@@ -153,7 +171,7 @@ class TestFailedLogonRate:
 
     def test_baseline_logon_failure_rate(self, state_manager, timestamp):
         """Over many logon attempts, ~10% should fail."""
-        emitters = {'windows_event_security': Mock(), 'zeek_conn': Mock()}
+        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
         gen = ActivityGenerator(state_manager, emitters)
         user = User(username="test", full_name="Test", email="t@t.com", enabled=True)
         system = System(hostname="W1", ip="10.0.0.1", os="Windows 10", type="workstation")
@@ -162,9 +180,9 @@ class TestFailedLogonRate:
         total = 0
         failed = 0
         for _ in range(200):
-            emitters['windows_event_security'].reset_mock()
-            gen.execute_baseline_activity(user, system, timestamp, 'logon')
-            emitter = emitters['windows_event_security']
+            emitters["windows_event_security"].reset_mock()
+            gen.execute_baseline_activity(user, system, timestamp, "logon")
+            emitter = emitters["windows_event_security"]
             # Both successful and failed logons now dispatched via emit()
             if emitter.emit.called:
                 event = emitter.emit.call_args[0][0]

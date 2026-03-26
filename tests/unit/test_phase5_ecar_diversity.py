@@ -1,12 +1,13 @@
 """Unit tests for Phase 5.2: eCAR object type diversity."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock
+
+import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import User, System
+from evidenceforge.models import System, User
 
 
 @pytest.fixture
@@ -17,9 +18,9 @@ def state_manager():
 @pytest.fixture
 def mock_emitters():
     return {
-        'windows_event_security': Mock(),
-        'zeek_conn': Mock(),
-        'ecar': Mock(),
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "ecar": Mock(),
     }
 
 
@@ -40,82 +41,110 @@ def win_system():
 
 @pytest.fixture
 def timestamp():
-    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
 class TestEcarFileEvent:
-    def test_file_events_dispatched_canonically(self, activity_gen, test_user, win_system, state_manager, timestamp, mock_emitters):
+    def test_file_events_dispatched_canonically(
+        self, activity_gen, test_user, win_system, state_manager, timestamp, mock_emitters
+    ):
         """FILE events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
         state_manager.set_current_time(timestamp)
         # generate_process triggers probabilistic FILE events via SecurityEvent dispatch
         # Verify by calling dispatch directly with a file_create event
         from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import FileContext, AuthContext
-        event = SecurityEvent(
-            timestamp=timestamp, event_type='file_create',
+        from evidenceforge.events.contexts import AuthContext, FileContext
+
+        SecurityEvent(
+            timestamp=timestamp,
+            event_type="file_create",
             host=activity_gen._build_host_context(win_system),
-            auth=AuthContext(username='alice.smith'),
-            file=FileContext(path='C:\\Users\\alice\\doc.docx', action='create', pid=1234),
+            auth=AuthContext(username="alice.smith"),
+            file=FileContext(path="C:\\Users\\alice\\doc.docx", action="create", pid=1234),
         )
         # Verify eCAR emitter can handle this event type
-        assert 'file_create' in type(mock_emitters['ecar'])._supported_types if hasattr(type(mock_emitters['ecar']), '_supported_types') else True
+        assert (
+            "file_create" in type(mock_emitters["ecar"])._supported_types
+            if hasattr(type(mock_emitters["ecar"]), "_supported_types")
+            else True
+        )
 
 
 class TestEcarRegistryEvent:
-    def test_registry_events_dispatched_canonically(self, activity_gen, win_system, timestamp, mock_emitters):
+    def test_registry_events_dispatched_canonically(
+        self, activity_gen, win_system, timestamp, mock_emitters
+    ):
         """REGISTRY events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
         from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import RegistryContext, AuthContext
+        from evidenceforge.events.contexts import AuthContext, RegistryContext
+
         event = SecurityEvent(
-            timestamp=timestamp, event_type='registry_modify',
+            timestamp=timestamp,
+            event_type="registry_modify",
             host=activity_gen._build_host_context(win_system),
-            auth=AuthContext(username='alice.smith'),
-            registry=RegistryContext(key='HKLM\\SOFTWARE\\Test', value='1', action='modify', pid=1234),
+            auth=AuthContext(username="alice.smith"),
+            registry=RegistryContext(
+                key="HKLM\\SOFTWARE\\Test", value="1", action="modify", pid=1234
+            ),
         )
-        assert event.event_type == 'registry_modify'
-        assert event.registry.key == 'HKLM\\SOFTWARE\\Test'
+        assert event.event_type == "registry_modify"
+        assert event.registry.key == "HKLM\\SOFTWARE\\Test"
 
 
 class TestEcarFlowEvent:
-    def test_ecar_receives_connection_events(self, activity_gen, state_manager, timestamp, mock_emitters):
+    def test_ecar_receives_connection_events(
+        self, activity_gen, state_manager, timestamp, mock_emitters
+    ):
         """eCAR FLOW events are now dispatched via SecurityEvent canonical path (Phase 8.1)."""
         state_manager.set_current_time(timestamp)
         # generate_connection dispatches SecurityEvent with event_type="connection"
         # EcarEmitter.can_handle() returns True for "connection" and renders FLOW
         activity_gen.generate_connection(
-            src_ip='10.0.10.1', dst_ip='93.184.216.34',
-            time=timestamp, dst_port=443, proto='tcp', service='ssl',
-            duration=1.0, orig_bytes=500, resp_bytes=1000,
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=1000,
         )
 
         # eCAR emitter should have received the event via emit() (canonical path)
-        assert mock_emitters['ecar'].emit.called
-        event = mock_emitters['ecar'].emit.call_args[0][0]
-        assert event.event_type == 'connection'
-        assert event.network.src_ip == '10.0.10.1'
-        assert event.network.dst_ip == '93.184.216.34'
+        assert mock_emitters["ecar"].emit.called
+        event = mock_emitters["ecar"].emit.call_args[0][0]
+        assert event.event_type == "connection"
+        assert event.network.src_ip == "10.0.10.1"
+        assert event.network.dst_ip == "93.184.216.34"
         assert event.network.dst_port == 443
 
 
 class TestEcarModuleEvent:
-    def test_module_events_dispatched_canonically(self, activity_gen, win_system, timestamp, mock_emitters):
+    def test_module_events_dispatched_canonically(
+        self, activity_gen, win_system, timestamp, mock_emitters
+    ):
         """MODULE events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
         from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import FileContext, AuthContext
+        from evidenceforge.events.contexts import AuthContext, FileContext
+
         event = SecurityEvent(
-            timestamp=timestamp, event_type='module_load',
+            timestamp=timestamp,
+            event_type="module_load",
             host=activity_gen._build_host_context(win_system),
-            auth=AuthContext(username='alice.smith'),
-            file=FileContext(path='C:\\Windows\\System32\\ntdll.dll', action='load', pid=1234),
+            auth=AuthContext(username="alice.smith"),
+            file=FileContext(path="C:\\Windows\\System32\\ntdll.dll", action="load", pid=1234),
         )
-        assert event.event_type == 'module_load'
-        assert event.file.path.endswith('.dll')
+        assert event.event_type == "module_load"
+        assert event.file.path.endswith(".dll")
 
 
 class TestEcarDiversityInProcessCreation:
     """Test that process creation triggers diverse eCAR events."""
 
-    def test_multiple_object_types_from_processes(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_multiple_object_types_from_processes(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
         """Generating many processes should produce multiple eCAR object types."""
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
@@ -123,36 +152,44 @@ class TestEcarDiversityInProcessCreation:
         # Generate many processes to trigger probabilistic eCAR events
         for i in range(50):
             activity_gen.generate_process(
-                test_user, win_system, timestamp, logon_id,
-                'C:\\Windows\\System32\\cmd.exe', f'cmd.exe /c echo {i}'
+                test_user,
+                win_system,
+                timestamp,
+                logon_id,
+                "C:\\Windows\\System32\\cmd.exe",
+                f"cmd.exe /c echo {i}",
             )
 
         # Collect eCAR object types from canonical dispatch (Phase 8.2: all via emit())
         _TYPE_MAP = {
-            "logon": "USER_SESSION", "process_create": "PROCESS",
+            "logon": "USER_SESSION",
+            "process_create": "PROCESS",
             "process_terminate": "PROCESS",
-            "file_create": "FILE", "file_modify": "FILE", "file_delete": "FILE",
-            "registry_modify": "REGISTRY", "module_load": "MODULE",
+            "file_create": "FILE",
+            "file_modify": "FILE",
+            "file_delete": "FILE",
+            "registry_modify": "REGISTRY",
+            "module_load": "MODULE",
         }
         object_types = set()
-        for call in mock_emitters['ecar'].emit.call_args_list:
+        for call in mock_emitters["ecar"].emit.call_args_list:
             event = call[0][0]
             if event.event_type in _TYPE_MAP:
                 object_types.add(_TYPE_MAP[event.event_type])
 
         # Should have at least PROCESS + USER_SESSION + some of FILE, MODULE, REGISTRY
-        assert 'PROCESS' in object_types
-        assert 'USER_SESSION' in object_types
+        assert "PROCESS" in object_types
+        assert "USER_SESSION" in object_types
         assert len(object_types) >= 3, f"Only {len(object_types)} object types: {object_types}"
 
 
 class TestEcarRegistryBackslashEscaping:
     """Test that REGISTRY events with Windows paths have valid backslashes."""
 
-    def test_registry_key_has_valid_backslashes(self, activity_gen, win_system, timestamp, mock_emitters):
+    def test_registry_key_has_valid_backslashes(
+        self, activity_gen, win_system, timestamp, mock_emitters
+    ):
         """REGISTRY events dispatched via canonical model preserve backslashes (Phase 8.2)."""
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import RegistryContext, AuthContext
         # Registry keys from the pool all contain backslashes
         keys = [k for k, v in activity_gen._ECAR_REGISTRY_KEYS]
-        assert all('\\' in k for k in keys)
+        assert all("\\" in k for k in keys)

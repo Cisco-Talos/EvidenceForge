@@ -4,13 +4,13 @@ This module defines Pydantic models for log format definitions loaded from YAML.
 Format definitions describe field schemas, validation rules, and output templates.
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class FieldType(str, Enum):
+class FieldType(StrEnum):
     """Supported field types for log formats."""
 
     STRING = "string"
@@ -45,9 +45,7 @@ class FieldConstraint(BaseModel):
     min_length: int | None = None
     max_length: int | None = None
     allowed_values: list[str | int] | None = None
-    json_logic: dict[str, Any] | None = Field(
-        None, description="JSON Logic rule for validation"
-    )
+    json_logic: dict[str, Any] | None = Field(None, description="JSON Logic rule for validation")
 
     model_config = ConfigDict(extra="forbid")
 
@@ -118,12 +116,8 @@ class OutputTemplate(BaseModel):
     format: str = Field(..., pattern="^(xml|json|tsv|csv|text)$")
     template: str = Field(..., description="Jinja2 template for rendering")
     file_extension: str = Field(..., pattern=r"^\.[a-z0-9]+$")
-    header_template: str | None = Field(
-        None, description="Optional header template"
-    )
-    footer_template: str | None = Field(
-        None, description="Optional footer template"
-    )
+    header_template: str | None = Field(None, description="Optional header template")
+    footer_template: str | None = Field(None, description="Optional footer template")
     encoding: str = Field(default="utf-8")
 
     model_config = ConfigDict(extra="forbid")
@@ -156,9 +150,7 @@ class FormatDefinition(BaseModel):
 
     @field_validator("fields")
     @classmethod
-    def validate_unique_field_names(
-        cls, v: list[FieldDefinition]
-    ) -> list[FieldDefinition]:
+    def validate_unique_field_names(cls, v: list[FieldDefinition]) -> list[FieldDefinition]:
         """Ensure field names are unique."""
         names = [f.name for f in v]
         if len(names) != len(set(names)):

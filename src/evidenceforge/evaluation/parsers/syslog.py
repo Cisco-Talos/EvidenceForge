@@ -11,17 +11,17 @@ from . import LogParser, ParsedRecord, register_parser
 # Also handles "Mon DD HH:MM:SS hostname app: message" (no PID, e.g., kernel)
 SYSLOG_PATTERN = re.compile(
     r"^(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+"  # timestamp (BSD)
-    r"(\S+)\s+"                                   # hostname
-    r"(\S+?)(?:\[([^\]]*)\])?:\s+"                # app_name[pid]: or app_name:
-    r"(.*)$"                                       # message
+    r"(\S+)\s+"  # hostname
+    r"(\S+?)(?:\[([^\]]*)\])?:\s+"  # app_name[pid]: or app_name:
+    r"(.*)$"  # message
 )
 
 # ISO 8601 variant: "2026-03-15T10:15:00Z hostname app[pid]: message"
 SYSLOG_ISO_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*)\s+"  # ISO timestamp
-    r"(\S+)\s+"                                          # hostname
-    r"(\S+?)(?:\[([^\]]*)\])?:\s+"                       # app_name[pid]: or app_name:
-    r"(.*)$"                                              # message
+    r"(\S+)\s+"  # hostname
+    r"(\S+?)(?:\[([^\]]*)\])?:\s+"  # app_name[pid]: or app_name:
+    r"(.*)$"  # message
 )
 
 

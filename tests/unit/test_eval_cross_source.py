@@ -1,15 +1,13 @@
 """Tests for Dimension 2: Cross-Source Coherence scoring."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 from evidenceforge.evaluation.dimensions.cross_source import CrossSourceScorer
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.visibility import VisibilityModel
 
-T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
 
 def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
@@ -18,28 +16,42 @@ def _record(fmt: str, fields: dict, ts: datetime | None = None) -> ParsedRecord:
 
 def _make_scenario(systems=None, storyline=None):
     from evidenceforge.models.scenario import (
-        BaselineActivity, Environment, OutputSpec,
-        StorylineEvent, System, TimeWindow, User,
+        BaselineActivity,
+        Environment,
+        OutputSpec,
+        StorylineEvent,
+        System,
+        TimeWindow,
+        User,
     )
+
     default_systems = systems or [
         System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
         System(hostname="SRV-01", ip="10.0.20.10", os="Linux Ubuntu", type="server"),
     ]
     from evidenceforge.models.scenario import Scenario
+
     return Scenario(
         name="test",
         description="Test",
         environment=Environment(
             description="Test",
             users=[
-                User(username="jsmith", full_name="J", email="j@x.com",
-                     persona="", primary_system="WS-01"),
+                User(
+                    username="jsmith",
+                    full_name="J",
+                    email="j@x.com",
+                    persona="",
+                    primary_system="WS-01",
+                ),
             ],
             systems=default_systems,
         ),
         time_window=TimeWindow(start=T0, duration="8h"),
         baseline_activity=BaselineActivity(
-            description="Normal", intensity="low", variation="low",
+            description="Normal",
+            intensity="low",
+            variation="low",
         ),
         storyline=[StorylineEvent(**e) for e in (storyline or [])],
         output=OutputSpec(
@@ -160,7 +172,7 @@ class TestFieldAgreement:
             ],
         }
         # Put in separate buckets to force disagreement
-        records2 = {
+        {
             "windows_event_security": [
                 _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
             ],
@@ -182,7 +194,9 @@ class TestBaselineAggregate:
         # WS-01 has ~similar counts in windows_event_security and ecar
         records = {
             "windows_event_security": [
-                _record("windows_event_security", {"Computer": "WS-01"}, ts=T0 + timedelta(minutes=i))
+                _record(
+                    "windows_event_security", {"Computer": "WS-01"}, ts=T0 + timedelta(minutes=i)
+                )
                 for i in range(50)
             ],
             "ecar": [
@@ -202,13 +216,23 @@ class TestEndToEnd:
         scenario = _make_scenario()
         records = {
             "windows_event_security": [
-                _record("windows_event_security", {
-                    "Computer": "WS-01", "EventID": 4624, "TargetUserName": "jsmith",
-                }, ts=T0 + timedelta(minutes=i * 10))
+                _record(
+                    "windows_event_security",
+                    {
+                        "Computer": "WS-01",
+                        "EventID": 4624,
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=T0 + timedelta(minutes=i * 10),
+                )
                 for i in range(5)
             ],
             "syslog": [
-                _record("syslog", {"hostname": "SRV-01", "message": "test"}, ts=T0 + timedelta(minutes=i * 10))
+                _record(
+                    "syslog",
+                    {"hostname": "SRV-01", "message": "test"},
+                    ts=T0 + timedelta(minutes=i * 10),
+                )
                 for i in range(5)
             ],
         }

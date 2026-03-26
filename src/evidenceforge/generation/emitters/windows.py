@@ -34,29 +34,47 @@ class WindowsEventEmitter(LogEmitter):
     """
 
     _supported_types: set[str] = {
-        "logon", "logoff", "failed_logon",
-        "process_create", "process_terminate", "system_process_create",
-        "machine_logon", "kerberos_tgt", "kerberos_tgt_renewal", "kerberos_service",
+        "logon",
+        "logoff",
+        "failed_logon",
+        "process_create",
+        "process_terminate",
+        "system_process_create",
+        "machine_logon",
+        "kerberos_tgt",
+        "kerberos_tgt_renewal",
+        "kerberos_service",
         "kerberos_preauth_failed",
-        "ntlm_validation", "explicit_credentials", "wfp_connection",
-        "log_cleared", "service_installed",
-        "scheduled_task_created", "scheduled_task_deleted",
-        "scheduled_task_enabled", "scheduled_task_disabled",
-        "group_member_added_global", "group_member_removed_global",
-        "group_member_added_local", "group_member_removed_local",
-        "group_member_added_universal", "group_member_removed_universal",
-        "account_created", "account_deleted", "account_changed",
-        "password_change", "password_reset",
+        "ntlm_validation",
+        "explicit_credentials",
+        "wfp_connection",
+        "log_cleared",
+        "service_installed",
+        "scheduled_task_created",
+        "scheduled_task_deleted",
+        "scheduled_task_enabled",
+        "scheduled_task_disabled",
+        "group_member_added_global",
+        "group_member_removed_global",
+        "group_member_added_local",
+        "group_member_removed_local",
+        "group_member_added_universal",
+        "group_member_removed_universal",
+        "account_created",
+        "account_deleted",
+        "account_changed",
+        "password_change",
+        "password_reset",
     }
 
     @staticmethod
     def _ipv6_mapped(ip: str | None) -> str:
         """Format IPv4 as ::ffff:-mapped for Windows event consistency."""
         if not ip:
-            return '-'
-        if ':' in ip:
+            return "-"
+        if ":" in ip:
             return ip  # Already IPv6
-        return f'::ffff:{ip}'
+        return f"::ffff:{ip}"
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Windows emitter handles events on Windows hosts."""
@@ -114,69 +132,71 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4624,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'TargetUserSid': auth.user_sid,
-            'TargetUserName': auth.username,
-            'TargetDomainName': host.netbios_domain,
-            'TargetLogonId': auth.logon_id,
-            'LogonType': auth.logon_type,
-            'WorkstationName': host.hostname,
-            'ProcessId': f'0x{auth.reporting_pid:x}' if auth.reporting_pid else '0x2e0',
-            'ProcessName': r'C:\Windows\System32\lsass.exe',
-            'IpAddress': self._ipv6_mapped(auth.source_ip),
-            'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
-            'LogonProcessName': auth.logon_process,
-            'AuthenticationPackageName': auth.auth_package,
-            'LmPackageName': auth.lm_package,
-            'KeyLength': 128 if auth.lm_package == 'NTLM V2' else 0,
-            'LogonGuid': auth.logon_guid,
+            "EventID": 4624,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": host.netbios_domain,
+            "TargetLogonId": auth.logon_id,
+            "LogonType": auth.logon_type,
+            "WorkstationName": host.hostname,
+            "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x2e0",
+            "ProcessName": r"C:\Windows\System32\lsass.exe",
+            "IpAddress": self._ipv6_mapped(auth.source_ip),
+            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "LogonProcessName": auth.logon_process,
+            "AuthenticationPackageName": auth.auth_package,
+            "LmPackageName": auth.lm_package,
+            "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
+            "LogonGuid": auth.logon_guid,
         }
         self.emit_event(event_data)
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
             # Admin/service/machine accounts get full privilege set
-            is_admin = (auth.username.endswith('$')
-                        or auth.username in ('SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE')
-                        or auth.logon_type == 5)
+            is_admin = (
+                auth.username.endswith("$")
+                or auth.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")
+                or auth.logon_type == 5
+            )
             if is_admin:
                 privs = (
-                    'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
-                    'SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
-                    'SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t'
-                    'SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
-                    'SeDelegateSessionUserImpersonatePrivilege'
+                    "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
+                    "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
+                    "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
+                    "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
+                    "SeDelegateSessionUserImpersonatePrivilege"
                 )
             else:
                 # Regular user with occasional elevation (e.g., UAC prompt)
                 privs = (
-                    'SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t'
-                    'SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t'
-                    'SeTimeZonePrivilege'
+                    "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
+                    "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
+                    "SeTimeZonePrivilege"
                 )
             priv_data = {
-                'EventID': 4672,
-                'TimeCreated': event.timestamp,
-                'Computer': host.fqdn,
-                'Channel': 'Security',
-                'Level': 0,
-                'ExecutionProcessID': auth.reporting_pid or 600,
-                'ExecutionThreadID': rng.randint(100, 500),
-                'SubjectUserSid': auth.user_sid,
-                'SubjectUserName': auth.username,
-                'SubjectDomainName': host.netbios_domain,
-                'SubjectLogonId': auth.logon_id,
-                'PrivilegeList': privs,
+                "EventID": 4672,
+                "TimeCreated": event.timestamp,
+                "Computer": host.fqdn,
+                "Channel": "Security",
+                "Level": 0,
+                "ExecutionProcessID": auth.reporting_pid or 600,
+                "ExecutionThreadID": rng.randint(100, 500),
+                "SubjectUserSid": auth.user_sid,
+                "SubjectUserName": auth.username,
+                "SubjectDomainName": host.netbios_domain,
+                "SubjectLogonId": auth.logon_id,
+                "PrivilegeList": privs,
             }
             self.emit_event(priv_data)
 
@@ -187,18 +207,18 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4634,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserSid': auth.user_sid,
-            'TargetUserName': auth.username,
-            'TargetDomainName': host.netbios_domain,
-            'TargetLogonId': auth.logon_id,
-            'LogonType': auth.logon_type,
+            "EventID": 4634,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": host.netbios_domain,
+            "TargetLogonId": auth.logon_id,
+            "LogonType": auth.logon_type,
         }
         self.emit_event(event_data)
 
@@ -209,27 +229,27 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4625,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'Keywords': '0x8010000000000000',  # Audit Failure
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'TargetUserSid': auth.user_sid,
-            'TargetUserName': auth.username,
-            'TargetDomainName': host.netbios_domain,
-            'Status': auth.failure_status,
-            'SubStatus': auth.failure_substatus,
-            'FailureReason': auth.failure_reason,
-            'LogonType': auth.logon_type,
-            'IpAddress': self._ipv6_mapped(auth.source_ip),
-            'IpPort': rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "EventID": 4625,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "Keywords": "0x8010000000000000",  # Audit Failure
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": host.netbios_domain,
+            "Status": auth.failure_status,
+            "SubStatus": auth.failure_substatus,
+            "FailureReason": auth.failure_reason,
+            "LogonType": auth.logon_type,
+            "IpAddress": self._ipv6_mapped(auth.source_ip),
+            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
         }
         self.emit_event(event_data)
 
@@ -241,28 +261,28 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4688,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.user_sid,
-            'SubjectUserName': auth.username,
-            'SubjectDomainName': host.netbios_domain,
-            'SubjectLogonId': proc.logon_id,
-            'NewProcessId': f'0x{proc.pid:x}',
-            'NewProcessName': proc.image,
-            'TokenElevationType': proc.token_elevation or '%%1938',
-            'ProcessId': f'0x{proc.parent_pid:x}',
-            'CommandLine': proc.command_line,
-            'TargetUserSid': auth.user_sid,
-            'TargetUserName': auth.username,
-            'TargetDomainName': host.netbios_domain,
-            'TargetLogonId': proc.logon_id,
-            'ParentProcessName': proc.parent_image,
-            'MandatoryLabel': proc.mandatory_label or 'S-1-16-8192',
+            "EventID": 4688,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.user_sid,
+            "SubjectUserName": auth.username,
+            "SubjectDomainName": host.netbios_domain,
+            "SubjectLogonId": proc.logon_id,
+            "NewProcessId": f"0x{proc.pid:x}",
+            "NewProcessName": proc.image,
+            "TokenElevationType": proc.token_elevation or "%%1938",
+            "ProcessId": f"0x{proc.parent_pid:x}",
+            "CommandLine": proc.command_line,
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": host.netbios_domain,
+            "TargetLogonId": proc.logon_id,
+            "ParentProcessName": proc.parent_image,
+            "MandatoryLabel": proc.mandatory_label or "S-1-16-8192",
         }
         self.emit_event(event_data)
 
@@ -274,20 +294,20 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4689,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'SubjectUserSid': auth.user_sid,
-            'SubjectUserName': auth.username,
-            'SubjectDomainName': host.netbios_domain,
-            'SubjectLogonId': proc.logon_id,
-            'Status': '0x0',
-            'ProcessId': f'0x{proc.pid:x}',
-            'ProcessName': proc.image,
+            "EventID": 4689,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "SubjectUserSid": auth.user_sid,
+            "SubjectUserName": auth.username,
+            "SubjectDomainName": host.netbios_domain,
+            "SubjectLogonId": proc.logon_id,
+            "Status": "0x0",
+            "ProcessId": f"0x{proc.pid:x}",
+            "ProcessName": proc.image,
         }
         self.emit_event(event_data)
 
@@ -299,28 +319,28 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4688,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'NewProcessId': f'0x{proc.pid:x}',
-            'NewProcessName': proc.image,
-            'TokenElevationType': proc.token_elevation or '%%1936',
-            'ProcessId': f'0x{proc.parent_pid:x}',
-            'CommandLine': proc.command_line,
-            'TargetUserSid': auth.user_sid,
-            'TargetUserName': auth.username,
-            'TargetDomainName': auth.subject_domain,
-            'TargetLogonId': proc.logon_id,
-            'ParentProcessName': proc.parent_image,
-            'MandatoryLabel': proc.mandatory_label or 'S-1-16-16384',
+            "EventID": 4688,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "NewProcessId": f"0x{proc.pid:x}",
+            "NewProcessName": proc.image,
+            "TokenElevationType": proc.token_elevation or "%%1936",
+            "ProcessId": f"0x{proc.parent_pid:x}",
+            "CommandLine": proc.command_line,
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": auth.subject_domain,
+            "TargetLogonId": proc.logon_id,
+            "ParentProcessName": proc.parent_image,
+            "MandatoryLabel": proc.mandatory_label or "S-1-16-16384",
         }
         self.emit_event(event_data)
 
@@ -330,66 +350,66 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = event.host
         # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
-        workstation = auth.username.rstrip('$') if auth.username.endswith('$') else auth.username
+        workstation = auth.username.rstrip("$") if auth.username.endswith("$") else auth.username
 
         event_data = {
-            'EventID': 4624,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'TargetUserSid': auth.user_sid,
-            'TargetUserName': auth.username,
-            'TargetDomainName': host.netbios_domain,
-            'TargetLogonId': auth.logon_id,
-            'LogonType': 3,
-            'LogonProcessName': auth.logon_process,
-            'AuthenticationPackageName': auth.auth_package,
-            'WorkstationName': workstation,
-            'LogonGuid': auth.logon_guid,
-            'TransmittedServices': '-',
-            'LmPackageName': auth.lm_package,
-            'KeyLength': 128 if auth.lm_package == 'NTLM V2' else 0,
-            'ProcessId': '0x0',
-            'ProcessName': '-',
-            'IpAddress': self._ipv6_mapped(auth.source_ip),
-            'IpPort': str(rng.randint(49152, 65535)),
-            'ImpersonationLevel': '%%1833',
-            'RestrictedAdminMode': '-',
-            'TargetOutboundUserName': '-',
-            'TargetOutboundDomainName': '-',
-            'VirtualAccount': '%%1843',
-            'TargetLinkedLogonId': '0x0',
-            'ElevatedToken': '%%1842',
+            "EventID": 4624,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": host.netbios_domain,
+            "TargetLogonId": auth.logon_id,
+            "LogonType": 3,
+            "LogonProcessName": auth.logon_process,
+            "AuthenticationPackageName": auth.auth_package,
+            "WorkstationName": workstation,
+            "LogonGuid": auth.logon_guid,
+            "TransmittedServices": "-",
+            "LmPackageName": auth.lm_package,
+            "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
+            "ProcessId": "0x0",
+            "ProcessName": "-",
+            "IpAddress": self._ipv6_mapped(auth.source_ip),
+            "IpPort": str(rng.randint(49152, 65535)),
+            "ImpersonationLevel": "%%1833",
+            "RestrictedAdminMode": "-",
+            "TargetOutboundUserName": "-",
+            "TargetOutboundDomainName": "-",
+            "VirtualAccount": "%%1843",
+            "TargetLinkedLogonId": "0x0",
+            "ElevatedToken": "%%1842",
         }
         self.emit_event(event_data)
 
         # 4672 special privileges for machine accounts
         if auth.elevated:
             priv_data = {
-                'EventID': 4672,
-                'TimeCreated': event.timestamp,
-                'Computer': host.fqdn,
-                'Channel': 'Security',
-                'Level': 0,
-                'ExecutionProcessID': auth.reporting_pid or 600,
-                'ExecutionThreadID': rng.randint(100, 500),
-                'SubjectUserSid': auth.user_sid,
-                'SubjectUserName': auth.username,
-                'SubjectDomainName': host.netbios_domain,
-                'SubjectLogonId': auth.logon_id,
-                'PrivilegeList': (
-                    'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
-                    'SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t'
-                    'SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t'
-                    'SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t'
-                    'SeDelegateSessionUserImpersonatePrivilege'
+                "EventID": 4672,
+                "TimeCreated": event.timestamp,
+                "Computer": host.fqdn,
+                "Channel": "Security",
+                "Level": 0,
+                "ExecutionProcessID": auth.reporting_pid or 600,
+                "ExecutionThreadID": rng.randint(100, 500),
+                "SubjectUserSid": auth.user_sid,
+                "SubjectUserName": auth.username,
+                "SubjectDomainName": host.netbios_domain,
+                "SubjectLogonId": auth.logon_id,
+                "PrivilegeList": (
+                    "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
+                    "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
+                    "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
+                    "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
+                    "SeDelegateSessionUserImpersonatePrivilege"
                 ),
             }
             self.emit_event(priv_data)
@@ -399,28 +419,28 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         krb = event.kerberos
         host = event.host
-        is_failure = krb.ticket_status != '0x0'
+        is_failure = krb.ticket_status != "0x0"
 
         event_data = {
-            'EventID': 4768,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'Keywords': '0x8010000000000000' if is_failure else '0x8020000000000000',
-            'ExecutionProcessID': krb.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': krb.target_username,
-            'TargetDomainName': krb.target_domain,
-            'TargetSid': krb.target_sid,
-            'ServiceName': krb.service_name,
-            'ServiceSid': krb.service_sid,
-            'TicketOptions': krb.ticket_options,
-            'Status': krb.ticket_status,
-            'TicketEncryptionType': krb.encryption_type,
-            'PreAuthType': krb.pre_auth_type,
-            'IpAddress': krb.source_ip,
-            'IpPort': krb.source_port,
+            "EventID": 4768,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "Keywords": "0x8010000000000000" if is_failure else "0x8020000000000000",
+            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserName": krb.target_username,
+            "TargetDomainName": krb.target_domain,
+            "TargetSid": krb.target_sid,
+            "ServiceName": krb.service_name,
+            "ServiceSid": krb.service_sid,
+            "TicketOptions": krb.ticket_options,
+            "Status": krb.ticket_status,
+            "TicketEncryptionType": krb.encryption_type,
+            "PreAuthType": krb.pre_auth_type,
+            "IpAddress": krb.source_ip,
+            "IpPort": krb.source_port,
         }
         self.emit_event(event_data)
 
@@ -429,26 +449,28 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         krb = event.kerberos
         host = event.host
-        is_failure = krb.ticket_status != '0x0'
+        is_failure = krb.ticket_status != "0x0"
 
         event_data = {
-            'EventID': 4769,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'Keywords': '0x8010000000000000' if is_failure else '0x8020000000000000',
-            'ExecutionProcessID': krb.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': krb.target_username if '@' in krb.target_username else f"{krb.target_username}@{krb.target_domain.upper()}",
-            'TargetDomainName': krb.target_domain,
-            'ServiceName': krb.service_name,
-            'ServiceSid': krb.service_sid,
-            'TicketOptions': krb.ticket_options,
-            'TicketEncryptionType': krb.encryption_type,
-            'IpAddress': krb.source_ip,
-            'IpPort': krb.source_port,
-            'Status': krb.ticket_status,
+            "EventID": 4769,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "Keywords": "0x8010000000000000" if is_failure else "0x8020000000000000",
+            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserName": krb.target_username
+            if "@" in krb.target_username
+            else f"{krb.target_username}@{krb.target_domain.upper()}",
+            "TargetDomainName": krb.target_domain,
+            "ServiceName": krb.service_name,
+            "ServiceSid": krb.service_sid,
+            "TicketOptions": krb.ticket_options,
+            "TicketEncryptionType": krb.encryption_type,
+            "IpAddress": krb.source_ip,
+            "IpPort": krb.source_port,
+            "Status": krb.ticket_status,
         }
         self.emit_event(event_data)
 
@@ -459,21 +481,21 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4770,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': krb.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': krb.target_username,
-            'TargetDomainName': krb.target_domain,
-            'ServiceName': krb.service_name,
-            'ServiceSid': krb.service_sid,
-            'TicketOptions': krb.ticket_options,
-            'TicketEncryptionType': krb.encryption_type,
-            'IpAddress': krb.source_ip,
-            'IpPort': krb.source_port,
+            "EventID": 4770,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserName": krb.target_username,
+            "TargetDomainName": krb.target_domain,
+            "ServiceName": krb.service_name,
+            "ServiceSid": krb.service_sid,
+            "TicketOptions": krb.ticket_options,
+            "TicketEncryptionType": krb.encryption_type,
+            "IpAddress": krb.source_ip,
+            "IpPort": krb.source_port,
         }
         self.emit_event(event_data)
 
@@ -484,17 +506,17 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4776,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'PackageName': 'MICROSOFT_AUTHENTICATION_PACKAGE_V1_0',
-            'TargetUserName': auth.username,
-            'Workstation': auth.source_ip,  # workstation stored in source_ip
-            'Status': '0x0',
+            "EventID": 4776,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "PackageName": "MICROSOFT_AUTHENTICATION_PACKAGE_V1_0",
+            "TargetUserName": auth.username,
+            "Workstation": auth.source_ip,  # workstation stored in source_ip
+            "Status": "0x0",
         }
         self.emit_event(event_data)
 
@@ -505,27 +527,27 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4648,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'LogonGuid': auth.logon_guid or '{00000000-0000-0000-0000-000000000000}',
-            'TargetUserName': auth.username,
-            'TargetDomainName': host.netbios_domain,
-            'TargetLogonGuid': '{00000000-0000-0000-0000-000000000000}',
-            'TargetServerName': auth.target_server or 'localhost',
-            'TargetInfo': auth.target_server or 'localhost',
-            'ProcessId': f'0x{auth.reporting_pid:x}' if auth.reporting_pid else '0x0',
-            'ProcessName': auth.process_name or r'C:\Windows\System32\svchost.exe',
-            'IpAddress': auth.source_ip or '-',
-            'IpPort': auth.source_port or 0,
+            "EventID": 4648,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "LogonGuid": auth.logon_guid or "{00000000-0000-0000-0000-000000000000}",
+            "TargetUserName": auth.username,
+            "TargetDomainName": host.netbios_domain,
+            "TargetLogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            "TargetServerName": auth.target_server or "localhost",
+            "TargetInfo": auth.target_server or "localhost",
+            "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x0",
+            "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
+            "IpAddress": auth.source_ip or "-",
+            "IpPort": auth.source_port or 0,
         }
         self.emit_event(event_data)
 
@@ -538,36 +560,36 @@ class WindowsEventEmitter(LogEmitter):
         is_outbound = net.src_ip == host.ip
 
         event_data = {
-            'EventID': 5156,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': 4,
-            'ExecutionThreadID': rng.randint(50, 200),
-            'ProcessID': net.initiating_pid if net.initiating_pid > 0 else 4,
-            'Application': self._to_device_path(
-                proc.image if proc else r'C:\Windows\System32\svchost.exe'
+            "EventID": 5156,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": rng.randint(50, 200),
+            "ProcessID": net.initiating_pid if net.initiating_pid > 0 else 4,
+            "Application": self._to_device_path(
+                proc.image if proc else r"C:\Windows\System32\svchost.exe"
             ),
-            'Direction': '%%14593' if is_outbound else '%%14592',
-            'SourceAddress': net.src_ip,
-            'SourcePort': net.src_port,
-            'DestAddress': net.dst_ip,
-            'DestPort': net.dst_port,
-            'Protocol': net.ip_proto,
-            'FilterRTID': rng.randint(0, 70000),
-            'LayerName': '%%14611',
-            'LayerRTID': 48,
-            'RemoteUserID': 'S-1-0-0',
-            'RemoteMachineID': 'S-1-0-0',
+            "Direction": "%%14593" if is_outbound else "%%14592",
+            "SourceAddress": net.src_ip,
+            "SourcePort": net.src_port,
+            "DestAddress": net.dst_ip,
+            "DestPort": net.dst_port,
+            "Protocol": net.ip_proto,
+            "FilterRTID": rng.randint(0, 70000),
+            "LayerName": "%%14611",
+            "LayerRTID": 48,
+            "RemoteUserID": "S-1-0-0",
+            "RemoteMachineID": "S-1-0-0",
         }
         self.emit_event(event_data)
 
     @staticmethod
     def _to_device_path(path: str) -> str:
         """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
-        if path and len(path) > 2 and path[1] == ':':
-            return f'\\device\\harddiskvolume1\\{path[3:]}'.lower()
+        if path and len(path) > 2 and path[1] == ":":
+            return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
         return path.lower()
 
     # --- Phase 1: Kerberos Pre-Auth Failed (4771) ---
@@ -579,22 +601,22 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 4771,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'Keywords': '0x8010000000000000',  # Always Audit Failure
-            'ExecutionProcessID': krb.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 500),
-            'TargetUserName': krb.target_username,
-            'TargetSid': krb.target_sid,
-            'ServiceName': krb.service_name,
-            'TicketOptions': krb.ticket_options,
-            'Status': krb.ticket_status,
-            'PreAuthType': krb.pre_auth_type,
-            'IpAddress': krb.source_ip,
-            'IpPort': krb.source_port,
+            "EventID": 4771,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "Keywords": "0x8010000000000000",  # Always Audit Failure
+            "ExecutionProcessID": krb.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserName": krb.target_username,
+            "TargetSid": krb.target_sid,
+            "ServiceName": krb.service_name,
+            "TicketOptions": krb.ticket_options,
+            "Status": krb.ticket_status,
+            "PreAuthType": krb.pre_auth_type,
+            "IpAddress": krb.source_ip,
+            "IpPort": krb.source_port,
         }
         self.emit_event(event_data)
 
@@ -607,18 +629,18 @@ class WindowsEventEmitter(LogEmitter):
         host = event.host
 
         event_data = {
-            'EventID': 1102,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 4,
-            'Keywords': '0x4020000000000000',
-            'ExecutionProcessID': rng.randint(600, 1400),
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
+            "EventID": 1102,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 4,
+            "Keywords": "0x4020000000000000",
+            "ExecutionProcessID": rng.randint(600, 1400),
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
         }
         self.emit_event(event_data)
 
@@ -632,22 +654,22 @@ class WindowsEventEmitter(LogEmitter):
         svc = event.service
 
         event_data = {
-            'EventID': 4697,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'ServiceName': svc.service_name,
-            'ServiceFileName': svc.service_file_name,
-            'ServiceType': svc.service_type,
-            'ServiceStartType': svc.service_start_type,
-            'ServiceAccount': svc.service_account,
+            "EventID": 4697,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "ServiceName": svc.service_name,
+            "ServiceFileName": svc.service_file_name,
+            "ServiceType": svc.service_type,
+            "ServiceStartType": svc.service_start_type,
+            "ServiceAccount": svc.service_account,
         }
         self.emit_event(event_data)
 
@@ -668,19 +690,19 @@ class WindowsEventEmitter(LogEmitter):
         task = event.scheduled_task
 
         event_data = {
-            'EventID': self._SCHEDULED_TASK_EVENT_IDS[event.event_type],
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'TaskName': task.task_name,
-            'TaskContent': task.task_content,
+            "EventID": self._SCHEDULED_TASK_EVENT_IDS[event.event_type],
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "TaskName": task.task_name,
+            "TaskContent": task.task_content,
         }
         self.emit_event(event_data)
 
@@ -703,23 +725,23 @@ class WindowsEventEmitter(LogEmitter):
         grp = event.group_membership
 
         event_data = {
-            'EventID': self._GROUP_MEMBERSHIP_EVENT_IDS[event.event_type],
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'MemberName': grp.member_name,
-            'MemberSid': grp.member_sid,
-            'TargetUserName': grp.group_name,
-            'TargetDomainName': grp.group_domain,
-            'TargetSid': grp.group_sid,
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'PrivilegeList': '-',
+            "EventID": self._GROUP_MEMBERSHIP_EVENT_IDS[event.event_type],
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "MemberName": grp.member_name,
+            "MemberSid": grp.member_sid,
+            "TargetUserName": grp.group_name,
+            "TargetDomainName": grp.group_domain,
+            "TargetSid": grp.group_sid,
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "PrivilegeList": "-",
         }
         self.emit_event(event_data)
 
@@ -741,26 +763,26 @@ class WindowsEventEmitter(LogEmitter):
         acct = event.account_management
 
         event_data = {
-            'EventID': event_id,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'TargetUserName': acct.target_username,
-            'TargetDomainName': acct.target_domain or host.netbios_domain,
-            'TargetSid': acct.target_sid,
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
-            'SamAccountName': acct.sam_account_name or acct.target_username,
-            'OldUacValue': acct.old_uac_value,
-            'NewUacValue': acct.new_uac_value,
-            'UserAccountControl': acct.user_account_control,
-            'PasswordLastSet': acct.password_last_set,
-            'PrimaryGroupId': acct.primary_group_id,
+            "EventID": event_id,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "TargetUserName": acct.target_username,
+            "TargetDomainName": acct.target_domain or host.netbios_domain,
+            "TargetSid": acct.target_sid,
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
+            "SamAccountName": acct.sam_account_name or acct.target_username,
+            "OldUacValue": acct.old_uac_value,
+            "NewUacValue": acct.new_uac_value,
+            "UserAccountControl": acct.user_account_control,
+            "PasswordLastSet": acct.password_last_set,
+            "PrimaryGroupId": acct.primary_group_id,
         }
         self.emit_event(event_data)
 
@@ -776,8 +798,9 @@ class WindowsEventEmitter(LogEmitter):
         """Render Windows 4723 (password change attempt)."""
         self._render_account_simple(event, 4723, include_privs=True)
 
-    def _render_account_simple(self, event: SecurityEvent, event_id: int,
-                               include_privs: bool) -> None:
+    def _render_account_simple(
+        self, event: SecurityEvent, event_id: int, include_privs: bool
+    ) -> None:
         """Render 4723/4724/4726 with minimal account fields."""
         rng = random.Random()
         auth = event.auth
@@ -785,23 +808,23 @@ class WindowsEventEmitter(LogEmitter):
         acct = event.account_management
 
         event_data = {
-            'EventID': event_id,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Security',
-            'Level': 0,
-            'ExecutionProcessID': auth.reporting_pid or 600,
-            'ExecutionThreadID': rng.randint(100, 9999),
-            'TargetUserName': acct.target_username,
-            'TargetDomainName': acct.target_domain or host.netbios_domain,
-            'TargetSid': acct.target_sid,
-            'SubjectUserSid': auth.subject_sid,
-            'SubjectUserName': auth.subject_username,
-            'SubjectDomainName': auth.subject_domain,
-            'SubjectLogonId': auth.subject_logon_id,
+            "EventID": event_id,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 9999),
+            "TargetUserName": acct.target_username,
+            "TargetDomainName": acct.target_domain or host.netbios_domain,
+            "TargetSid": acct.target_sid,
+            "SubjectUserSid": auth.subject_sid,
+            "SubjectUserName": auth.subject_username,
+            "SubjectDomainName": auth.subject_domain,
+            "SubjectLogonId": auth.subject_logon_id,
         }
         if include_privs:
-            event_data['PrivilegeList'] = '-'
+            event_data["PrivilegeList"] = "-"
         self.emit_event(event_data)
 
     def __init__(
@@ -863,6 +886,7 @@ class WindowsEventEmitter(LogEmitter):
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Windows Event dict to XML format."""
         from xml.sax.saxutils import escape as xml_escape
+
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
@@ -911,13 +935,17 @@ class WindowsEventEmitter(LogEmitter):
             if counter_key not in self._record_id_counters:
                 rng = random.Random(f"erid_{counter_key}")
                 key_lower = counter_key.lower()
-                if 'dc' in key_lower:
+                if "dc" in key_lower:
                     self._record_id_counters[counter_key] = rng.randint(5_000_000, 15_000_000)
-                elif any(x in key_lower for x in ('srv', 'server', 'web', 'file', 'db', 'mail', 'exch')):
+                elif any(
+                    x in key_lower for x in ("srv", "server", "web", "file", "db", "mail", "exch")
+                ):
                     self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
                 else:
                     self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
-            gap_rng = random.Random(f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}")
+            gap_rng = random.Random(
+                f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}"
+            )
             if gap_rng.random() < 0.15:
                 self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
             elif gap_rng.random() < 0.03:

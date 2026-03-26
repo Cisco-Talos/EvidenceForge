@@ -22,7 +22,8 @@ from evidenceforge.models import (
     Timezone,
     User,
 )
-from evidenceforge.models.exceptions import EvidenceForgeError, ValidationError as VError
+from evidenceforge.models.exceptions import EvidenceForgeError
+from evidenceforge.models.exceptions import ValidationError as VError
 
 
 class TestExceptions:
@@ -46,9 +47,7 @@ class TestTimeWindow:
 
     def test_time_window_with_end(self):
         """Test time window with explicit end time."""
-        tw = TimeWindow(
-            start=datetime(2024, 1, 15, 10, 0, 0), end=datetime(2024, 1, 15, 18, 0, 0)
-        )
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), end=datetime(2024, 1, 15, 18, 0, 0))
         assert tw.start == datetime(2024, 1, 15, 10, 0, 0)
         assert tw.end == datetime(2024, 1, 15, 18, 0, 0)
         assert tw.duration is None
@@ -144,25 +143,19 @@ class TestSystem:
 
     def test_system_defaults(self):
         """Test system default values."""
-        system = System(
-            hostname="SRV-01", ip="192.168.1.1", os="Linux", type="server"
-        )
+        system = System(hostname="SRV-01", ip="192.168.1.1", os="Linux", type="server")
         assert system.assigned_user is None
         assert system.services == []
 
     def test_system_valid_ipv6(self):
         """Test system with IPv6 address."""
-        system = System(
-            hostname="SRV-01", ip="2001:db8::1", os="Linux", type="server"
-        )
+        system = System(hostname="SRV-01", ip="2001:db8::1", os="Linux", type="server")
         assert system.ip == "2001:db8::1"
 
     def test_system_invalid_ip(self):
         """Test that invalid IPs are rejected."""
         with pytest.raises(ValidationError, match="Invalid IP"):
-            System(
-                hostname="WS-01", ip="999.999.999.999", os="Windows 10", type="workstation"
-            )
+            System(hostname="WS-01", ip="999.999.999.999", os="Windows 10", type="workstation")
 
     def test_system_invalid_type(self):
         """Test that invalid types are rejected."""
@@ -261,9 +254,7 @@ class TestEnvironment:
         """Test valid environment creation."""
         env = Environment(
             description="Test environment",
-            users=[
-                User(username="jdoe", full_name="John Doe", email="jdoe@example.com")
-            ],
+            users=[User(username="jdoe", full_name="John Doe", email="jdoe@example.com")],
             systems=[
                 System(hostname="WS-01", ip="192.168.1.100", os="Windows", type="workstation")
             ],
@@ -277,9 +268,7 @@ class TestEnvironment:
             Environment(
                 description="Test",
                 users=[],
-                systems=[
-                    System(hostname="SRV-01", ip="192.168.1.1", os="Linux", type="server")
-                ],
+                systems=[System(hostname="SRV-01", ip="192.168.1.1", os="Linux", type="server")],
             )
 
     def test_environment_requires_systems(self):
@@ -287,9 +276,7 @@ class TestEnvironment:
         with pytest.raises(ValidationError, match="at least one system"):
             Environment(
                 description="Test",
-                users=[
-                    User(username="jdoe", full_name="John", email="j@example.com")
-                ],
+                users=[User(username="jdoe", full_name="John", email="j@example.com")],
                 systems=[],
             )
 
@@ -311,7 +298,9 @@ class TestBaselineActivity:
         """Test that invalid intensity is rejected."""
         with pytest.raises(ValidationError):
             BaselineActivity(
-                description="Test", intensity="invalid", variation="low"  # type: ignore
+                description="Test",
+                intensity="invalid",
+                variation="low",  # type: ignore
             )
 
 
@@ -336,7 +325,10 @@ class TestStorylineEvent:
         """Test storyline event with events list."""
         event = StorylineEvent(
             id="evt-test-2",
-            time="+2h30m", actor="jdoe", system="WS-01", activity="Access file share",
+            time="+2h30m",
+            actor="jdoe",
+            system="WS-01",
+            activity="Access file share",
             events=[{"type": "process", "process_name": "cmd.exe"}],
         )
         assert len(event.events) == 1
@@ -372,16 +364,12 @@ class TestScenario:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(username="jdoe", full_name="John", email="j@example.com")
-                ],
+                users=[User(username="jdoe", full_name="John", email="j@example.com")],
                 systems=[
                     System(hostname="WS-01", ip="192.168.1.1", os="Windows", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0), duration="8h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h"),
             baseline_activity=BaselineActivity(
                 description="Normal", intensity="medium", variation="low"
             ),
@@ -400,18 +388,12 @@ class TestScenario:
                 description="Test",
                 environment=Environment(
                     description="Test",
-                    users=[
-                        User(
-                            username="jdoe", full_name="John", email="j@example.com"
-                        )
-                    ],
+                    users=[User(username="jdoe", full_name="John", email="j@example.com")],
                     systems=[
                         System(hostname="WS-01", ip="192.168.1.1", os="Windows", type="workstation")
                     ],
                 ),
-                time_window=TimeWindow(
-                    start=datetime(2024, 1, 15, 10, 0, 0), duration="8h"
-                ),
+                time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h"),
                 baseline_activity=BaselineActivity(
                     description="Normal", intensity="medium", variation="low"
                 ),
@@ -496,8 +478,7 @@ class TestStateModels:
             integrity_level="Medium",
         )
         state = GeneratorState(
-            active_sessions={"0x3e7": session},
-            running_processes={("WS-01", 1234): process}
+            active_sessions={"0x3e7": session}, running_processes={("WS-01", 1234): process}
         )
         assert "0x3e7" in state.active_sessions
         assert state.active_sessions["0x3e7"].username == "jdoe"

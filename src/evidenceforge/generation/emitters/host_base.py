@@ -14,7 +14,6 @@ from queue import Empty
 from threading import Lock
 from typing import Any
 
-from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -141,7 +140,7 @@ class HostMultiplexEmitter(LogEmitter):
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         rendered = self._render_event(event_data)
-        host_fqdn = event_data.pop('_host_fqdn', '')
+        host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
 
     def _run(self) -> None:

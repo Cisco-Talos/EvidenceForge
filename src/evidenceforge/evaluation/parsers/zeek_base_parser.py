@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Iterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +42,7 @@ class ZeekNdjsonParser(LogParser):
             if ts is not None:
                 try:
                     epoch = float(ts)
-                    timestamp = datetime.fromtimestamp(epoch, tz=timezone.utc)
+                    timestamp = datetime.fromtimestamp(epoch, tz=UTC)
                 except (ValueError, TypeError, OSError):
                     errors.append(f"Invalid timestamp: {ts}")
 

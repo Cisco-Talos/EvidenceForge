@@ -4,9 +4,7 @@ Phase 2.4: Tests get_system_timezone() and convert_to_output_timezone()
 for correct timezone resolution and conversion.
 """
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from evidenceforge.models.scenario import (
     Environment,
@@ -113,7 +111,7 @@ class TestConvertToOutputTimezone:
     def test_utc_to_eastern(self):
         """UTC time should convert to America/New_York correctly."""
         env = _make_environment(tz_default="America/New_York")
-        utc_time = datetime(2024, 1, 15, 15, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 1, 15, 15, 0, 0, tzinfo=UTC)
         local_time = convert_to_output_timezone(utc_time, "TEST-01", env)
         # January = EST (UTC-5)
         assert local_time.hour == 10
@@ -123,7 +121,7 @@ class TestConvertToOutputTimezone:
     def test_utc_to_london(self):
         """UTC time should convert to Europe/London (same in winter)."""
         env = _make_environment(tz_default="Europe/London")
-        utc_time = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
         local_time = convert_to_output_timezone(utc_time, "TEST-01", env)
         # January = GMT (UTC+0)
         assert local_time.hour == 12
@@ -132,21 +130,21 @@ class TestConvertToOutputTimezone:
         """Should handle DST correctly in summer."""
         env = _make_environment(tz_default="America/New_York")
         # July = EDT (UTC-4)
-        utc_time = datetime(2024, 7, 15, 15, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 7, 15, 15, 0, 0, tzinfo=UTC)
         local_time = convert_to_output_timezone(utc_time, "TEST-01", env)
         assert local_time.hour == 11  # EDT is UTC-4
 
     def test_dst_london_summer(self):
         """Europe/London should be BST (UTC+1) in summer."""
         env = _make_environment(tz_default="Europe/London")
-        utc_time = datetime(2024, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC)
         local_time = convert_to_output_timezone(utc_time, "TEST-01", env)
         assert local_time.hour == 13  # BST is UTC+1
 
     def test_midnight_boundary(self):
         """Converting UTC midnight should handle date boundary correctly."""
         env = _make_environment(tz_default="America/Los_Angeles")
-        utc_time = datetime(2024, 1, 15, 3, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 1, 15, 3, 0, 0, tzinfo=UTC)
         local_time = convert_to_output_timezone(utc_time, "TEST-01", env)
         # PST is UTC-8, so 03:00 UTC = 19:00 Jan 14 PST
         assert local_time.hour == 19
@@ -158,7 +156,7 @@ class TestConvertToOutputTimezone:
             tz_default="UTC",
             tz_systems={"EU-*": "Europe/Berlin"},
         )
-        utc_time = datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
 
         # EU host should use Europe/Berlin (CET = UTC+1 in winter)
         local_time = convert_to_output_timezone(utc_time, "EU-SERVER-01", env)

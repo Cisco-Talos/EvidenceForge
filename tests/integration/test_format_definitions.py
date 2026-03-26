@@ -5,9 +5,6 @@ Tests that format definitions load correctly and validate sample data.
 
 import re
 from collections import Counter
-from datetime import datetime
-
-import pytest
 
 from evidenceforge.formats import load_all_formats, load_format, validate_event
 
@@ -279,7 +276,9 @@ class TestZeekJsonFormat:
         assert self.format.output.format == "json"
         assert self.format.output.file_extension == ".json"
         assert self.format.output.encoding == "utf-8"
-        assert self.format.output.header_template is None or self.format.output.header_template == ""
+        assert (
+            self.format.output.header_template is None or self.format.output.header_template == ""
+        )
         assert "{" in self.format.output.template
         assert "}" in self.format.output.template
 

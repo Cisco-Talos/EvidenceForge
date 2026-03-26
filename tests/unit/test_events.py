@@ -1,19 +1,20 @@
 """Tests for the canonical event model types (SecurityEvent, contexts, RawLogEntry)."""
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
 
 from evidenceforge.events import (
-    SecurityEvent,
-    RawLogEntry,
-    HostContext,
     AuthContext,
-    ProcessContext,
-    NetworkContext,
     DnsContext,
     FileContext,
-    RegistryContext,
+    HostContext,
     IdsContext,
+    NetworkContext,
+    ProcessContext,
+    RawLogEntry,
+    RegistryContext,
+    SecurityEvent,
 )
 
 
@@ -22,7 +23,7 @@ class TestSecurityEvent:
 
     def test_minimal_event(self):
         """SecurityEvent requires only timestamp and event_type."""
-        ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
         event = SecurityEvent(timestamp=ts, event_type="logon")
         assert event.timestamp == ts
         assert event.event_type == "logon"
@@ -30,7 +31,7 @@ class TestSecurityEvent:
     def test_contexts_default_to_none(self):
         """All optional context fields default to None."""
         event = SecurityEvent(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             event_type="logon",
         )
         assert event.host is None
@@ -44,22 +45,31 @@ class TestSecurityEvent:
 
     def test_with_all_contexts(self):
         """SecurityEvent can hold all context types simultaneously."""
-        ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
         event = SecurityEvent(
             timestamp=ts,
             event_type="logon",
             host=HostContext(
-                hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-                os_category="windows", system_type="workstation",
+                hostname="WS-01",
+                ip="10.0.1.50",
+                os="Windows 10",
+                os_category="windows",
+                system_type="workstation",
             ),
             auth=AuthContext(username="alice"),
             process=ProcessContext(
-                pid=1234, parent_pid=4, image="cmd.exe",
-                command_line="cmd.exe /c dir", username="alice",
+                pid=1234,
+                parent_pid=4,
+                image="cmd.exe",
+                command_line="cmd.exe /c dir",
+                username="alice",
             ),
             network=NetworkContext(
-                src_ip="10.0.1.50", src_port=54321,
-                dst_ip="10.0.1.100", dst_port=443, protocol="tcp",
+                src_ip="10.0.1.50",
+                src_port=54321,
+                dst_ip="10.0.1.100",
+                dst_port=443,
+                protocol="tcp",
             ),
             dns=DnsContext(query="example.com"),
             file=FileContext(path="C:\\temp\\test.txt", action="create"),
@@ -78,7 +88,7 @@ class TestSecurityEvent:
     def test_slots_prevents_dynamic_attributes(self):
         """slots=True prevents adding undeclared attributes."""
         event = SecurityEvent(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             event_type="logon",
         )
         with pytest.raises(AttributeError):
@@ -90,16 +100,22 @@ class TestHostContext:
 
     def test_required_fields(self):
         ctx = HostContext(
-            hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-            os_category="windows", system_type="workstation",
+            hostname="WS-01",
+            ip="10.0.1.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
         )
         assert ctx.hostname == "WS-01"
         assert ctx.os_category == "windows"
 
     def test_domain_defaults_to_empty(self):
         ctx = HostContext(
-            hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-            os_category="windows", system_type="workstation",
+            hostname="WS-01",
+            ip="10.0.1.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
         )
         assert ctx.domain == ""
         assert ctx.fqdn == ""
@@ -107,8 +123,11 @@ class TestHostContext:
 
     def test_fqdn_and_netbios_precomputed(self):
         ctx = HostContext(
-            hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-            os_category="windows", system_type="workstation",
+            hostname="WS-01",
+            ip="10.0.1.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
             domain="corp.local",
             fqdn="WS-01.corp.local",
             netbios_domain="CORP",
@@ -118,8 +137,11 @@ class TestHostContext:
 
     def test_slots_prevents_dynamic_attributes(self):
         ctx = HostContext(
-            hostname="WS-01", ip="10.0.1.50", os="Windows 10",
-            os_category="windows", system_type="workstation",
+            hostname="WS-01",
+            ip="10.0.1.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
         )
         with pytest.raises(AttributeError):
             ctx.bogus = "fail"
@@ -153,8 +175,11 @@ class TestProcessContext:
 
     def test_defaults(self):
         ctx = ProcessContext(
-            pid=1234, parent_pid=4, image="cmd.exe",
-            command_line="cmd.exe /c dir", username="alice",
+            pid=1234,
+            parent_pid=4,
+            image="cmd.exe",
+            command_line="cmd.exe /c dir",
+            username="alice",
         )
         assert ctx.integrity_level == "Medium"
         assert ctx.logon_id == ""
@@ -168,8 +193,11 @@ class TestNetworkContext:
 
     def test_defaults(self):
         ctx = NetworkContext(
-            src_ip="10.0.1.50", src_port=54321,
-            dst_ip="10.0.1.100", dst_port=443, protocol="tcp",
+            src_ip="10.0.1.50",
+            src_port=54321,
+            dst_ip="10.0.1.100",
+            dst_port=443,
+            protocol="tcp",
         )
         assert ctx.service == ""
         assert ctx.zeek_uid == ""
@@ -189,7 +217,7 @@ class TestRawLogEntry:
     """Tests for RawLogEntry escape hatch."""
 
     def test_construction(self):
-        ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
         entry = RawLogEntry(
             timestamp=ts,
             target_emitter="syslog",
@@ -201,7 +229,7 @@ class TestRawLogEntry:
 
     def test_slots_prevents_dynamic_attributes(self):
         entry = RawLogEntry(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             target_emitter="syslog",
             data={},
         )
@@ -214,6 +242,7 @@ class TestKerberosContext:
 
     def test_defaults(self):
         from evidenceforge.events.contexts import KerberosContext
+
         ctx = KerberosContext(target_username="alice", target_domain="CORP")
         assert ctx.target_sid == ""
         assert ctx.service_name == ""
@@ -223,12 +252,17 @@ class TestKerberosContext:
 
     def test_tgt_fields(self):
         from evidenceforge.events.contexts import KerberosContext
+
         ctx = KerberosContext(
-            target_username="alice", target_domain="CORP",
+            target_username="alice",
+            target_domain="CORP",
             target_sid="S-1-5-21-123-456-789-1001",
-            service_name="krbtgt", service_sid="S-1-5-21-123-456-789-502",
-            ticket_options="0x40810010", encryption_type="0x12",
-            pre_auth_type=15, source_ip="::ffff:10.0.1.50",
+            service_name="krbtgt",
+            service_sid="S-1-5-21-123-456-789-502",
+            ticket_options="0x40810010",
+            encryption_type="0x12",
+            pre_auth_type=15,
+            source_ip="::ffff:10.0.1.50",
         )
         assert ctx.service_name == "krbtgt"
         assert ctx.pre_auth_type == 15
@@ -239,11 +273,13 @@ class TestShellContext:
 
     def test_defaults(self):
         from evidenceforge.events.contexts import ShellContext
+
         ctx = ShellContext(command="ls -la")
         assert ctx.exit_code == 0
 
     def test_with_exit_code(self):
         from evidenceforge.events.contexts import ShellContext
+
         ctx = ShellContext(command="false", exit_code=1)
         assert ctx.exit_code == 1
 
@@ -253,8 +289,9 @@ class TestSecurityEventNewContexts:
 
     def test_kerberos_slot(self):
         from evidenceforge.events.contexts import KerberosContext
+
         evt = SecurityEvent(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             event_type="kerberos_tgt",
             kerberos=KerberosContext(target_username="alice", target_domain="CORP"),
         )
@@ -263,8 +300,9 @@ class TestSecurityEventNewContexts:
 
     def test_shell_slot(self):
         from evidenceforge.events.contexts import ShellContext
+
         evt = SecurityEvent(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             event_type="bash_command",
             shell=ShellContext(command="ls"),
         )

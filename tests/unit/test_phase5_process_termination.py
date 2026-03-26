@@ -1,12 +1,13 @@
 """Unit tests for Phase 5.2.3: Process termination events."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock
+
+import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import User, System
+from evidenceforge.models import System, User
 
 
 @pytest.fixture
@@ -17,9 +18,9 @@ def state_manager():
 @pytest.fixture
 def mock_emitters():
     return {
-        'windows_event_security': Mock(),
-        'zeek_conn': Mock(),
-        'ecar': Mock(),
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "ecar": Mock(),
     }
 
 
@@ -40,85 +41,106 @@ def win_system():
 
 @pytest.fixture
 def timestamp():
-    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
 class TestProcessTermination:
     """Test process termination event generation."""
 
-    def test_emits_process_terminate(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_emits_process_terminate(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
         pid = activity_gen.generate_process(
-            test_user, win_system, timestamp, logon_id,
-            'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
+            test_user,
+            win_system,
+            timestamp,
+            logon_id,
+            "C:\\Windows\\System32\\cmd.exe",
+            "cmd.exe /c dir",
         )
-        mock_emitters['windows_event_security'].reset_mock()
+        mock_emitters["windows_event_security"].reset_mock()
 
         activity_gen.generate_process_termination(
-            test_user, win_system, timestamp, pid,
-            'C:\\Windows\\System32\\cmd.exe', logon_id
+            test_user, win_system, timestamp, pid, "C:\\Windows\\System32\\cmd.exe", logon_id
         )
 
-        assert mock_emitters['windows_event_security'].emit.called
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert mock_emitters["windows_event_security"].emit.called
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "process_terminate"
         assert event.process.pid == pid
-        assert event.process.image == 'C:\\Windows\\System32\\cmd.exe'
+        assert event.process.image == "C:\\Windows\\System32\\cmd.exe"
 
-    def test_removes_process_from_state(self, activity_gen, test_user, win_system, timestamp, state_manager):
+    def test_removes_process_from_state(
+        self, activity_gen, test_user, win_system, timestamp, state_manager
+    ):
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
         pid = activity_gen.generate_process(
-            test_user, win_system, timestamp, logon_id,
-            'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
+            test_user,
+            win_system,
+            timestamp,
+            logon_id,
+            "C:\\Windows\\System32\\cmd.exe",
+            "cmd.exe /c dir",
         )
 
         assert state_manager.get_process(win_system.hostname, pid) is not None
         activity_gen.generate_process_termination(
-            test_user, win_system, timestamp, pid,
-            'C:\\Windows\\System32\\cmd.exe', logon_id
+            test_user, win_system, timestamp, pid, "C:\\Windows\\System32\\cmd.exe", logon_id
         )
         assert state_manager.get_process(win_system.hostname, pid) is None
 
-    def test_emits_ecar_terminate(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
+    def test_emits_ecar_terminate(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
         pid = activity_gen.generate_process(
-            test_user, win_system, timestamp, logon_id,
-            'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
+            test_user,
+            win_system,
+            timestamp,
+            logon_id,
+            "C:\\Windows\\System32\\cmd.exe",
+            "cmd.exe /c dir",
         )
-        mock_emitters['ecar'].reset_mock()
+        mock_emitters["ecar"].reset_mock()
 
         activity_gen.generate_process_termination(
-            test_user, win_system, timestamp, pid,
-            'C:\\Windows\\System32\\cmd.exe', logon_id
+            test_user, win_system, timestamp, pid, "C:\\Windows\\System32\\cmd.exe", logon_id
         )
 
         # Find the process_terminate event dispatched via emit()
         terminate_calls = [
-            c for c in mock_emitters['ecar'].emit.call_args_list
-            if c[0][0].event_type == 'process_terminate'
+            c
+            for c in mock_emitters["ecar"].emit.call_args_list
+            if c[0][0].event_type == "process_terminate"
         ]
         assert len(terminate_calls) == 1
         event = terminate_calls[0][0][0]
         assert event.process.pid == pid
 
-    def test_has_subject_sid(self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters):
-        sid_registry = {'alice.smith': 'S-1-5-21-123-456-789-1001'}
+    def test_has_subject_sid(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        sid_registry = {"alice.smith": "S-1-5-21-123-456-789-1001"}
         gen = ActivityGenerator(state_manager, mock_emitters, sid_registry=sid_registry)
         state_manager.set_current_time(timestamp)
         logon_id = gen.generate_logon(test_user, win_system, timestamp)
         pid = gen.generate_process(
-            test_user, win_system, timestamp, logon_id,
-            'C:\\Windows\\System32\\cmd.exe', 'cmd.exe /c dir'
+            test_user,
+            win_system,
+            timestamp,
+            logon_id,
+            "C:\\Windows\\System32\\cmd.exe",
+            "cmd.exe /c dir",
         )
-        mock_emitters['windows_event_security'].reset_mock()
+        mock_emitters["windows_event_security"].reset_mock()
 
         gen.generate_process_termination(
-            test_user, win_system, timestamp, pid,
-            'C:\\Windows\\System32\\cmd.exe', logon_id
+            test_user, win_system, timestamp, pid, "C:\\Windows\\System32\\cmd.exe", logon_id
         )
 
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
-        assert event.auth.user_sid == 'S-1-5-21-123-456-789-1001'
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.user_sid == "S-1-5-21-123-456-789-1001"

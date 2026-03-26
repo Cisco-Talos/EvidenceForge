@@ -11,13 +11,13 @@ from threading import RLock
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.models.exceptions import StateError
-from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.models.state import (
     ActiveSession,
     GeneratorState,
     OpenConnection,
     RunningProcess,
 )
+from evidenceforge.utils.ids import generate_zeek_uid
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class StateManager:
         self._logon_id_rng = random.Random(42)  # Deterministic RNG for LogonID generation
         self._used_logon_ids: set[int] = set()
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
-        self._reserved_logon_ids = {0x3e4, 0x3e5, 0x3e6, 0x3e7}
+        self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._connection_id_counter = 0
@@ -209,31 +209,32 @@ class StateManager:
                 parent_key = (system, parent_pid)
                 if parent_key not in self.state.running_processes:
                     raise StateError(
-                        f"Cannot create process: parent PID {parent_pid} "
-                        f"does not exist on {system}"
+                        f"Cannot create process: parent PID {parent_pid} does not exist on {system}"
                     )
 
             # Allocate PID for this system — OS-aware allocation (Phase 6.0)
             if system not in self._pid_counters:
                 import random as _rng
+
                 # Detect OS from image path: backslash = Windows, forward slash = Linux
-                is_windows = '\\' in image
+                is_windows = "\\" in image
                 if is_windows:
                     # Windows: PIDs are multiples of 4, start in realistic range
                     start = _rng.randint(2000, 6000)
                     start = start - (start % 4)  # Align to multiple of 4
                     self._pid_counters[system] = start
-                    self._pid_os[system] = 'windows'
+                    self._pid_os[system] = "windows"
                 else:
                     # Linux: PIDs increment by 1, start after boot processes
                     self._pid_counters[system] = _rng.randint(500, 2000)
-                    self._pid_os[system] = 'linux'
+                    self._pid_os[system] = "linux"
 
             pid = self._pid_counters[system]
 
             # Increment with OS-aware gaps
             import random as _rng
-            if self._pid_os.get(system) == 'windows':
+
+            if self._pid_os.get(system) == "windows":
                 # Windows: multiples of 4 with irregular gaps
                 self._pid_counters[system] += 4 * _rng.choice([1, 1, 1, 1, 2, 3, 5, 8])
             else:
@@ -369,7 +370,7 @@ class StateManager:
             # Create connection with Zeek UID for cross-log correlation
             connection = OpenConnection(
                 conn_id=conn_id,
-                zeek_uid=generate_zeek_uid('C'),
+                zeek_uid=generate_zeek_uid("C"),
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
@@ -415,9 +416,7 @@ class StateManager:
         with self._lock:
             return self.state.open_connections.get(conn_id)
 
-    def update_connection_bytes(
-        self, conn_id: str, bytes_sent: int, bytes_received: int
-    ) -> bool:
+    def update_connection_bytes(self, conn_id: str, bytes_sent: int, bytes_received: int) -> bool:
         """Update cumulative byte counts for a connection.
 
         Args:
@@ -478,10 +477,7 @@ class StateManager:
         with self._lock:
             existing = self.state.dns_cache.get(hostname)
             if existing and existing != ip:
-                raise StateError(
-                    f"Cannot register {hostname} → {ip}: "
-                    f"already mapped to {existing}"
-                )
+                raise StateError(f"Cannot register {hostname} → {ip}: already mapped to {existing}")
 
             self.state.dns_cache[hostname] = ip
             logger.debug(f"Registered DNS: {hostname} → {ip}")
@@ -588,9 +584,7 @@ class StateManager:
             elif event.event_type == "process_terminate" and event.process and event.host:
                 self.end_process(event.host.hostname, event.process.pid)
             elif event.event_type == "connection" and event.network:
-                if event.network.conn_id and (
-                    event.network.orig_bytes or event.network.resp_bytes
-                ):
+                if event.network.conn_id and (event.network.orig_bytes or event.network.resp_bytes):
                     self.update_connection_bytes(
                         event.network.conn_id,
                         event.network.orig_bytes,

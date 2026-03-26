@@ -10,7 +10,6 @@ Sub-scores (0.25 each):
 import logging
 import math
 from collections import Counter, defaultdict
-from typing import Any
 
 from evidenceforge.evaluation.anomaly import detect_anomalies
 from evidenceforge.evaluation.dimensions import (
@@ -41,23 +40,90 @@ def _process_category(process_path: str) -> str:
     p = process_path.lower()
     if any(x in p for x in ["chrome", "firefox", "edge", "iexplore", "safari", "opera"]):
         return "browser"
-    if any(x in p for x in ["word", "excel", "outlook", "powerpoint", "teams",
-                             "onedrive", "acrobat", "onenote", "libreoffice",
-                             "thunderbird"]):
+    if any(
+        x in p
+        for x in [
+            "word",
+            "excel",
+            "outlook",
+            "powerpoint",
+            "teams",
+            "onedrive",
+            "acrobat",
+            "onenote",
+            "libreoffice",
+            "thunderbird",
+        ]
+    ):
         return "office"
-    if any(x in p for x in ["code", "vim", "nvim", "emacs", "devenv", "idea",
-                             "pycharm", "git", "node", "python", "java", "dotnet",
-                             "npm", "cargo", "make", "cmake", "gcc", "msbuild",
-                             "pytest", "docker", "kubectl"]):
+    if any(
+        x in p
+        for x in [
+            "code",
+            "vim",
+            "nvim",
+            "emacs",
+            "devenv",
+            "idea",
+            "pycharm",
+            "git",
+            "node",
+            "python",
+            "java",
+            "dotnet",
+            "npm",
+            "cargo",
+            "make",
+            "cmake",
+            "gcc",
+            "msbuild",
+            "pytest",
+            "docker",
+            "kubectl",
+        ]
+    ):
         return "dev_tool"
-    if any(x in p for x in ["powershell", "cmd.exe", "regedit", "mmc", "taskmgr",
-                             "eventvwr", "compmgmt", "services.msc", "wmic",
-                             "netstat", "ipconfig", "ssh", "curl", "wget"]):
+    if any(
+        x in p
+        for x in [
+            "powershell",
+            "cmd.exe",
+            "regedit",
+            "mmc",
+            "taskmgr",
+            "eventvwr",
+            "compmgmt",
+            "services.msc",
+            "wmic",
+            "netstat",
+            "ipconfig",
+            "ssh",
+            "curl",
+            "wget",
+        ]
+    ):
         return "admin_tool"
-    if any(x in p for x in ["svchost", "lsass", "csrss", "winlogon", "services.exe",
-                             "smss", "wininit", "spoolsv", "searchindexer",
-                             "taskhostw", "conhost", "explorer.exe",
-                             "systemd", "cron", "sshd", "rsyslog"]):
+    if any(
+        x in p
+        for x in [
+            "svchost",
+            "lsass",
+            "csrss",
+            "winlogon",
+            "services.exe",
+            "smss",
+            "wininit",
+            "spoolsv",
+            "searchindexer",
+            "taskhostw",
+            "conhost",
+            "explorer.exe",
+            "systemd",
+            "cron",
+            "sshd",
+            "rsyslog",
+        ]
+    ):
         return "system"
     return "other"
 
@@ -150,20 +216,28 @@ class NoiseRealismScorer(DimensionScorer):
         dim_score = sum(s.score * s.weight for s in sub_scores if s.score is not None)
 
         return DimensionScore(
-            number=self.number, name=self.name, weight=self.weight,
-            score=dim_score, sub_scores=sub_scores,
+            number=self.number,
+            name=self.name,
+            weight=self.weight,
+            score=dim_score,
+            sub_scores=sub_scores,
         )
 
     # --- Sub-score 1: Volume Adequacy ---
 
     def _score_volume_adequacy(
-        self, records: dict[str, list[ParsedRecord]], scenario: Scenario,
+        self,
+        records: dict[str, list[ParsedRecord]],
+        scenario: Scenario,
     ) -> SubScore:
         storyline = scenario.storyline or []
         if not storyline:
             return SubScore(
-                name="Volume Adequacy", key="volume_adequacy", weight=0.25,
-                score=100.0, details="No storyline — volume check skipped",
+                name="Volume Adequacy",
+                key="volume_adequacy",
+                weight=0.25,
+                score=100.0,
+                details="No storyline — volume check skipped",
             )
 
         signal_count = len(storyline)
@@ -182,7 +256,9 @@ class NoiseRealismScorer(DimensionScorer):
             score = 100.0 * (ratio - half_target) / (target - half_target)
 
         return SubScore(
-            name="Volume Adequacy", key="volume_adequacy", weight=0.25,
+            name="Volume Adequacy",
+            key="volume_adequacy",
+            weight=0.25,
             score=score,
             details=f"Noise:signal ratio {ratio:.0f}:1 (target {target}:1 for {scenario.baseline_activity.intensity})",
         )
@@ -193,7 +269,7 @@ class NoiseRealismScorer(DimensionScorer):
         # Build per-user event-type distributions
         user_types: dict[str, Counter] = defaultdict(Counter)
 
-        for format_name, record_list in records.items():
+        for _format_name, record_list in records.items():
             for record in record_list:
                 user = _extract_username(record)
                 if not user:
@@ -205,13 +281,16 @@ class NoiseRealismScorer(DimensionScorer):
         users_with_data = {u: c for u, c in user_types.items() if sum(c.values()) >= 5}
         if len(users_with_data) < 2:
             return SubScore(
-                name="User Behavioral Diversity", key="user_diversity", weight=0.25,
-                score=100.0, details="Fewer than 2 users with sufficient data — skipped",
+                name="User Behavioral Diversity",
+                key="user_diversity",
+                weight=0.25,
+                score=100.0,
+                details="Fewer than 2 users with sufficient data — skipped",
             )
 
         # Compute pairwise cosine similarity (sample pairs for large user counts)
-        import random as _rng
         import itertools
+        import random as _rng
 
         user_list = list(users_with_data.keys())
         total_pairs = len(user_list) * (len(user_list) - 1) // 2
@@ -249,7 +328,9 @@ class NoiseRealismScorer(DimensionScorer):
             score = 100.0 * (0.9 - avg_sim) / 0.4
 
         return SubScore(
-            name="User Behavioral Diversity", key="user_diversity", weight=0.25,
+            name="User Behavioral Diversity",
+            key="user_diversity",
+            weight=0.25,
             score=score,
             details=f"Avg pairwise similarity: {avg_sim:.2f} across {len(user_list)} users",
         )
@@ -259,8 +340,8 @@ class NoiseRealismScorer(DimensionScorer):
         """Cosine similarity between two Counter distributions."""
         all_keys = set(a.keys()) | set(b.keys())
         dot = sum(a.get(k, 0) * b.get(k, 0) for k in all_keys)
-        mag_a = math.sqrt(sum(v ** 2 for v in a.values()))
-        mag_b = math.sqrt(sum(v ** 2 for v in b.values()))
+        mag_a = math.sqrt(sum(v**2 for v in a.values()))
+        mag_b = math.sqrt(sum(v**2 for v in b.values()))
         if mag_a == 0 or mag_b == 0:
             return 0.0
         return dot / (mag_a * mag_b)
@@ -268,7 +349,9 @@ class NoiseRealismScorer(DimensionScorer):
     # --- Sub-score 3: Activity Plausibility ---
 
     def _score_activity_plausibility(
-        self, records: dict[str, list[ParsedRecord]], scenario: Scenario,
+        self,
+        records: dict[str, list[ParsedRecord]],
+        scenario: Scenario,
     ) -> SubScore:
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}
         vis = VisibilityModel(scenario, enabled)
@@ -298,7 +381,9 @@ class NoiseRealismScorer(DimensionScorer):
 
         score = (100.0 * plausible / total) if total > 0 else 100.0
         return SubScore(
-            name="Activity Plausibility", key="activity_plausibility", weight=0.25,
+            name="Activity Plausibility",
+            key="activity_plausibility",
+            weight=0.25,
             score=score,
             details=f"{plausible}/{total} records have OS-plausible content",
             sample_failures=failures,
@@ -306,10 +391,13 @@ class NoiseRealismScorer(DimensionScorer):
 
     @staticmethod
     def _check_os_plausibility(
-        record: ParsedRecord, fmt: str, hostname: str, vis: VisibilityModel,
+        record: ParsedRecord,
+        fmt: str,
+        hostname: str,
+        vis: VisibilityModel,
     ) -> bool | None:
         """Check if record content is plausible for the host's OS. Returns None if not checkable."""
-        os_cat = vis.get_os_category(hostname)
+        vis.get_os_category(hostname)
         f = record.fields
 
         if fmt == "bash_history":
@@ -331,14 +419,19 @@ class NoiseRealismScorer(DimensionScorer):
     # --- Sub-score 4: Organic Anomaly Rate ---
 
     def _score_anomaly_rate(
-        self, records: dict[str, list[ParsedRecord]], scenario: Scenario,
+        self,
+        records: dict[str, list[ParsedRecord]],
+        scenario: Scenario,
     ) -> SubScore:
         anomalous, total = detect_anomalies(records, scenario)
 
         if total == 0:
             return SubScore(
-                name="Organic Anomaly Rate", key="anomaly_rate", weight=0.25,
-                score=100.0, details="No records to check",
+                name="Organic Anomaly Rate",
+                key="anomaly_rate",
+                weight=0.25,
+                score=100.0,
+                details="No records to check",
             )
 
         rate = anomalous / total
@@ -356,7 +449,9 @@ class NoiseRealismScorer(DimensionScorer):
             score = 0.0
 
         return SubScore(
-            name="Organic Anomaly Rate", key="anomaly_rate", weight=0.25,
+            name="Organic Anomaly Rate",
+            key="anomaly_rate",
+            weight=0.25,
             score=score,
             details=f"{anomalous}/{total} events flagged anomalous ({rate:.1%}), target 1-5%",
         )

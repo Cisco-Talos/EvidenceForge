@@ -1,10 +1,8 @@
 """Zeek conn.log emitter."""
 
-from pathlib import Path
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -27,28 +25,28 @@ class ZeekEmitter(SensorMultiplexEmitter):
         """Render SecurityEvent to Zeek conn.log format."""
         net = event.network
         event_data = {
-            'ts': event.timestamp,
-            'uid': net.zeek_uid,
-            'id.orig_h': net.src_ip,
-            'id.orig_p': net.src_port,
-            'id.resp_h': net.dst_ip,
-            'id.resp_p': net.dst_port,
-            'proto': net.protocol,
-            'service': net.service or None,
-            'duration': net.duration,
-            'orig_bytes': net.orig_bytes,
-            'resp_bytes': net.resp_bytes,
-            'conn_state': net.conn_state,
-            'local_orig': net.local_orig,
-            'local_resp': net.local_resp,
-            'missed_bytes': net.missed_bytes,
-            'history': net.history,
-            'orig_pkts': net.orig_pkts,
-            'orig_ip_bytes': net.orig_ip_bytes,
-            'resp_pkts': net.resp_pkts,
-            'resp_ip_bytes': net.resp_ip_bytes,
-            'ip_proto': net.ip_proto,
-            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            "ts": event.timestamp,
+            "uid": net.zeek_uid,
+            "id.orig_h": net.src_ip,
+            "id.orig_p": net.src_port,
+            "id.resp_h": net.dst_ip,
+            "id.resp_p": net.dst_port,
+            "proto": net.protocol,
+            "service": net.service or None,
+            "duration": net.duration,
+            "orig_bytes": net.orig_bytes,
+            "resp_bytes": net.resp_bytes,
+            "conn_state": net.conn_state,
+            "local_orig": net.local_orig,
+            "local_resp": net.local_resp,
+            "missed_bytes": net.missed_bytes,
+            "history": net.history,
+            "orig_pkts": net.orig_pkts,
+            "orig_ip_bytes": net.orig_ip_bytes,
+            "resp_pkts": net.resp_pkts,
+            "resp_ip_bytes": net.resp_ip_bytes,
+            "ip_proto": net.ip_proto,
+            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 
@@ -56,10 +54,20 @@ class ZeekEmitter(SensorMultiplexEmitter):
         """Render Zeek connection to JSON format."""
         # Ensure all optional fields exist with None to prevent Jinja2 Undefined errors
         optional_fields = [
-            "service", "duration", "orig_bytes", "resp_bytes",
-            "local_orig", "local_resp", "missed_bytes", "history",
-            "orig_pkts", "orig_ip_bytes", "resp_pkts", "resp_ip_bytes",
-            "ip_proto", "tunnel_parents"
+            "service",
+            "duration",
+            "orig_bytes",
+            "resp_bytes",
+            "local_orig",
+            "local_resp",
+            "missed_bytes",
+            "history",
+            "orig_pkts",
+            "orig_ip_bytes",
+            "resp_pkts",
+            "resp_ip_bytes",
+            "ip_proto",
+            "tunnel_parents",
         ]
         for f in optional_fields:
             if f not in event_data:

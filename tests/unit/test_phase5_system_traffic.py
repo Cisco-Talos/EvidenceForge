@@ -1,28 +1,29 @@
 """Unit tests for Phase 5.4: Background Traffic & System Activity."""
 
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch
+from datetime import UTC, datetime
+from unittest.mock import Mock
 
-from evidenceforge.generation.activity import ActivityGenerator, _get_os_category
+import pytest
+
+from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import User, System
+from evidenceforge.models import System, User
 
 
 @pytest.fixture
 def state_manager():
     sm = StateManager()
-    sm.set_current_time(datetime(2024, 3, 15, 8, 0, 0, tzinfo=timezone.utc))
+    sm.set_current_time(datetime(2024, 3, 15, 8, 0, 0, tzinfo=UTC))
     return sm
 
 
 @pytest.fixture
 def mock_emitters():
     return {
-        'windows_event_security': Mock(),
-        'zeek_conn': Mock(),
-        'ecar': Mock(),
-        'syslog': Mock(),
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "ecar": Mock(),
+        "syslog": Mock(),
     }
 
 
@@ -43,7 +44,7 @@ def linux_system():
 
 @pytest.fixture
 def timestamp():
-    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
 class TestWindowsProcessTreeSeeding:
@@ -62,12 +63,12 @@ class TestWindowsProcessTreeSeeding:
         engine._seed_windows_process_tree(win_system, pids)
 
         # Verify key processes exist
-        assert 'smss' in pids
-        assert 'services' in pids
-        assert 'lsass' in pids
-        assert 'svchost_netsvcs' in pids
-        assert 'msmpeng' in pids
-        assert 'dwm' in pids
+        assert "smss" in pids
+        assert "services" in pids
+        assert "lsass" in pids
+        assert "svchost_netsvcs" in pids
+        assert "msmpeng" in pids
+        assert "dwm" in pids
 
     def test_windows_tree_has_min_svchost_instances(self, state_manager, win_system):
         """Windows should have at least 7 svchost instances."""
@@ -80,7 +81,7 @@ class TestWindowsProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_windows_process_tree(win_system, pids)
 
-        svchost_count = sum(1 for k in pids if k.startswith('svchost_'))
+        svchost_count = sum(1 for k in pids if k.startswith("svchost_"))
         assert svchost_count >= 7, f"Only {svchost_count} svchost instances"
 
     def test_services_is_parent_of_svchost(self, state_manager, win_system):
@@ -95,10 +96,10 @@ class TestWindowsProcessTreeSeeding:
         engine._seed_windows_process_tree(win_system, pids)
 
         # Check parent of a svchost
-        svchost_pid = pids['svchost_netsvcs']
+        svchost_pid = pids["svchost_netsvcs"]
         proc = state_manager.get_process(win_system.hostname, svchost_pid)
         assert proc is not None
-        assert proc.parent_pid == pids['services']
+        assert proc.parent_pid == pids["services"]
 
     def test_lsass_is_child_of_wininit(self, state_manager, win_system):
         """lsass.exe should be child of wininit.exe (not services.exe)."""
@@ -111,9 +112,9 @@ class TestWindowsProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_windows_process_tree(win_system, pids)
 
-        lsass_proc = state_manager.get_process(win_system.hostname, pids['lsass'])
+        lsass_proc = state_manager.get_process(win_system.hostname, pids["lsass"])
         assert lsass_proc is not None
-        assert lsass_proc.parent_pid == pids['wininit']
+        assert lsass_proc.parent_pid == pids["wininit"]
 
     def test_no_events_emitted_during_seeding(self, state_manager, win_system, mock_emitters):
         """Seeding should not emit any log events."""
@@ -145,12 +146,12 @@ class TestLinuxProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_linux_process_tree(linux_system, pids)
 
-        assert 'systemd' in pids
-        assert 'sshd' in pids
-        assert 'cron' in pids
-        assert 'rsyslogd' in pids
-        assert 'dbus' in pids
-        assert 'journald' in pids
+        assert "systemd" in pids
+        assert "sshd" in pids
+        assert "cron" in pids
+        assert "rsyslogd" in pids
+        assert "dbus" in pids
+        assert "journald" in pids
 
     def test_all_daemons_are_children_of_systemd(self, state_manager, linux_system):
         """All daemons should be direct children of PID 1 (systemd)."""
@@ -163,18 +164,22 @@ class TestLinuxProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_linux_process_tree(linux_system, pids)
 
-        systemd_pid = pids['systemd']
-        sshd_pid = pids['sshd']
+        systemd_pid = pids["systemd"]
+        sshd_pid = pids["sshd"]
         for name, pid in pids.items():
-            if name == 'systemd':
+            if name == "systemd":
                 continue
             proc = state_manager.get_process(linux_system.hostname, pid)
             assert proc is not None
-            if name == 'bash':
+            if name == "bash":
                 # bash is a child of sshd (login shell), not systemd
-                assert proc.parent_pid == sshd_pid, f"bash parent is {proc.parent_pid}, expected sshd ({sshd_pid})"
+                assert proc.parent_pid == sshd_pid, (
+                    f"bash parent is {proc.parent_pid}, expected sshd ({sshd_pid})"
+                )
             else:
-                assert proc.parent_pid == systemd_pid, f"{name} parent is {proc.parent_pid}, expected {systemd_pid}"
+                assert proc.parent_pid == systemd_pid, (
+                    f"{name} parent is {proc.parent_pid}, expected {systemd_pid}"
+                )
 
     def test_rsyslogd_runs_as_syslog_user(self, state_manager, linux_system):
         """rsyslogd should run as syslog user, not root."""
@@ -187,8 +192,8 @@ class TestLinuxProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_linux_process_tree(linux_system, pids)
 
-        rsyslogd = state_manager.get_process(linux_system.hostname, pids['rsyslogd'])
-        assert rsyslogd.username == 'syslog'
+        rsyslogd = state_manager.get_process(linux_system.hostname, pids["rsyslogd"])
+        assert rsyslogd.username == "syslog"
 
     def test_dbus_runs_as_messagebus(self, state_manager, linux_system):
         """dbus-daemon should run as messagebus user."""
@@ -201,8 +206,8 @@ class TestLinuxProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_linux_process_tree(linux_system, pids)
 
-        dbus = state_manager.get_process(linux_system.hostname, pids['dbus'])
-        assert dbus.username == 'messagebus'
+        dbus = state_manager.get_process(linux_system.hostname, pids["dbus"])
+        assert dbus.username == "messagebus"
 
     def test_rhel_uses_crond(self, state_manager):
         """RHEL/CentOS should use crond, not cron."""
@@ -216,56 +221,79 @@ class TestLinuxProcessTreeSeeding:
         pids: dict[str, int] = {}
         engine._seed_linux_process_tree(rhel_system, pids)
 
-        cron_proc = state_manager.get_process(rhel_system.hostname, pids['cron'])
-        assert 'crond' in cron_proc.image
+        cron_proc = state_manager.get_process(rhel_system.hostname, pids["cron"])
+        assert "crond" in cron_proc.image
 
 
 class TestGenerateSystemProcess:
     """Test system process generation method in ActivityGenerator."""
 
-    def test_emits_windows_4688(self, activity_gen, win_system, timestamp, state_manager, mock_emitters):
+    def test_emits_windows_4688(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         # Create a parent first
         parent_pid = state_manager.create_process(
-            win_system.hostname, 4, r'C:\Windows\System32\services.exe', 'services.exe', 'SYSTEM', 'System'
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
         )
         activity_gen.generate_system_process(
-            system=win_system, time=timestamp,
-            process_name=r'C:\Windows\System32\svchost.exe',
-            command_line='svchost.exe -k netsvcs -p -s Schedule',
-            parent_pid=parent_pid, username='SYSTEM',
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe -k netsvcs -p -s Schedule",
+            parent_pid=parent_pid,
+            username="SYSTEM",
         )
-        assert mock_emitters['windows_event_security'].emit.called
-        event = mock_emitters['windows_event_security'].emit.call_args[0][0]
+        assert mock_emitters["windows_event_security"].emit.called
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "system_process_create"
-        assert event.auth.username == 'SYSTEM'
+        assert event.auth.username == "SYSTEM"
 
-    def test_emits_linux_syslog(self, activity_gen, linux_system, timestamp, state_manager, mock_emitters):
+    def test_emits_linux_syslog(
+        self, activity_gen, linux_system, timestamp, state_manager, mock_emitters
+    ):
         state_manager.set_current_time(timestamp)
         parent_pid = state_manager.create_process(
-            linux_system.hostname, 0, '/usr/sbin/cron', '/usr/sbin/cron -f', 'root', 'System'
+            linux_system.hostname, 0, "/usr/sbin/cron", "/usr/sbin/cron -f", "root", "System"
         )
         activity_gen.generate_system_process(
-            system=linux_system, time=timestamp,
-            process_name='/usr/sbin/logrotate',
-            command_line='/usr/sbin/logrotate /etc/logrotate.conf',
-            parent_pid=parent_pid, username='root',
+            system=linux_system,
+            time=timestamp,
+            process_name="/usr/sbin/logrotate",
+            command_line="/usr/sbin/logrotate /etc/logrotate.conf",
+            parent_pid=parent_pid,
+            username="root",
         )
-        assert mock_emitters['syslog'].emit.called
+        assert mock_emitters["syslog"].emit.called
 
     def test_emits_ecar(self, activity_gen, win_system, timestamp, state_manager, mock_emitters):
         state_manager.set_current_time(timestamp)
         parent_pid = state_manager.create_process(
-            win_system.hostname, 4, r'C:\Windows\System32\services.exe', 'services.exe', 'SYSTEM', 'System'
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
         )
         activity_gen.generate_system_process(
-            system=win_system, time=timestamp,
-            process_name=r'C:\Windows\System32\taskhostw.exe',
-            command_line='taskhostw.exe /Run',
-            parent_pid=parent_pid, username='SYSTEM',
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\taskhostw.exe",
+            command_line="taskhostw.exe /Run",
+            parent_pid=parent_pid,
+            username="SYSTEM",
         )
-        ecar_calls = [c for c in mock_emitters['ecar'].emit.call_args_list
-                      if c[0][0].event_type == 'system_process_create']
+        ecar_calls = [
+            c
+            for c in mock_emitters["ecar"].emit.call_args_list
+            if c[0][0].event_type == "system_process_create"
+        ]
         assert len(ecar_calls) >= 1
 
 
@@ -275,20 +303,33 @@ class TestInfrastructureDetection:
     def test_detects_dc_from_hostname(self):
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
-            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            TimeWindow,
         )
+
         scenario = Scenario(
-            name="test", description="test",
+            name="test",
+            description="test",
             environment=Environment(
                 description="test",
                 users=[User(username="j", full_name="J", email="j@x.com")],
                 systems=[
-                    System(hostname="DC-01", ip="10.0.0.5", os="Windows Server 2019", type="domain_controller"),
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.5",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
                     System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
                 ],
             ),
-            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
-            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=UTC), duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
         )
 
@@ -296,16 +337,22 @@ class TestInfrastructureDetection:
         engine.scenario = scenario
         infra = engine._detect_infrastructure_ips()
 
-        assert infra['dc'] == ['10.0.0.5']
-        assert infra['dns'] == ['10.0.0.5']  # DC also serves DNS
+        assert infra["dc"] == ["10.0.0.5"]
+        assert infra["dns"] == ["10.0.0.5"]  # DC also serves DNS
 
     def test_service_defaults_windows(self):
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
-            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            TimeWindow,
         )
+
         scenario = Scenario(
-            name="test", description="test",
+            name="test",
+            description="test",
             environment=Environment(
                 description="test",
                 users=[User(username="j", full_name="J", email="j@x.com")],
@@ -313,8 +360,10 @@ class TestInfrastructureDetection:
                     System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
                 ],
             ),
-            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
-            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=UTC), duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
         )
 
@@ -322,9 +371,9 @@ class TestInfrastructureDetection:
         engine.scenario = scenario
         defaults = engine._build_service_defaults()
 
-        assert 'dns-client' in defaults['WKS-01']
-        assert 'ntp-client' in defaults['WKS-01']
-        assert 'smb-client' in defaults['WKS-01']
+        assert "dns-client" in defaults["WKS-01"]
+        assert "ntp-client" in defaults["WKS-01"]
+        assert "smb-client" in defaults["WKS-01"]
 
 
 class TestParentPidSelection:
@@ -346,18 +395,22 @@ class TestParentPidSelection:
         ag._system_pids = engine._system_pids
         user = User(username="test.user", full_name="Test User", email="t@t.com", enabled=True)
 
-        logon_id = ag.generate_logon(user, win_system, datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
+        logon_id = ag.generate_logon(user, win_system, datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC))
         pid = ag.generate_process(
-            user, win_system, datetime(2024, 3, 15, 10, 0, 1, tzinfo=timezone.utc),
-            logon_id, r'C:\Windows\System32\notepad.exe', 'notepad.exe',
-            parent_pid=ag._select_parent_pid(win_system, user, r'C:\Windows\System32\notepad.exe'),
+            user,
+            win_system,
+            datetime(2024, 3, 15, 10, 0, 1, tzinfo=UTC),
+            logon_id,
+            r"C:\Windows\System32\notepad.exe",
+            "notepad.exe",
+            parent_pid=ag._select_parent_pid(win_system, user, r"C:\Windows\System32\notepad.exe"),
         )
 
         proc = state_manager.get_process(win_system.hostname, pid)
         # Parent should be an explorer.exe PID (session-specific or system-seeded)
         parent_proc = state_manager.get_process(win_system.hostname, proc.parent_pid)
         assert parent_proc is not None, f"Parent PID {proc.parent_pid} not found in state"
-        assert 'explorer.exe' in parent_proc.image.lower(), (
+        assert "explorer.exe" in parent_proc.image.lower(), (
             f"User process parent should be explorer, got {parent_proc.image} (PID {proc.parent_pid})"
         )
 
@@ -377,15 +430,21 @@ class TestParentPidSelection:
         ag._system_pids = engine._system_pids
         user = User(username="test.user", full_name="Test User", email="t@t.com", enabled=True)
 
-        logon_id = ag.generate_logon(user, linux_system, datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc))
+        logon_id = ag.generate_logon(
+            user, linux_system, datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        )
         pid = ag.generate_process(
-            user, linux_system, datetime(2024, 3, 15, 10, 0, 1, tzinfo=timezone.utc),
-            logon_id, '/usr/bin/vim', 'vim /etc/config',
-            parent_pid=ag._select_parent_pid(linux_system, user, '/usr/bin/vim'),
+            user,
+            linux_system,
+            datetime(2024, 3, 15, 10, 0, 1, tzinfo=UTC),
+            logon_id,
+            "/usr/bin/vim",
+            "vim /etc/config",
+            parent_pid=ag._select_parent_pid(linux_system, user, "/usr/bin/vim"),
         )
 
         proc = state_manager.get_process(linux_system.hostname, pid)
-        bash_pid = pids['bash']
+        bash_pid = pids["bash"]
         assert proc.parent_pid == bash_pid, (
             f"Linux user process parent should be bash ({bash_pid}), not {proc.parent_pid}"
         )
@@ -406,25 +465,29 @@ class TestParentPidSelection:
         ag._system_pids = engine._system_pids
         user = User(username="test.user", full_name="Test User", email="t@t.com", enabled=True)
 
-        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
         logon_id = ag.generate_logon(user, win_system, ts)
 
         # Create a cmd.exe shell first
         cmd_pid = ag.generate_process(
-            user, win_system, ts, logon_id,
-            r'C:\Windows\System32\cmd.exe', 'cmd.exe',
-            parent_pid=ag._select_parent_pid(win_system, user, r'C:\Windows\System32\cmd.exe'),
+            user,
+            win_system,
+            ts,
+            logon_id,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe",
+            parent_pid=ag._select_parent_pid(win_system, user, r"C:\Windows\System32\cmd.exe"),
         )
-        ag._record_user_process(win_system, user, cmd_pid, r'C:\Windows\System32\cmd.exe')
+        ag._record_user_process(win_system, user, cmd_pid, r"C:\Windows\System32\cmd.exe")
 
         # Create many processes — some should have cmd.exe as parent
         parent_pids = set()
-        for i in range(20):
-            parent = ag._select_parent_pid(win_system, user, r'C:\Windows\System32\ipconfig.exe')
+        for _i in range(20):
+            parent = ag._select_parent_pid(win_system, user, r"C:\Windows\System32\ipconfig.exe")
             parent_pids.add(parent)
 
         # Should see both explorer and cmd as possible parents
-        assert cmd_pid in parent_pids or pids['explorer'] in parent_pids, (
+        assert cmd_pid in parent_pids or pids["explorer"] in parent_pids, (
             "Process tree should have depth — shells should sometimes be parents"
         )
 
@@ -436,21 +499,39 @@ class TestInfrastructureTrafficGeneration:
         """DB servers should be detected from system services list."""
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
-            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            TimeWindow,
         )
+
         scenario = Scenario(
-            name="test", description="test",
+            name="test",
+            description="test",
             environment=Environment(
                 description="test",
                 users=[User(username="j", full_name="J", email="j@x.com")],
                 systems=[
-                    System(hostname="DC-01", ip="10.0.0.5", os="Windows Server 2019", type="domain_controller"),
-                    System(hostname="SRV-DB-01", ip="10.0.100.14", os="Windows Server 2019", type="server",
-                           services=["mssql", "SQL Server 2019"]),
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.5",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
+                    System(
+                        hostname="SRV-DB-01",
+                        ip="10.0.100.14",
+                        os="Windows Server 2019",
+                        type="server",
+                        services=["mssql", "SQL Server 2019"],
+                    ),
                 ],
             ),
-            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
-            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=UTC), duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
         )
 
@@ -458,28 +539,44 @@ class TestInfrastructureTrafficGeneration:
         engine.scenario = scenario
         infra = engine._detect_infrastructure_ips()
 
-        db_servers = infra['db_servers']
+        db_servers = infra["db_servers"]
         assert len(db_servers) >= 1
-        assert any(d['ip'] == '10.0.100.14' and d['port'] == 1433 and d['service'] == 'mssql' for d in db_servers)
+        assert any(
+            d["ip"] == "10.0.100.14" and d["port"] == 1433 and d["service"] == "mssql"
+            for d in db_servers
+        )
 
     def test_detects_mysql_from_services(self):
         """MySQL servers should also be detected."""
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
-            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            TimeWindow,
         )
+
         scenario = Scenario(
-            name="test", description="test",
+            name="test",
+            description="test",
             environment=Environment(
                 description="test",
                 users=[User(username="j", full_name="J", email="j@x.com")],
                 systems=[
-                    System(hostname="DB-01", ip="10.0.100.10", os="Linux Ubuntu 22.04", type="server",
-                           services=["MySQL 8.0"]),
+                    System(
+                        hostname="DB-01",
+                        ip="10.0.100.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        services=["MySQL 8.0"],
+                    ),
                 ],
             ),
-            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
-            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=UTC), duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
         )
 
@@ -487,18 +584,24 @@ class TestInfrastructureTrafficGeneration:
         engine.scenario = scenario
         infra = engine._detect_infrastructure_ips()
 
-        db_servers = infra['db_servers']
+        db_servers = infra["db_servers"]
         assert len(db_servers) >= 1
-        assert any(d['port'] == 3306 and d['service'] == 'mysql' for d in db_servers)
+        assert any(d["port"] == 3306 and d["service"] == "mysql" for d in db_servers)
 
     def test_kerberos_ldap_in_default_windows_services(self):
         """Windows systems should have kerberos-client and ldap-client by default."""
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
-            BaselineActivity, Environment, OutputSpec, Scenario, TimeWindow,
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            TimeWindow,
         )
+
         scenario = Scenario(
-            name="test", description="test",
+            name="test",
+            description="test",
             environment=Environment(
                 description="test",
                 users=[User(username="j", full_name="J", email="j@x.com")],
@@ -506,8 +609,10 @@ class TestInfrastructureTrafficGeneration:
                     System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
                 ],
             ),
-            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=timezone.utc), duration="8h"),
-            baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+            time_window=TimeWindow(start=datetime(2024, 1, 1, tzinfo=UTC), duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
         )
 
@@ -515,5 +620,5 @@ class TestInfrastructureTrafficGeneration:
         engine.scenario = scenario
         defaults = engine._build_service_defaults()
 
-        assert 'kerberos-client' in defaults['WKS-01']
-        assert 'ldap-client' in defaults['WKS-01']
+        assert "kerberos-client" in defaults["WKS-01"]
+        assert "ldap-client" in defaults["WKS-01"]

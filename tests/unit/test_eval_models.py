@@ -1,7 +1,7 @@
 """Tests for evaluation data models."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
@@ -42,7 +42,7 @@ class TestQualityReport:
     def test_json_serialization(self):
         report = QualityReport(
             scenario_name="test-scenario",
-            evaluated_at=datetime(2026, 3, 16, 12, 0, 0, tzinfo=timezone.utc),
+            evaluated_at=datetime(2026, 3, 16, 12, 0, 0, tzinfo=UTC),
             total_records=1000,
             source_counts={"windows_event_security": 500, "zeek_conn": 500},
             overall_score=78.0,
@@ -77,7 +77,7 @@ class TestQualityReport:
     def test_empty_report(self):
         report = QualityReport(
             scenario_name="empty",
-            evaluated_at=datetime.now(timezone.utc),
+            evaluated_at=datetime.now(UTC),
         )
         assert report.total_records == 0
         assert report.overall_score is None

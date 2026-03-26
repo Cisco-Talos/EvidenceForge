@@ -31,8 +31,8 @@ class _SingleHistoryWriter:
 
     def write(self, event_data: dict[str, Any]) -> None:
         context = {
-            'timestamp': event_data.get('timestamp'),
-            'command': event_data.get('command'),
+            "timestamp": event_data.get("timestamp"),
+            "command": event_data.get("command"),
         }
         rendered = self._template.render(**context).strip()
         self.buffer.append(rendered)
@@ -56,11 +56,13 @@ class _SingleHistoryWriter:
 
     def _sort_by_timestamp(self) -> None:
         """Sort buffer entries by embedded epoch timestamps."""
+
         def _extract_ts(entry: str) -> int:
-            for line in entry.split('\n'):
-                if line.startswith('#') and line[1:].strip().isdigit():
+            for line in entry.split("\n"):
+                if line.startswith("#") and line[1:].strip().isdigit():
                     return int(line[1:].strip())
             return 0
+
         self.buffer.sort(key=_extract_ts)
 
 
@@ -84,12 +86,12 @@ class BashHistoryEmitter(LogEmitter):
     def emit(self, event: SecurityEvent) -> None:
         """Extract fields from SecurityEvent and delegate to existing dispatch."""
         event_data = {
-            'timestamp': event.timestamp,
-            'username': event.auth.username if event.auth else 'unknown',
-            'hostname': event.host.hostname if event.host else 'unknown',
-            'host_fqdn': (event.host.fqdn or event.host.hostname) if event.host else 'unknown',
-            'command': event.shell.command if event.shell else '',
-            'exit_code': event.shell.exit_code if event.shell else 0,
+            "timestamp": event.timestamp,
+            "username": event.auth.username if event.auth else "unknown",
+            "hostname": event.host.hostname if event.host else "unknown",
+            "host_fqdn": (event.host.fqdn or event.host.hostname) if event.host else "unknown",
+            "command": event.shell.command if event.shell else "",
+            "exit_code": event.shell.exit_code if event.shell else 0,
         }
         self.emit_event(event_data)
 
@@ -136,8 +138,8 @@ class BashHistoryEmitter(LogEmitter):
         raise NotImplementedError("BashHistoryEmitter uses _dispatch, not _render_event")
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
-        username = event_data.get('username', 'unknown')
-        host_fqdn = event_data.get('host_fqdn', event_data.get('hostname', 'unknown'))
+        username = event_data.get("username", "unknown")
+        host_fqdn = event_data.get("host_fqdn", event_data.get("hostname", "unknown"))
         writer = self._get_writer(username, host_fqdn)
         writer.write(event_data)
 

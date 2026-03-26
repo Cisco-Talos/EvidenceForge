@@ -1,13 +1,19 @@
 """Unit tests for ground truth generation."""
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
-from pathlib import Path
 
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.models import (
-    Scenario, Environment, User, System, TimeWindow,
-    BaselineActivity, OutputSpec, StorylineEvent
+    BaselineActivity,
+    Environment,
+    OutputSpec,
+    Scenario,
+    StorylineEvent,
+    System,
+    TimeWindow,
+    User,
 )
 
 
@@ -24,16 +30,32 @@ class TestGroundTruthGenerator:
             environment=Environment(
                 description="Test environment",
                 users=[
-                    User(username="attacker", full_name="Attacker", email="attacker@evil.com", enabled=True),
-                    User(username="victim", full_name="Victim User", email="victim@example.com", enabled=True)
+                    User(
+                        username="attacker",
+                        full_name="Attacker",
+                        email="attacker@evil.com",
+                        enabled=True,
+                    ),
+                    User(
+                        username="victim",
+                        full_name="Victim User",
+                        email="victim@example.com",
+                        enabled=True,
+                    ),
                 ],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
-                ]
+                ],
             ),
             time_window=TimeWindow(start="2024-01-15T10:00:00Z", duration="2h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="low", variation="low"),
-            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output", compression=False),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows_event_security"}],
+                destination="./output",
+                compression=False,
+            ),
             personas=[],
             storyline=[
                 StorylineEvent(
@@ -42,7 +64,7 @@ class TestGroundTruthGenerator:
                     actor="attacker",
                     system="TEST-01",
                     activity="Execute malicious PowerShell command",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 ),
                 StorylineEvent(
                     id="evt-test-2",
@@ -50,9 +72,9 @@ class TestGroundTruthGenerator:
                     actor="attacker",
                     system="TEST-01",
                     activity="Connect to C2 server",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
-                )
-            ]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
+            ],
         )
 
     @pytest.fixture
@@ -60,25 +82,25 @@ class TestGroundTruthGenerator:
         """Create sample malicious events."""
         return [
             {
-                'time': datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc),
-                'actor': 'attacker',
-                'system': 'TEST-01',
-                'activity': 'Execute malicious PowerShell command',
-                'type': 'process',
-                'process_name': 'powershell.exe',
-                'command_line': 'powershell.exe -enc <base64_encoded_command>',
-                'pid': 1234
+                "time": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "actor": "attacker",
+                "system": "TEST-01",
+                "activity": "Execute malicious PowerShell command",
+                "type": "process",
+                "process_name": "powershell.exe",
+                "command_line": "powershell.exe -enc <base64_encoded_command>",
+                "pid": 1234,
             },
             {
-                'time': datetime(2024, 1, 15, 10, 35, 0, tzinfo=timezone.utc),
-                'actor': 'attacker',
-                'system': 'TEST-01',
-                'activity': 'Connect to C2 server',
-                'type': 'connection',
-                'dst_ip': '159.65.43.201',
-                'dst_port': 443,
-                'uid': 'C12345'
-            }
+                "time": datetime(2024, 1, 15, 10, 35, 0, tzinfo=UTC),
+                "actor": "attacker",
+                "system": "TEST-01",
+                "activity": "Connect to C2 server",
+                "type": "connection",
+                "dst_ip": "159.65.43.201",
+                "dst_port": 443,
+                "uid": "C12345",
+            },
         ]
 
     def test_generate_creates_file(self, minimal_scenario, malicious_events, tmp_path):
@@ -138,25 +160,25 @@ class TestGroundTruthGenerator:
         # Create events out of order
         events = [
             {
-                'time': datetime(2024, 1, 15, 10, 35, 0, tzinfo=timezone.utc),
-                'actor': 'attacker',
-                'system': 'TEST-01',
-                'type': 'connection',
-                'dst_ip': '159.65.43.201',
-                'dst_port': 443
+                "time": datetime(2024, 1, 15, 10, 35, 0, tzinfo=UTC),
+                "actor": "attacker",
+                "system": "TEST-01",
+                "type": "connection",
+                "dst_ip": "159.65.43.201",
+                "dst_port": 443,
             },
             {
-                'time': datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc),
-                'actor': 'attacker',
-                'system': 'TEST-01',
-                'type': 'process',
-                'process_name': 'cmd.exe'
-            }
+                "time": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "actor": "attacker",
+                "system": "TEST-01",
+                "type": "process",
+                "process_name": "cmd.exe",
+            },
         ]
         generator = GroundTruthGenerator(minimal_scenario, events)
 
         timeline = generator._create_timeline()
-        lines = timeline.split('\n')
+        lines = timeline.split("\n")
 
         # First event in table (after headers) should be 10:30, then 10:35
         assert "10:30:00" in lines[2]  # First data row
@@ -172,11 +194,7 @@ class TestGroundTruthGenerator:
 
     def test_format_event_details_logon(self, minimal_scenario, malicious_events):
         """_format_event_details() should format logon events."""
-        event = {
-            'type': 'logon',
-            'source_ip': '203.0.113.50',
-            'logon_id': '0x12345'
-        }
+        event = {"type": "logon", "source_ip": "203.0.113.50", "logon_id": "0x12345"}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         details = generator._format_event_details(event)
@@ -187,10 +205,10 @@ class TestGroundTruthGenerator:
     def test_format_event_details_process(self, minimal_scenario, malicious_events):
         """_format_event_details() should format process events."""
         event = {
-            'type': 'process',
-            'process_name': 'powershell.exe',
-            'pid': 1234,
-            'command_line': 'powershell.exe -Command Get-Process'
+            "type": "process",
+            "process_name": "powershell.exe",
+            "pid": 1234,
+            "command_line": "powershell.exe -Command Get-Process",
         }
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
@@ -200,14 +218,16 @@ class TestGroundTruthGenerator:
         assert "PID: 1234" in details
         assert "powershell.exe -Command Get-Process" in details
 
-    def test_format_event_details_process_truncates_long_cmdline(self, minimal_scenario, malicious_events):
+    def test_format_event_details_process_truncates_long_cmdline(
+        self, minimal_scenario, malicious_events
+    ):
         """_format_event_details() should truncate long command lines."""
         long_cmdline = "x" * 100
         event = {
-            'type': 'process',
-            'process_name': 'cmd.exe',
-            'pid': 5678,
-            'command_line': long_cmdline
+            "type": "process",
+            "process_name": "cmd.exe",
+            "pid": 5678,
+            "command_line": long_cmdline,
         }
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
@@ -218,12 +238,7 @@ class TestGroundTruthGenerator:
 
     def test_format_event_details_connection(self, minimal_scenario, malicious_events):
         """_format_event_details() should format connection events."""
-        event = {
-            'type': 'connection',
-            'dst_ip': '159.65.43.201',
-            'dst_port': 443,
-            'uid': 'C12345'
-        }
+        event = {"type": "connection", "dst_ip": "159.65.43.201", "dst_port": 443, "uid": "C12345"}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         details = generator._format_event_details(event)
@@ -233,10 +248,7 @@ class TestGroundTruthGenerator:
 
     def test_format_event_details_unknown_type(self, minimal_scenario, malicious_events):
         """_format_event_details() should handle unknown event types."""
-        event = {
-            'type': 'unknown',
-            'activity': 'Some activity'
-        }
+        event = {"type": "unknown", "activity": "Some activity"}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         details = generator._format_event_details(event)
@@ -246,111 +258,79 @@ class TestGroundTruthGenerator:
     def test_extract_iocs_network(self, minimal_scenario):
         """_extract_iocs() should extract network IOCs."""
         events = [
-            {
-                'actor': 'attacker',
-                'type': 'logon',
-                'source_ip': '203.0.113.50'
-            },
-            {
-                'actor': 'attacker',
-                'type': 'connection',
-                'dst_ip': '159.65.43.201',
-                'dst_port': 443
-            }
+            {"actor": "attacker", "type": "logon", "source_ip": "203.0.113.50"},
+            {"actor": "attacker", "type": "connection", "dst_ip": "159.65.43.201", "dst_port": 443},
         ]
         generator = GroundTruthGenerator(minimal_scenario, events)
 
         iocs = generator._extract_iocs()
 
-        assert 'network' in iocs
-        assert '203.0.113.50 (Attacker IP)' in iocs['network']
-        assert '159.65.43.201:443 (C2 Server)' in iocs['network']
+        assert "network" in iocs
+        assert "203.0.113.50 (Attacker IP)" in iocs["network"]
+        assert "159.65.43.201:443 (C2 Server)" in iocs["network"]
 
     def test_extract_iocs_processes(self, minimal_scenario):
         """_extract_iocs() should extract process IOCs."""
         events = [
             {
-                'actor': 'attacker',
-                'type': 'process',
-                'process_name': 'powershell.exe',
-                'command_line': 'powershell.exe -enc PAYLOAD'
+                "actor": "attacker",
+                "type": "process",
+                "process_name": "powershell.exe",
+                "command_line": "powershell.exe -enc PAYLOAD",
             }
         ]
         generator = GroundTruthGenerator(minimal_scenario, events)
 
         iocs = generator._extract_iocs()
 
-        assert 'processes' in iocs
-        assert 'powershell.exe' in iocs['processes']
-        assert '`powershell.exe -enc PAYLOAD`' in iocs['processes']
+        assert "processes" in iocs
+        assert "powershell.exe" in iocs["processes"]
+        assert "`powershell.exe -enc PAYLOAD`" in iocs["processes"]
 
     def test_extract_iocs_users(self, minimal_scenario):
         """_extract_iocs() should extract user IOCs."""
         events = [
-            {
-                'actor': 'attacker',
-                'type': 'logon'
-            },
-            {
-                'actor': 'victim',
-                'type': 'process',
-                'process_name': 'cmd.exe'
-            }
+            {"actor": "attacker", "type": "logon"},
+            {"actor": "victim", "type": "process", "process_name": "cmd.exe"},
         ]
         generator = GroundTruthGenerator(minimal_scenario, events)
 
         iocs = generator._extract_iocs()
 
-        assert 'users' in iocs
-        assert 'attacker' in iocs['users']
-        assert 'victim' in iocs['users']
+        assert "users" in iocs
+        assert "attacker" in iocs["users"]
+        assert "victim" in iocs["users"]
 
     def test_extract_iocs_deduplicates(self, minimal_scenario):
         """_extract_iocs() should deduplicate IOCs."""
         events = [
-            {
-                'actor': 'attacker',
-                'type': 'process',
-                'process_name': 'powershell.exe'
-            },
-            {
-                'actor': 'attacker',
-                'type': 'process',
-                'process_name': 'powershell.exe'
-            }
+            {"actor": "attacker", "type": "process", "process_name": "powershell.exe"},
+            {"actor": "attacker", "type": "process", "process_name": "powershell.exe"},
         ]
         generator = GroundTruthGenerator(minimal_scenario, events)
 
         iocs = generator._extract_iocs()
 
         # Should only appear once
-        assert len(iocs['users']) == 1
-        assert len([p for p in iocs['processes'] if p == 'powershell.exe']) == 1
+        assert len(iocs["users"]) == 1
+        assert len([p for p in iocs["processes"] if p == "powershell.exe"]) == 1
 
     def test_extract_iocs_removes_empty_categories(self, minimal_scenario):
         """_extract_iocs() should remove empty IOC categories."""
-        events = [
-            {
-                'actor': 'attacker',
-                'type': 'process',
-                'process_name': 'cmd.exe'
-            }
-        ]
+        events = [{"actor": "attacker", "type": "process", "process_name": "cmd.exe"}]
         generator = GroundTruthGenerator(minimal_scenario, events)
 
         iocs = generator._extract_iocs()
 
         # Should have users and processes, but not network or files
-        assert 'users' in iocs
-        assert 'processes' in iocs
-        assert 'network' not in iocs
-        assert 'files' not in iocs
+        assert "users" in iocs
+        assert "processes" in iocs
+        assert "network" not in iocs
+        assert "files" not in iocs
 
     def test_format_iocs_network_section(self, minimal_scenario, malicious_events):
         """_format_iocs() should format network IOC section."""
-        iocs = {
-            'network': {'159.65.43.201:443 (C2 Server)', '203.0.113.50 (Attacker IP)'}
-        }
+        iocs = {"network": {"159.65.43.201:443 (C2 Server)", "203.0.113.50 (Attacker IP)"}}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         formatted = generator._format_iocs(iocs)
@@ -361,9 +341,7 @@ class TestGroundTruthGenerator:
 
     def test_format_iocs_process_section(self, minimal_scenario, malicious_events):
         """_format_iocs() should format process IOC section."""
-        iocs = {
-            'processes': {'powershell.exe', '`powershell.exe -enc PAYLOAD`'}
-        }
+        iocs = {"processes": {"powershell.exe", "`powershell.exe -enc PAYLOAD`"}}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         formatted = generator._format_iocs(iocs)
@@ -374,9 +352,7 @@ class TestGroundTruthGenerator:
 
     def test_format_iocs_user_section(self, minimal_scenario, malicious_events):
         """_format_iocs() should format user IOC section."""
-        iocs = {
-            'users': {'attacker', 'victim'}
-        }
+        iocs = {"users": {"attacker", "victim"}}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         formatted = generator._format_iocs(iocs)
@@ -395,21 +371,19 @@ class TestGroundTruthGenerator:
 
     def test_format_iocs_sorted(self, minimal_scenario, malicious_events):
         """_format_iocs() should sort IOCs alphabetically."""
-        iocs = {
-            'users': {'zebra', 'alpha', 'beta'}
-        }
+        iocs = {"users": {"zebra", "alpha", "beta"}}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
 
         formatted = generator._format_iocs(iocs)
-        lines = formatted.split('\n')
+        lines = formatted.split("\n")
 
         # Find lines with IOCs
-        ioc_lines = [l for l in lines if l.startswith('- ')]
+        ioc_lines = [line for line in lines if line.startswith("- ")]
 
         # Should be in alphabetical order
-        assert '- alpha' in ioc_lines[0]
-        assert '- beta' in ioc_lines[1]
-        assert '- zebra' in ioc_lines[2]
+        assert "- alpha" in ioc_lines[0]
+        assert "- beta" in ioc_lines[1]
+        assert "- zebra" in ioc_lines[2]
 
     def test_generate_includes_all_sections(self, minimal_scenario, malicious_events, tmp_path):
         """generate() should include all sections in output."""
@@ -429,9 +403,9 @@ class TestGroundTruthGenerator:
         """_extract_iocs() should handle connections without port."""
         events = [
             {
-                'actor': 'attacker',
-                'type': 'connection',
-                'dst_ip': '159.65.43.201'
+                "actor": "attacker",
+                "type": "connection",
+                "dst_ip": "159.65.43.201",
                 # No dst_port
             }
         ]
@@ -439,23 +413,23 @@ class TestGroundTruthGenerator:
 
         iocs = generator._extract_iocs()
 
-        assert 'network' in iocs
-        assert '159.65.43.201 (C2 Server)' in iocs['network']
+        assert "network" in iocs
+        assert "159.65.43.201 (C2 Server)" in iocs["network"]
 
     def test_format_event_details_missing_fields(self, minimal_scenario, malicious_events):
         """_format_event_details() should handle missing optional fields."""
         # Logon without optional fields
-        event_logon = {'type': 'logon'}
+        event_logon = {"type": "logon"}
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
         details = generator._format_event_details(event_logon)
         assert "N/A" in details
 
         # Process without optional fields
-        event_process = {'type': 'process'}
+        event_process = {"type": "process"}
         details = generator._format_event_details(event_process)
         assert "N/A" in details
 
         # Connection without optional fields
-        event_conn = {'type': 'connection'}
+        event_conn = {"type": "connection"}
         details = generator._format_event_details(event_conn)
         assert "N/A" in details

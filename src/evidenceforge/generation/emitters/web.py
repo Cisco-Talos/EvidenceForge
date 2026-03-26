@@ -33,24 +33,24 @@ class WebEmitter(HostMultiplexEmitter):
         net = event.network
 
         event_data = {
-            'timestamp': event.timestamp,
-            'client_ip': net.src_ip if net else '',
-            'username': '-',
-            'method': http.method,
-            'path': http.uri,
-            'protocol': f'HTTP/{http.version}',
-            'status_code': http.status_code,
-            'bytes_sent': http.response_body_len,
-            'referer': http.referrer or '-',
-            'user_agent': http.user_agent,
-            '_host_fqdn': host.fqdn or host.hostname,
+            "timestamp": event.timestamp,
+            "client_ip": net.src_ip if net else "",
+            "username": "-",
+            "method": http.method,
+            "path": http.uri,
+            "protocol": f"HTTP/{http.version}",
+            "status_code": http.status_code,
+            "bytes_sent": http.response_body_len,
+            "referer": http.referrer or "-",
+            "user_agent": http.user_agent,
+            "_host_fqdn": host.fqdn or host.hostname,
         }
         self._dispatch(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route web access event to per-host file."""
         rendered = self._render_event(event_data)
-        host_fqdn = event_data.pop('_host_fqdn', '')
+        host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
@@ -59,16 +59,16 @@ class WebEmitter(HostMultiplexEmitter):
         Format: <client_ip> - <username> [<timestamp>] "<method> <path> <protocol>" <status> <bytes> "<referer>" "<user_agent>"
         """
         context = {
-            'timestamp': event_data.get('timestamp'),
-            'client_ip': event_data.get('client_ip'),
-            'username': event_data.get('username'),
-            'method': event_data.get('method'),
-            'path': event_data.get('path'),
-            'protocol': event_data.get('protocol'),
-            'status_code': event_data.get('status_code'),
-            'bytes_sent': event_data.get('bytes_sent'),
-            'referer': event_data.get('referer'),
-            'user_agent': event_data.get('user_agent')
+            "timestamp": event_data.get("timestamp"),
+            "client_ip": event_data.get("client_ip"),
+            "username": event_data.get("username"),
+            "method": event_data.get("method"),
+            "path": event_data.get("path"),
+            "protocol": event_data.get("protocol"),
+            "status_code": event_data.get("status_code"),
+            "bytes_sent": event_data.get("bytes_sent"),
+            "referer": event_data.get("referer"),
+            "user_agent": event_data.get("user_agent"),
         }
 
         # Render template

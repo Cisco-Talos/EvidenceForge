@@ -22,9 +22,6 @@ from queue import Empty
 from threading import Lock
 from typing import Any
 
-from jinja2 import Template
-
-from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
@@ -154,7 +151,7 @@ class SensorMultiplexEmitter(LogEmitter):
         rendered = self._render_event(event_data)
         if rendered is None:
             return
-        sensor_hostnames = event_data.pop('_sensor_hostnames', None)
+        sensor_hostnames = event_data.pop("_sensor_hostnames", None)
         self.emit_to_sensors(rendered, sensor_hostnames)
 
     def _render_zeek_json(self, event_data: dict[str, Any]) -> str:
@@ -176,7 +173,7 @@ class SensorMultiplexEmitter(LogEmitter):
         data_fields = {}
         regular_fields = {}
         for key, value in event_data.items():
-            if key.startswith('_'):
+            if key.startswith("_"):
                 continue  # Skip internal metadata fields
             if "." in key:
                 data_fields[key] = value
@@ -192,9 +189,9 @@ class SensorMultiplexEmitter(LogEmitter):
         try:
             data = json.loads(rendered)
             # Round timestamp to 6 decimal places (Zeek standard)
-            if 'ts' in data and isinstance(data['ts'], float):
-                data['ts'] = round(data['ts'], 6)
-            return json.dumps(data, separators=(',', ':'))
+            if "ts" in data and isinstance(data["ts"], float):
+                data["ts"] = round(data["ts"], 6)
+            return json.dumps(data, separators=(",", ":"))
         except json.JSONDecodeError:
             return rendered.strip()
 

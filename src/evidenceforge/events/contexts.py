@@ -103,16 +103,16 @@ class DnsContext:
     """DNS query/response details for Zeek dns.log fan-out."""
 
     query: str
-    query_type: str = "A"           # qtype_name: "A", "AAAA", "PTR", "CNAME", "SOA", "SRV", "MX"
+    query_type: str = "A"  # qtype_name: "A", "AAAA", "PTR", "CNAME", "SOA", "SRV", "MX"
     response_ip: str = ""
-    rcode: str = "NOERROR"          # rcode_name: "NOERROR", "NXDOMAIN", "SERVFAIL"
+    rcode: str = "NOERROR"  # rcode_name: "NOERROR", "NXDOMAIN", "SERVFAIL"
 
     # Zeek dns.log fields
     trans_id: int = 0
     qclass: int = 1
     qclass_name: str = "C_INTERNET"
-    qtype: int = 1                  # Numeric: 1=A, 28=AAAA, 12=PTR, 5=CNAME, 6=SOA, 33=SRV, 15=MX
-    rcode_num: int = 0              # Numeric: 0=NOERROR, 2=SERVFAIL, 3=NXDOMAIN
+    qtype: int = 1  # Numeric: 1=A, 28=AAAA, 12=PTR, 5=CNAME, 6=SOA, 33=SRV, 15=MX
+    rcode_num: int = 0  # Numeric: 0=NOERROR, 2=SERVFAIL, 3=NXDOMAIN
     answers: list[str] = field(default_factory=list)
     TTLs: list[float] = field(default_factory=list)
     AA: bool = False
@@ -343,12 +343,12 @@ class NtpContext:
 class OcspContext:
     """OCSP response details for Zeek ocsp.log."""
 
-    id: str = ""                    # F-prefix file ID
+    id: str = ""  # F-prefix file ID
     hash_algorithm: str = "sha256"
     issuer_name_hash: str = ""
     issuer_key_hash: str = ""
     serial_number: str = ""
-    cert_status: str = "good"       # "good", "revoked", "unknown"
+    cert_status: str = "good"  # "good", "revoked", "unknown"
     this_update: float = 0.0
     next_update: float = 0.0
 
@@ -357,7 +357,7 @@ class OcspContext:
 class PeContext:
     """PE (Portable Executable) analysis for Zeek pe.log."""
 
-    id: str = ""                    # F-prefix file ID from files.log
+    id: str = ""  # F-prefix file ID from files.log
     machine: str = "AMD64"
     compile_ts: float = 0.0
     os: str = "WINDOWS_NT"
@@ -382,16 +382,16 @@ class ProxyContext:
     client_ip: str
     username: str = ""
     method: str = "GET"
-    url: str = ""               # Full destination URL or host:port for CONNECT
-    host: str = ""              # Destination hostname
+    url: str = ""  # Full destination URL or host:port for CONNECT
+    host: str = ""  # Destination hostname
     status_code: int = 200
-    sc_bytes: int = 0           # Server→client bytes
-    cs_bytes: int = 0           # Client→server bytes
-    time_taken: int = 0         # Request duration in ms
+    sc_bytes: int = 0  # Server→client bytes
+    cs_bytes: int = 0  # Client→server bytes
+    time_taken: int = 0  # Request duration in ms
     user_agent: str = ""
     content_type: str = ""
     cache_result: str = "MISS"  # HIT, MISS, NONE, DENIED
-    proxy_fqdn: str = ""        # FQDN of proxy system for routing
+    proxy_fqdn: str = ""  # FQDN of proxy system for routing
 
 
 @dataclass(slots=True)
@@ -402,5 +402,5 @@ class RawContext:
     local_only) but doesn't have a dedicated context model.
     """
 
-    target_format: str              # Emitter key, e.g. "syslog", "windows_event_security"
+    target_format: str  # Emitter key, e.g. "syslog", "windows_event_security"
     fields: dict[str, Any]

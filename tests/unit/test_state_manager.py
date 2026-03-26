@@ -1,6 +1,6 @@
 """Unit tests for StateManager."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -34,7 +34,7 @@ class TestSessionManagement:
     def test_create_session(self):
         """Test creating a new session."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         logon_id = sm.create_session(
             username="jdoe",
@@ -55,7 +55,7 @@ class TestSessionManagement:
     def test_create_session_increments_counter(self):
         """Test that creating sessions increments LogonID counter."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         id1 = sm.create_session("user1", "WS-01", 2, "192.168.1.1")
         id2 = sm.create_session("user2", "WS-02", 3, "192.168.1.2")
@@ -74,7 +74,7 @@ class TestSessionManagement:
     def test_get_sessions_for_user(self):
         """Test getting all sessions for a user."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.create_session("jdoe", "WS-01", 2, "192.168.1.1")
         sm.create_session("jdoe", "WS-02", 3, "192.168.1.1")
@@ -87,7 +87,7 @@ class TestSessionManagement:
     def test_get_sessions_on_system(self):
         """Test getting all sessions on a system."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.create_session("jdoe", "WS-01", 2, "192.168.1.1")
         sm.create_session("asmith", "WS-01", 3, "192.168.1.2")
@@ -100,7 +100,7 @@ class TestSessionManagement:
     def test_end_session(self):
         """Test ending a session."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         logon_id = sm.create_session("jdoe", "WS-01", 2, "192.168.1.1")
         assert sm.get_session(logon_id) is not None
@@ -118,7 +118,7 @@ class TestSessionManagement:
     def test_list_active_sessions(self):
         """Test listing all active sessions."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.create_session("user1", "WS-01", 2, "192.168.1.1")
         sm.create_session("user2", "WS-02", 3, "192.168.1.2")
@@ -133,7 +133,7 @@ class TestProcessManagement:
     def test_create_process(self):
         """Test creating a new process."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         pid = sm.create_process(
             system="WS-01",
@@ -156,18 +156,20 @@ class TestProcessManagement:
     def test_create_process_increments_per_system(self):
         """Test that PIDs increment per system with OS-aware allocation."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         # Windows path → multiples of 4
-        pid1 = sm.create_process("WS-01", 0, r"C:\Windows\explorer.exe", "explorer.exe", "jdoe", "Medium")
+        pid1 = sm.create_process(
+            "WS-01", 0, r"C:\Windows\explorer.exe", "explorer.exe", "jdoe", "Medium"
+        )
         pid2 = sm.create_process("WS-01", 0, r"C:\Windows\cmd.exe", "cmd.exe", "jdoe", "Medium")
         # Linux path → sequential
         pid3 = sm.create_process("WS-02", 0, "/usr/bin/bash", "bash", "asmith", "Medium")
 
         assert pid1 % 4 == 0  # Windows: multiple of 4
         assert pid2 % 4 == 0  # Windows: multiple of 4
-        assert pid2 > pid1    # Incrementing
-        assert pid3 >= 500    # Linux: starts in realistic range
+        assert pid2 > pid1  # Incrementing
+        assert pid3 >= 500  # Linux: starts in realistic range
 
     def test_create_process_requires_current_time(self):
         """Test that creating process fails if current_time not set."""
@@ -179,17 +181,15 @@ class TestProcessManagement:
     def test_create_process_validates_parent_exists(self):
         """Test that creating process fails if parent doesn't exist."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         with pytest.raises(StateError, match="parent PID .* does not exist"):
-            sm.create_process(
-                "WS-01", 999, "cmd.exe", "cmd.exe", "jdoe", "Medium"
-            )
+            sm.create_process("WS-01", 999, "cmd.exe", "cmd.exe", "jdoe", "Medium")
 
     def test_create_process_allows_parent_zero(self):
         """Test that parent_pid=0 is allowed (system processes)."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         pid = sm.create_process("WS-01", 0, "System", "System", "SYSTEM", "System")
         assert pid > 0  # PID allocated successfully
@@ -197,7 +197,7 @@ class TestProcessManagement:
     def test_create_process_with_valid_parent(self):
         """Test creating child process with valid parent."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         parent_pid = sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
         child_pid = sm.create_process("WS-01", parent_pid, "cmd.exe", "cmd.exe", "jdoe", "Medium")
@@ -209,7 +209,7 @@ class TestProcessManagement:
     def test_get_processes_for_user(self):
         """Test getting all processes for a user."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
         sm.create_process("WS-01", 0, "cmd.exe", "cmd.exe", "jdoe", "Medium")
@@ -222,7 +222,7 @@ class TestProcessManagement:
     def test_get_processes_on_system(self):
         """Test getting all processes on a system."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
         sm.create_process("WS-01", 0, "cmd.exe", "cmd.exe", "asmith", "Medium")
@@ -235,7 +235,7 @@ class TestProcessManagement:
     def test_end_process(self):
         """Test ending a process."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         pid = sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
         assert sm.get_process("WS-01", pid) is not None
@@ -253,7 +253,7 @@ class TestProcessManagement:
     def test_list_running_processes(self):
         """Test listing all running processes."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
         sm.create_process("WS-02", 0, "bash", "bash", "asmith", "Medium")
@@ -268,7 +268,7 @@ class TestConnectionManagement:
     def test_open_connection(self):
         """Test opening a new connection."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         conn_id = sm.open_connection(
             src_ip="192.168.1.100",
@@ -289,7 +289,7 @@ class TestConnectionManagement:
     def test_open_connection_increments_counter(self):
         """Test that connection IDs increment."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         id1 = sm.open_connection("192.168.1.1", 50000, "8.8.8.8", 53, "udp")
         id2 = sm.open_connection("192.168.1.1", 50001, "8.8.4.4", 53, "udp")
@@ -307,7 +307,7 @@ class TestConnectionManagement:
     def test_update_connection_bytes(self):
         """Test updating connection byte counts."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         conn_id = sm.open_connection("192.168.1.1", 50000, "8.8.8.8", 53, "udp")
         result = sm.update_connection_bytes(conn_id, 1024, 2048)
@@ -326,7 +326,7 @@ class TestConnectionManagement:
     def test_close_connection(self):
         """Test closing a connection."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         conn_id = sm.open_connection("192.168.1.1", 50000, "8.8.8.8", 53, "udp")
         assert sm.get_connection(conn_id) is not None
@@ -344,7 +344,7 @@ class TestConnectionManagement:
     def test_list_open_connections(self):
         """Test listing all open connections."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
         sm.open_connection("192.168.1.1", 50000, "8.8.8.8", 53, "udp")
         sm.open_connection("192.168.1.2", 50001, "8.8.4.4", 53, "udp")
@@ -405,7 +405,7 @@ class TestTimeManagement:
     def test_set_current_time(self):
         """Test setting current time."""
         sm = StateManager()
-        dt = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         sm.set_current_time(dt)
         assert sm.get_current_time() == dt
@@ -413,11 +413,11 @@ class TestTimeManagement:
     def test_advance_time(self):
         """Test advancing time by delta."""
         sm = StateManager()
-        dt = datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         sm.set_current_time(dt)
 
         sm.advance_time(timedelta(hours=1))
-        assert sm.get_current_time() == datetime(2024, 1, 15, 11, 0, 0, tzinfo=timezone.utc)
+        assert sm.get_current_time() == datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC)
 
     def test_advance_time_requires_current_time(self):
         """Test that advancing time fails if current_time not set."""
@@ -439,7 +439,7 @@ class TestStateQueries:
     def test_get_state_summary(self):
         """Test getting state summary."""
         sm = StateManager()
-        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc))
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
         sm.create_session("jdoe", "WS-01", 2, "192.168.1.1")
         sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
 

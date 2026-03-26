@@ -59,16 +59,19 @@ class TestBidirectionalSensor:
         systems = _make_systems()
         config = _make_config(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.10.10.0/24",
-                               systems=["WS-01", "WS-02"]),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24",
-                               systems=["SRV-01", "SRV-02"]),
+                NetworkSegment(
+                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                ),
+                NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01", "SRV-02"]),
             ],
             sensors=[
-                NetworkSensor(type="network", name="ws-tap",
-                              monitoring_segments=["workstations"],
-                              direction="bidirectional",
-                              log_formats=["zeek"]),
+                NetworkSensor(
+                    type="network",
+                    name="ws-tap",
+                    monitoring_segments=["workstations"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                ),
             ],
         )
         return NetworkVisibilityEngine(config, systems)
@@ -111,14 +114,18 @@ class TestDirectionFiltering:
         systems = _make_systems()
         config = _make_config(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.10.10.0/24",
-                               systems=["WS-01", "WS-02"]),
+                NetworkSegment(
+                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                ),
             ],
             sensors=[
-                NetworkSensor(type="network", name="sensor",
-                              monitoring_segments=["workstations"],
-                              direction=direction,
-                              log_formats=["zeek"]),
+                NetworkSensor(
+                    type="network",
+                    name="sensor",
+                    monitoring_segments=["workstations"],
+                    direction=direction,
+                    log_formats=["zeek"],
+                ),
             ],
         )
         return NetworkVisibilityEngine(config, systems)
@@ -151,26 +158,34 @@ class TestMultiSensorMultiFormat:
         systems = _make_systems()
         config = _make_config(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.10.10.0/24",
-                               systems=["WS-01", "WS-02"]),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24",
-                               systems=["SRV-01", "SRV-02"]),
-                NetworkSegment(name="dmz", cidr="10.10.50.0/24",
-                               systems=["DMZ-01"]),
+                NetworkSegment(
+                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                ),
+                NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01", "SRV-02"]),
+                NetworkSegment(name="dmz", cidr="10.10.50.0/24", systems=["DMZ-01"]),
             ],
             sensors=[
-                NetworkSensor(type="network", name="core-tap",
-                              monitoring_segments=["workstations", "servers"],
-                              direction="bidirectional",
-                              log_formats=["zeek"]),
-                NetworkSensor(type="ids", name="perimeter-ids",
-                              monitoring_segments=["dmz"],
-                              direction="inbound",
-                              log_formats=["snort_alert"]),
-                NetworkSensor(type="network", name="dmz-tap",
-                              monitoring_segments=["dmz"],
-                              direction="bidirectional",
-                              log_formats=["zeek"]),
+                NetworkSensor(
+                    type="network",
+                    name="core-tap",
+                    monitoring_segments=["workstations", "servers"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="ids",
+                    name="perimeter-ids",
+                    monitoring_segments=["dmz"],
+                    direction="inbound",
+                    log_formats=["snort_alert"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="dmz-tap",
+                    monitoring_segments=["dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                ),
             ],
         )
         return NetworkVisibilityEngine(config, systems)
@@ -229,10 +244,13 @@ class TestCIDRAutoInference:
                 NetworkSegment(name="servers", cidr="10.10.30.0/24"),
             ],
             sensors=[
-                NetworkSensor(type="network", name="sensor",
-                              monitoring_segments=["workstations"],
-                              direction="bidirectional",
-                              log_formats=["zeek"]),
+                NetworkSensor(
+                    type="network",
+                    name="sensor",
+                    monitoring_segments=["workstations"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                ),
             ],
         )
         engine = NetworkVisibilityEngine(config, systems)
@@ -247,14 +265,18 @@ class TestCIDRAutoInference:
         systems = _make_systems()
         config = _make_config(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.10.10.0/24",
-                               systems=["WS-01"]),  # Only WS-01 explicit
+                NetworkSegment(
+                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01"]
+                ),  # Only WS-01 explicit
             ],
             sensors=[
-                NetworkSensor(type="network", name="sensor",
-                              monitoring_segments=["workstations"],
-                              direction="bidirectional",
-                              log_formats=["zeek"]),
+                NetworkSensor(
+                    type="network",
+                    name="sensor",
+                    monitoring_segments=["workstations"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                ),
             ],
         )
         engine = NetworkVisibilityEngine(config, systems)
@@ -272,17 +294,20 @@ class TestTapVsSpanPlacement:
         systems = _make_systems()
         config = _make_config(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.10.10.0/24",
-                               systems=["WS-01", "WS-02"]),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24",
-                               systems=["SRV-01", "SRV-02"]),
+                NetworkSegment(
+                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                ),
+                NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01", "SRV-02"]),
             ],
             sensors=[
-                NetworkSensor(type="network", name="sensor",
-                              monitoring_segments=["workstations"],
-                              direction="bidirectional",
-                              placement=placement,
-                              log_formats=["zeek"]),
+                NetworkSensor(
+                    type="network",
+                    name="sensor",
+                    monitoring_segments=["workstations"],
+                    direction="bidirectional",
+                    placement=placement,
+                    log_formats=["zeek"],
+                ),
             ],
         )
         return NetworkVisibilityEngine(config, systems)

@@ -4,7 +4,7 @@ Phase 2.4: Tests that timezone configuration works end-to-end
 when loading scenarios with multiple timezone overrides.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from evidenceforge.models.scenario import (
     BaselineActivity,
@@ -13,8 +13,8 @@ from evidenceforge.models.scenario import (
     Persona,
     Scenario,
     System,
-    Timezone,
     TimeWindow,
+    Timezone,
     User,
 )
 from evidenceforge.utils.time import convert_to_output_timezone, get_system_timezone
@@ -63,7 +63,12 @@ class TestMultiTimezoneScenario:
                     System(hostname="US-WS-01", ip="10.1.0.1", os="Windows 10", type="workstation"),
                     System(hostname="EU-WS-01", ip="10.2.0.1", os="Windows 10", type="workstation"),
                     System(hostname="AP-WS-01", ip="10.3.0.1", os="Windows 10", type="workstation"),
-                    System(hostname="DC-01", ip="10.0.0.1", os="Windows Server 2019", type="domain_controller"),
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.1",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
                 ],
             ),
             personas=[
@@ -105,7 +110,7 @@ class TestMultiTimezoneScenario:
         """Same UTC time should produce different local times per system."""
         scenario = self._make_multi_tz_scenario()
         env = scenario.environment
-        utc_time = datetime(2024, 1, 15, 15, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 1, 15, 15, 0, 0, tzinfo=UTC)
 
         us_local = convert_to_output_timezone(utc_time, "US-WS-01", env)
         eu_local = convert_to_output_timezone(utc_time, "EU-WS-01", env)
@@ -115,8 +120,8 @@ class TestMultiTimezoneScenario:
         # January: EST=-5, GMT=0, JST=+9, UTC=0
         assert us_local.hour == 10  # 15:00 UTC - 5 = 10:00 EST
         assert eu_local.hour == 15  # 15:00 UTC + 0 = 15:00 GMT
-        assert ap_local.hour == 0   # 15:00 UTC + 9 = 00:00 next day JST
-        assert ap_local.day == 16   # Next day in Tokyo
+        assert ap_local.hour == 0  # 15:00 UTC + 9 = 00:00 next day JST
+        assert ap_local.day == 16  # Next day in Tokyo
         assert dc_local.hour == 15  # UTC stays UTC
 
     def test_work_hours_auto_parsed_on_persona_load(self):
@@ -147,11 +152,15 @@ class TestMultiTimezoneScenario:
                 ],
                 systems=[
                     System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
-                    System(hostname="SRV-01", ip="10.0.0.2", os="Windows Server 2019", type="server"),
+                    System(
+                        hostname="SRV-01", ip="10.0.0.2", os="Windows Server 2019", type="server"
+                    ),
                 ],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="low", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./output"),
         )
 

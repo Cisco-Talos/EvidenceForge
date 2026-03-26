@@ -13,10 +13,17 @@ LLM expansion or complex parsing. Phase 2/3 will add:
 import ipaddress
 import re
 from datetime import datetime
-from typing import Annotated, Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal
 
 import pytz
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class TimeWindow(BaseModel):
@@ -63,7 +70,6 @@ class TimeWindow(BaseModel):
         return self
 
 
-
 class User(BaseModel):
     """User definition (simplified for Phase 1).
 
@@ -96,7 +102,6 @@ class User(BaseModel):
         return v
 
 
-
 class System(BaseModel):
     """System definition (simplified for Phase 1).
 
@@ -118,7 +123,10 @@ class System(BaseModel):
     type: str = Field(..., pattern="^(workstation|server|domain_controller)$")
     assigned_user: str | None = None
     services: list[str] = Field(default_factory=list)
-    roles: list[str] = Field(default_factory=list, description="System roles: forward_proxy, web_server, dns_server, mail_server, etc.")
+    roles: list[str] = Field(
+        default_factory=list,
+        description="System roles: forward_proxy, web_server, dns_server, mail_server, etc.",
+    )
 
     @field_validator("ip")
     @classmethod
@@ -129,7 +137,6 @@ class System(BaseModel):
         except ValueError as e:
             raise ValueError(f"Invalid IP address: {v}") from e
         return v
-
 
 
 class Group(BaseModel):
@@ -148,7 +155,6 @@ class Group(BaseModel):
     description: str | None = None
     members: list[str] = Field(default_factory=list)
     permissions: list[str] | None = None
-
 
 
 class Persona(BaseModel):
@@ -180,23 +186,20 @@ class Persona(BaseModel):
     risk_profile: str = Field(default="medium", pattern="^(low|medium|high)$")
 
     # Phase 2.4 optional fields (backward compatible - prepare for future LLM expansion)
-    expanded_activities: Optional[list[dict[str, Any]]] = Field(
-        None,
-        description="Detailed activity sequences (populated by LLM in Phase 3.1)"
+    expanded_activities: list[dict[str, Any]] | None = Field(
+        None, description="Detailed activity sequences (populated by LLM in Phase 3.1)"
     )
-    work_hours_parsed: Optional[dict[str, Any]] = Field(
-        None,
-        description="Parsed work hours distribution (auto-populated from work_hours)"
+    work_hours_parsed: dict[str, Any] | None = Field(
+        None, description="Parsed work hours distribution (auto-populated from work_hours)"
     )
-    activity_intensity: Optional[dict[str, int]] = Field(
-        None,
-        description="Per-activity-type intensity overrides (events/hour)"
+    activity_intensity: dict[str, int] | None = Field(
+        None, description="Per-activity-type intensity overrides (events/hour)"
     )
 
     model_config = ConfigDict(extra="forbid")
 
-    @model_validator(mode='after')
-    def parse_work_hours_on_load(self) -> 'Persona':
+    @model_validator(mode="after")
+    def parse_work_hours_on_load(self) -> "Persona":
         """Auto-populate work_hours_parsed if not provided.
 
         Phase 2.4: Parse work_hours string into structured time distribution.
@@ -205,6 +208,7 @@ class Persona(BaseModel):
             try:
                 # Import here to avoid circular dependency
                 from evidenceforge.utils.time import parse_work_hours
+
                 self.work_hours_parsed = parse_work_hours(self.work_hours)
             except Exception:
                 # If parsing fails, leave work_hours_parsed as None
@@ -238,6 +242,7 @@ class BaselineActivity(BaseModel):
 
 class _EventSpecBase(BaseModel):
     """Base for all event spec models. Common optional metadata fields."""
+
     technique: str | None = None  # MITRE ATT&CK technique ID (for GROUND_TRUTH.md)
     description: str | None = None  # Human-readable description (for GROUND_TRUTH.md)
     model_config = ConfigDict(extra="forbid")
@@ -245,6 +250,7 @@ class _EventSpecBase(BaseModel):
 
 class ProcessEventSpec(_EventSpecBase):
     """Process execution event (generates 4688, Sysmon 1, eCAR PROCESS/CREATE)."""
+
     type: Literal["process"] = "process"
     process_name: str
     command_line: str | None = None  # defaults to process_name at generation time
@@ -253,6 +259,7 @@ class ProcessEventSpec(_EventSpecBase):
 
 class LogonEventSpec(_EventSpecBase):
     """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN)."""
+
     type: Literal["logon"] = "logon"
     logon_type: int = 3
     source_ip: str | None = None
@@ -264,6 +271,7 @@ class FailedLogonEventSpec(_EventSpecBase):
     If target_username is set, the failed logon targets that user (e.g., help desk
     testing a locked-out account). Otherwise, the actor is used as the target.
     """
+
     type: Literal["failed_logon"] = "failed_logon"
     source_ip: str | None = None
     logon_type: int = 3
@@ -272,11 +280,13 @@ class FailedLogonEventSpec(_EventSpecBase):
 
 class LogoffEventSpec(_EventSpecBase):
     """Logoff event (generates 4634, eCAR USER_SESSION/LOGOUT)."""
+
     type: Literal["logoff"] = "logoff"
 
 
 class ConnectionEventSpec(_EventSpecBase):
     """Network connection event (generates Zeek conn, eCAR FLOW, optionally Snort)."""
+
     type: Literal["connection"] = "connection"
     dst_ip: str
     dst_port: int = 443
@@ -286,18 +296,21 @@ class ConnectionEventSpec(_EventSpecBase):
 
 class SshSessionEventSpec(_EventSpecBase):
     """SSH session event (generates Zeek conn + syslog sshd + eCAR)."""
+
     type: Literal["ssh_session"] = "ssh_session"
     source_ip: str | None = None
 
 
 class RdpSessionEventSpec(_EventSpecBase):
     """RDP session event (generates Zeek conn + 4624 type 10 + eCAR on target)."""
+
     type: Literal["rdp_session"] = "rdp_session"
     source_ip: str | None = None
 
 
 class AccountCreatedEventSpec(_EventSpecBase):
     """Account creation event (generates 4720 on DC)."""
+
     type: Literal["account_created"] = "account_created"
     target_username: str
     target_sid: str | None = None  # auto-generated from domain SID if not provided
@@ -305,6 +318,7 @@ class AccountCreatedEventSpec(_EventSpecBase):
 
 class AccountDeletedEventSpec(_EventSpecBase):
     """Account deletion event (generates 4726 on DC)."""
+
     type: Literal["account_deleted"] = "account_deleted"
     target_username: str
     target_sid: str | None = None
@@ -312,6 +326,7 @@ class AccountDeletedEventSpec(_EventSpecBase):
 
 class GroupMemberAddedEventSpec(_EventSpecBase):
     """Group membership change event (generates 4728/4732/4756 on DC)."""
+
     type: Literal["group_member_added"] = "group_member_added"
     group_name: str
     member_name: str
@@ -320,6 +335,7 @@ class GroupMemberAddedEventSpec(_EventSpecBase):
 
 class ServiceInstalledEventSpec(_EventSpecBase):
     """Service installation event (generates 4697)."""
+
     type: Literal["service_installed"] = "service_installed"
     service_name: str
     service_file_name: str
@@ -328,6 +344,7 @@ class ServiceInstalledEventSpec(_EventSpecBase):
 
 class ScheduledTaskCreatedEventSpec(_EventSpecBase):
     """Scheduled task creation event (generates 4698)."""
+
     type: Literal["scheduled_task_created"] = "scheduled_task_created"
     task_name: str
     task_content: str | None = None
@@ -335,11 +352,13 @@ class ScheduledTaskCreatedEventSpec(_EventSpecBase):
 
 class LogClearedEventSpec(_EventSpecBase):
     """Security log cleared event (generates 1102)."""
+
     type: Literal["log_cleared"] = "log_cleared"
 
 
 class CreateRemoteThreadEventSpec(_EventSpecBase):
     """Remote thread injection event (generates Sysmon Event 8)."""
+
     type: Literal["create_remote_thread"] = "create_remote_thread"
     target_process: str
 
@@ -350,6 +369,7 @@ class RawEventSpec(_EventSpecBase):
     Use for events without a dedicated typed spec (e.g., custom syslog messages,
     specific Windows events not covered by other types).
     """
+
     type: Literal["raw"] = "raw"
     target_format: str
     fields: dict[str, Any] = Field(default_factory=dict)
@@ -358,13 +378,21 @@ class RawEventSpec(_EventSpecBase):
 
 # Discriminated union of all event spec types
 EventSpec = Annotated[
-    Union[
-        ProcessEventSpec, LogonEventSpec, FailedLogonEventSpec, LogoffEventSpec,
-        ConnectionEventSpec, SshSessionEventSpec, RdpSessionEventSpec,
-        AccountCreatedEventSpec, AccountDeletedEventSpec, GroupMemberAddedEventSpec,
-        ServiceInstalledEventSpec, ScheduledTaskCreatedEventSpec,
-        LogClearedEventSpec, CreateRemoteThreadEventSpec, RawEventSpec,
-    ],
+    ProcessEventSpec
+    | LogonEventSpec
+    | FailedLogonEventSpec
+    | LogoffEventSpec
+    | ConnectionEventSpec
+    | SshSessionEventSpec
+    | RdpSessionEventSpec
+    | AccountCreatedEventSpec
+    | AccountDeletedEventSpec
+    | GroupMemberAddedEventSpec
+    | ServiceInstalledEventSpec
+    | ScheduledTaskCreatedEventSpec
+    | LogClearedEventSpec
+    | CreateRemoteThreadEventSpec
+    | RawEventSpec,
     Discriminator("type"),
 ]
 
@@ -392,7 +420,6 @@ class StorylineEvent(BaseModel):
     events: list[EventSpec]
 
 
-
 class Timezone(BaseModel):
     """Timezone configuration.
 
@@ -418,7 +445,6 @@ class Timezone(BaseModel):
         except pytz.UnknownTimeZoneError as e:
             raise ValueError(f"Unknown timezone: {v}") from e
         return v
-
 
 
 class NetworkSegment(BaseModel):
@@ -449,7 +475,6 @@ class NetworkSegment(BaseModel):
         return v
 
 
-
 class NetworkSensor(BaseModel):
     """Network sensor definition.
 
@@ -471,13 +496,10 @@ class NetworkSensor(BaseModel):
     name: str
     hostname: str = ""
     monitoring_segments: list[str]
-    direction: str = Field(
-        default="bidirectional", pattern="^(inbound|outbound|bidirectional)$"
-    )
+    direction: str = Field(default="bidirectional", pattern="^(inbound|outbound|bidirectional)$")
     placement: str = Field(default="span", pattern="^(span|tap)$")
     log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
     description: str = ""
-
 
 
 class NetworkConfig(BaseModel):
@@ -506,7 +528,6 @@ class NetworkConfig(BaseModel):
         if not v:
             raise ValueError("Network config must have at least one sensor")
         return v
-
 
 
 class Environment(BaseModel):
@@ -561,7 +582,6 @@ class Environment(BaseModel):
         return v
 
 
-
 class OutputSpec(BaseModel):
     """Output specification.
 
@@ -576,7 +596,6 @@ class OutputSpec(BaseModel):
     logs: list[dict[str, Any]]
     destination: str
     compression: bool = Field(default=False)
-
 
 
 class Scenario(BaseModel):
@@ -627,7 +646,5 @@ class Scenario(BaseModel):
     def validate_logon_grace_period(cls, v: str) -> str:
         """Validate logon_grace_period uses a valid duration format."""
         if not re.match(r"^(\d+(ms|[hdms]))+$", v):
-            raise ValueError(
-                "logon_grace_period must be a duration like '30m', '1h', '2h30m'"
-            )
+            raise ValueError("logon_grace_period must be a duration like '30m', '1h', '2h30m'")
         return v

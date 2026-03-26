@@ -5,16 +5,14 @@ checks acceptance criteria, and assembles the QualityReport.
 """
 
 import logging
-from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
-from evidenceforge.evaluation.dimensions.record_fidelity import RecordFidelityScorer
-from evidenceforge.evaluation.dimensions.signal_integrity import SignalIntegrityScorer
 from evidenceforge.evaluation.dimensions.cross_source import CrossSourceScorer
 from evidenceforge.evaluation.dimensions.noise_realism import NoiseRealismScorer
+from evidenceforge.evaluation.dimensions.record_fidelity import RecordFidelityScorer
+from evidenceforge.evaluation.dimensions.signal_integrity import SignalIntegrityScorer
 from evidenceforge.evaluation.dimensions.temporal import TemporalRealismScorer
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
@@ -89,27 +87,31 @@ class EvaluationEngine:
         self._progress("phase_start", {"phase": "parsing"})
         records, source_counts = self._parse_all_logs()
         total_records = sum(source_counts.values())
-        self._progress("phase_done", {
-            "phase": "parsing",
-            "total_records": total_records,
-            "sources": len(source_counts),
-        })
-
-        logger.info(
-            f"Parsed {total_records} records across {len(source_counts)} sources"
+        self._progress(
+            "phase_done",
+            {
+                "phase": "parsing",
+                "total_records": total_records,
+                "sources": len(source_counts),
+            },
         )
+
+        logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
 
         # 2. Run each available dimension scorer
         total_dims = len(DIMENSION_SCORERS)
         self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_dims})
         dimensions: list[DimensionScore] = []
         for i, scorer in enumerate(DIMENSION_SCORERS, 1):
-            self._progress("dimension_start", {
-                "number": scorer.number,
-                "name": scorer.name,
-                "step": i,
-                "total": total_dims,
-            })
+            self._progress(
+                "dimension_start",
+                {
+                    "number": scorer.number,
+                    "name": scorer.name,
+                    "step": i,
+                    "total": total_dims,
+                },
+            )
             logger.info(f"Scoring Dimension {scorer.number}: {scorer.name}")
             try:
                 dim_score = scorer.score(records, self.scenario, progress=self._progress)
@@ -124,11 +126,16 @@ class EvaluationEngine:
                         score=None,
                     )
                 )
-            self._progress("dimension_done", {
-                "number": scorer.number,
-                "name": scorer.name,
-                "score": dim_score.score if dimensions and dimensions[-1].score is not None else None,
-            })
+            self._progress(
+                "dimension_done",
+                {
+                    "number": scorer.number,
+                    "name": scorer.name,
+                    "score": dim_score.score
+                    if dimensions and dimensions[-1].score is not None
+                    else None,
+                },
+            )
 
         # 3. Compute overall score (weighted average of available dimensions)
         overall = self._compute_overall(dimensions)
@@ -136,8 +143,7 @@ class EvaluationEngine:
         # 4. Check acceptance criteria
         acceptance_criteria = self._check_acceptance(dimensions)
         all_hard_pass = all(
-            c.passed for c in acceptance_criteria
-            if c.level == "hard" and c.passed is not None
+            c.passed for c in acceptance_criteria if c.level == "hard" and c.passed is not None
         )
 
         # 5. Build flags
@@ -145,14 +151,14 @@ class EvaluationEngine:
 
         return QualityReport(
             scenario_name=self.scenario.name,
-            evaluated_at=datetime.now(timezone.utc),
+            evaluated_at=datetime.now(UTC),
             total_records=total_records,
             source_counts=source_counts,
             overall_score=overall,
             dimensions=dimensions,
-            acceptance_passed=all_hard_pass if any(
-                c.passed is not None for c in acceptance_criteria if c.level == "hard"
-            ) else None,
+            acceptance_passed=all_hard_pass
+            if any(c.passed is not None for c in acceptance_criteria if c.level == "hard")
+            else None,
             acceptance_criteria=acceptance_criteria,
             flags=flags,
         )
@@ -165,11 +171,14 @@ class EvaluationEngine:
 
         total_formats = len(file_map)
         for i, (format_name, paths) in enumerate(file_map.items(), 1):
-            self._progress("parsing_format", {
-                "format": format_name,
-                "step": i,
-                "total": total_formats,
-            })
+            self._progress(
+                "parsing_format",
+                {
+                    "format": format_name,
+                    "step": i,
+                    "total": total_formats,
+                },
+            )
             parser = get_parser(format_name)
             format_records: list[ParsedRecord] = []
             for path in paths:
@@ -204,18 +213,14 @@ class EvaluationEngine:
             result = criterion.model_copy()
 
             # Find the matching dimension
-            dim = next(
-                (d for d in dimensions if d.number == criterion.dimension), None
-            )
+            dim = next((d for d in dimensions if d.number == criterion.dimension), None)
             if dim is None or dim.score is None:
                 # Dimension not yet implemented — criterion is indeterminate
                 results.append(result)
                 continue
 
             # Find the matching sub-score
-            sub = next(
-                (s for s in dim.sub_scores if s.key == criterion.sub_score_key), None
-            )
+            sub = next((s for s in dim.sub_scores if s.key == criterion.sub_score_key), None)
             if sub is None or sub.score is None:
                 results.append(result)
                 continue
@@ -238,16 +243,13 @@ class EvaluationEngine:
         for dim in dimensions:
             for sub in dim.sub_scores:
                 if sub.score is not None and sub.score < 50:
-                    flags.append(
-                        f"{sub.name}: {sub.score:.0f}/100 ({sub.details})"
-                    )
+                    flags.append(f"{sub.name}: {sub.score:.0f}/100 ({sub.details})")
 
         # Flag failed acceptance criteria
         for c in criteria:
             if c.passed is False:
                 flags.append(
-                    f"[{c.level.upper()}] {c.name}: "
-                    f"{c.actual:.1f} < {c.threshold:.1f} threshold"
+                    f"[{c.level.upper()}] {c.name}: {c.actual:.1f} < {c.threshold:.1f} threshold"
                 )
 
         return flags

@@ -12,8 +12,7 @@ import logging
 import random
 import statistics
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime, timedelta
 
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
@@ -22,7 +21,6 @@ from evidenceforge.evaluation.dimensions import (
 )
 from evidenceforge.evaluation.dimensions.temporal import (
     _HOST_FIELD_MAP,
-    _extract_username,
 )
 from evidenceforge.evaluation.models import DimensionScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
@@ -74,7 +72,7 @@ def _normalize_hostname(hostname: str) -> str:
 
 def _normalize_ts(ts: datetime) -> datetime:
     if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc)
+        return ts.replace(tzinfo=UTC)
     return ts
 
 
@@ -112,7 +110,9 @@ class CrossSourceScorer(DimensionScorer):
         s4 = self._score_baseline_sampled(records, vis, host_time_index)
         progress("sub_score_done", {"name": "Baseline Coherence (Sampled)", "score": s4.score})
 
-        progress("sub_score_start", {"name": "Baseline Coherence (Aggregate)", "step": 5, "total": 5})
+        progress(
+            "sub_score_start", {"name": "Baseline Coherence (Aggregate)", "step": 5, "total": 5}
+        )
         s5 = self._score_baseline_aggregate(records, vis)
         progress("sub_score_done", {"name": "Baseline Coherence (Aggregate)", "score": s5.score})
 
@@ -120,8 +120,11 @@ class CrossSourceScorer(DimensionScorer):
         dim_score = sum(s.score * s.weight for s in sub_scores if s.score is not None)
 
         return DimensionScore(
-            number=self.number, name=self.name, weight=self.weight,
-            score=dim_score, sub_scores=sub_scores,
+            number=self.number,
+            name=self.name,
+            weight=self.weight,
+            score=dim_score,
+            sub_scores=sub_scores,
         )
 
     # --- Host-Time Index ---
@@ -135,9 +138,7 @@ class CrossSourceScorer(DimensionScorer):
         Enables O(1) lookups for finding records near a given host+time,
         replacing O(n) linear scans.
         """
-        index: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
+        index: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(lambda: defaultdict(list))
         for format_name, record_list in records.items():
             for rec in record_list:
                 if rec.timestamp is None:
@@ -154,7 +155,9 @@ class CrossSourceScorer(DimensionScorer):
     # --- Sub-score 1: Source Correctness ---
 
     def _score_source_correctness(
-        self, records: dict[str, list[ParsedRecord]], vis: VisibilityModel,
+        self,
+        records: dict[str, list[ParsedRecord]],
+        vis: VisibilityModel,
     ) -> SubScore:
         total = 0
         correct = 0
@@ -175,9 +178,7 @@ class CrossSourceScorer(DimensionScorer):
 
                 if hostname not in vis.hostnames:
                     if len(failures) < 10:
-                        failures.append(
-                            f"[{format_name}] Host '{hostname}' not in scenario"
-                        )
+                        failures.append(f"[{format_name}] Host '{hostname}' not in scenario")
                 elif host_os == expected_os:
                     correct += 1
                 elif host_os == "unknown":
@@ -189,7 +190,9 @@ class CrossSourceScorer(DimensionScorer):
 
         score = (100.0 * correct / total) if total > 0 else 100.0
         return SubScore(
-            name="Source Correctness", key="source_correctness", weight=0.20,
+            name="Source Correctness",
+            key="source_correctness",
+            weight=0.20,
             score=score,
             details=f"{correct}/{total} records in correct OS-specific sources",
             sample_failures=failures,
@@ -207,8 +210,11 @@ class CrossSourceScorer(DimensionScorer):
         storyline = scenario.storyline or []
         if not storyline:
             return SubScore(
-                name="Storyline Trace Coverage", key="storyline_trace_coverage", weight=0.20,
-                score=100.0, details="No storyline events",
+                name="Storyline Trace Coverage",
+                key="storyline_trace_coverage",
+                weight=0.20,
+                score=100.0,
+                details="No storyline events",
             )
 
         from evidenceforge.evaluation.dimensions.signal_integrity import (
@@ -249,7 +255,9 @@ class CrossSourceScorer(DimensionScorer):
 
         score = (100.0 * found / total_expected) if total_expected > 0 else 100.0
         return SubScore(
-            name="Storyline Trace Coverage", key="storyline_trace_coverage", weight=0.20,
+            name="Storyline Trace Coverage",
+            key="storyline_trace_coverage",
+            weight=0.20,
             score=score,
             details=f"{found}/{total_expected} expected format-traces found",
             sample_failures=failures,
@@ -259,9 +267,7 @@ class CrossSourceScorer(DimensionScorer):
 
     def _score_field_agreement(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
         # Group records by (hostname, time_bucket_30s) to find cross-source correlations
-        buckets: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
+        buckets: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(lambda: defaultdict(list))
 
         for format_name, record_list in records.items():
             for record in record_list:
@@ -304,7 +310,9 @@ class CrossSourceScorer(DimensionScorer):
 
         score = (100.0 * agreeing / total_groups) if total_groups > 0 else 100.0
         return SubScore(
-            name="Cross-Source Field Agreement", key="field_agreement", weight=0.20,
+            name="Cross-Source Field Agreement",
+            key="field_agreement",
+            weight=0.20,
             score=score,
             details=f"{agreeing}/{total_groups} cross-source groups agree on fields",
             sample_failures=failures,
@@ -312,7 +320,8 @@ class CrossSourceScorer(DimensionScorer):
 
     @staticmethod
     def _timestamps_agree(
-        recs_a: list[ParsedRecord], recs_b: list[ParsedRecord],
+        recs_a: list[ParsedRecord],
+        recs_b: list[ParsedRecord],
     ) -> bool:
         """Check if records from two formats are within timestamp tolerance.
 
@@ -338,8 +347,11 @@ class CrossSourceScorer(DimensionScorer):
 
         if len(all_records) < 20:
             return SubScore(
-                name="Baseline Coherence (Sampled)", key="baseline_sampled", weight=0.20,
-                score=100.0, details="Too few records for sampling",
+                name="Baseline Coherence (Sampled)",
+                key="baseline_sampled",
+                weight=0.20,
+                score=100.0,
+                details="Too few records for sampling",
             )
 
         # Sample 5%, capped at 500 (statistically sufficient)
@@ -375,7 +387,9 @@ class CrossSourceScorer(DimensionScorer):
 
         score = (100.0 * found / total) if total > 0 else 100.0
         return SubScore(
-            name="Baseline Coherence (Sampled)", key="baseline_sampled", weight=0.20,
+            name="Baseline Coherence (Sampled)",
+            key="baseline_sampled",
+            weight=0.20,
             score=score,
             details=f"{found}/{total} sampled cross-source checks found nearby records",
         )
@@ -383,7 +397,9 @@ class CrossSourceScorer(DimensionScorer):
     # --- Sub-score 5: Baseline Coherence (Aggregate) ---
 
     def _score_baseline_aggregate(
-        self, records: dict[str, list[ParsedRecord]], vis: VisibilityModel,
+        self,
+        records: dict[str, list[ParsedRecord]],
+        vis: VisibilityModel,
     ) -> SubScore:
         # Count events per (hostname, format)
         host_format_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -396,8 +412,11 @@ class CrossSourceScorer(DimensionScorer):
 
         if not host_format_counts:
             return SubScore(
-                name="Baseline Coherence (Aggregate)", key="baseline_aggregate", weight=0.20,
-                score=100.0, details="No host-attributed records",
+                name="Baseline Coherence (Aggregate)",
+                key="baseline_aggregate",
+                weight=0.20,
+                score=100.0,
+                details="No host-attributed records",
             )
 
         # For each host, check if event counts across expected formats are proportional
@@ -435,7 +454,9 @@ class CrossSourceScorer(DimensionScorer):
 
         score = statistics.mean(ratio_scores) if ratio_scores else 100.0
         return SubScore(
-            name="Baseline Coherence (Aggregate)", key="baseline_aggregate", weight=0.20,
+            name="Baseline Coherence (Aggregate)",
+            key="baseline_aggregate",
+            weight=0.20,
             score=score,
             details=f"Ratio consistency scored for {len(ratio_scores)} hosts",
         )

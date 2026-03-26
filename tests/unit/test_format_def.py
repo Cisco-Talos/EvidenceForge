@@ -154,7 +154,9 @@ class TestFieldDefinition:
         """Test that extra fields are rejected."""
         with pytest.raises(ValidationError):
             FieldDefinition(
-                name="test", type=FieldType.STRING, unknown_field="value"  # type: ignore
+                name="test",
+                type=FieldType.STRING,
+                unknown_field="value",  # type: ignore
             )
 
 
@@ -289,9 +291,7 @@ class TestFormatDefinition:
             description="Test format",
             category="host",
             fields=[FieldDefinition(name="field1", type=FieldType.STRING)],
-            output=OutputTemplate(
-                format="text", template="test", file_extension=".txt"
-            ),
+            output=OutputTemplate(format="text", template="test", file_extension=".txt"),
         )
         assert fmt.name == "test_format"
         assert fmt.version == "1.0"

@@ -28,26 +28,30 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
         net = event.network
         ssl = event.ssl
         event_data: dict[str, Any] = {
-            'ts': event.timestamp,
-            'uid': net.zeek_uid,
-            'id.orig_h': net.src_ip,
-            'id.orig_p': net.src_port,
-            'id.resp_h': net.dst_ip,
-            'id.resp_p': net.dst_port,
-            'version': ssl.version or None,
-            'cipher': ssl.cipher or None,
-            'server_name': ssl.server_name or None,
-            'resumed': ssl.resumed,
-            'established': ssl.established,
-            'ssl_history': ssl.ssl_history or None,
-            '_sensor_hostnames': event._sensor_hostnames_by_format.get(self.format_def.name, []),
+            "ts": event.timestamp,
+            "uid": net.zeek_uid,
+            "id.orig_h": net.src_ip,
+            "id.orig_p": net.src_port,
+            "id.resp_h": net.dst_ip,
+            "id.resp_p": net.dst_port,
+            "version": ssl.version or None,
+            "cipher": ssl.cipher or None,
+            "server_name": ssl.server_name or None,
+            "resumed": ssl.resumed,
+            "established": ssl.established,
+            "ssl_history": ssl.ssl_history or None,
+            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = [
-            "version", "cipher", "server_name", "resumed",
-            "established", "ssl_history",
+            "version",
+            "cipher",
+            "server_name",
+            "resumed",
+            "established",
+            "ssl_history",
         ]
         for f in optional_fields:
             if f not in event_data:

@@ -88,17 +88,13 @@ class TestMediumDatasetGeneration:
         """Should produce substantial Windows Event output (>1MB)."""
         win_file = generated_output["files"].get("windows_event_security.xml")
         assert win_file is not None
-        assert win_file["size"] > 1_000_000, (
-            f"Windows events too small: {win_file['size']} bytes"
-        )
+        assert win_file["size"] > 1_000_000, f"Windows events too small: {win_file['size']} bytes"
 
     def test_zeek_events_substantial(self, generated_output):
         """Should produce substantial Zeek output (>100KB)."""
         zeek_file = generated_output["files"].get("zeek_conn.json")
         assert zeek_file is not None
-        assert zeek_file["size"] > 100_000, (
-            f"Zeek output too small: {zeek_file['size']} bytes"
-        )
+        assert zeek_file["size"] > 100_000, f"Zeek output too small: {zeek_file['size']} bytes"
 
     def test_zeek_events_valid_json(self, generated_output):
         """All Zeek events should be valid JSON (NDJSON)."""

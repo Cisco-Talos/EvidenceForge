@@ -11,10 +11,24 @@ logger = logging.getLogger(__name__)
 def get_builtin_personas_dir() -> Path:
     """Get the path to the pre-built personas directory.
 
-    Resolves from package data: evidenceforge/_data/personas/
-    Works both in development (editable install) and installed mode.
+    Tries installed package path first (evidenceforge/_data/personas/),
+    then falls back to dev-mode project root (personas/).
     """
-    return Path(__file__).resolve().parent.parent / "_data" / "personas"
+    # Installed package path (hatch force-include copies personas here)
+    installed = Path(__file__).resolve().parent.parent / "_data" / "personas"
+    if installed.is_dir() and any(installed.glob("*.yaml")):
+        return installed
+
+    # Dev-mode fallback: walk up from this file to find project root personas/
+    current = Path(__file__).resolve().parent
+    for _ in range(5):
+        current = current.parent
+        candidate = current / "personas"
+        if candidate.is_dir() and any(candidate.glob("*.yaml")):
+            return candidate
+
+    # Return installed path as default (downstream handles missing dir)
+    return installed
 
 
 def load_builtin_personas() -> list[dict]:

@@ -1,6 +1,6 @@
 """Tests for evaluation report formatting."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import StringIO
 
 from rich.console import Console
@@ -27,7 +27,7 @@ def _make_console() -> tuple[Console, StringIO]:
 def _make_report(**overrides) -> QualityReport:
     defaults = dict(
         scenario_name="test-scenario",
-        evaluated_at=datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        evaluated_at=datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC),
         total_records=500,
         source_counts={"windows_event_security": 300, "zeek_conn": 200},
         overall_score=85.0,
@@ -39,8 +39,13 @@ def _make_report(**overrides) -> QualityReport:
                 score=90.0,
                 sub_scores=[
                     SubScore(name="Field Accuracy", key="field_accuracy", weight=0.5, score=95.0),
-                    SubScore(name="Parse Rate", key="parse_rate", weight=0.5, score=85.0,
-                             details="2 parse errors"),
+                    SubScore(
+                        name="Parse Rate",
+                        key="parse_rate",
+                        weight=0.5,
+                        score=85.0,
+                        details="2 parse errors",
+                    ),
                 ],
             ),
             DimensionScore(
@@ -177,7 +182,10 @@ class TestFormatTextReport:
 
     def test_failure_summary_displayed(self):
         sub = SubScore(
-            name="Parse Rate", key="parse_rate", weight=1.0, score=70.0,
+            name="Parse Rate",
+            key="parse_rate",
+            weight=1.0,
+            score=70.0,
             failure_summary={"windows_event_security": {"parse_error": 3, "missing_field": 1}},
         )
         dim = DimensionScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
@@ -191,7 +199,10 @@ class TestFormatTextReport:
 
     def test_verbose_sample_failures(self):
         sub = SubScore(
-            name="Parse Rate", key="parse_rate", weight=1.0, score=70.0,
+            name="Parse Rate",
+            key="parse_rate",
+            weight=1.0,
+            score=70.0,
             sample_failures=["bad record 1", "bad [record] 2"],
         )
         dim = DimensionScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
@@ -205,7 +216,10 @@ class TestFormatTextReport:
 
     def test_verbose_sample_failures_truncation(self):
         sub = SubScore(
-            name="Parse Rate", key="parse_rate", weight=1.0, score=70.0,
+            name="Parse Rate",
+            key="parse_rate",
+            weight=1.0,
+            score=70.0,
             sample_failures=[f"failure {i}" for i in range(30)],
         )
         dim = DimensionScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])

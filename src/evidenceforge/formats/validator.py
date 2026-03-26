@@ -61,21 +61,15 @@ def validate_field_type(
 
     if field_type == FieldType.STRING:
         if not isinstance(field_value, str):
-            result.add_error(
-                field_name, f"Expected string, got {type(field_value).__name__}"
-            )
+            result.add_error(field_name, f"Expected string, got {type(field_value).__name__}")
 
     elif field_type == FieldType.INTEGER:
         if not isinstance(field_value, int) or isinstance(field_value, bool):
-            result.add_error(
-                field_name, f"Expected integer, got {type(field_value).__name__}"
-            )
+            result.add_error(field_name, f"Expected integer, got {type(field_value).__name__}")
 
     elif field_type == FieldType.BOOLEAN:
         if not isinstance(field_value, bool):
-            result.add_error(
-                field_name, f"Expected boolean, got {type(field_value).__name__}"
-            )
+            result.add_error(field_name, f"Expected boolean, got {type(field_value).__name__}")
 
     elif field_type == FieldType.TIMESTAMP:
         # Accept datetime objects, ISO 8601 strings, or epoch floats/ints (Zeek)
@@ -87,9 +81,7 @@ def validate_field_type(
             except ValueError:
                 result.add_error(field_name, "Invalid ISO 8601 timestamp")
         elif not isinstance(field_value, datetime):
-            result.add_error(
-                field_name, f"Expected timestamp, got {type(field_value).__name__}"
-            )
+            result.add_error(field_name, f"Expected timestamp, got {type(field_value).__name__}")
 
     elif field_type == FieldType.IP_ADDRESS:
         if not isinstance(field_value, str):
@@ -120,9 +112,7 @@ def validate_field_type(
 
     elif field_type == FieldType.LIST:
         if not isinstance(field_value, list):
-            result.add_error(
-                field_name, f"Expected list, got {type(field_value).__name__}"
-            )
+            result.add_error(field_name, f"Expected list, got {type(field_value).__name__}")
 
     elif field_type == FieldType.ENUM:
         # Enum validation requires constraints.allowed_values
@@ -170,18 +160,12 @@ def validate_field_constraints(
 
     # Min/max length (for strings)
     if isinstance(field_value, str):
-        if (
-            constraints.min_length is not None
-            and len(field_value) < constraints.min_length
-        ):
+        if constraints.min_length is not None and len(field_value) < constraints.min_length:
             result.add_error(
                 field_name,
                 f"Length {len(field_value)} less than minimum {constraints.min_length}",
             )
-        if (
-            constraints.max_length is not None
-            and len(field_value) > constraints.max_length
-        ):
+        if constraints.max_length is not None and len(field_value) > constraints.max_length:
             result.add_error(
                 field_name,
                 f"Length {len(field_value)} greater than maximum {constraints.max_length}",
@@ -282,9 +266,7 @@ def validate_event(
             key = (format_def.name, field_name, event_context or "")
             if key not in _warned_unknown_fields:
                 _warned_unknown_fields.add(key)
-                logger.warning(
-                    f"Unknown field in {format_def.name}{ctx_suffix}: {field_name}"
-                )
+                logger.warning(f"Unknown field in {format_def.name}{ctx_suffix}: {field_name}")
             continue
 
         # Validate field

@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 # Per-persona cluster configuration
 PERSONA_CLUSTER_CONFIG = {
-    'developer': {'cluster_size': (5, 15), 'inter_gap_mean': 600},
-    'executive': {'cluster_size': (2, 6), 'inter_gap_mean': 300},
-    'analyst': {'cluster_size': (4, 10), 'inter_gap_mean': 480},
-    'sysadmin': {'cluster_size': (3, 8), 'inter_gap_mean': 360},
-    'default': {'cluster_size': (3, 10), 'inter_gap_mean': 420},
+    "developer": {"cluster_size": (5, 15), "inter_gap_mean": 600},
+    "executive": {"cluster_size": (2, 6), "inter_gap_mean": 300},
+    "analyst": {"cluster_size": (4, 10), "inter_gap_mean": 480},
+    "sysadmin": {"cluster_size": (3, 8), "inter_gap_mean": 360},
+    "default": {"cluster_size": (3, 10), "inter_gap_mean": 420},
 }
 
 
@@ -62,22 +62,23 @@ class BaselineMixin:
             logger.debug(f"Processing hour {hour_count}: {current_hour}")
             self.state_manager.set_current_time(current_hour)
 
-            self._report_progress("hour_progress", {
-                "hour": hour_count,
-                "total_hours": total_hours,
-                "current_time": current_hour
-            })
+            self._report_progress(
+                "hour_progress",
+                {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
+            )
 
             for user in enabled_users:
                 persona = self._get_user_persona(user)
                 user_offsets = self._user_time_offsets.get(user.username)
 
                 local_hour = current_hour.hour
-                if hasattr(self, '_scenario_tz') and self._scenario_tz:
+                if hasattr(self, "_scenario_tz") and self._scenario_tz:
                     utc_dt = current_hour.replace(tzinfo=UTC)
                     local_hour = utc_dt.astimezone(self._scenario_tz).hour
                 num_events = self._calculate_events_for_hour(
-                    user, current_hour=local_hour, persona=persona,
+                    user,
+                    current_hour=local_hour,
+                    persona=persona,
                     user_offsets=user_offsets,
                 )
 
@@ -88,7 +89,8 @@ class BaselineMixin:
 
                     persona_name = user.persona if user.persona else None
                     event_times = self._distribute_events_in_hour(
-                        current_hour, num_events,
+                        current_hour,
+                        num_events,
                         persona_name=persona_name,
                         username=user.username,
                     )
@@ -99,7 +101,7 @@ class BaselineMixin:
             self._generate_system_traffic(current_hour)
 
             hour_key = int(current_hour.timestamp())
-            for event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
+            for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
                 if event_idx not in self._storyline_executed:
                     self._execute_single_storyline_event(event_idx)
                     self._storyline_executed.add(event_idx)
@@ -121,11 +123,26 @@ class BaselineMixin:
         - Build tools (msbuild, gcc, npm): 5-30 minutes
         - Other: 30min-2 hours
         """
-        system_patterns = ('svchost', 'lsass', 'csrss', 'services.exe', 'explorer.exe',
-                           'smss', 'wininit', 'winlogon', 'fontdrvhost', 'systemd',
-                           'cron', 'sshd', 'rsyslogd', 'NetworkManager', 'dbus-daemon',
-                           'bash', 'agetty')
-        short_lived = ('msbuild', 'gcc', 'npm', 'make', 'dotnet', 'cargo', 'node.exe')
+        system_patterns = (
+            "svchost",
+            "lsass",
+            "csrss",
+            "services.exe",
+            "explorer.exe",
+            "smss",
+            "wininit",
+            "winlogon",
+            "fontdrvhost",
+            "systemd",
+            "cron",
+            "sshd",
+            "rsyslogd",
+            "NetworkManager",
+            "dbus-daemon",
+            "bash",
+            "agetty",
+        )
+        short_lived = ("msbuild", "gcc", "npm", "make", "dotnet", "cargo", "node.exe")
 
         rng = _get_rng()
         for system in self.scenario.environment.systems:
@@ -139,7 +156,10 @@ class BaselineMixin:
 
                 if any(p in image_lower for p in short_lived):
                     max_hours = rng.uniform(0.08, 0.5)
-                elif any(p in image_lower for p in ('chrome', 'firefox', 'edge', 'outlook', 'teams', 'code')):
+                elif any(
+                    p in image_lower
+                    for p in ("chrome", "firefox", "edge", "outlook", "teams", "code")
+                ):
                     max_hours = rng.uniform(1.0, 4.0)
                 else:
                     max_hours = rng.uniform(0.5, 2.0)
@@ -150,7 +170,7 @@ class BaselineMixin:
                         continue
 
                     sessions = self.state_manager.get_sessions_for_user(proc.username)
-                    logon_id = sessions[0].logon_id if sessions else '0x0'
+                    logon_id = sessions[0].logon_id if sessions else "0x0"
 
                     term_offset = rng.uniform(0, 3599)
                     term_time = current_hour + timedelta(seconds=term_offset)
@@ -178,15 +198,23 @@ class BaselineMixin:
             persona = self._get_user_persona(user)
             is_outside_work_hours = False
             if persona and persona.work_hours_parsed:
-                is_outside_work_hours = current_hour.hour not in persona.work_hours_parsed.get('hours', range(24))
+                is_outside_work_hours = current_hour.hour not in persona.work_hours_parsed.get(
+                    "hours", range(24)
+                )
 
             system = None
             if user.primary_system:
-                systems = [s for s in self.scenario.environment.systems if s.hostname == user.primary_system]
+                systems = [
+                    s
+                    for s in self.scenario.environment.systems
+                    if s.hostname == user.primary_system
+                ]
                 if systems:
                     system = systems[0]
             if not system:
-                assigned = [s for s in self.scenario.environment.systems if s.assigned_user == user.username]
+                assigned = [
+                    s for s in self.scenario.environment.systems if s.assigned_user == user.username
+                ]
                 system = assigned[0] if assigned else self.scenario.environment.systems[0]
 
             for session in list(sessions):
@@ -195,7 +223,9 @@ class BaselineMixin:
                     continue
 
                 rng = _get_rng()
-                logoff_probability = 0.6 if is_outside_work_hours else 0.3 if session_age_hours > 1 else 0.1
+                logoff_probability = (
+                    0.6 if is_outside_work_hours else 0.3 if session_age_hours > 1 else 0.1
+                )
                 if rng.random() < logoff_probability:
                     logoff_offset = rng.uniform(0, 3599)
                     logoff_time = current_hour + timedelta(seconds=logoff_offset)
@@ -215,7 +245,7 @@ class BaselineMixin:
         before hour N+1 begins.
         """
         logger.debug("Barrier flush: waiting for all emitters to complete")
-        for format_name, emitter in self.emitters.items():
+        for _format_name, emitter in self.emitters.items():
             emitter.barrier_flush()
         logger.debug("Barrier flush: all emitters complete")
 
@@ -244,18 +274,18 @@ class BaselineMixin:
         Returns 0.0-1.5 multiplier. Uses sigmoid ramps for gradual transitions
         at work start/end and lunch, instead of binary on/off.
         """
-        start = whp['start']
-        end = whp['end']
-        lunch = whp.get('lunch')
-        peak_hours = whp.get('peak_hours') or []
+        start = whp["start"]
+        end = whp["end"]
+        lunch = whp.get("lunch")
+        peak_hours = whp.get("peak_hours") or []
 
         if user_offsets:
-            start += user_offsets.get('start_offset', 0)
-            end += user_offsets.get('end_offset', 0)
+            start += user_offsets.get("start_offset", 0)
+            end += user_offsets.get("end_offset", 0)
             if lunch:
-                lunch_start = lunch[0] + user_offsets.get('lunch_start_offset', 0)
-                lunch_dur_offset = user_offsets.get('lunch_duration_offset', 0)
-                lunch_end = lunch[1] + user_offsets.get('lunch_start_offset', 0) + lunch_dur_offset
+                lunch_start = lunch[0] + user_offsets.get("lunch_start_offset", 0)
+                lunch_dur_offset = user_offsets.get("lunch_duration_offset", 0)
+                lunch_end = lunch[1] + user_offsets.get("lunch_start_offset", 0) + lunch_dur_offset
                 lunch = (lunch_start, lunch_end)
 
         h = float(hour) + 0.5
@@ -297,11 +327,11 @@ class BaselineMixin:
         user_offsets: dict | None = None,
     ) -> int:
         """Calculate number of events for user this hour."""
-        intensity_map = {'low': 5, 'medium': 15, 'high': 40}
+        intensity_map = {"low": 5, "medium": 15, "high": 40}
         base_events = intensity_map[self.scenario.baseline_activity.intensity]
 
         if persona and persona.risk_profile:
-            risk_mult = {'low': 0.7, 'medium': 1.0, 'high': 1.3}
+            risk_mult = {"low": 0.7, "medium": 1.0, "high": 1.3}
             base_events = int(base_events * risk_mult.get(persona.risk_profile, 1.0))
 
         if persona and persona.work_hours_parsed and current_hour is not None:
@@ -310,17 +340,19 @@ class BaselineMixin:
             )
             base_events = int(base_events * multiplier)
 
-        if user_offsets and 'intensity_bias' in user_offsets:
-            base_events = int(base_events * user_offsets['intensity_bias'])
+        if user_offsets and "intensity_bias" in user_offsets:
+            base_events = int(base_events * user_offsets["intensity_bias"])
 
         rng = _get_rng()
-        variation_map = {'low': 0.10, 'medium': 0.25, 'high': 0.50}
+        variation_map = {"low": 0.10, "medium": 0.25, "high": 0.50}
         stddev = base_events * variation_map[self.scenario.baseline_activity.variation]
         num_events = max(0, int(rng.gauss(base_events, stddev)))
 
         return num_events
 
-    def _distribute_events_in_hour_uniform(self, hour_start: datetime, num_events: int) -> list[datetime]:
+    def _distribute_events_in_hour_uniform(
+        self, hour_start: datetime, num_events: int
+    ) -> list[datetime]:
         """Distribute events uniformly (legacy fallback)."""
         if num_events == 0:
             return []
@@ -351,18 +383,17 @@ class BaselineMixin:
             return []
 
         config = self.PERSONA_CLUSTER_CONFIG.get(
-            (persona_name or '').lower(),
-            self.PERSONA_CLUSTER_CONFIG['default']
+            (persona_name or "").lower(), self.PERSONA_CLUSTER_CONFIG["default"]
         )
-        cluster_min, cluster_max = config['cluster_size']
-        inter_gap_mean = config['inter_gap_mean']
+        cluster_min, cluster_max = config["cluster_size"]
+        inter_gap_mean = config["inter_gap_mean"]
 
-        if username and hasattr(self, '_user_time_offsets'):
+        if username and hasattr(self, "_user_time_offsets"):
             offsets = self._user_time_offsets.get(username, {})
-            size_bias = 1.0 + offsets.get('cluster_size_bias', 0)
+            size_bias = 1.0 + offsets.get("cluster_size_bias", 0)
             cluster_min = max(2, int(cluster_min * size_bias))
             cluster_max = max(cluster_min + 1, int(cluster_max * size_bias))
-            gap_bias = 1.0 + offsets.get('inter_gap_bias', 0)
+            gap_bias = 1.0 + offsets.get("inter_gap_bias", 0)
             inter_gap_mean = max(60, inter_gap_mean * gap_bias)
 
         rng = _get_rng()
@@ -399,10 +430,14 @@ class BaselineMixin:
         """Generate activity for user at specified time."""
         rng = _get_rng()
         if user.primary_system:
-            systems = [s for s in self.scenario.environment.systems if s.hostname == user.primary_system]
+            systems = [
+                s for s in self.scenario.environment.systems if s.hostname == user.primary_system
+            ]
             system = systems[0] if systems else rng.choice(self.scenario.environment.systems)
         else:
-            assigned_systems = [s for s in self.scenario.environment.systems if s.assigned_user == user.username]
+            assigned_systems = [
+                s for s in self.scenario.environment.systems if s.assigned_user == user.username
+            ]
             if assigned_systems:
                 system = rng.choice(assigned_systems)
             else:
@@ -431,7 +466,7 @@ class BaselineMixin:
             logon_time = event_time - timedelta(seconds=rng.uniform(1.0, 5.0))
             self.state_manager.set_current_time(logon_time)
             self.activity_generator.execute_baseline_activity(
-                user=user, system=system, time=logon_time, activity_type='logon'
+                user=user, system=system, time=logon_time, activity_type="logon"
             )
 
         for activity_type in activities:
@@ -439,10 +474,7 @@ class BaselineMixin:
             t = event_time + jitter
             self.state_manager.set_current_time(t)
             self.activity_generator.execute_baseline_activity(
-                user=user,
-                system=system,
-                time=t,
-                activity_type=activity_type
+                user=user, system=system, time=t, activity_type=activity_type
             )
 
     def _generate_system_traffic(self, current_hour: datetime) -> None:
@@ -457,10 +489,10 @@ class BaselineMixin:
         from evidenceforge.generation.activity import _get_os_category
 
         rng = _get_rng()
-        dns_ips = self._infra_ips.get('dns', ['10.0.0.1'])
+        dns_ips = self._infra_ips.get("dns", ["10.0.0.1"])
         if isinstance(dns_ips, str):
             dns_ips = [dns_ips]
-        ntp_ips = self._infra_ips.get('ntp', ['129.6.15.28'])
+        ntp_ips = self._infra_ips.get("ntp", ["129.6.15.28"])
         if isinstance(ntp_ips, str):
             ntp_ips = [ntp_ips]
 
@@ -470,7 +502,7 @@ class BaselineMixin:
             sys_pids = self._system_pids.get(system.hostname, {})
 
             # DNS lookups: truly periodic with small jitter, using global schedule
-            if 'dns-client' in services:
+            if "dns-client" in services:
                 dns_interval = 600 + (hash(f"dns_iv_{system.hostname}") % 1200)
                 dns_phase = hash(f"dns_ph_{system.hostname}") % dns_interval
                 hour_start_sec = (current_hour - self.start_time).total_seconds()
@@ -486,8 +518,8 @@ class BaselineMixin:
                         dst_ip=rng.choice(dns_ips),
                         time=ts,
                         dst_port=53,
-                        proto='udp',
-                        service='dns',
+                        proto="udp",
+                        service="dns",
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(40, 120),
                         resp_bytes=rng.randint(80, 512),
@@ -496,7 +528,7 @@ class BaselineMixin:
                     t += dns_interval
 
             # NTP sync: 1 per hour
-            if 'ntp-client' in services:
+            if "ntp-client" in services:
                 offset = (hash(system.hostname) % 3600) + rng.gauss(0, 5)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
@@ -507,8 +539,8 @@ class BaselineMixin:
                     dst_ip=ntp_ip,
                     time=ts,
                     dst_port=123,
-                    proto='udp',
-                    service='ntp',
+                    proto="udp",
+                    service="ntp",
                     duration=rng.uniform(0.01, 0.1),
                     orig_bytes=48,
                     resp_bytes=48,
@@ -516,12 +548,12 @@ class BaselineMixin:
                 )
 
             # SMB browsing: Windows workstations only
-            dc_ips = self._infra_ips.get('dc', ['10.0.0.1'])
+            dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
 
-            if 'smb-client' in services and os_cat == 'windows' and dc_targets:
+            if "smb-client" in services and os_cat == "windows" and dc_targets:
                 smb_interval = 1200 + (hash(f"smb_iv_{system.hostname}") % 1800)
                 smb_phase = hash(f"smb_ph_{system.hostname}") % smb_interval
                 hour_start_sec = (current_hour - self.start_time).total_seconds()
@@ -538,8 +570,8 @@ class BaselineMixin:
                         dst_ip=rng.choice(dc_targets),
                         time=ts,
                         dst_port=445,
-                        proto='tcp',
-                        service='smb',
+                        proto="tcp",
+                        service="smb",
                         duration=rng.uniform(0.1, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=rng.randint(500, 5000),
@@ -548,7 +580,7 @@ class BaselineMixin:
                     t += smb_interval
 
             # Kerberos
-            if 'kerberos-client' in services and os_cat == 'windows' and dc_targets:
+            if "kerberos-client" in services and os_cat == "windows" and dc_targets:
                 num_krb = rng.randint(1, 3)
                 base_interval = 3600 / (num_krb + 1)
                 for i in range(num_krb):
@@ -557,8 +589,12 @@ class BaselineMixin:
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
-                        src_ip=system.ip, dst_ip=rng.choice(dc_targets), time=ts,
-                        dst_port=88, proto='tcp', service='kerberos',
+                        src_ip=system.ip,
+                        dst_ip=rng.choice(dc_targets),
+                        time=ts,
+                        dst_port=88,
+                        proto="tcp",
+                        service="kerberos",
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(200, 1500),
                         resp_bytes=rng.randint(200, 2000),
@@ -566,7 +602,7 @@ class BaselineMixin:
                     )
 
             # LDAP
-            if 'ldap-client' in services and os_cat == 'windows' and dc_targets:
+            if "ldap-client" in services and os_cat == "windows" and dc_targets:
                 num_ldap = rng.randint(2, 5)
                 base_interval = 3600 / (num_ldap + 1)
                 for i in range(num_ldap):
@@ -575,8 +611,12 @@ class BaselineMixin:
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
-                        src_ip=system.ip, dst_ip=rng.choice(dc_targets), time=ts,
-                        dst_port=389, proto='tcp', service='ldap',
+                        src_ip=system.ip,
+                        dst_ip=rng.choice(dc_targets),
+                        time=ts,
+                        dst_port=389,
+                        proto="tcp",
+                        service="ldap",
                         duration=rng.uniform(0.01, 0.5),
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
@@ -584,13 +624,17 @@ class BaselineMixin:
                     )
 
             # HTTPS background traffic
-            if os_cat == 'windows':
+            if os_cat == "windows":
                 _bg_https_ips = [
-                    '23.196.25.38', '13.107.4.50', '93.184.220.29',
-                    '23.45.101.50', '52.114.128.40', '204.79.197.200',
+                    "23.196.25.38",
+                    "13.107.4.50",
+                    "93.184.220.29",
+                    "23.45.101.50",
+                    "52.114.128.40",
+                    "204.79.197.200",
                 ]
                 num_https = rng.randint(8, 20)
-                for i in range(num_https):
+                for _i in range(num_https):
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
@@ -598,17 +642,19 @@ class BaselineMixin:
                         src_ip=system.ip,
                         dst_ip=rng.choice(_bg_https_ips),
                         time=ts,
-                        dst_port=443, proto='tcp', service='ssl',
+                        dst_port=443,
+                        proto="tcp",
+                        service="ssl",
                         duration=rng.uniform(0.1, 5.0),
                         orig_bytes=rng.randint(200, 5000),
                         resp_bytes=rng.randint(500, 50000),
                         emit_dns=True,
                         source_system=system,
                     )
-            elif os_cat == 'linux':
-                _linux_https_ips = ['91.189.91.39', '185.125.190.39', '151.101.0.204']
+            elif os_cat == "linux":
+                _linux_https_ips = ["91.189.91.39", "185.125.190.39", "151.101.0.204"]
                 num_https = rng.randint(3, 10)
-                for i in range(num_https):
+                for _i in range(num_https):
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
@@ -616,7 +662,9 @@ class BaselineMixin:
                         src_ip=system.ip,
                         dst_ip=rng.choice(_linux_https_ips),
                         time=ts,
-                        dst_port=443, proto='tcp', service='ssl',
+                        dst_port=443,
+                        proto="tcp",
+                        service="ssl",
                         duration=rng.uniform(0.1, 3.0),
                         orig_bytes=rng.randint(200, 3000),
                         resp_bytes=rng.randint(500, 30000),
@@ -625,10 +673,12 @@ class BaselineMixin:
                     )
 
             # Database traffic
-            db_servers = self._infra_ips.get('db_servers', [])
-            if db_servers and system.ip not in [d['ip'] for d in db_servers]:
-                sys_type = (system.type or 'workstation').lower()
-                if sys_type in ('server', 'domain_controller') or (sys_type == 'workstation' and rng.random() < 0.2):
+            db_servers = self._infra_ips.get("db_servers", [])
+            if db_servers and system.ip not in [d["ip"] for d in db_servers]:
+                sys_type = (system.type or "workstation").lower()
+                if sys_type in ("server", "domain_controller") or (
+                    sys_type == "workstation" and rng.random() < 0.2
+                ):
                     db = rng.choice(db_servers)
                     num_db = rng.randint(3, 10)
                     base_interval = 3600 / (num_db + 1)
@@ -638,8 +688,12 @@ class BaselineMixin:
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_connection(
-                            src_ip=system.ip, dst_ip=db['ip'], time=ts,
-                            dst_port=db['port'], proto='tcp', service=db['service'],
+                            src_ip=system.ip,
+                            dst_ip=db["ip"],
+                            time=ts,
+                            dst_port=db["port"],
+                            proto="tcp",
+                            service=db["service"],
                             duration=rng.uniform(0.01, 2.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
@@ -648,27 +702,32 @@ class BaselineMixin:
 
             # Scheduled tasks
             host_seed = hash(system.hostname) % 900
-            if os_cat == 'windows':
+            if os_cat == "windows":
                 win_tasks = [
-                    (r'C:\Windows\System32\svchost.exe', 'svchost.exe -k netsvcs -p -s Schedule'),
-                    (r'C:\Windows\System32\taskhostw.exe', 'taskhostw.exe /Run'),
-                    (r'C:\Windows\System32\usoclient.exe', 'usoclient.exe StartScan'),
+                    (r"C:\Windows\System32\svchost.exe", "svchost.exe -k netsvcs -p -s Schedule"),
+                    (r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe /Run"),
+                    (r"C:\Windows\System32\usoclient.exe", "usoclient.exe StartScan"),
                 ]
                 task_name, task_cmd = win_tasks[hash(system.hostname) % len(win_tasks)]
             else:
-                os_str = (system.os or '').lower()
-                is_rhel_task = any(d in os_str for d in ('centos', 'rhel', 'red hat', 'rocky', 'alma'))
+                os_str = (system.os or "").lower()
+                is_rhel_task = any(
+                    d in os_str for d in ("centos", "rhel", "red hat", "rocky", "alma")
+                )
                 if is_rhel_task:
                     linux_tasks = [
-                        ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
-                        ('/usr/bin/dnf', '/usr/bin/dnf -y makecache --timer'),
-                        ('/usr/bin/needs-restarting', '/usr/bin/needs-restarting -r'),
+                        ("/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf"),
+                        ("/usr/bin/dnf", "/usr/bin/dnf -y makecache --timer"),
+                        ("/usr/bin/needs-restarting", "/usr/bin/needs-restarting -r"),
                     ]
                 else:
                     linux_tasks = [
-                        ('/usr/sbin/logrotate', '/usr/sbin/logrotate /etc/logrotate.conf'),
-                        ('/usr/bin/apt-get', '/usr/bin/apt-get -qq update'),
-                        ('/usr/lib/update-notifier/apt-check', '/usr/lib/update-notifier/apt-check --human-readable'),
+                        ("/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf"),
+                        ("/usr/bin/apt-get", "/usr/bin/apt-get -qq update"),
+                        (
+                            "/usr/lib/update-notifier/apt-check",
+                            "/usr/lib/update-notifier/apt-check --human-readable",
+                        ),
                     ]
                 task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
 
@@ -678,44 +737,59 @@ class BaselineMixin:
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
 
-                if os_cat == 'windows':
-                    parent_pid = sys_pids.get('svchost_local_system', sys_pids.get('services', 4))
+                if os_cat == "windows":
+                    parent_pid = sys_pids.get("svchost_local_system", sys_pids.get("services", 4))
                     self.activity_generator.generate_system_process(
-                        system=system, time=ts,
-                        process_name=task_name, command_line=task_cmd,
-                        parent_pid=parent_pid, username='SYSTEM',
+                        system=system,
+                        time=ts,
+                        process_name=task_name,
+                        command_line=task_cmd,
+                        parent_pid=parent_pid,
+                        username="SYSTEM",
                     )
                 else:
-                    parent_pid = sys_pids.get('cron', 0)
+                    parent_pid = sys_pids.get("cron", 0)
                     self.activity_generator.generate_system_process(
-                        system=system, time=ts,
-                        process_name=task_name, command_line=task_cmd,
-                        parent_pid=parent_pid, username='root',
+                        system=system,
+                        time=ts,
+                        process_name=task_name,
+                        command_line=task_cmd,
+                        parent_pid=parent_pid,
+                        username="root",
                     )
 
             # ICMP: monitoring pings between servers
-            sys_type = (system.type or 'workstation').lower()
-            if sys_type in ('server', 'domain_controller') and rng.random() < 0.7:
-                targets = [s.ip for s in self.scenario.environment.systems
-                           if s.ip != system.ip and s.type and
-                           s.type.lower() in ('server', 'domain_controller')][:5]
+            sys_type = (system.type or "workstation").lower()
+            if sys_type in ("server", "domain_controller") and rng.random() < 0.7:
+                targets = [
+                    s.ip
+                    for s in self.scenario.environment.systems
+                    if s.ip != system.ip
+                    and s.type
+                    and s.type.lower() in ("server", "domain_controller")
+                ][:5]
                 if targets:
                     target_ip = rng.choice(targets)
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
-                        src_ip=system.ip, dst_ip=target_ip, time=ts,
-                        dst_port=0, proto='icmp',
+                        src_ip=system.ip,
+                        dst_ip=target_ip,
+                        time=ts,
+                        dst_port=0,
+                        proto="icmp",
                         duration=rng.uniform(0.0001, 0.005),
-                        orig_bytes=64, resp_bytes=64,
+                        orig_bytes=64,
+                        resp_bytes=64,
                         source_system=system,
                     )
 
             # SSH: connections to Linux servers
-            if os_cat == 'linux' and sys_type == 'server':
-                ssh_sources = [s.ip for s in self.scenario.environment.systems
-                               if s.ip != system.ip][:10]
+            if os_cat == "linux" and sys_type == "server":
+                ssh_sources = [
+                    s.ip for s in self.scenario.environment.systems if s.ip != system.ip
+                ][:10]
                 if ssh_sources:
                     num_ssh = rng.randint(1, 3)
                     for _ in range(num_ssh):
@@ -724,8 +798,12 @@ class BaselineMixin:
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_connection(
-                            src_ip=src_ip, dst_ip=system.ip, time=ts,
-                            dst_port=22, proto='tcp', service='ssh',
+                            src_ip=src_ip,
+                            dst_ip=system.ip,
+                            time=ts,
+                            dst_port=22,
+                            proto="tcp",
+                            service="ssh",
                             duration=rng.uniform(30.0, 3600.0),
                             orig_bytes=rng.randint(2000, 50000),
                             resp_bytes=rng.randint(5000, 200000),
@@ -735,55 +813,73 @@ class BaselineMixin:
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
             os_cat_svc = _get_os_category(system.os)
-            if os_cat_svc != 'windows' or 'windows_event_security' not in self.emitters:
+            if os_cat_svc != "windows" or "windows_event_security" not in self.emitters:
                 continue
 
-            ad_domain = getattr(self.activity_generator, '_ad_domain', 'corp.local')
-            netbios = getattr(self.activity_generator, '_netbios_domain', 'CORP')
+            ad_domain = getattr(self.activity_generator, "_ad_domain", "corp.local")
+            getattr(self.activity_generator, "_netbios_domain", "CORP")
             computer_fqdn = f"{system.hostname}.{ad_domain}"
 
-            sys_type_svc = (system.type or 'workstation').lower()
-            num_svc = rng.randint(2, 5) if sys_type_svc != 'workstation' else rng.randint(1, 2)
+            sys_type_svc = (system.type or "workstation").lower()
+            num_svc = rng.randint(2, 5) if sys_type_svc != "workstation" else rng.randint(1, 2)
             for _ in range(num_svc):
                 offset = rng.randint(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                svc_accounts = ['SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE']
+                svc_accounts = ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"]
                 svc_user = rng.choice(svc_accounts)
                 self.activity_generator.generate_service_logon(
-                    system=system, time=ts, service_account=svc_user,
+                    system=system,
+                    time=ts,
+                    service_account=svc_user,
                 )
 
-            if sys_type_svc in ('server', 'domain_controller'):
+            if sys_type_svc in ("server", "domain_controller"):
                 num_anon = rng.randint(1, 3)
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='windows_event_security', system=system,
-                        fields={'EventID': 4624, 'TimeCreated': ts, 'Computer': computer_fqdn,
-                                'Channel': 'Security', 'Level': 0,
-                                'ExecutionProcessID': 4, 'ExecutionThreadID': rng.randint(100, 500),
-                                'SubjectUserSid': 'S-1-0-0', 'SubjectUserName': '-',
-                                'SubjectDomainName': '-', 'SubjectLogonId': '0x0',
-                                'TargetUserSid': 'S-1-5-7', 'TargetUserName': 'ANONYMOUS LOGON',
-                                'TargetDomainName': 'NT AUTHORITY',
-                                'TargetLogonId': f'0x{rng.randint(0x10000, 0xFFFFFFFF):x}',
-                                'LogonType': 3, 'LogonProcessName': 'NtLmSsp',
-                                'AuthenticationPackageName': 'NTLM', 'LmPackageName': 'NTLM V2',
-                                'LogonGuid': '{00000000-0000-0000-0000-000000000000}',
-                                'WorkstationName': '-', 'ProcessId': '0x0', 'ProcessName': '-',
-                                'IpAddress': '-', 'IpPort': 0},
+                        time=ts,
+                        target_format="windows_event_security",
+                        system=system,
+                        fields={
+                            "EventID": 4624,
+                            "TimeCreated": ts,
+                            "Computer": computer_fqdn,
+                            "Channel": "Security",
+                            "Level": 0,
+                            "ExecutionProcessID": 4,
+                            "ExecutionThreadID": rng.randint(100, 500),
+                            "SubjectUserSid": "S-1-0-0",
+                            "SubjectUserName": "-",
+                            "SubjectDomainName": "-",
+                            "SubjectLogonId": "0x0",
+                            "TargetUserSid": "S-1-5-7",
+                            "TargetUserName": "ANONYMOUS LOGON",
+                            "TargetDomainName": "NT AUTHORITY",
+                            "TargetLogonId": f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
+                            "LogonType": 3,
+                            "LogonProcessName": "NtLmSsp",
+                            "AuthenticationPackageName": "NTLM",
+                            "LmPackageName": "NTLM V2",
+                            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+                            "WorkstationName": "-",
+                            "ProcessId": "0x0",
+                            "ProcessName": "-",
+                            "IpAddress": "-",
+                            "IpPort": 0,
+                        },
                     )
 
         # Machine account ($) authentication to DCs
-        dc_ips = self._infra_ips.get('dc', [])
-        dc_hostnames = self._infra_ips.get('dc_hostnames', [])
+        dc_ips = self._infra_ips.get("dc", [])
+        dc_hostnames = self._infra_ips.get("dc_hostnames", [])
         if isinstance(dc_ips, str):
             dc_ips = [dc_ips]
         if dc_ips and dc_hostnames:
             for system in self.scenario.environment.systems:
                 os_cat = _get_os_category(system.os)
-                if os_cat != 'windows' or system.ip in dc_ips:
+                if os_cat != "windows" or system.ip in dc_ips:
                     continue
 
                 num_auth = rng.randint(2, 6)
@@ -806,10 +902,11 @@ class BaselineMixin:
         # DC-side Kerberos event generation
         if dc_ips and dc_hostnames:
             windows_clients = [
-                s for s in self.scenario.environment.systems
-                if _get_os_category(s.os) == 'windows' and s.ip not in dc_ips
+                s
+                for s in self.scenario.environment.systems
+                if _get_os_category(s.os) == "windows" and s.ip not in dc_ips
             ]
-            for dc_idx, dc_hostname in enumerate(dc_hostnames):
+            for _dc_idx, dc_hostname in enumerate(dc_hostnames):
                 for client in windows_clients:
                     num_cycles = rng.randint(3, 8)
                     base_interval = 3600 / (num_cycles + 1)
@@ -828,16 +925,29 @@ class BaselineMixin:
                         )
                         num_tgs = rng.randint(2, 5)
                         member_servers = [
-                            s.hostname for s in self.scenario.environment.systems
-                            if _get_os_category(s.os) == 'windows'
+                            s.hostname
+                            for s in self.scenario.environment.systems
+                            if _get_os_category(s.os) == "windows"
                             and s.ip not in dc_ips
-                            and any(svc in s.services for svc in
-                                    ['file-server', 'sql-server', 'web', 'iis',
-                                     'exchange', 'sharepoint', 'crm', 'print'])
+                            and any(
+                                svc in s.services
+                                for svc in [
+                                    "file-server",
+                                    "sql-server",
+                                    "web",
+                                    "iis",
+                                    "exchange",
+                                    "sharepoint",
+                                    "crm",
+                                    "print",
+                                ]
+                            )
                         ] or [dc_hostname]
                         for tgs_i in range(num_tgs):
-                            ts2 = ts + timedelta(milliseconds=rng.randint(50, 200) + tgs_i * rng.randint(100, 500))
-                            svc = rng.choice(['cifs', 'ldap', 'http', 'host'])
+                            ts2 = ts + timedelta(
+                                milliseconds=rng.randint(50, 200) + tgs_i * rng.randint(100, 500)
+                            )
+                            svc = rng.choice(["cifs", "ldap", "http", "host"])
                             if rng.random() < 0.60 and member_servers:
                                 target = rng.choice(member_servers)
                             else:
@@ -858,7 +968,7 @@ class BaselineMixin:
                             )
 
         # TGT Renewal
-        if not hasattr(self, '_last_tgt_time'):
+        if not hasattr(self, "_last_tgt_time"):
             self._last_tgt_time: dict[str, datetime] = {}
         if dc_ips and dc_hostnames:
             renewal_interval = timedelta(hours=rng.uniform(8.0, 12.0))
@@ -883,12 +993,12 @@ class BaselineMixin:
         # Linux syslog diversity
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
-            if os_cat != 'linux' or 'syslog' not in self.emitters:
+            if os_cat != "linux" or "syslog" not in self.emitters:
                 continue
 
             sys_pids = self._system_pids.get(system.hostname, {})
-            sys_type = (system.type or 'server').lower()
-            is_dmz = 'dmz' in system.hostname.lower() or 'web' in system.hostname.lower()
+            sys_type = (system.type or "server").lower()
+            is_dmz = "dmz" in system.hostname.lower() or "web" in system.hostname.lower()
             num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             scenario_start = self.scenario.time_window.start
@@ -901,80 +1011,130 @@ class BaselineMixin:
 
                 source_roll = rng.random()
                 if source_roll < 0.20:
-                    services = ['logrotate', 'phpsessionclean', 'apt-daily', 'man-db',
-                                'fstrim', 'motd-news', 'ua-timer', 'systemd-tmpfiles-clean']
+                    services = [
+                        "logrotate",
+                        "phpsessionclean",
+                        "apt-daily",
+                        "man-db",
+                        "fstrim",
+                        "motd-news",
+                        "ua-timer",
+                        "systemd-tmpfiles-clean",
+                    ]
                     svc = rng.choice(services)
-                    action = rng.choice(['Starting', 'Finished'])
+                    action = rng.choice(["Starting", "Finished"])
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='syslog', system=system, fields={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'systemd', 'pid': sys_pids.get('systemd', 1),
-                        'facility': 3, 'severity': 6,
-                        'message': f'{action} {svc}.service - {svc.replace("-", " ").title()}.'},
+                        time=ts,
+                        target_format="syslog",
+                        system=system,
+                        fields={
+                            "timestamp": ts,
+                            "hostname": system.hostname,
+                            "app_name": "systemd",
+                            "pid": sys_pids.get("systemd", 1),
+                            "facility": 3,
+                            "severity": 6,
+                            "message": f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
+                        },
                     )
                 elif source_roll < 0.35:
                     cron_cmds = [
-                        ('root', 'test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )'),
-                        ('root', 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'),
-                        ('root', '/usr/sbin/logrotate /etc/logrotate.conf'),
-                        ('www-data', '/usr/bin/php /var/www/html/cron.php'),
+                        (
+                            "root",
+                            "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
+                        ),
+                        ("root", "command -v debian-sa1 > /dev/null && debian-sa1 1 1"),
+                        ("root", "/usr/sbin/logrotate /etc/logrotate.conf"),
+                        ("www-data", "/usr/bin/php /var/www/html/cron.php"),
                     ]
                     user, cmd = rng.choice(cron_cmds)
                     self.activity_generator.generate_system_process(
-                        system=system, time=ts,
-                        process_name='/usr/sbin/cron',
+                        system=system,
+                        time=ts,
+                        process_name="/usr/sbin/cron",
                         command_line=cmd,
-                        parent_pid=sys_pids.get('cron', 0),
+                        parent_pid=sys_pids.get("cron", 0),
                         username=user,
                     )
                 elif source_roll < 0.50:
                     if is_dmz and rng.random() < 0.85:
-                        src_ip = f'{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}'
+                        src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
-                        msg = (f'[{uptime}.{rng.randint(100000,999999)}] [UFW BLOCK] '
-                               f'IN=ens160 OUT= SRC={src_ip} DST={system.ip} '
-                               f'LEN={rng.randint(40,60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40,255)} '
-                               f'ID={rng.randint(1,65535)} PROTO=TCP SPT={spt} DPT={dpt} '
-                               f'WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0')
+                        msg = (
+                            f"[{uptime}.{rng.randint(100000, 999999)}] [UFW BLOCK] "
+                            f"IN=ens160 OUT= SRC={src_ip} DST={system.ip} "
+                            f"LEN={rng.randint(40, 60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40, 255)} "
+                            f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
+                            f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
+                        )
                         self.activity_generator.generate_connection(
-                            src_ip=src_ip, dst_ip=system.ip, time=ts,
-                            dst_port=dpt, proto='tcp',
-                            conn_state='REJ',
+                            src_ip=src_ip,
+                            dst_ip=system.ip,
+                            time=ts,
+                            dst_port=dpt,
+                            proto="tcp",
+                            conn_state="REJ",
                             src_port=spt,
                             source_system=system,
                         )
                     else:
-                        self._audit_serials[system.hostname] = self._audit_serials.get(system.hostname, 1000) + rng.randint(1, 5)
+                        self._audit_serials[system.hostname] = self._audit_serials.get(
+                            system.hostname, 1000
+                        ) + rng.randint(1, 5)
                         audit_serial = self._audit_serials[system.hostname]
-                        msg = (f'[{uptime}.{rng.randint(100000,999999)}] audit: type=1400 '
-                               f'audit({int(ts.timestamp())}.{rng.randint(100,999)}:{audit_serial}): '
-                               f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"')
+                        msg = (
+                            f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
+                            f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
+                            f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
+                        )
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='syslog', system=system, fields={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'kernel', 'pid': None,
-                        'facility': 0, 'severity': 5,
-                        'message': msg},
+                        time=ts,
+                        target_format="syslog",
+                        system=system,
+                        fields={
+                            "timestamp": ts,
+                            "hostname": system.hostname,
+                            "app_name": "kernel",
+                            "pid": None,
+                            "facility": 0,
+                            "severity": 5,
+                            "message": msg,
+                        },
                     )
                 elif source_roll < 0.65:
                     sid = rng.randint(100, 9999)
-                    user = rng.choice(['root', 'admin', 'www-data', 'ubuntu'])
-                    action = rng.choice([f'New session {sid} of user {user}.', f'Removed session {sid}.'])
+                    user = rng.choice(["root", "admin", "www-data", "ubuntu"])
+                    action = rng.choice(
+                        [f"New session {sid} of user {user}.", f"Removed session {sid}."]
+                    )
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='syslog', system=system, fields={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'systemd-logind', 'pid': sys_pids.get('logind', rng.randint(400, 800)),
-                        'facility': 3, 'severity': 6,
-                        'message': action},
+                        time=ts,
+                        target_format="syslog",
+                        system=system,
+                        fields={
+                            "timestamp": ts,
+                            "hostname": system.hostname,
+                            "app_name": "systemd-logind",
+                            "pid": sys_pids.get("logind", rng.randint(400, 800)),
+                            "facility": 3,
+                            "severity": 6,
+                            "message": action,
+                        },
                     )
                 elif source_roll < 0.80:
-                    other_ips = [s.ip for s in self.scenario.environment.systems if s.ip != system.ip]
+                    other_ips = [
+                        s.ip for s in self.scenario.environment.systems if s.ip != system.ip
+                    ]
                     ip = rng.choice(other_ips) if other_ips else system.ip
                     port = rng.randint(49152, 65535)
                     self.activity_generator.generate_connection(
-                        src_ip=ip, dst_ip=system.ip, time=ts,
-                        dst_port=22, proto='tcp', service='ssh',
+                        src_ip=ip,
+                        dst_ip=system.ip,
+                        time=ts,
+                        dst_port=22,
+                        proto="tcp",
+                        service="ssh",
                         duration=rng.uniform(30.0, 1800.0),
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
@@ -982,49 +1142,73 @@ class BaselineMixin:
                         source_system=system,
                     )
                     msgs = [
-                        f'Received disconnect from {ip} port {port}:11: disconnected by user',
-                        f'Disconnected from user admin {ip} port {port}',
-                        'pam_unix(sshd:session): session closed for user admin',
+                        f"Received disconnect from {ip} port {port}:11: disconnected by user",
+                        f"Disconnected from user admin {ip} port {port}",
+                        "pam_unix(sshd:session): session closed for user admin",
                     ]
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='syslog', system=system, fields={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'sshd', 'pid': rng.randint(5000, 60000),
-                        'facility': 10, 'severity': 6,
-                        'message': rng.choice(msgs)},
+                        time=ts,
+                        target_format="syslog",
+                        system=system,
+                        fields={
+                            "timestamp": ts,
+                            "hostname": system.hostname,
+                            "app_name": "sshd",
+                            "pid": rng.randint(5000, 60000),
+                            "facility": 10,
+                            "severity": 6,
+                            "message": rng.choice(msgs),
+                        },
                     )
                 elif source_roll < 0.90:
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='syslog', system=system, fields={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'snapd', 'pid': sys_pids.get('snapd', rng.randint(500, 2000)),
-                        'facility': 3, 'severity': 6,
-                        'message': rng.choice([
-                            'autorefresh.go:540: auto-refresh: all snaps are up-to-date',
-                            'daemon.go:460: gracefully waiting for running hooks',
-                            'stateengine.go:150: state ensure starting',
-                        ])},
+                        time=ts,
+                        target_format="syslog",
+                        system=system,
+                        fields={
+                            "timestamp": ts,
+                            "hostname": system.hostname,
+                            "app_name": "snapd",
+                            "pid": sys_pids.get("snapd", rng.randint(500, 2000)),
+                            "facility": 3,
+                            "severity": 6,
+                            "message": rng.choice(
+                                [
+                                    "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
+                                    "daemon.go:460: gracefully waiting for running hooks",
+                                    "stateengine.go:150: state ensure starting",
+                                ]
+                            ),
+                        },
                     )
                 else:
-                    ntp_ip = rng.choice(['91.189.89.198', '91.189.89.199', '91.189.94.4'])
-                    if not hasattr(self, '_timesyncd_first_seen'):
+                    ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
+                    if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
                     if system.hostname not in self._timesyncd_first_seen:
-                        msg = f'Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com).'
+                        msg = f"Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com)."
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
-                        msg = rng.choice([
-                            f'Initial synchronization to time server {ntp_ip}:123 (ntp.ubuntu.com).',
-                            f'Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).',
-                            f'Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).',
-                        ])
+                        msg = rng.choice(
+                            [
+                                f"Initial synchronization to time server {ntp_ip}:123 (ntp.ubuntu.com).",
+                                f"Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).",
+                                f"Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).",
+                            ]
+                        )
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='syslog', system=system, fields={
-                        'timestamp': ts, 'hostname': system.hostname,
-                        'app_name': 'systemd-timesyncd',
-                        'pid': sys_pids.get('timesyncd', rng.randint(400, 800)),
-                        'facility': 3, 'severity': 6,
-                        'message': msg},
+                        time=ts,
+                        target_format="syslog",
+                        system=system,
+                        fields={
+                            "timestamp": ts,
+                            "hostname": system.hostname,
+                            "app_name": "systemd-timesyncd",
+                            "pid": sys_pids.get("timesyncd", rng.randint(400, 800)),
+                            "facility": 3,
+                            "severity": 6,
+                            "message": msg,
+                        },
                     )
 
         # ICMP ping between systems on same subnet
@@ -1037,7 +1221,7 @@ class BaselineMixin:
                 dst_sys = rng.choice(systems)
                 if src_sys.ip == dst_sys.ip:
                     continue
-                if src_sys.ip.rsplit('.', 1)[0] != dst_sys.ip.rsplit('.', 1)[0]:
+                if src_sys.ip.rsplit(".", 1)[0] != dst_sys.ip.rsplit(".", 1)[0]:
                     continue
                 offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
                 offset = max(0, min(3599, offset))
@@ -1048,7 +1232,7 @@ class BaselineMixin:
                     dst_ip=dst_sys.ip,
                     time=ts,
                     dst_port=0,
-                    proto='icmp',
+                    proto="icmp",
                     duration=rng.uniform(0.0005, 0.005),
                     orig_bytes=64,
                     resp_bytes=64,
@@ -1056,7 +1240,7 @@ class BaselineMixin:
                 )
 
         # IDS false-positive alerts
-        if 'snort_alert' in self.emitters and self.scenario.environment.network:
+        if "snort_alert" in self.emitters and self.scenario.environment.network:
             _FP_SIGS = [
                 (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3),
                 (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3),
@@ -1068,17 +1252,19 @@ class BaselineMixin:
                 (2027865, "ET DNS Query to a .top domain", "potentially-bad-traffic", 2),
             ]
             from evidenceforge.events.dispatcher import expand_formats
+
             segment_systems: dict[str, list] = {}
             for seg in self.scenario.environment.network.segments:
                 seg_sys = [s for s in systems if s.hostname in (seg.systems or [])]
                 if not seg_sys:
                     import ipaddress
+
                     net = ipaddress.ip_network(seg.cidr, strict=False)
                     seg_sys = [s for s in systems if ipaddress.ip_address(s.ip) in net]
                 segment_systems[seg.name] = seg_sys
 
             for sensor in self.scenario.environment.network.sensors:
-                if 'snort_alert' not in expand_formats(sensor.log_formats):
+                if "snort_alert" not in expand_formats(sensor.log_formats):
                     continue
                 sensor_host = sensor.hostname or sensor.name
                 monitored_systems = []
@@ -1090,8 +1276,12 @@ class BaselineMixin:
                 # For IDS sensors (typically perimeter), generate alerts with
                 # external source IPs targeting monitored systems.
                 _EXTERNAL_SCAN_IPS = [
-                    "45.33.32.156", "185.220.101.34", "91.240.118.172",
-                    "194.26.192.77", "162.247.74.27", "198.98.51.189",
+                    "45.33.32.156",
+                    "185.220.101.34",
+                    "91.240.118.172",
+                    "194.26.192.77",
+                    "162.247.74.27",
+                    "198.98.51.189",
                 ]
                 for _ in range(num_alerts):
                     offset = rng.randint(0, 3599)
@@ -1106,35 +1296,49 @@ class BaselineMixin:
                             continue
                         src_ip = src_sys.ip
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='snort_alert', fields={
-                            'timestamp': ts, 'sid': sig[0], 'message': sig[1],
-                            'classification': sig[2], 'priority': sig[3],
-                            'protocol': rng.choice(['TCP', 'UDP', 'ICMP']),
-                            'src_ip': src_ip, 'src_port': rng.randint(1024, 65535),
-                            'dst_ip': dst_sys.ip, 'dst_port': rng.choice([22, 80, 443, 53, 8080]),
-                            '_sensor_hostnames': [sensor_host],
+                        time=ts,
+                        target_format="snort_alert",
+                        fields={
+                            "timestamp": ts,
+                            "sid": sig[0],
+                            "message": sig[1],
+                            "classification": sig[2],
+                            "priority": sig[3],
+                            "protocol": rng.choice(["TCP", "UDP", "ICMP"]),
+                            "src_ip": src_ip,
+                            "src_port": rng.randint(1024, 65535),
+                            "dst_ip": dst_sys.ip,
+                            "dst_port": rng.choice([22, 80, 443, 53, 8080]),
+                            "_sensor_hostnames": [sensor_host],
                         },
                     )
 
         # Web access logs
-        if 'web_access' in self.emitters:
+        if "web_access" in self.emitters:
             _WEB_PATHS = [
-                ('/', 'GET', 200), ('/index.html', 'GET', 200),
-                ('/api/v1/health', 'GET', 200), ('/favicon.ico', 'GET', 200),
-                ('/robots.txt', 'GET', 200), ('/assets/main.css', 'GET', 200),
-                ('/assets/app.js', 'GET', 200), ('/images/logo.png', 'GET', 200),
-                ('/wp-login.php', 'GET', 404), ('/admin', 'GET', 403),
-                ('/.env', 'GET', 403), ('/api/v1/data', 'POST', 200),
-                ('/phpmyadmin/', 'GET', 404), ('/xmlrpc.php', 'POST', 404),
+                ("/", "GET", 200),
+                ("/index.html", "GET", 200),
+                ("/api/v1/health", "GET", 200),
+                ("/favicon.ico", "GET", 200),
+                ("/robots.txt", "GET", 200),
+                ("/assets/main.css", "GET", 200),
+                ("/assets/app.js", "GET", 200),
+                ("/images/logo.png", "GET", 200),
+                ("/wp-login.php", "GET", 404),
+                ("/admin", "GET", 403),
+                ("/.env", "GET", 403),
+                ("/api/v1/data", "POST", 200),
+                ("/phpmyadmin/", "GET", 404),
+                ("/xmlrpc.php", "POST", 404),
             ]
             _WEB_UAS = [
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-                'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                'curl/7.88.1',
-                'python-requests/2.31.0',
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "curl/7.88.1",
+                "python-requests/2.31.0",
             ]
             for sys_obj in systems:
-                if 'web_server' not in (sys_obj.roles or []):
+                if "web_server" not in (sys_obj.roles or []):
                     continue
                 num_reqs = rng.randint(10, 30)
 
@@ -1144,21 +1348,30 @@ class BaselineMixin:
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     path, method, status = rng.choice(_WEB_PATHS)
-                    if exposure == 'external':
+                    if exposure == "external":
                         client_ip = self._generate_external_client_ip(rng)
-                    elif exposure == 'both':
+                    elif exposure == "both":
                         if rng.random() < 0.6:
                             client_ip = self._generate_external_client_ip(rng)
                         else:
-                            client_ip = rng.choice(internal_ips) if internal_ips else '10.0.0.1'
+                            client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     else:
-                        client_ip = rng.choice(internal_ips) if internal_ips else '10.0.0.1'
+                        client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     self.activity_generator.generate_raw(
-                        time=ts, target_format='web_access', system=sys_obj, fields={
-                            'timestamp': ts, 'client_ip': client_ip,
-                            'method': method, 'path': path,
-                            'protocol': 'HTTP/1.1', 'status_code': status,
-                            'bytes_sent': rng.randint(200, 50000) if status == 200 else rng.randint(100, 500),
-                            'referer': '-', 'user_agent': rng.choice(_WEB_UAS),
+                        time=ts,
+                        target_format="web_access",
+                        system=sys_obj,
+                        fields={
+                            "timestamp": ts,
+                            "client_ip": client_ip,
+                            "method": method,
+                            "path": path,
+                            "protocol": "HTTP/1.1",
+                            "status_code": status,
+                            "bytes_sent": rng.randint(200, 50000)
+                            if status == 200
+                            else rng.randint(100, 500),
+                            "referer": "-",
+                            "user_agent": rng.choice(_WEB_UAS),
                         },
                     )

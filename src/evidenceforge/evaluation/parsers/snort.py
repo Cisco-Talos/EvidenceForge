@@ -10,13 +10,13 @@ from . import LogParser, ParsedRecord, register_parser
 # Snort fast alert format:
 # MM/DD-HH:MM:SS.ffffff [**] [sid:rev:gid] message [**] [Classification: class] [Priority: pri] {PROTO} src:port -> dst:port
 SNORT_PATTERN = re.compile(
-    r"^(\d{2}/\d{2}-\d{2}:\d{2}:\d{2}\.\d+)\s+"         # timestamp
-    r"\[\*\*\]\s+\[(\d+):\d+:\d+\]\s+"                     # [sid:rev:gid]
-    r"(.*?)\s+\[\*\*\]\s+"                                  # message
-    r"\[Classification:\s*(.*?)\]\s+"                        # classification
-    r"\[Priority:\s*(\d+)\]\s+"                              # priority
-    r"\{(\w+)\}\s+"                                          # {protocol}
-    r"(\S+)\s+->\s+(\S+)$"                                   # src -> dst
+    r"^(\d{2}/\d{2}-\d{2}:\d{2}:\d{2}\.\d+)\s+"  # timestamp
+    r"\[\*\*\]\s+\[(\d+):\d+:\d+\]\s+"  # [sid:rev:gid]
+    r"(.*?)\s+\[\*\*\]\s+"  # message
+    r"\[Classification:\s*(.*?)\]\s+"  # classification
+    r"\[Priority:\s*(\d+)\]\s+"  # priority
+    r"\{(\w+)\}\s+"  # {protocol}
+    r"(\S+)\s+->\s+(\S+)$"  # src -> dst
 )
 
 

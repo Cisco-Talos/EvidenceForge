@@ -20,7 +20,7 @@ from evidenceforge.models import (
     User,
 )
 from evidenceforge.utils import load_yaml
-from evidenceforge.validation import ScenarioValidator, ValidationIssue
+from evidenceforge.validation import ScenarioValidator
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 
@@ -50,16 +50,11 @@ class TestScenarioValidator:
                         username="testuser",
                         full_name="Test User",
                         email="test@example.com",
-                        persona="nonexistent_persona"  # Invalid reference
+                        persona="nonexistent_persona",  # Invalid reference
                     )
                 ],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
             personas=[
@@ -69,22 +64,15 @@ class TestScenarioValidator:
                     typical_activities=["coding"],
                     work_hours="9-5",
                     application_usage=["vscode"],
-                    risk_profile="low"
+                    risk_profile="low",
                 )
             ],
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -106,36 +94,23 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(
                         hostname="TEST-01",
                         ip="10.0.0.1",
                         os="Windows 10",
                         type="workstation",
-                        assigned_user="nonexistent_user"  # Invalid reference
+                        assigned_user="nonexistent_user",  # Invalid reference
                     )
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -161,31 +136,19 @@ class TestScenarioValidator:
                         username="testuser",
                         full_name="Test User",
                         email="test@example.com",
-                        primary_system="NONEXISTENT-01"  # Invalid reference
+                        primary_system="NONEXISTENT-01",  # Invalid reference
                     )
                 ],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -206,43 +169,25 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
                 groups=[
                     Group(
                         name="admins",
                         description="Admin group",
                         members=["testuser", "nonexistent_user"],  # One invalid
-                        permissions=["admin"]
+                        permissions=["admin"],
                     )
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -263,46 +208,27 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-001",
                     time="2024-01-15T10:30:00Z",
                     actor="nonexistent_actor",  # Invalid
                     system="TEST-01",
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -323,46 +249,27 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-002",
                     time="2024-01-15T10:30:00Z",
                     actor="attacker",  # Not in users list — should fail
                     system="TEST-01",
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -382,46 +289,27 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-003",
                     time="2024-01-15T10:30:00Z",
                     actor="testuser",
                     system="NONEXISTENT-01",  # Invalid
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -446,36 +334,24 @@ class TestScenarioValidator:
                     User(
                         username="testuser",  # Duplicate
                         full_name="Test User 1",
-                        email="test1@example.com"
+                        email="test1@example.com",
                     ),
                     User(
                         username="testuser",  # Duplicate
                         full_name="Test User 2",
-                        email="test2@example.com"
+                        email="test2@example.com",
                     ),
                 ],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -496,41 +372,28 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(
                         hostname="TEST-01",  # Duplicate
                         ip="10.0.0.1",
                         os="Windows 10",
-                        type="workstation"
+                        type="workstation",
                     ),
                     System(
                         hostname="TEST-01",  # Duplicate
                         ip="10.0.0.2",
                         os="Windows 10",
-                        type="workstation"
+                        type="workstation",
                     ),
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -551,41 +414,28 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(
-                        username="testuser",
-                        full_name="Test User",
-                        email="test@example.com"
-                    )
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(
                         hostname="TEST-01",
                         ip="10.0.0.1",  # Duplicate
                         os="Windows 10",
-                        type="workstation"
+                        type="workstation",
                     ),
                     System(
                         hostname="TEST-02",
                         ip="10.0.0.1",  # Duplicate
                         os="Windows 10",
-                        type="workstation"
+                        type="workstation",
                     ),
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -611,37 +461,25 @@ class TestScenarioValidator:
                         username="user1",
                         full_name="User 1",
                         email="user1@example.com",
-                        persona="invalid"
+                        persona="invalid",
                     ),
                     User(
                         username="user2",
                         full_name="User 2",
                         email="user2@example.com",
-                        primary_system="INVALID"
+                        primary_system="INVALID",
                     ),
                 ],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -665,16 +503,11 @@ class TestScenarioValidator:
                         username="testuser",
                         full_name="Test User",
                         email="test@example.com",
-                        persona="invalid"
+                        persona="invalid",
                     )
                 ],
                 systems=[
-                    System(
-                        hostname="TEST-01",
-                        ip="10.0.0.1",
-                        os="Windows 10",
-                        type="workstation"
-                    )
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
             personas=[
@@ -684,7 +517,7 @@ class TestScenarioValidator:
                     typical_activities=["coding"],
                     work_hours="9-5",
                     application_usage=["vscode"],
-                    risk_profile="low"
+                    risk_profile="low",
                 ),
                 Persona(
                     name="executive",
@@ -692,22 +525,15 @@ class TestScenarioValidator:
                     typical_activities=["email"],
                     work_hours="8-6",
                     application_usage=["outlook"],
-                    risk_profile="medium"
+                    risk_profile="medium",
                 ),
             ],
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -733,12 +559,12 @@ class TestScenarioValidator:
                         full_name="User 1",
                         email="user1@example.com",
                         persona="invalid_persona",  # Issue 1
-                        primary_system="INVALID-SYS"  # Issue 2
+                        primary_system="INVALID-SYS",  # Issue 2
                     ),
                     User(
                         username="user1",  # Issue 3: duplicate
                         full_name="User 1 Dup",
-                        email="user1dup@example.com"
+                        email="user1dup@example.com",
                     ),
                 ],
                 systems=[
@@ -747,23 +573,16 @@ class TestScenarioValidator:
                         ip="10.0.0.1",
                         os="Windows 10",
                         type="workstation",
-                        assigned_user="invalid_user"  # Issue 4
+                        assigned_user="invalid_user",  # Issue 4
                     )
                 ],
             ),
-            time_window=TimeWindow(
-                start=datetime(2024, 1, 15, 10, 0, 0),
-                duration="1h"
-            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test",
-                intensity="medium",
-                variation="low"
+                description="Test", intensity="medium", variation="low"
             ),
             output=OutputSpec(
-                logs=[{"format": "windows"}],
-                destination="./output",
-                compression=False
+                logs=[{"format": "windows"}], destination="./output", compression=False
             ),
         )
 
@@ -790,7 +609,12 @@ class TestScenarioValidator:
             environment=Environment(
                 description="Test env",
                 users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        persona="dev",
+                    )
                 ],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
@@ -808,7 +632,9 @@ class TestScenarioValidator:
                 )
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
@@ -825,7 +651,12 @@ class TestScenarioValidator:
             environment=Environment(
                 description="Test env",
                 users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        persona="dev",
+                    )
                 ],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
@@ -842,7 +673,9 @@ class TestScenarioValidator:
                 )
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
@@ -863,7 +696,12 @@ class TestScenarioValidator:
             environment=Environment(
                 description="Test env",
                 users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        persona="dev",
+                    )
                 ],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
@@ -880,7 +718,9 @@ class TestScenarioValidator:
                 )
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
@@ -900,7 +740,12 @@ class TestScenarioValidator:
             environment=Environment(
                 description="Test env",
                 users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com", persona="dev")
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        persona="dev",
+                    )
                 ],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
@@ -915,10 +760,11 @@ class TestScenarioValidator:
                 )
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-004",
                     time="2024-01-15T10:00:00Z",
                     actor="testuser",
@@ -927,7 +773,6 @@ class TestScenarioValidator:
                     events=[{"type": "logon", "logon_type": 2}],
                 ),
                 StorylineEvent(
-
                     id="evt-val-005",
                     time="2024-01-15T10:30:00Z",
                     actor="testuser",
@@ -943,7 +788,9 @@ class TestScenarioValidator:
         issues = validator.validate()
         assert len(issues) == 0
 
-    @pytest.mark.parametrize("actor_name", ["SYSTEM", "root", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE"])
+    @pytest.mark.parametrize(
+        "actor_name", ["SYSTEM", "root", "NT AUTHORITY\\SYSTEM", "LOCAL SERVICE"]
+    )
     def test_builtin_accounts_valid_as_actors(self, actor_name):
         """Built-in OS accounts should be valid storyline actors without being in users list."""
         scenario = Scenario(
@@ -952,24 +799,23 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com")
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-006",
                     time="2024-01-15T10:30:00Z",
                     actor=actor_name,
                     system="TEST-01",
                     activity="system-level activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
@@ -988,25 +834,24 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com")
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
                 service_accounts=["svc_backup", "apache"],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-007",
                     time="2024-01-15T10:30:00Z",
                     actor="svc_backup",
                     system="TEST-01",
                     activity="backup service activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
@@ -1025,25 +870,24 @@ class TestScenarioValidator:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com")
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
                 service_accounts=["svc_backup"],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-008",
                     time="2024-01-15T10:30:00Z",
                     actor="totally_unknown",
                     system="TEST-01",
                     activity="suspicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
                 )
             ],
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
@@ -1071,17 +915,19 @@ class TestNetworkValidation:
             description="Test scenario",
             environment=Environment(
                 description="Test env",
-                users=[
-                    User(username="testuser", full_name="Test User", email="test@example.com")
-                ],
+                users=[User(username="testuser", full_name="Test User", email="test@example.com")],
                 systems=[
                     System(hostname="WS-01", ip="10.10.10.1", os="Windows 10", type="workstation"),
-                    System(hostname="SRV-01", ip="10.10.30.1", os="Windows Server 2019", type="server"),
+                    System(
+                        hostname="SRV-01", ip="10.10.30.1", os="Windows Server 2019", type="server"
+                    ),
                 ],
                 network=network_config,
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
-            baseline_activity=BaselineActivity(description="Test", intensity="medium", variation="low"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
 
@@ -1094,9 +940,12 @@ class TestNetworkValidation:
                     NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01"]),
                 ],
                 sensors=[
-                    NetworkSensor(type="network", name="tap",
-                                  monitoring_segments=["workstations", "servers"],
-                                  log_formats=["zeek"]),
+                    NetworkSensor(
+                        type="network",
+                        name="tap",
+                        monitoring_segments=["workstations", "servers"],
+                        log_formats=["zeek"],
+                    ),
                 ],
             )
         )
@@ -1109,12 +958,12 @@ class TestNetworkValidation:
         scenario = self._make_scenario_with_network(
             NetworkConfig(
                 segments=[
-                    NetworkSegment(name="workstations", cidr="10.10.10.0/24",
-                                   systems=["WS-01", "NONEXISTENT"]),
+                    NetworkSegment(
+                        name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "NONEXISTENT"]
+                    ),
                 ],
                 sensors=[
-                    NetworkSensor(type="network", name="tap",
-                                  monitoring_segments=["workstations"]),
+                    NetworkSensor(type="network", name="tap", monitoring_segments=["workstations"]),
                 ],
             )
         )
@@ -1134,8 +983,11 @@ class TestNetworkValidation:
                     NetworkSegment(name="workstations", cidr="10.10.10.0/24"),
                 ],
                 sensors=[
-                    NetworkSensor(type="network", name="tap",
-                                  monitoring_segments=["workstations", "nonexistent"]),
+                    NetworkSensor(
+                        type="network",
+                        name="tap",
+                        monitoring_segments=["workstations", "nonexistent"],
+                    ),
                 ],
             )
         )
@@ -1152,12 +1004,10 @@ class TestNetworkValidation:
         scenario = self._make_scenario_with_network(
             NetworkConfig(
                 segments=[
-                    NetworkSegment(name="wrong_subnet", cidr="192.168.1.0/24",
-                                   systems=["WS-01"]),
+                    NetworkSegment(name="wrong_subnet", cidr="192.168.1.0/24", systems=["WS-01"]),
                 ],
                 sensors=[
-                    NetworkSensor(type="network", name="tap",
-                                  monitoring_segments=["wrong_subnet"]),
+                    NetworkSensor(type="network", name="tap", monitoring_segments=["wrong_subnet"]),
                 ],
             )
         )
@@ -1190,20 +1040,23 @@ class TestFormatOsCompatibility:
                 description="Test env",
                 users=[User(username="u1", full_name="U", email="u@test.com")],
                 systems=[
-                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu 22.04",
-                           type="server"),
+                    System(
+                        hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu 22.04", type="server"
+                    ),
                 ],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        errors = [i for i in issues if i.severity == "error"
-                  and "requires windows" in i.message.lower()]
+        errors = [
+            i for i in issues if i.severity == "error" and "requires windows" in i.message.lower()
+        ]
         assert len(errors) >= 1
 
     def test_linux_format_no_linux_systems_error(self):
@@ -1216,20 +1069,21 @@ class TestFormatOsCompatibility:
                 description="Test env",
                 users=[User(username="u1", full_name="U", email="u@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "syslog"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        errors = [i for i in issues if i.severity == "error"
-                  and "requires linux" in i.message.lower()]
+        errors = [
+            i for i in issues if i.severity == "error" and "requires linux" in i.message.lower()
+        ]
         assert len(errors) >= 1
 
     def test_linux_system_no_linux_format_warning(self):
@@ -1242,22 +1096,24 @@ class TestFormatOsCompatibility:
                 description="Test env",
                 users=[User(username="u1", full_name="U", email="u@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu",
-                           type="server"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu", type="server"),
                 ],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        warnings = [i for i in issues if i.severity == "warning"
-                    and "LNX-01" in i.message and "linux" in i.message.lower()]
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning" and "LNX-01" in i.message and "linux" in i.message.lower()
+        ]
         assert len(warnings) >= 1
 
     def test_matching_os_and_formats_no_issues(self):
@@ -1270,25 +1126,27 @@ class TestFormatOsCompatibility:
                 description="Test env",
                 users=[User(username="u1", full_name="U", email="u@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu",
-                           type="server"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu", type="server"),
                 ],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(
-                logs=[{"format": "windows"}, {"format": "syslog"},
-                      {"format": "bash_history"}],
-                destination="./output"),
+                logs=[{"format": "windows"}, {"format": "syslog"}, {"format": "bash_history"}],
+                destination="./output",
+            ),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        os_issues = [i for i in issues if "output.logs" == i.field_path
-                     and ("requires" in i.message or "no" in i.message)]
+        os_issues = [
+            i
+            for i in issues
+            if "output.logs" == i.field_path and ("requires" in i.message or "no" in i.message)
+        ]
         assert len(os_issues) == 0
 
 
@@ -1305,35 +1163,38 @@ class TestSegmentSensorCoverage:
                 description="Test env",
                 users=[User(username="u1", full_name="U", email="u@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="SRV-01", ip="10.0.1.1", os="Windows Server 2019",
-                           type="server"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(
+                        hostname="SRV-01", ip="10.0.1.1", os="Windows Server 2019", type="server"
+                    ),
                 ],
                 network=NetworkConfig(
                     segments=[
-                        NetworkSegment(name="workstations", cidr="10.0.0.0/24",
-                                       systems=["WS-01"]),
-                        NetworkSegment(name="servers", cidr="10.0.1.0/24",
-                                       systems=["SRV-01"]),
+                        NetworkSegment(name="workstations", cidr="10.0.0.0/24", systems=["WS-01"]),
+                        NetworkSegment(name="servers", cidr="10.0.1.0/24", systems=["SRV-01"]),
                     ],
                     sensors=[
-                        NetworkSensor(type="network", name="tap",
-                                      monitoring_segments=["servers"],
-                                      log_formats=["zeek"]),
+                        NetworkSensor(
+                            type="network",
+                            name="tap",
+                            monitoring_segments=["servers"],
+                            log_formats=["zeek"],
+                        ),
                     ],
                 ),
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        warnings = [i for i in issues if i.severity == "warning"
-                    and "no sensor" in i.message.lower()]
+        warnings = [
+            i for i in issues if i.severity == "warning" and "no sensor" in i.message.lower()
+        ]
         assert len(warnings) == 1
         assert "workstations" in warnings[0].message
 
@@ -1347,24 +1208,26 @@ class TestSegmentSensorCoverage:
                 description="Test env",
                 users=[User(username="u1", full_name="U", email="u@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
                 network=NetworkConfig(
                     segments=[
-                        NetworkSegment(name="workstations", cidr="10.0.0.0/24",
-                                       systems=["WS-01"]),
+                        NetworkSegment(name="workstations", cidr="10.0.0.0/24", systems=["WS-01"]),
                     ],
                     sensors=[
-                        NetworkSensor(type="network", name="tap",
-                                      monitoring_segments=["workstations"],
-                                      log_formats=["zeek"]),
+                        NetworkSensor(
+                            type="network",
+                            name="tap",
+                            monitoring_segments=["workstations"],
+                            log_formats=["zeek"],
+                        ),
                     ],
                 ),
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1387,14 +1250,14 @@ class TestServiceAccountCollisions:
                 description="Test env",
                 users=[User(username="svc_backup", full_name="Backup", email="b@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
                 service_accounts=["svc_backup", "svc_sql"],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1414,14 +1277,14 @@ class TestServiceAccountCollisions:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J Doe", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
                 service_accounts=["svc_sql"],
             ),
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1442,29 +1305,33 @@ class TestStorylineActorWorkHours:
             description="Test",
             environment=Environment(
                 description="Test env",
-                users=[User(username="jdoe", full_name="J", email="j@test.com",
-                            persona="dev")],
+                users=[User(username="jdoe", full_name="J", email="j@test.com", persona="dev")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             personas=[
-                Persona(name="dev", description="Dev",
-                        typical_activities=["coding"],
-                        work_hours="whenever I feel like it"),
+                Persona(
+                    name="dev",
+                    description="Dev",
+                    typical_activities=["coding"],
+                    work_hours="whenever I feel like it",
+                ),
             ],
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-009",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="logon",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1481,29 +1348,33 @@ class TestStorylineActorWorkHours:
             description="Test",
             environment=Environment(
                 description="Test env",
-                users=[User(username="jdoe", full_name="J", email="j@test.com",
-                            persona="dev")],
+                users=[User(username="jdoe", full_name="J", email="j@test.com", persona="dev")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             personas=[
-                Persona(name="dev", description="Dev",
-                        typical_activities=["coding"],
-                        work_hours="9am-5pm"),
+                Persona(
+                    name="dev",
+                    description="Dev",
+                    typical_activities=["coding"],
+                    work_hours="9am-5pm",
+                ),
             ],
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-010",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="logon",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1520,11 +1391,13 @@ class TestNoiseFeasibility:
         """Low intensity with 51+ storyline events should warn."""
         events = [
             StorylineEvent(
-
                 id=f"evt-val-011-{i}",
-                time=f"2024-01-15T10:{i:02d}:00Z", actor="jdoe", system="WS-01",
+                time=f"2024-01-15T10:{i:02d}:00Z",
+                actor="jdoe",
+                system="WS-01",
                 activity=f"step {i}",
-                events=[{"type": "logon", "logon_type": 2}])
+                events=[{"type": "logon", "logon_type": 2}],
+            )
             for i in range(51)
         ]
         scenario = Scenario(
@@ -1535,14 +1408,14 @@ class TestNoiseFeasibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=events,
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="low", variation="low"),
+                description="Test", intensity="low", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1555,11 +1428,13 @@ class TestNoiseFeasibility:
         """High intensity with many events should not warn about noise."""
         events = [
             StorylineEvent(
-
                 id=f"evt-val-012-{i}",
-                time=f"2024-01-15T10:{i:02d}:00Z", actor="jdoe", system="WS-01",
+                time=f"2024-01-15T10:{i:02d}:00Z",
+                actor="jdoe",
+                system="WS-01",
                 activity=f"step {i}",
-                events=[{"type": "logon", "logon_type": 2}])
+                events=[{"type": "logon", "logon_type": 2}],
+            )
             for i in range(51)
         ]
         scenario = Scenario(
@@ -1570,14 +1445,14 @@ class TestNoiseFeasibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=events,
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="high", variation="low"),
+                description="Test", intensity="high", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1600,30 +1475,34 @@ class TestStorylineFormatCoverage:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu",
-                           type="server"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="LNX-01", ip="10.0.0.2", os="Linux Ubuntu", type="server"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-013",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="LNX-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="LNX-01",
                     activity="ssh",
-                    events=[{"type": "ssh_session"}]),
+                    events=[{"type": "ssh_session"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        warnings = [i for i in issues if i.severity == "warning"
-                    and "LNX-01" in i.message and "format" in i.message.lower()]
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning" and "LNX-01" in i.message and "format" in i.message.lower()
+        ]
         assert len(warnings) >= 1
 
 
@@ -1640,23 +1519,29 @@ class TestStorylineOsPlausibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu",
-                           type="server"),
+                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu", type="server"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-014",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="LNX-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="LNX-01",
                     activity="install service",
-                    events=[{"type": "service_installed",
-                             "service_name": "evil",
-                             "service_file_name": "C:\\evil.exe"}]),
+                    events=[
+                        {
+                            "type": "service_installed",
+                            "service_name": "evil",
+                            "service_file_name": "C:\\evil.exe",
+                        }
+                    ],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "syslog"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1675,21 +1560,23 @@ class TestStorylineOsPlausibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-015",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="ssh session",
-                    events=[{"type": "ssh_session"}]),
+                    events=[{"type": "ssh_session"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1708,22 +1595,29 @@ class TestStorylineOsPlausibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu",
-                           type="server"),
+                    System(hostname="LNX-01", ip="10.0.0.1", os="Linux Ubuntu", type="server"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-016",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="LNX-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="LNX-01",
                     activity="run powershell",
-                    events=[{"type": "process", "process_name": "powershell.exe",
-                             "command_line": "powershell.exe -enc abc123"}]),
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "powershell.exe",
+                            "command_line": "powershell.exe -enc abc123",
+                        }
+                    ],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "syslog"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1742,28 +1636,37 @@ class TestStorylineOsPlausibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-017",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="run linux binary",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-018",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="run linux binary",
-                    events=[{"type": "process", "process_name": "ncat",
-                             "command_line": "/usr/bin/ncat -e /bin/sh"}]),
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "ncat",
+                            "command_line": "/usr/bin/ncat -e /bin/sh",
+                        }
+                    ],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1782,36 +1685,47 @@ class TestStorylineOsPlausibility:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-019",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="logon",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-020",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="install service",
-                    events=[{"type": "service_installed",
-                             "service_name": "svc",
-                             "service_file_name": "C:\\svc.exe"}]),
+                    events=[
+                        {
+                            "type": "service_installed",
+                            "service_name": "svc",
+                            "service_file_name": "C:\\svc.exe",
+                        }
+                    ],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        os_warnings = [i for i in issues if "specific" in i.message.lower()
-                       and ("Windows" in i.message or "Linux" in i.message)]
+        os_warnings = [
+            i
+            for i in issues
+            if "specific" in i.message.lower() and ("Windows" in i.message or "Linux" in i.message)
+        ]
         assert len(os_warnings) == 0
 
 
@@ -1831,29 +1745,32 @@ class TestStorylineLinkability:
                     User(username="bob", full_name="B", email="b@test.com"),
                 ],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-021",
-                    time="2024-01-15T10:00:00Z", actor="alice", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="alice",
+                    system="WS-01",
                     activity="step 1",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-022",
-                    time="2024-01-15T10:01:00Z", actor="bob", system="WS-02",
+                    time="2024-01-15T10:01:00Z",
+                    actor="bob",
+                    system="WS-02",
                     activity="step 2",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1872,29 +1789,32 @@ class TestStorylineLinkability:
                 description="Test env",
                 users=[User(username="alice", full_name="A", email="a@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-023",
-                    time="2024-01-15T10:00:00Z", actor="alice", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="alice",
+                    system="WS-01",
                     activity="step 1",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-024",
-                    time="2024-01-15T10:01:00Z", actor="alice", system="WS-02",
+                    time="2024-01-15T10:01:00Z",
+                    actor="alice",
+                    system="WS-02",
                     activity="step 2",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1916,30 +1836,34 @@ class TestStorylineLinkability:
                     User(username="bob", full_name="B", email="b@test.com"),
                 ],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="SRV-01", ip="10.0.0.10", os="Windows Server 2019",
-                           type="server"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(
+                        hostname="SRV-01", ip="10.0.0.10", os="Windows Server 2019", type="server"
+                    ),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-025",
-                    time="2024-01-15T10:00:00Z", actor="alice", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="alice",
+                    system="WS-01",
                     activity="connect",
-                    events=[{"type": "connection", "dst_ip": "10.0.0.10",
-                             "dst_port": 443}]),
+                    events=[{"type": "connection", "dst_ip": "10.0.0.10", "dst_port": 443}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-026",
-                    time="2024-01-15T10:01:00Z", actor="bob", system="SRV-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="bob",
+                    system="SRV-01",
                     activity="execute",
-                    events=[{"type": "logon", "logon_type": 3}]),
+                    events=[{"type": "logon", "logon_type": 3}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -1962,20 +1886,23 @@ class TestStorylineCausalOrder:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-val-027",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="run cmd",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
             logon_grace_period="0s",
         )
@@ -1995,27 +1922,31 @@ class TestStorylineCausalOrder:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-028",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="logon",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-029",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="run cmd",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -2034,21 +1965,23 @@ class TestStorylineCausalOrder:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-030",
-                    time="2024-01-15T10:00:00Z", actor="SYSTEM", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="SYSTEM",
+                    system="WS-01",
                     activity="system process",
-                    events=[{"type": "process", "process_name": "svchost.exe"}]),
+                    events=[{"type": "process", "process_name": "svchost.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -2067,21 +2000,23 @@ class TestStorylineCausalOrder:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-031",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="logoff",
-                    events=[{"type": "logoff"}]),
+                    events=[{"type": "logoff"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
             logon_grace_period="0s",
         )
@@ -2101,28 +2036,36 @@ class TestStorylineCausalOrder:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="DC-01", ip="10.0.0.1", os="Windows Server 2019",
-                           type="domain_controller"),
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.1",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-032",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="DC-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="DC-01",
                     activity="logon",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-033",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="DC-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="DC-01",
                     activity="delete account",
-                    events=[{"type": "account_deleted",
-                             "target_username": "ghost_user"}]),
+                    events=[{"type": "account_deleted", "target_username": "ghost_user"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -2141,35 +2084,44 @@ class TestStorylineCausalOrder:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="DC-01", ip="10.0.0.1", os="Windows Server 2019",
-                           type="domain_controller"),
+                    System(
+                        hostname="DC-01",
+                        ip="10.0.0.1",
+                        os="Windows Server 2019",
+                        type="domain_controller",
+                    ),
                 ],
             ),
             storyline=[
                 StorylineEvent(
-
                     id="evt-val-034",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="DC-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="DC-01",
                     activity="logon",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-035",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="DC-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="DC-01",
                     activity="create account",
-                    events=[{"type": "account_created",
-                             "target_username": "temp_user"}]),
+                    events=[{"type": "account_created", "target_username": "temp_user"}],
+                ),
                 StorylineEvent(
-
                     id="evt-val-036",
-                    time="2024-01-15T10:02:00Z", actor="jdoe", system="DC-01",
+                    time="2024-01-15T10:02:00Z",
+                    actor="jdoe",
+                    system="DC-01",
                     activity="delete account",
-                    events=[{"type": "account_deleted",
-                             "target_username": "temp_user"}]),
+                    events=[{"type": "account_deleted", "target_username": "temp_user"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -2192,32 +2144,37 @@ class TestStorylineEventIds:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-dup",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="step 1",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
                     id="evt-dup",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="step 2",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
 
-        errors = [i for i in issues if i.severity == "error"
-                  and "Duplicate event ID" in i.message]
+        errors = [i for i in issues if i.severity == "error" and "Duplicate event ID" in i.message]
         assert len(errors) == 1
         assert "evt-dup" in errors[0].message
 
@@ -2231,25 +2188,31 @@ class TestStorylineEventIds:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-001",
-                    time="2024-01-15T10:00:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="step 1",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
                     id="evt-002",
-                    time="2024-01-15T10:01:00Z", actor="jdoe", system="WS-01",
+                    time="2024-01-15T10:01:00Z",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="step 2",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -2272,20 +2235,23 @@ class TestLogonGracePeriod:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-001",
-                    time="+10m", actor="jdoe", system="WS-01",
+                    time="+10m",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="run cmd",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
             logon_grace_period="30m",
         )
@@ -2305,20 +2271,23 @@ class TestLogonGracePeriod:
                 description="Test env",
                 users=[User(username="jdoe", full_name="J", email="j@test.com")],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-001",
-                    time="+2h", actor="jdoe", system="WS-01",
+                    time="+2h",
+                    actor="jdoe",
+                    system="WS-01",
                     activity="run cmd",
-                    events=[{"type": "process", "process_name": "cmd.exe"}]),
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="4h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
             logon_grace_period="30m",
         )
@@ -2345,27 +2314,32 @@ class TestLinkabilityTimeGap:
                     User(username="bob", full_name="B", email="b@test.com"),
                 ],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-001",
-                    time="+1h", actor="alice", system="WS-01",
+                    time="+1h",
+                    actor="alice",
+                    system="WS-01",
                     activity="step 1",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
                     id="evt-002",
-                    time="+27h", actor="bob", system="WS-02",
+                    time="+27h",
+                    actor="bob",
+                    system="WS-02",
                     activity="step 2 (next day)",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="48h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)
@@ -2387,27 +2361,32 @@ class TestLinkabilityTimeGap:
                     User(username="bob", full_name="B", email="b@test.com"),
                 ],
                 systems=[
-                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10",
-                           type="workstation"),
-                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10",
-                           type="workstation"),
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                    System(hostname="WS-02", ip="10.0.0.2", os="Windows 10", type="workstation"),
                 ],
             ),
             storyline=[
                 StorylineEvent(
                     id="evt-001",
-                    time="+1h", actor="alice", system="WS-01",
+                    time="+1h",
+                    actor="alice",
+                    system="WS-01",
                     activity="step 1",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
                 StorylineEvent(
                     id="evt-002",
-                    time="+1h30m", actor="bob", system="WS-02",
+                    time="+1h30m",
+                    actor="bob",
+                    system="WS-02",
                     activity="step 2",
-                    events=[{"type": "logon", "logon_type": 2}]),
+                    events=[{"type": "logon", "logon_type": 2}],
+                ),
             ],
             time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="4h"),
             baseline_activity=BaselineActivity(
-                description="Test", intensity="medium", variation="low"),
+                description="Test", intensity="medium", variation="low"
+            ),
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
         )
         validator = ScenarioValidator(scenario)

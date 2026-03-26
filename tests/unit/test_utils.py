@@ -1,8 +1,6 @@
 """Unit tests for utility modules."""
 
-import logging
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -123,40 +121,36 @@ class TestTimeUtils:
         assert result.month == 1
         assert result.day == 15
         assert result.hour == 10
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
 
     def test_parse_iso8601_with_offset(self):
         """Test parsing ISO 8601 with timezone offset."""
         result = parse_iso8601("2024-01-15T10:00:00+00:00")
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
 
     def test_resolve_time_window_with_duration(self):
         """Test resolving TimeWindow with duration."""
-        tw = TimeWindow(
-            start=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc), duration="8h"
-        )
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC), duration="8h")
         start, end = resolve_time_window(tw)
-        assert start == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
+        assert start == datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         assert end == start + timedelta(hours=8)
 
     def test_resolve_time_window_with_end(self):
         """Test resolving TimeWindow with explicit end."""
         tw = TimeWindow(
-            start=datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
-            end=datetime(2024, 1, 15, 18, 0, 0, tzinfo=timezone.utc),
+            start=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            end=datetime(2024, 1, 15, 18, 0, 0, tzinfo=UTC),
         )
         start, end = resolve_time_window(tw)
-        assert start == datetime(2024, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
-        assert end == datetime(2024, 1, 15, 18, 0, 0, tzinfo=timezone.utc)
+        assert start == datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        assert end == datetime(2024, 1, 15, 18, 0, 0, tzinfo=UTC)
 
     def test_get_system_timezone_default(self):
         """Test system timezone with no pattern match."""
         env = Environment(
             description="Test",
             users=[User(username="test", full_name="Test", email="test@example.com")],
-            systems=[
-                System(hostname="WS-01", ip="192.168.1.1", os="Windows", type="workstation")
-            ],
+            systems=[System(hostname="WS-01", ip="192.168.1.1", os="Windows", type="workstation")],
         )
         tz = get_system_timezone("WS-01", env)
         assert tz == "UTC"
@@ -184,7 +178,7 @@ class TestTimeUtils:
                 System(hostname="WS-NYC-01", ip="192.168.1.1", os="Windows", type="workstation")
             ],
         )
-        utc_time = datetime(2024, 1, 15, 15, 0, 0, tzinfo=timezone.utc)
+        utc_time = datetime(2024, 1, 15, 15, 0, 0, tzinfo=UTC)
         ny_time = convert_to_output_timezone(utc_time, "WS-NYC-01", env)
         # Should be 10 AM in New York (EST = UTC-5)
         assert ny_time.hour == 10
@@ -276,7 +270,7 @@ class TestFileUtils:
     def test_parse_iso8601_no_timezone(self):
         """Test parsing ISO 8601 without timezone assumes UTC."""
         result = parse_iso8601("2024-01-15T10:00:00")
-        assert result.tzinfo == timezone.utc
+        assert result.tzinfo == UTC
 
     def test_parse_iso8601_invalid(self):
         """Test parsing invalid ISO 8601 raises ValueError."""

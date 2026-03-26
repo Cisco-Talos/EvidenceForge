@@ -10,15 +10,15 @@ from . import LogParser, ParsedRecord, register_parser
 # Apache/Nginx combined log format:
 # client_ip - username [timestamp] "method path protocol" status bytes "referer" "user_agent"
 WEB_ACCESS_PATTERN = re.compile(
-    r'^(\S+)\s+'                        # client_ip
-    r'\S+\s+'                           # ident (always -)
-    r'(\S+)\s+'                         # username (or -)
-    r'\[([^\]]+)\]\s+'                  # [timestamp]
-    r'"(\S+)\s+(\S+)\s+(\S+)"\s+'      # "method path protocol"
-    r'(\d+)\s+'                         # status_code
-    r'(\S+)\s+'                         # bytes_sent (or -)
-    r'"([^"]*)"\s+'                     # "referer"
-    r'"([^"]*)"'                        # "user_agent"
+    r"^(\S+)\s+"  # client_ip
+    r"\S+\s+"  # ident (always -)
+    r"(\S+)\s+"  # username (or -)
+    r"\[([^\]]+)\]\s+"  # [timestamp]
+    r'"(\S+)\s+(\S+)\s+(\S+)"\s+'  # "method path protocol"
+    r"(\d+)\s+"  # status_code
+    r"(\S+)\s+"  # bytes_sent (or -)
+    r'"([^"]*)"\s+'  # "referer"
+    r'"([^"]*)"'  # "user_agent"
 )
 
 
@@ -54,8 +54,18 @@ class WebAccessParser(LogParser):
                 line_number=line_num,
             )
 
-        (client_ip, username, ts_str, method, path_str,
-         protocol, status, bytes_sent, referer, user_agent) = match.groups()
+        (
+            client_ip,
+            username,
+            ts_str,
+            method,
+            path_str,
+            protocol,
+            status,
+            bytes_sent,
+            referer,
+            user_agent,
+        ) = match.groups()
 
         # Parse CLF timestamp: dd/Mon/YYYY:HH:MM:SS +ZZZZ
         try:

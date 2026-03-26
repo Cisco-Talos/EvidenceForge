@@ -122,7 +122,8 @@ class RecordFidelityScorer(DimensionScorer):
                     line_info = f" (line {record.line_number})" if record.line_number else ""
                     for err in record.parse_errors:
                         _track_failure(
-                            format_name, "parse_error",
+                            format_name,
+                            "parse_error",
                             f"[{format_name}{ctx_label}]{line_info} Parse error: {err}",
                         )
                     continue
@@ -144,7 +145,8 @@ class RecordFidelityScorer(DimensionScorer):
                         for err in result.errors:
                             category = self._categorize_error(err)
                             _track_failure(
-                                format_name, category,
+                                format_name,
+                                category,
                                 f"[{format_name}{ctx_label}]{line_info} {err}",
                             )
                 else:
@@ -202,16 +204,11 @@ class RecordFidelityScorer(DimensionScorer):
                     if self._condition_matches(rule.get("condition", {}), record.fields):
                         total_applicable += 1
                         checks = rule.get("checks", [])
-                        all_pass = all(
-                            self._check_passes(check, record.fields)
-                            for check in checks
-                        )
+                        all_pass = all(self._check_passes(check, record.fields) for check in checks)
                         if all_pass:
                             passing += 1
                         elif len(failures) < 10:
-                            failures.append(
-                                f"[{format_name}] Rule '{rule['name']}' failed"
-                            )
+                            failures.append(f"[{format_name}] Rule '{rule['name']}' failed")
 
         score = (100.0 * passing / total_applicable) if total_applicable > 0 else 100.0
         return SubScore(
@@ -275,17 +272,15 @@ class RecordFidelityScorer(DimensionScorer):
                 divergence_scores.append(field_score)
                 details_parts.append(f"{format_name}.{field}: {field_score:.0f}")
 
-        score = (
-            sum(divergence_scores) / len(divergence_scores)
-            if divergence_scores
-            else 100.0
-        )
+        score = sum(divergence_scores) / len(divergence_scores) if divergence_scores else 100.0
         return SubScore(
             name="Population Statistics",
             key="distributions",
             weight=0.25,
             score=score,
-            details="; ".join(details_parts) if details_parts else "No distribution profiles applicable",
+            details="; ".join(details_parts)
+            if details_parts
+            else "No distribution profiles applicable",
             sample_failures=[],
         )
 
@@ -339,7 +334,9 @@ class RecordFidelityScorer(DimensionScorer):
 
     @staticmethod
     def _build_event_context(
-        format_name: str, record: ParsedRecord, variant: str | None,
+        format_name: str,
+        record: ParsedRecord,
+        variant: str | None,
     ) -> str:
         """Build a human-readable context string for validator messages."""
         if format_name in ("windows_event_security", "windows_event_sysmon"):

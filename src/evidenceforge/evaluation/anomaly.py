@@ -5,32 +5,58 @@ Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 """
 
 import random
-from collections import Counter, defaultdict
-from datetime import timezone as _tz
-from typing import Any
+from collections import Counter
+from datetime import UTC
 from zoneinfo import ZoneInfo
 
 from evidenceforge.evaluation.dimensions.temporal import _extract_username
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.models.scenario import Scenario
-from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 # Failed operation indicators
 _FAILED_EVENT_IDS = {4625}  # Failed logon (flagged only in burst context)
 _FAILED_HTTP_CODES = set(range(400, 600))
 # Specific failure patterns (not bare keywords — avoids false positives on benign logs)
 _FAILED_SYSLOG_PATTERNS = [
-    "authentication failure", "failed password", "permission denied",
-    "access denied", "invalid user", "connection refused",
-    "unauthorized access", "login failed",
+    "authentication failure",
+    "failed password",
+    "permission denied",
+    "access denied",
+    "invalid user",
+    "connection refused",
+    "unauthorized access",
+    "login failed",
 ]
 
 # Common application ports that are expected even if not in scenario services
 _COMMON_APP_PORTS = {
-    21, 22, 25, 53, 80, 88, 123, 135, 143, 443, 445,    # Standard services + Kerberos
-    389, 464, 587, 636, 993, 995,                         # LDAP, kpasswd, LDAPS, mail
-    1433, 3306, 3389, 5432, 5353,                         # Database/RDP/mDNS
-    8080, 8443, 3128, 8888, 9090,                         # Proxy/dev ports
+    21,
+    22,
+    25,
+    53,
+    80,
+    88,
+    123,
+    135,
+    143,
+    443,
+    445,  # Standard services + Kerberos
+    389,
+    464,
+    587,
+    636,
+    993,
+    995,  # LDAP, kpasswd, LDAPS, mail
+    1433,
+    3306,
+    3389,
+    5432,
+    5353,  # Database/RDP/mDNS
+    8080,
+    8443,
+    3128,
+    8888,
+    9090,  # Proxy/dev ports
 }
 
 
@@ -77,7 +103,7 @@ def detect_anomalies(
     try:
         scenario_tz = ZoneInfo(tz_name)
     except (KeyError, ValueError):
-        scenario_tz = _tz.utc
+        scenario_tz = UTC
 
     # Collect all valid records, then sample for efficiency
     all_valid: list[tuple[str, ParsedRecord]] = []
@@ -130,9 +156,20 @@ def _build_service_ports(scenario: Scenario) -> set[int]:
     # Common service-to-port mappings
     service_ports: set[int] = set()
     port_map = {
-        "ssh": 22, "http": 80, "https": 443, "ftp": 21, "smtp": 25,
-        "dns": 53, "rdp": 3389, "smb": 445, "mysql": 3306, "postgres": 5432,
-        "iis": 80, "nginx": 80, "apache": 80, "sql server": 1433,
+        "ssh": 22,
+        "http": 80,
+        "https": 443,
+        "ftp": 21,
+        "smtp": 25,
+        "dns": 53,
+        "rdp": 3389,
+        "smb": 445,
+        "mysql": 3306,
+        "postgres": 5432,
+        "iis": 80,
+        "nginx": 80,
+        "apache": 80,
+        "sql server": 1433,
     }
     for system in scenario.environment.systems:
         for svc in system.services:
@@ -166,7 +203,9 @@ def _extract_process_key(record: ParsedRecord, fmt: str) -> str | None:
     return None
 
 
-def _is_off_hours(record: ParsedRecord, persona_hours: dict[str, list[int]], scenario_tz=None) -> bool:
+def _is_off_hours(
+    record: ParsedRecord, persona_hours: dict[str, list[int]], scenario_tz=None
+) -> bool:
     """Check if event is in deep off-hours for the user.
 
     Only flags events during truly unusual hours (midnight-5am local) for users
@@ -193,7 +232,8 @@ def _is_off_hours(record: ParsedRecord, persona_hours: dict[str, list[int]], sce
 
 
 def _is_failed_operation(
-    record: ParsedRecord, fmt: str,
+    record: ParsedRecord,
+    fmt: str,
     failed_logon_bursts: set[tuple[str, int]] | None = None,
 ) -> bool:
     """Check if event represents a failed operation.
@@ -220,7 +260,9 @@ def _is_failed_operation(
 
 
 def _is_rare_process(
-    record: ParsedRecord, fmt: str, process_freq: Counter,
+    record: ParsedRecord,
+    fmt: str,
+    process_freq: Counter,
 ) -> bool:
     """Check if event involves a rarely-seen process/command."""
     proc = _extract_process_key(record, fmt)
@@ -237,7 +279,9 @@ def _is_rare_process(
 
 
 def _is_unexpected_port(
-    record: ParsedRecord, fmt: str, service_ports: set[int],
+    record: ParsedRecord,
+    fmt: str,
+    service_ports: set[int],
 ) -> bool:
     """Check if connection goes to a port not associated with declared services."""
     if fmt != "zeek_conn":

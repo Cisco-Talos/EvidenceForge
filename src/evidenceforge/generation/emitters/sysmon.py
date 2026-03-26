@@ -7,7 +7,6 @@ and writes to per-host FQDN directories as windows_event_sysmon.xml.
 
 import hashlib
 import random
-import uuid
 from datetime import datetime
 from pathlib import Path
 from queue import Empty
@@ -28,7 +27,8 @@ class SysmonEventEmitter(LogEmitter):
     """
 
     _supported_types: set[str] = {
-        "process_create", "system_process_create",
+        "process_create",
+        "system_process_create",
         "create_remote_thread",
     }
 
@@ -62,7 +62,7 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_hashes(image: str, hostname: str) -> str:
         """Generate deterministic fake file hashes from image+hostname."""
         seed = f"{image}:{hostname}"
-        rng = random.Random(seed)
+        random.Random(seed)
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
         md5 = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest().upper()
         sha256 = hashlib.sha256(seed.encode(), usedforsecurity=False).hexdigest().upper()
@@ -79,42 +79,49 @@ class SysmonEventEmitter(LogEmitter):
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
         parent_guid = self._generate_process_guid(
-            host.hostname, proc.parent_pid,
-            datetime(event.timestamp.year, 1, 1)  # Stable parent GUID
+            host.hostname,
+            proc.parent_pid,
+            datetime(event.timestamp.year, 1, 1),  # Stable parent GUID
         )
 
         # Determine user string
         if auth:
-            user = f"{host.netbios_domain}\\{auth.username}" if auth.username else "NT AUTHORITY\\SYSTEM"
-            logon_id = auth.logon_id if hasattr(auth, 'logon_id') and auth.logon_id else '0x3e7'
+            user = (
+                f"{host.netbios_domain}\\{auth.username}"
+                if auth.username
+                else "NT AUTHORITY\\SYSTEM"
+            )
+            logon_id = auth.logon_id if hasattr(auth, "logon_id") and auth.logon_id else "0x3e7"
         else:
             user = "NT AUTHORITY\\SYSTEM"
-            logon_id = '0x3e7'
+            logon_id = "0x3e7"
 
-        integrity = proc.integrity_level if proc.integrity_level else 'Medium'
+        integrity = proc.integrity_level if proc.integrity_level else "Medium"
 
         event_data = {
-            'EventID': 1,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Microsoft-Windows-Sysmon/Operational',
-            'Level': 4,
-            'ExecutionProcessID': rng.randint(1800, 3000),  # Sysmon service PID
-            'ExecutionThreadID': rng.randint(1000, 5000),
-            'UtcTime': utc_time,
-            'ProcessGuid': process_guid,
-            'ProcessId': proc.pid,
-            'Image': proc.image,
-            'CommandLine': proc.command_line,
-            'User': user,
-            'LogonGuid': self._generate_process_guid(host.hostname, 0, datetime(event.timestamp.year, 1, 1)),
-            'LogonId': logon_id,
-            'IntegrityLevel': integrity,
-            'Hashes': self._generate_hashes(proc.image, host.hostname),
-            'ParentProcessGuid': parent_guid,
-            'ParentProcessId': proc.parent_pid,
-            'ParentImage': proc.parent_image or '-',
-            'ParentCommandLine': '-',
+            "EventID": 1,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": rng.randint(1800, 3000),  # Sysmon service PID
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": proc.pid,
+            "Image": proc.image,
+            "CommandLine": proc.command_line,
+            "User": user,
+            "LogonGuid": self._generate_process_guid(
+                host.hostname, 0, datetime(event.timestamp.year, 1, 1)
+            ),
+            "LogonId": logon_id,
+            "IntegrityLevel": integrity,
+            "Hashes": self._generate_hashes(proc.image, host.hostname),
+            "ParentProcessGuid": parent_guid,
+            "ParentProcessId": proc.parent_pid,
+            "ParentImage": proc.parent_image or "-",
+            "ParentCommandLine": "-",
         }
         self.emit_event(event_data)
 
@@ -132,26 +139,28 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (target_server=target_image, process_name=unused)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
-        target_image = auth.target_server if auth and auth.target_server else r'C:\Windows\explorer.exe'
+        target_image = (
+            auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe"
+        )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
 
         event_data = {
-            'EventID': 8,
-            'TimeCreated': event.timestamp,
-            'Computer': host.fqdn,
-            'Channel': 'Microsoft-Windows-Sysmon/Operational',
-            'Level': 4,
-            'ExecutionProcessID': rng.randint(1800, 3000),
-            'ExecutionThreadID': rng.randint(1000, 5000),
-            'UtcTime': utc_time,
-            'SourceProcessGuid': source_guid,
-            'SourceProcessId': proc.pid,
-            'SourceImage': proc.image,
-            'TargetProcessGuid': target_guid,
-            'TargetProcessId': target_pid,
-            'TargetImage': target_image,
-            'NewThreadId': rng.randint(100, 9999),
-            'StartAddress': f'0x{rng.randint(0x01000000, 0x7FFFFFFF):08X}',
+            "EventID": 8,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": rng.randint(1800, 3000),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "SourceProcessGuid": source_guid,
+            "SourceProcessId": proc.pid,
+            "SourceImage": proc.image,
+            "TargetProcessGuid": target_guid,
+            "TargetProcessId": target_pid,
+            "TargetImage": target_image,
+            "NewThreadId": rng.randint(100, 9999),
+            "StartAddress": f"0x{rng.randint(0x01000000, 0x7FFFFFFF):08X}",
         }
         self.emit_event(event_data)
 
@@ -209,6 +218,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         from xml.sax.saxutils import escape as xml_escape
+
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):

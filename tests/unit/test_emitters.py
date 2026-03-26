@@ -1,9 +1,7 @@
 """Unit tests for log emitters."""
 
 import json
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 
@@ -31,7 +29,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 4624,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=UTC),
             "Computer": "WIN-TEST-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -67,11 +65,11 @@ class TestWindowsEventEmitter:
         assert "<Version>2</Version>" in content  # 4624 = Version 2
         assert '<Data Name="TargetLinkedLogonId">' in content  # Not LinkedLogonId
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("WINDOWS EVENT LOG SAMPLE (4624 - Logon):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print(content)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
     def test_emit_logoff_event(self, format_def, temp_output):
         """Test emitting a logoff event (4634)."""
@@ -79,7 +77,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 4634,
-            "TimeCreated": datetime(2024, 1, 15, 18, 15, 30, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 18, 15, 30, 0, tzinfo=UTC),
             "Computer": "WIN-TEST-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -105,11 +103,11 @@ class TestWindowsEventEmitter:
         assert "2024-01-15T18:15:30.000000Z" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("WINDOWS EVENT LOG SAMPLE (4634 - Logoff):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print(content)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
     def test_emit_process_creation_event(self, format_def, temp_output):
         """Test emitting a process creation event (4688)."""
@@ -117,7 +115,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": datetime(2024, 1, 15, 10, 31, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 31, 0, 0, tzinfo=UTC),
             "Computer": "WIN-TEST-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -150,11 +148,11 @@ class TestWindowsEventEmitter:
         assert '<Data Name="NewProcessName">C:\\Windows\\System32\\cmd.exe</Data>' in content
         assert '<Data Name="CommandLine">cmd.exe /c dir</Data>' in content
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("WINDOWS EVENT LOG SAMPLE (4688 - Process Creation):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print(content)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
     def test_buffering(self, format_def, temp_output):
         """Test that events are buffered before flushing."""
@@ -164,7 +162,7 @@ class TestWindowsEventEmitter:
         for i in range(2):
             event_data = {
                 "EventID": 4624,
-                "TimeCreated": datetime(2024, 1, 15, 10, 30, i, 0, tzinfo=timezone.utc),
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, i, 0, tzinfo=UTC),
                 "Computer": "WIN-TEST-01",
                 "Channel": "Security",
                 "Level": 0,
@@ -188,7 +186,7 @@ class TestWindowsEventEmitter:
         # Emit 3rd event (reaches buffer size)
         event_data = {
             "EventID": 4624,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 2, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 2, 0, tzinfo=UTC),
             "Computer": "WIN-TEST-01",
             "Channel": "Security",
             "Level": 0,
@@ -216,14 +214,13 @@ class TestWindowsEventEmitter:
         assert "user1" in content
         assert "user2" in content
 
-
     def test_failed_logon_keywords_and_task(self, format_def, temp_output):
         """Test that 4625 uses Audit Failure keywords and correct task ID."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
         event_data = {
             "EventID": 4625,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WIN-TEST-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -258,7 +255,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 4776,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -284,12 +281,12 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
         expected_privs = (
-            'SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t'
-            'SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege'
+            "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
+            "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege"
         )
         event_data = {
             "EventID": 4672,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WIN-TEST-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -317,7 +314,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 4648,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -356,7 +353,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 5156,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -385,23 +382,29 @@ class TestWindowsEventEmitter:
         assert "<Version>1</Version>" in content
         assert "<Task>12810</Task>" in content
         assert '<Data Name="Direction">%%14593</Data>' in content  # Outbound
-        assert '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\lsass.exe</Data>' in content
+        assert (
+            '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\lsass.exe</Data>'
+            in content
+        )
         assert '<Data Name="Protocol">6</Data>' in content
 
     def test_device_path_conversion(self):
         """Test _to_device_path helper converts Windows paths correctly."""
-        assert WindowsEventEmitter._to_device_path(
-            r"C:\Windows\System32\svchost.exe"
-        ) == r"\device\harddiskvolume1\windows\system32\svchost.exe"
+        assert (
+            WindowsEventEmitter._to_device_path(r"C:\Windows\System32\svchost.exe")
+            == r"\device\harddiskvolume1\windows\system32\svchost.exe"
+        )
 
-        assert WindowsEventEmitter._to_device_path(
-            r"D:\Program Files\app.exe"
-        ) == r"\device\harddiskvolume1\program files\app.exe"
+        assert (
+            WindowsEventEmitter._to_device_path(r"D:\Program Files\app.exe")
+            == r"\device\harddiskvolume1\program files\app.exe"
+        )
 
         # Already a device path — lowercase only
-        assert WindowsEventEmitter._to_device_path(
-            r"\device\harddiskvolume1\test.exe"
-        ) == r"\device\harddiskvolume1\test.exe"
+        assert (
+            WindowsEventEmitter._to_device_path(r"\device\harddiskvolume1\test.exe")
+            == r"\device\harddiskvolume1\test.exe"
+        )
 
     def test_timestamp_microsecond_precision(self, format_def, temp_output):
         """Test that timestamps have 6 decimal places (microsecond precision)."""
@@ -409,7 +412,7 @@ class TestWindowsEventEmitter:
 
         event_data = {
             "EventID": 4634,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=UTC),
             "Computer": "WIN-TEST-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -433,7 +436,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4771,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -462,7 +465,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 1102,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 4,
@@ -490,7 +493,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4697,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -519,7 +522,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4698,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -545,7 +548,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4699,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -568,7 +571,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4728,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -598,7 +601,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4733,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "WKS-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -625,7 +628,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4756,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -652,7 +655,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4720,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -685,7 +688,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4724,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -710,7 +713,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4726,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -736,7 +739,7 @@ class TestWindowsEventEmitter:
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4738,
-            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=timezone.utc),
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
             "Computer": "DC-01.corp.local",
             "Channel": "Security",
             "Level": 0,
@@ -781,7 +784,7 @@ class TestZeekEmitter:
 
         uid = generate_zeek_uid()
         event_data = {
-            "ts": datetime(2024, 1, 15, 10, 0, 0, 123456, tzinfo=timezone.utc),
+            "ts": datetime(2024, 1, 15, 10, 0, 0, 123456, tzinfo=UTC),
             "uid": uid,
             "id.orig_h": "192.168.1.100",
             "id.orig_p": 49152,
@@ -827,12 +830,12 @@ class TestZeekEmitter:
         assert conn["local_orig"] is True
         assert conn["local_resp"] is False
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("ZEEK CONN.LOG SAMPLE (TCP Connection):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
     def test_emit_udp_connection(self, format_def, temp_output):
         """Test emitting a UDP connection (DNS query)."""
@@ -840,7 +843,7 @@ class TestZeekEmitter:
 
         uid = generate_zeek_uid()
         event_data = {
-            "ts": datetime(2024, 1, 15, 10, 0, 5, 654321, tzinfo=timezone.utc),
+            "ts": datetime(2024, 1, 15, 10, 0, 5, 654321, tzinfo=UTC),
             "uid": uid,
             "id.orig_h": "10.0.0.50",
             "id.orig_p": 53123,
@@ -877,12 +880,12 @@ class TestZeekEmitter:
         assert conn["orig_bytes"] == 64
         assert conn["resp_bytes"] == 128
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("ZEEK CONN.LOG SAMPLE (UDP/DNS Query):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
     def test_emit_incomplete_connection(self, format_def, temp_output):
         """Test emitting an incomplete connection (no established state)."""
@@ -890,7 +893,7 @@ class TestZeekEmitter:
 
         uid = generate_zeek_uid()
         event_data = {
-            "ts": datetime(2024, 1, 15, 10, 0, 10, 543210, tzinfo=timezone.utc),
+            "ts": datetime(2024, 1, 15, 10, 0, 10, 543210, tzinfo=UTC),
             "uid": uid,
             "id.orig_h": "192.168.1.200",
             "id.orig_p": 12345,
@@ -914,12 +917,12 @@ class TestZeekEmitter:
         assert "service" not in conn  # No service for incomplete connection
         assert "duration" not in conn  # No duration
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("ZEEK CONN.LOG SAMPLE (Incomplete Connection - S0):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")
 
     def test_multiple_connections(self, format_def, temp_output):
         """Test emitting multiple connections (one per line JSON)."""
@@ -931,7 +934,7 @@ class TestZeekEmitter:
         microseconds = [876543, 291047, 638219]
         for i in range(3):
             event_data = {
-                "ts": datetime(2024, 1, 15, 10, 0, i, microseconds[i], tzinfo=timezone.utc),
+                "ts": datetime(2024, 1, 15, 10, 0, i, microseconds[i], tzinfo=UTC),
                 "uid": uids[i],
                 "id.orig_h": f"192.168.1.{100 + i}",
                 "id.orig_p": 49152 + i,
@@ -963,10 +966,10 @@ class TestZeekEmitter:
             assert conn["id.orig_h"] == f"192.168.1.{100 + i}"
             assert conn["orig_bytes"] == (i + 1) * 100
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("ZEEK CONN.LOG SAMPLE (Multiple Connections):")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
         print("Raw file content (JSONL/NDJSON format - one JSON object per line):")
         for line in lines:
             print(line)
-        print(f"{'='*80}\n")
+        print(f"{'=' * 80}\n")

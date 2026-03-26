@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
@@ -20,6 +19,7 @@ from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import Scenario, System, User
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
@@ -96,26 +96,38 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         logger.info(f"Starting generation for scenario: {self.scenario.name}")
 
         # Phase 1: Initialize
-        self._report_progress("phase_start", {"phase": "initialize", "description": "Initializing generation engine"})
+        self._report_progress(
+            "phase_start", {"phase": "initialize", "description": "Initializing generation engine"}
+        )
         self._initialize()
         self._report_progress("phase_end", {"phase": "initialize"})
 
         try:
             # Phase 2: Generate baseline activity
-            self._report_progress("phase_start", {"phase": "baseline", "description": "Generating baseline activity"})
+            self._report_progress(
+                "phase_start", {"phase": "baseline", "description": "Generating baseline activity"}
+            )
             self._generate_baseline()
             self._report_progress("phase_end", {"phase": "baseline"})
 
             # Phase 6.3: Execute remaining storyline events not covered by baseline hours
             if self.scenario.storyline:
-                remaining = [i for i in range(len(self.scenario.storyline))
-                             if i not in self._storyline_executed]
+                remaining = [
+                    i
+                    for i in range(len(self.scenario.storyline))
+                    if i not in self._storyline_executed
+                ]
                 if remaining:
-                    logger.info(f"Executing {len(remaining)} remaining storyline events (outside baseline window)")
-                    self._report_progress("phase_start", {
-                        "phase": "storyline",
-                        "description": f"Executing {len(remaining)} remaining storyline events"
-                    })
+                    logger.info(
+                        f"Executing {len(remaining)} remaining storyline events (outside baseline window)"
+                    )
+                    self._report_progress(
+                        "phase_start",
+                        {
+                            "phase": "storyline",
+                            "description": f"Executing {len(remaining)} remaining storyline events",
+                        },
+                    )
                     for idx in remaining:
                         self._execute_single_storyline_event(idx)
                         self._storyline_executed.add(idx)
@@ -123,14 +135,21 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     self._report_progress("phase_end", {"phase": "storyline"})
         finally:
             # Phase 4: Finalize and close emitters (always, even on error)
-            self._report_progress("phase_start", {"phase": "finalize", "description": "Finalizing generation"})
+            self._report_progress(
+                "phase_start", {"phase": "finalize", "description": "Finalizing generation"}
+            )
             self._finalize()
             self._report_progress("phase_end", {"phase": "finalize"})
 
         # Phase 5: Generate ground truth (if malicious activity present)
         if self.malicious_events:
-            logger.info(f"Generating GROUND_TRUTH.md with {len(self.malicious_events)} malicious events")
-            self._report_progress("phase_start", {"phase": "ground_truth", "description": "Generating ground truth documentation"})
+            logger.info(
+                f"Generating GROUND_TRUTH.md with {len(self.malicious_events)} malicious events"
+            )
+            self._report_progress(
+                "phase_start",
+                {"phase": "ground_truth", "description": "Generating ground truth documentation"},
+            )
             self._generate_ground_truth()
             self._report_progress("phase_end", {"phase": "ground_truth"})
 
@@ -160,6 +179,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         # Initialize network visibility engine (Phase 2.5)
         from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+
         visibility_engine = NetworkVisibilityEngine(
             network_config=self.scenario.environment.network,
             systems=self.scenario.environment.systems,
@@ -173,13 +193,13 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._user_time_offsets: dict[str, dict[str, float]] = {}
         for user in self.scenario.environment.users:
             self._user_time_offsets[user.username] = {
-                'start_offset': rng.gauss(0, 0.25),        # ~+/-15min work start
-                'end_offset': rng.gauss(0, 0.25),          # ~+/-15min work end
-                'lunch_start_offset': rng.gauss(0, 0.17),  # ~+/-10min lunch start
-                'lunch_duration_offset': rng.gauss(0, 0.12),  # ~+/-7min lunch length
-                'intensity_bias': rng.uniform(0.8, 1.2),    # +/-20% event intensity
-                'cluster_size_bias': rng.gauss(0, 0.2),     # +/-20% cluster size
-                'inter_gap_bias': rng.gauss(0, 0.15),       # +/-15% gap timing
+                "start_offset": rng.gauss(0, 0.25),  # ~+/-15min work start
+                "end_offset": rng.gauss(0, 0.25),  # ~+/-15min work end
+                "lunch_start_offset": rng.gauss(0, 0.17),  # ~+/-10min lunch start
+                "lunch_duration_offset": rng.gauss(0, 0.12),  # ~+/-7min lunch length
+                "intensity_bias": rng.uniform(0.8, 1.2),  # +/-20% event intensity
+                "cluster_size_bias": rng.gauss(0, 0.2),  # +/-20% cluster size
+                "inter_gap_bias": rng.gauss(0, 0.15),  # +/-15% gap timing
             }
 
         # Initialize event dispatcher and activity generator
@@ -197,9 +217,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             dispatcher=self.dispatcher,
         )
         # Build IP->System lookup for HostContext resolution on connection events
-        self.activity_generator._ip_to_system = {
-            s.ip: s for s in self.scenario.environment.systems
-        }
+        self.activity_generator._ip_to_system = {s.ip: s for s in self.scenario.environment.systems}
         logger.info("Initialized activity generator")
 
         # Set initial state manager time
@@ -210,13 +228,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if self.scenario.environment.timezone and self.scenario.environment.timezone.default:
             try:
                 from zoneinfo import ZoneInfo
+
                 self._scenario_tz = ZoneInfo(self.scenario.environment.timezone.default)
             except (KeyError, ValueError):
                 pass
 
         # Phase 6.3: Resolve AD domain for FQDNs and domain name fields
         self._ad_domain = self._resolve_ad_domain()
-        self._netbios_domain = self._ad_domain.split('.')[0].upper() if self._ad_domain else 'CORP'
+        self._netbios_domain = self._ad_domain.split(".")[0].upper() if self._ad_domain else "CORP"
         self.activity_generator._ad_domain = self._ad_domain
         self.activity_generator._netbios_domain = self._netbios_domain
 
@@ -243,7 +262,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 self._storyline_by_hour.setdefault(hour_key, []).append((event_time, idx))
             for key in self._storyline_by_hour:
                 self._storyline_by_hour[key].sort()
-            logger.info(f"Pre-parsed {len(self.scenario.storyline)} storyline events across {len(self._storyline_by_hour)} hours")
+            logger.info(
+                f"Pre-parsed {len(self.scenario.storyline)} storyline events across {len(self._storyline_by_hour)} hours"
+            )
 
         self._storyline_executed: set[int] = set()
 
@@ -309,8 +330,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         output_path = self.ground_truth_dir / "GROUND_TRUTH.md"
 
         generator = GroundTruthGenerator(
-            scenario=self.scenario,
-            malicious_events=self.malicious_events
+            scenario=self.scenario, malicious_events=self.malicious_events
         )
 
         generator.generate(output_path)
