@@ -2898,6 +2898,55 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_sensor_startup(
+        self,
+        sensor_hostname: str,
+        time: datetime,
+        reporter_messages: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Generate sensor startup events (packet_filter.log + reporter.log).
+
+        Emits a SecurityEvent with event_type="sensor_startup" that routes
+        to ZeekPacketFilterEmitter and ZeekReporterEmitter.
+
+        Args:
+            sensor_hostname: Hostname of the sensor
+            time: Startup timestamp
+            reporter_messages: Optional list of (level, message) tuples for reporter.log
+        """
+        from evidenceforge.events.contexts import ShellContext
+
+        # Packet filter startup
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="sensor_startup",
+            host=HostContext(
+                hostname=sensor_hostname,
+                ip="",
+                os="",
+                os_category="",
+                system_type="sensor",
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+        # Reporter startup messages
+        if reporter_messages:
+            for i, (level, msg) in enumerate(reporter_messages):
+                reporter_event = SecurityEvent(
+                    timestamp=time + timedelta(milliseconds=i * 50),
+                    event_type="sensor_startup",
+                    host=HostContext(
+                        hostname=sensor_hostname,
+                        ip="",
+                        os="",
+                        os_category="",
+                        system_type="sensor",
+                    ),
+                    shell=ShellContext(command=f"{level}|{msg}"),
+                )
+                self.dispatcher.dispatch(reporter_event)
+
     def _get_next_event_record_id(self, hostname: str = "") -> int:
         """Get next EventRecordID for a specific computer (thread-safe).
 

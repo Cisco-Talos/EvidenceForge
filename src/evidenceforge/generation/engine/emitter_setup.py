@@ -199,40 +199,23 @@ class EmitterSetupMixin:
             hostname = sensor.hostname or sensor.name
             ts = self.start_time + timedelta(seconds=rng.uniform(0.1, 2.0))
 
-            if "zeek_packet_filter" in self.emitters:
-                self.activity_generator.generate_raw(
-                    time=ts,
-                    target_format="zeek_packet_filter",
-                    fields={
-                        "ts": ts,
-                        "node": hostname,
-                        "filter": "ip or not ip",
-                        "init": True,
-                        "success": True,
-                        "_sensor_hostnames": [hostname],
-                    },
-                )
-
+            reporter_msgs: list[tuple[str, str]] = []
             if "zeek_reporter" in self.emitters:
-                msgs = [
+                reporter_msgs = [
                     ("Reporter::INFO", "zeek_init() called"),
                     ("Reporter::INFO", f"listening on {rng.choice(['eth0', 'ens160', 'ens192'])}"),
                     ("Reporter::INFO", "loaded base/frameworks/notice/main.zeek"),
                 ]
                 if rng.random() < 0.5:
-                    msgs.append(("Reporter::WARNING", "Zeek compiled without GeoIP support"))
-                for i, (level, msg) in enumerate(msgs):
-                    self.activity_generator.generate_raw(
-                        time=ts + timedelta(milliseconds=i * 50),
-                        target_format="zeek_reporter",
-                        fields={
-                            "ts": ts + timedelta(milliseconds=i * 50),
-                            "level": level,
-                            "message": msg,
-                            "location": "",
-                            "_sensor_hostnames": [hostname],
-                        },
+                    reporter_msgs.append(
+                        ("Reporter::WARNING", "Zeek compiled without GeoIP support")
                     )
+
+            self.activity_generator.generate_sensor_startup(
+                sensor_hostname=hostname,
+                time=ts,
+                reporter_messages=reporter_msgs if reporter_msgs else None,
+            )
 
     def _emit_dhcp_leases(self) -> None:
         """Emit DHCP lease records for each system at scenario start.
