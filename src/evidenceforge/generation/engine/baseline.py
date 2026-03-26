@@ -857,6 +857,8 @@ class BaselineMixin:
                 )
 
             if sys_type_svc in ("server", "domain_controller"):
+                # Anonymous logons are Windows-specific passive SMB auth events
+                # with no IP, process, or cross-source correlation — legitimate generate_raw()
                 num_anon = rng.randint(1, 3)
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
@@ -1046,19 +1048,13 @@ class BaselineMixin:
                     ]
                     svc = rng.choice(services)
                     action = rng.choice(["Starting", "Finished"])
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_system_process(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd",
-                            "pid": sys_pids.get("systemd", 1),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
-                        },
+                        time=ts,
+                        process_name="/usr/lib/systemd/systemd",
+                        command_line=f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
+                        parent_pid=sys_pids.get("systemd", 1),
+                        username="root",
                     )
                 elif source_roll < 0.35:
                     cron_cmds = [
@@ -1111,6 +1107,8 @@ class BaselineMixin:
                             f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
                             f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
                         )
+                    # Kernel messages (UFW BLOCK, AppArmor) are log-only entries
+                    # with no cross-source expectation — legitimate generate_raw() use
                     self.activity_generator.generate_raw(
                         time=ts,
                         target_format="syslog",
@@ -1131,19 +1129,13 @@ class BaselineMixin:
                     action = rng.choice(
                         [f"New session {sid} of user {user}.", f"Removed session {sid}."]
                     )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_system_process(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd-logind",
-                            "pid": sys_pids.get("logind", rng.randint(400, 800)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": action,
-                        },
+                        time=ts,
+                        process_name="/usr/lib/systemd/systemd-logind",
+                        command_line=action,
+                        parent_pid=sys_pids.get("logind", rng.randint(400, 800)),
+                        username="root",
                     )
                 elif source_roll < 0.80:
                     other_ips = [
@@ -1169,40 +1161,28 @@ class BaselineMixin:
                         f"Disconnected from user admin {ip} port {port}",
                         "pam_unix(sshd:session): session closed for user admin",
                     ]
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_system_process(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "sshd",
-                            "pid": rng.randint(5000, 60000),
-                            "facility": 10,
-                            "severity": 6,
-                            "message": rng.choice(msgs),
-                        },
+                        time=ts,
+                        process_name="/usr/sbin/sshd",
+                        command_line=rng.choice(msgs),
+                        parent_pid=sys_pids.get("sshd", 0),
+                        username="root",
                     )
                 elif source_roll < 0.90:
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_system_process(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "snapd",
-                            "pid": sys_pids.get("snapd", rng.randint(500, 2000)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": rng.choice(
-                                [
-                                    "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
-                                    "daemon.go:460: gracefully waiting for running hooks",
-                                    "stateengine.go:150: state ensure starting",
-                                ]
-                            ),
-                        },
+                        time=ts,
+                        process_name="/usr/lib/snapd/snapd",
+                        command_line=rng.choice(
+                            [
+                                "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
+                                "daemon.go:460: gracefully waiting for running hooks",
+                                "stateengine.go:150: state ensure starting",
+                            ]
+                        ),
+                        parent_pid=sys_pids.get("snapd", rng.randint(500, 2000)),
+                        username="root",
                     )
                 else:
                     ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
@@ -1219,19 +1199,13 @@ class BaselineMixin:
                                 f"Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).",
                             ]
                         )
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="syslog",
+                    self.activity_generator.generate_system_process(
                         system=system,
-                        fields={
-                            "timestamp": ts,
-                            "hostname": system.hostname,
-                            "app_name": "systemd-timesyncd",
-                            "pid": sys_pids.get("timesyncd", rng.randint(400, 800)),
-                            "facility": 3,
-                            "severity": 6,
-                            "message": msg,
-                        },
+                        time=ts,
+                        process_name="/usr/lib/systemd/systemd-timesyncd",
+                        command_line=msg,
+                        parent_pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
+                        username="systemd-timesync",
                     )
 
         # ICMP ping between systems on same subnet
