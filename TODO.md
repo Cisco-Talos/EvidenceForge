@@ -135,7 +135,12 @@ Typed `events` list on storyline entries with per-type Pydantic models, suppleme
 
 ## Post-MVP Enhancements (Future)
 
+### Immediate-term (priority fixes)
+- [ ] The `eforge validate` command correctly finds defined personas when run as an installed tool, but is unable to find them when run in dev mode (`uv run eforge validate [...]`).
+
 ### Short-term
+- [ ] Story line events are too perfect. Have the threat actor(s) fumble and make mistakes (e.g., use the wrong commands, make typos and correct them, enumerate systems/accounts/files, perform local recon, try attack paths that lead to dead ends, etc)
+- [ ] Vastly expand options available for 'canned' data such as syslog messages, snort alerts, and other items (first discover what other items apply)
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation
