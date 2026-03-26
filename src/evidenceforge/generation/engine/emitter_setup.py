@@ -233,22 +233,13 @@ class EmitterSetupMixin:
             mac = f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}:{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
             ts = self.start_time + timedelta(seconds=rng.uniform(0.5, 5.0))
             uid = generate_zeek_uid("C")
-            self.activity_generator.generate_raw(
-                time=ts,
-                target_format="zeek_dhcp",
+            self.state_manager.set_current_time(ts)
+            self.activity_generator.generate_dhcp_lease(
                 system=system,
-                fields={
-                    "ts": ts,
-                    "uids": [uid],
-                    "client_addr": system.ip,
-                    "server_addr": "10.0.0.1",
-                    "mac": mac,
-                    "host_name": system.hostname,
-                    "assigned_addr": system.ip,
-                    "lease_time": float(rng.choice([3600, 7200, 14400, 86400])),
-                    "msg_types": ["DISCOVER", "OFFER", "REQUEST", "ACK"],
-                    "duration": round(rng.uniform(0.01, 0.5), 6),
-                },
+                time=ts,
+                mac=mac,
+                lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
+                uid=uid,
             )
 
     def _build_sid_registry(self) -> dict[str, str]:

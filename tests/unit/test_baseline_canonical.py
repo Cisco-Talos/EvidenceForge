@@ -359,6 +359,134 @@ class TestSyslogContext:
         assert event.syslog.pid == 1
 
 
+class TestWeirdContext:
+    """Weird events attach to connection SecurityEvents."""
+
+    def test_weird_context_on_connection(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Connection events can carry WeirdContext for zeek_weird emitter."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import HostContext, NetworkContext, WeirdContext
+
+        event = SecurityEvent(
+            timestamp=timestamp,
+            event_type="connection",
+            host=HostContext(
+                hostname="FW-01",
+                ip="10.0.0.1",
+                os="Linux",
+                os_category="linux",
+                system_type="server",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.10.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTest123456789ab",
+            ),
+            weird=WeirdContext(name="truncated_header", source="TCP"),
+        )
+        assert event.weird is not None
+        assert event.weird.name == "truncated_header"
+
+
+class TestDhcpLease:
+    """DHCP lease events dispatch through canonical path."""
+
+    def test_generate_dhcp_lease_dispatches(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """generate_dhcp_lease() should dispatch to zeek_dhcp emitter."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            uid="CTest123456789ab",
+        )
+
+        # Check dispatch happened (mock emitter records all calls)
+        # The zeek_dhcp emitter would receive this if present
+        # We verify the event was dispatched with DhcpContext
+        # Since mock emitters don't have can_handle(), check any emitter got it
+        all_calls = []
+        for emitter in mock_emitters.values():
+            if emitter.emit.called:
+                for call in emitter.emit.call_args_list:
+                    all_calls.append(call[0][0])
+        dhcp_events = [e for e in all_calls if e.event_type == "dhcp_lease"]
+        assert len(dhcp_events) >= 1
+        assert dhcp_events[0].dhcp is not None
+        assert dhcp_events[0].dhcp.mac == "00:50:56:ab:cd:ef"
+
+
+class TestAnonymousLogon:
+    """Anonymous logon events dispatch without creating sessions."""
+
+    def test_generate_anonymous_logon_dispatches(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """generate_anonymous_logon() should dispatch to Windows emitter."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        win = mock_emitters["windows_event_security"]
+        assert win.emit.called
+        event = win.emit.call_args[0][0]
+        assert event.auth.username == "ANONYMOUS LOGON"
+        assert event.auth.user_sid == "S-1-5-7"
+        assert event.auth.logon_type == 3
+        assert event.auth.auth_package == "NTLM"
+
+    def test_anonymous_logon_no_session_created(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Anonymous logon should NOT create a session in StateManager."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        sessions_before = len(state_manager.state.active_sessions)
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+        sessions_after = len(state_manager.state.active_sessions)
+        assert sessions_after == sessions_before
+
+
+class TestNoInternalGenerateRaw:
+    """Verify no internal engine code calls generate_raw()."""
+
+    def test_no_generate_raw_in_baseline(self):
+        """baseline.py should not call generate_raw()."""
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert "generate_raw" not in source
+
+    def test_no_generate_raw_in_emitter_setup(self):
+        """emitter_setup.py should not call generate_raw()."""
+        import inspect
+
+        from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+        source = inspect.getsource(EmitterSetupMixin)
+        assert "generate_raw" not in source
+
+
 class TestSensorStartup:
     """Sensor startup events dispatch through canonical path."""
 

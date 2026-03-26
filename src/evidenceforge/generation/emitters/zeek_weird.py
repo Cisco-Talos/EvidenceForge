@@ -2,21 +2,47 @@
 
 from typing import Any
 
+from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
 class ZeekWeirdEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek weird.log format (NDJSON).
 
-    Generates network anomaly/weird records. Intentionally dispatch_raw-only:
-    weird events are probabilistic side-effects of connection processing,
-    not tied to specific SecurityEvent types.
+    Renders network anomaly records from WeirdContext on connection events.
     """
 
     _log_filename = "weird.json"
     _flat_filename = "zeek_weird.json"
-    # Weird events dispatched via dispatch_raw(), not SecurityEvent pipeline
-    _supported_types: set[str] = set()
+    _supported_types: set[str] = {"connection"}
+
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """Only handle connection events that carry WeirdContext."""
+        return event.event_type == "connection" and event.weird is not None
+
+    def emit(self, event: SecurityEvent) -> None:
+        """Render weird.log entry from WeirdContext + NetworkContext."""
+        net = event.network
+        weird = event.weird
+        event_data = {
+            "ts": event.timestamp,
+            "uid": net.zeek_uid if net else "",
+            "id.orig_h": net.src_ip if net else "",
+            "id.orig_p": net.src_port if net else 0,
+            "id.resp_h": net.dst_ip if net else "",
+            "id.resp_p": net.dst_port if net else 0,
+            "name": weird.name,
+            "notice": weird.notice,
+            "peer": weird.peer,
+            "source": weird.source,
+        }
+        if net:
+            event_data["_sensor_hostnames"] = event._sensor_hostnames_by_format.get(
+                "zeek_weird", []
+            )
+        rendered = self._render_event(event_data)
+        if rendered:
+            self._buffer_event(rendered)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = ["uid", "addl", "source"]

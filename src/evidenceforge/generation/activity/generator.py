@@ -1394,12 +1394,10 @@ class ActivityGenerator:
                 ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
             )
 
-        # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
-        self.dispatcher.dispatch(event)
-        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
-
         # Zeek weird.log: probabilistic network anomalies (~3% of connections)
         if not local_only and rng.random() < 0.03:
+            from evidenceforge.events.contexts import WeirdContext
+
             _WEIRD_NAMES = [
                 "window_recision",
                 "possible_split_routing",
@@ -1410,22 +1408,14 @@ class ActivityGenerator:
                 "inappropriate_FIN",
                 "bad_TCP_checksum",
             ]
-            self.generate_raw(
-                time=time,
-                target_format="zeek_weird",
-                fields={
-                    "ts": time,
-                    "uid": uid,
-                    "id.orig_h": src_ip,
-                    "id.orig_p": src_port,
-                    "id.resp_h": dst_ip,
-                    "id.resp_p": dst_port,
-                    "name": rng.choice(_WEIRD_NAMES),
-                    "notice": False,
-                    "peer": "",
-                    "source": "TCP" if proto == "tcp" else "UDP",
-                },
+            event.weird = WeirdContext(
+                name=rng.choice(_WEIRD_NAMES),
+                source="TCP" if proto == "tcp" else "UDP",
             )
+
+        # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
+        self.dispatcher.dispatch(event)
+        logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
         # Emit 5156 (WFP connection) on Windows source hosts
         if source_system and _get_os_category(source_system.os) == "windows":
@@ -2988,6 +2978,68 @@ class ActivityGenerator:
                 target_domain=host.netbios_domain,
                 target_sid=target_sid,
                 sam_account_name=target_username,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_dhcp_lease(
+        self,
+        system: "System",
+        time: datetime,
+        mac: str,
+        server_addr: str = "10.0.0.1",
+        lease_time: float = 3600.0,
+        uid: str = "",
+    ) -> None:
+        """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
+        from evidenceforge.events.contexts import DhcpContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="dhcp_lease",
+            host=self._build_host_context(system),
+            dhcp=DhcpContext(
+                client_addr=system.ip,
+                server_addr=server_addr,
+                mac=mac,
+                host_name=system.hostname,
+                assigned_addr=system.ip,
+                lease_time=lease_time,
+                uids=[uid] if uid else [],
+                msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+                duration=_get_rng().uniform(0.01, 0.5),
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_anonymous_logon(
+        self,
+        system: "System",
+        time: datetime,
+    ) -> None:
+        """Generate an anonymous logon event (4624 type 3) without creating a session.
+
+        Used for Windows server/DC background SMB enumeration traffic.
+        """
+        rng = _get_rng()
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="logon",
+            host=self._build_host_context(system),
+            auth=AuthContext(
+                username="ANONYMOUS LOGON",
+                user_sid="S-1-5-7",
+                logon_id=f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
+                logon_type=3,
+                auth_package="NTLM",
+                logon_process="NtLmSsp",
+                lm_package="NTLM V2",
+                logon_guid="{00000000-0000-0000-0000-000000000000}",
+                subject_sid="S-1-0-0",
+                subject_username="-",
+                subject_domain="-",
+                subject_logon_id="0x0",
+                source_ip="-",
             ),
         )
         self.dispatcher.dispatch(event)

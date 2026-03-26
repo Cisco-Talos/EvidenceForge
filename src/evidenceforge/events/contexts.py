@@ -171,6 +171,16 @@ class SyslogContext:
 
 
 @dataclass(slots=True)
+class WeirdContext:
+    """Zeek weird.log anomaly details."""
+
+    name: str  # e.g., "truncated_header", "bad_TCP_checksum"
+    notice: bool = False
+    peer: str = ""
+    source: str = "TCP"  # "TCP", "UDP"
+
+
+@dataclass(slots=True)
 class KerberosContext:
     """Kerberos protocol details for DC events (4768 TGT, 4769 service ticket)."""
 
@@ -328,10 +338,14 @@ class DhcpContext:
     """DHCP transaction details for Zeek dhcp.log."""
 
     client_addr: str = ""
+    server_addr: str = ""
     mac: str = ""
     host_name: str = ""
     domain: str = ""
-    msg_types: list[str] = field(default_factory=list)  # ["REQUEST", "ACK"]
+    assigned_addr: str = ""
+    lease_time: float = 0.0
+    uids: list[str] = field(default_factory=list)
+    msg_types: list[str] = field(default_factory=list)  # ["DISCOVER", "OFFER", "REQUEST", "ACK"]
     duration: float = 0.0
 
 

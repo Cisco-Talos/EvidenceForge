@@ -35,6 +35,7 @@ from evidenceforge.events.contexts import (
     ShellContext,
     SslContext,
     SyslogContext,
+    WeirdContext,
     X509Context,
 )
 
@@ -59,6 +60,7 @@ class SecurityEvent:
     registry: RegistryContext | None = None
     ids: IdsContext | None = None
     syslog: SyslogContext | None = None
+    weird: WeirdContext | None = None
     kerberos: KerberosContext | None = None
     shell: ShellContext | None = None
     service: ServiceContext | None = None

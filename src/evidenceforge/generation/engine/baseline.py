@@ -839,10 +839,6 @@ class BaselineMixin:
             if os_cat_svc != "windows" or "windows_event_security" not in self.emitters:
                 continue
 
-            ad_domain = getattr(self.activity_generator, "_ad_domain", "corp.local")
-            getattr(self.activity_generator, "_netbios_domain", "CORP")
-            computer_fqdn = f"{system.hostname}.{ad_domain}"
-
             sys_type_svc = (system.type or "workstation").lower()
             num_svc = rng.randint(2, 5) if sys_type_svc != "workstation" else rng.randint(1, 2)
             for _ in range(num_svc):
@@ -861,37 +857,10 @@ class BaselineMixin:
                 for _ in range(num_anon):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    self.activity_generator.generate_raw(
-                        time=ts,
-                        target_format="windows_event_security",
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_anonymous_logon(
                         system=system,
-                        fields={
-                            "EventID": 4624,
-                            "TimeCreated": ts,
-                            "Computer": computer_fqdn,
-                            "Channel": "Security",
-                            "Level": 0,
-                            "ExecutionProcessID": 4,
-                            "ExecutionThreadID": rng.randint(100, 500),
-                            "SubjectUserSid": "S-1-0-0",
-                            "SubjectUserName": "-",
-                            "SubjectDomainName": "-",
-                            "SubjectLogonId": "0x0",
-                            "TargetUserSid": "S-1-5-7",
-                            "TargetUserName": "ANONYMOUS LOGON",
-                            "TargetDomainName": "NT AUTHORITY",
-                            "TargetLogonId": f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
-                            "LogonType": 3,
-                            "LogonProcessName": "NtLmSsp",
-                            "AuthenticationPackageName": "NTLM",
-                            "LmPackageName": "NTLM V2",
-                            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
-                            "WorkstationName": "-",
-                            "ProcessId": "0x0",
-                            "ProcessName": "-",
-                            "IpAddress": "-",
-                            "IpPort": 0,
-                        },
+                        time=ts,
                     )
 
         # Machine account ($) authentication to DCs
