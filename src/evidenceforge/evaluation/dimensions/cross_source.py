@@ -54,7 +54,7 @@ def _normalize_hostname(hostname: str) -> str:
     """Normalize hostname by stripping domain suffix.
 
     The generator appends FQDN domain (e.g., 'EXEC-WS-01.meridiancapital.com')
-    to Windows Computer fields, but eCAR/syslog use bare hostnames. Normalize
+    to Windows Computer fields, but EDR (eCAR format)/syslog use bare hostnames. Normalize
     to bare hostname for consistent cross-source matching.
     """
     # IP addresses pass through unchanged

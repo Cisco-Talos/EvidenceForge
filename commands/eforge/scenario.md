@@ -47,7 +47,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call.
 
-**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
+**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
@@ -248,7 +248,7 @@ output:
 The `os` field on systems determines which native log formats are generated:
 - **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
 - **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
-- **eCAR** → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
+- **eCAR** (format) → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
 - **Zeek, Snort** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **web_access** → Generated for systems with `roles: [web_server]`
 - **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs

@@ -147,7 +147,7 @@ After reviewing output, you can suggest:
 |--------|-------------|---------------|
 | windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 8) | Windows systems |
 | zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
-| ecar | eCAR EDR/XDR events (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
+| ecar | EDR/XDR telemetry in eCAR format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
 | syslog | Linux syslog (BSD format) | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |

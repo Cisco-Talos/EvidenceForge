@@ -831,7 +831,7 @@ class ActivityGenerator:
 
         Creates process in StateManager, builds a SecurityEvent, and dispatches
         to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
-        probabilistic eCAR file/module/registry events.
+        probabilistic EDR file/module/registry events.
 
         Args:
             user: User creating the process
@@ -884,7 +884,7 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Phase 8.2: Probabilistic eCAR object diversity via canonical SecurityEvent
+        # Phase 8.2: Probabilistic EDR object diversity via canonical SecurityEvent
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
@@ -892,9 +892,7 @@ class ActivityGenerator:
         if rng.random() < 0.40:
             action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
             pool = (
-                self._ECAR_FILE_PATHS_WIN
-                if os_category == "windows"
-                else self._ECAR_FILE_PATHS_LINUX
+                self._EDR_FILE_PATHS_WIN if os_category == "windows" else self._EDR_FILE_PATHS_LINUX
             )
             path = (
                 rng.choice(pool)
@@ -916,7 +914,7 @@ class ActivityGenerator:
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
-            dll_path = rng.choice(self._ECAR_DLL_POOL)
+            dll_path = rng.choice(self._EDR_DLL_POOL)
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
@@ -927,7 +925,7 @@ class ActivityGenerator:
                 )
             )
         if os_category == "windows" and "system32" in process_name.lower() and rng.random() < 0.20:
-            key, value = rng.choice(self._ECAR_REGISTRY_KEYS)
+            key, value = rng.choice(self._EDR_REGISTRY_KEYS)
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
@@ -3597,8 +3595,8 @@ class ActivityGenerator:
             return self._WELL_KNOWN_SIDS[username]
         return "S-1-5-21-0-0-0-0"
 
-    # Phase 5.2: eCAR object type diversity data pools
-    _ECAR_FILE_PATHS_WIN = [
+    # Phase 5.2: EDR object type diversity data pools
+    _EDR_FILE_PATHS_WIN = [
         "C:\\Users\\{user}\\Documents\\report.docx",
         "C:\\Users\\{user}\\Documents\\spreadsheet.xlsx",
         "C:\\Users\\{user}\\Documents\\presentation.pptx",
@@ -3607,21 +3605,21 @@ class ActivityGenerator:
         "C:\\Users\\{user}\\Desktop\\notes.txt",
         "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\Report.wer",
     ]
-    _ECAR_FILE_PATHS_LINUX = [
+    _EDR_FILE_PATHS_LINUX = [
         "/home/{user}/documents/report.odt",
         "/home/{user}/downloads/file.pdf",
         "/tmp/tmp{rand}",
         "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}",
         "/var/log/syslog",
     ]
-    _ECAR_REGISTRY_KEYS = [
+    _EDR_REGISTRY_KEYS = [
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
         ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
         ("HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin"),
         ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "ProxyEnable"),
     ]
-    _ECAR_DLL_POOL = [
+    _EDR_DLL_POOL = [
         "C:\\Windows\\System32\\ntdll.dll",
         "C:\\Windows\\System32\\kernel32.dll",
         "C:\\Windows\\System32\\user32.dll",

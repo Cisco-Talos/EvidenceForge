@@ -1,4 +1,4 @@
-"""eCAR emitter for EDR/XDR host telemetry."""
+"""Emitter for EDR/XDR host telemetry in eCAR format."""
 
 import json
 import uuid

@@ -127,12 +127,12 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 ---
 
-## eCAR (EDR/XDR Telemetry)
+## eCAR Format (EDR/XDR Telemetry)
 
 **File:** `ecar.json`
 **Format:** NDJSON
 
-MITRE CAR-based endpoint detection and response telemetry. Represents what an EDR agent would observe.
+EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
 
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
@@ -144,9 +144,9 @@ MITRE CAR-based endpoint detection and response telemetry. Represents what an ED
 | USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. |
 
 **Known Limitations:**
-- eCAR represents an optional EDR layer — not all systems may have it enabled
+- eCAR format represents an optional EDR layer — not all systems may have it enabled
 - FLOW events use `pid: -1` (real EDR tracks socket-to-process mapping)
-- Limited eCAR object diversity on Linux (mainly PROCESS + USER_SESSION)
+- Limited EDR object diversity on Linux (mainly PROCESS + USER_SESSION)
 - File paths cycle through a small set of templates
 
 ---

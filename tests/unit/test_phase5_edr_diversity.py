@@ -1,4 +1,4 @@
-"""Unit tests for Phase 5.2: eCAR object type diversity."""
+"""Unit tests for Phase 5.2: EDR object type diversity."""
 
 from datetime import UTC, datetime
 from unittest.mock import Mock
@@ -44,7 +44,7 @@ def timestamp():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
-class TestEcarFileEvent:
+class TestEdrFileEvent:
     def test_file_events_dispatched_canonically(
         self, activity_gen, test_user, win_system, state_manager, timestamp, mock_emitters
     ):
@@ -62,7 +62,7 @@ class TestEcarFileEvent:
             auth=AuthContext(username="alice.smith"),
             file=FileContext(path="C:\\Users\\alice\\doc.docx", action="create", pid=1234),
         )
-        # Verify eCAR emitter can handle this event type
+        # Verify eCAR format emitter can handle this event type
         assert (
             "file_create" in type(mock_emitters["ecar"])._supported_types
             if hasattr(type(mock_emitters["ecar"]), "_supported_types")
@@ -70,7 +70,7 @@ class TestEcarFileEvent:
         )
 
 
-class TestEcarRegistryEvent:
+class TestEdrRegistryEvent:
     def test_registry_events_dispatched_canonically(
         self, activity_gen, win_system, timestamp, mock_emitters
     ):
@@ -91,11 +91,11 @@ class TestEcarRegistryEvent:
         assert event.registry.key == "HKLM\\SOFTWARE\\Test"
 
 
-class TestEcarFlowEvent:
-    def test_ecar_receives_connection_events(
+class TestEdrFlowEvent:
+    def test_edr_receives_connection_events(
         self, activity_gen, state_manager, timestamp, mock_emitters
     ):
-        """eCAR FLOW events are now dispatched via SecurityEvent canonical path (Phase 8.1)."""
+        """EDR FLOW events are now dispatched via SecurityEvent canonical path (Phase 8.1)."""
         state_manager.set_current_time(timestamp)
         # generate_connection dispatches SecurityEvent with event_type="connection"
         # EcarEmitter.can_handle() returns True for "connection" and renders FLOW
@@ -111,7 +111,7 @@ class TestEcarFlowEvent:
             resp_bytes=1000,
         )
 
-        # eCAR emitter should have received the event via emit() (canonical path)
+        # eCAR format emitter should have received the event via emit() (canonical path)
         assert mock_emitters["ecar"].emit.called
         event = mock_emitters["ecar"].emit.call_args[0][0]
         assert event.event_type == "connection"
@@ -120,7 +120,7 @@ class TestEcarFlowEvent:
         assert event.network.dst_port == 443
 
 
-class TestEcarModuleEvent:
+class TestEdrModuleEvent:
     def test_module_events_dispatched_canonically(
         self, activity_gen, win_system, timestamp, mock_emitters
     ):
@@ -139,17 +139,17 @@ class TestEcarModuleEvent:
         assert event.file.path.endswith(".dll")
 
 
-class TestEcarDiversityInProcessCreation:
-    """Test that process creation triggers diverse eCAR events."""
+class TestEdrDiversityInProcessCreation:
+    """Test that process creation triggers diverse EDR events."""
 
     def test_multiple_object_types_from_processes(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):
-        """Generating many processes should produce multiple eCAR object types."""
+        """Generating many processes should produce multiple EDR object types."""
         state_manager.set_current_time(timestamp)
         logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
 
-        # Generate many processes to trigger probabilistic eCAR events
+        # Generate many processes to trigger probabilistic EDR events
         for i in range(50):
             activity_gen.generate_process(
                 test_user,
@@ -160,7 +160,7 @@ class TestEcarDiversityInProcessCreation:
                 f"cmd.exe /c echo {i}",
             )
 
-        # Collect eCAR object types from canonical dispatch (Phase 8.2: all via emit())
+        # Collect EDR object types from canonical dispatch (Phase 8.2: all via emit())
         _TYPE_MAP = {
             "logon": "USER_SESSION",
             "process_create": "PROCESS",
@@ -183,7 +183,7 @@ class TestEcarDiversityInProcessCreation:
         assert len(object_types) >= 3, f"Only {len(object_types)} object types: {object_types}"
 
 
-class TestEcarRegistryBackslashEscaping:
+class TestEdrRegistryBackslashEscaping:
     """Test that REGISTRY events with Windows paths have valid backslashes."""
 
     def test_registry_key_has_valid_backslashes(
@@ -191,5 +191,5 @@ class TestEcarRegistryBackslashEscaping:
     ):
         """REGISTRY events dispatched via canonical model preserve backslashes (Phase 8.2)."""
         # Registry keys from the pool all contain backslashes
-        keys = [k for k, v in activity_gen._ECAR_REGISTRY_KEYS]
+        keys = [k for k, v in activity_gen._EDR_REGISTRY_KEYS]
         assert all("\\" in k for k in keys)
