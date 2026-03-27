@@ -1739,11 +1739,16 @@ class BaselineMixin:
                 ("/phpmyadmin/", "GET", 404),
                 ("/xmlrpc.php", "POST", 404),
             ]
-            _WEB_UAS = [
+            _WEB_UAS_BROWSER = [
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
                 "curl/7.88.1",
                 "python-requests/2.31.0",
+            ]
+            _WEB_UAS_BOT = [
+                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
             ]
             for sys_obj in systems:
                 if "web_server" not in (sys_obj.roles or []):
@@ -1767,6 +1772,9 @@ class BaselineMixin:
                         client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     from evidenceforge.events.contexts import HttpContext
 
+                    # Bots only from external IPs; browsers from anywhere
+                    is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
+                    ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
                     _URI_MIME = {
                         "/": "text/html",
@@ -1794,7 +1802,7 @@ class BaselineMixin:
                             host=sys_obj.hostname,
                             uri=path,
                             version="1.1",
-                            user_agent=rng.choice(_WEB_UAS),
+                            user_agent=rng.choice(ua_pool),
                             request_body_len=rng.randint(0, 500) if method == "POST" else 0,
                             response_body_len=resp_bytes,
                             status_code=status,

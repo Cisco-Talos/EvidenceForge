@@ -1105,7 +1105,10 @@ class ActivityGenerator:
                 )
                 return ""
 
-        if src_port is None:
+        if proto == "icmp":
+            src_port = 0
+            dst_port = 0
+        elif src_port is None:
             src_port = _get_rng().randint(49152, 65535)
 
         # Phase 1: Allocate IDs from StateManager

@@ -33,6 +33,144 @@ class SysmonEventEmitter(LogEmitter):
         "process_access",
     }
 
+    # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
+    _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
+        "cmd.exe": (
+            "10.0.19041.1",
+            "Windows Command Processor",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "Cmd.Exe",
+        ),
+        "powershell.exe": (
+            "10.0.19041.1",
+            "Windows PowerShell",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "PowerShell.EXE",
+        ),
+        "svchost.exe": (
+            "10.0.19041.1",
+            "Host Process for Windows Services",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "svchost.exe",
+        ),
+        "explorer.exe": (
+            "10.0.19041.1",
+            "Windows Explorer",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "EXPLORER.EXE",
+        ),
+        "taskhostw.exe": (
+            "10.0.19041.1",
+            "Host Process for Windows Tasks",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "taskhostw.exe",
+        ),
+        "usoclient.exe": (
+            "10.0.19041.1",
+            "Update Session Orchestrator",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "UsoClient.exe",
+        ),
+        "lsass.exe": (
+            "10.0.19041.1",
+            "Local Security Authority Process",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "lsass.exe",
+        ),
+        "services.exe": (
+            "10.0.19041.1",
+            "Services and Controller app",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "services.exe",
+        ),
+        "net.exe": (
+            "10.0.19041.1",
+            "Net Command",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "net.exe",
+        ),
+        "net1.exe": (
+            "10.0.19041.1",
+            "Net Command",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "net1.exe",
+        ),
+        "sc.exe": (
+            "10.0.19041.1",
+            "Service Control Manager Configuration Tool",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "sc.exe",
+        ),
+        "schtasks.exe": (
+            "10.0.19041.1",
+            "Task Scheduler Configuration Tool",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "schtasks.exe",
+        ),
+        "whoami.exe": (
+            "10.0.19041.1",
+            "whoami - displays logged on user information",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "whoami.exe",
+        ),
+        "notepad.exe": (
+            "10.0.19041.1",
+            "Notepad",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "NOTEPAD.EXE",
+        ),
+        "mstsc.exe": (
+            "10.0.19041.1",
+            "Remote Desktop Connection",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "mstsc.exe",
+        ),
+        "wmic.exe": (
+            "10.0.19041.1",
+            "WMI Commandline Utility",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "wmic.exe",
+        ),
+        "rundll32.exe": (
+            "10.0.19041.1",
+            "Windows host process (Rundll32)",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "RUNDLL32.EXE",
+        ),
+        "conhost.exe": (
+            "10.0.19041.1",
+            "Console Window Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "conhost.exe",
+        ),
+    }
+
+    @classmethod
+    def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
+        """Look up PE metadata for a Windows binary by image path or name."""
+        import os
+
+        basename = os.path.basename(image_path).lower()
+        return cls._PE_METADATA.get(basename, ("-", "-", "-", "-", "-"))
+
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
 
@@ -140,8 +278,17 @@ class SysmonEventEmitter(LogEmitter):
             "ParentProcessGuid": parent_guid,
             "ParentProcessId": proc.parent_pid,
             "ParentImage": proc.parent_image or "-",
-            "ParentCommandLine": "-",
+            "ParentCommandLine": proc.parent_command_line
+            if hasattr(proc, "parent_command_line") and proc.parent_command_line
+            else "-",
         }
+        # Populate PE metadata from known binary lookup
+        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image)
+        event_data["FileVersion"] = fv
+        event_data["Description"] = desc
+        event_data["Product"] = prod
+        event_data["Company"] = company
+        event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
