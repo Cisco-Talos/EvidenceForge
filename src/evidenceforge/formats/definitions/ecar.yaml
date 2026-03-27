@@ -112,6 +112,13 @@ fields:
     required: false
     description: "Protocol for network events"
 
+  - name: direction
+    type: string
+    required: false
+    description: "Connection direction for FLOW events (INBOUND or OUTBOUND)"
+    constraints:
+      allowed_values: [INBOUND, OUTBOUND]
+
   - name: md5
     type: string
     required: false

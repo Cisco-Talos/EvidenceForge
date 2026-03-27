@@ -2310,7 +2310,20 @@ class ActivityGenerator:
                 return
 
             # Interactive logon types (2, 7, 10, 11) — create sessions
-            source_ip = "127.0.0.1" if logon_type == 7 else None
+            if logon_type == 7:
+                source_ip = "127.0.0.1"
+            elif logon_type in (10, 11):
+                # Remote interactive (RDP/VNC) — pick a realistic remote IP
+                other_ips = getattr(self, "_all_system_ips", [])
+                remote_ips = [ip for ip in other_ips if ip != system.ip]
+                source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip
+            elif logon_type == 2 and _get_os_category(system.os) == "linux":
+                # Console logon on Linux servers often comes via SSH from another host
+                other_ips = getattr(self, "_all_system_ips", [])
+                remote_ips = [ip for ip in other_ips if ip != system.ip]
+                source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip
+            else:
+                source_ip = None  # Local console on Windows — defaults to system.ip
             self.generate_logon(user, system, time, logon_type=logon_type, source_ip=source_ip)
 
         # Process activities

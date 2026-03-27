@@ -859,7 +859,6 @@ class BaselineMixin:
                             duration=rng.uniform(30.0, 3600.0),
                             orig_bytes=rng.randint(2000, 50000),
                             resp_bytes=rng.randint(5000, 200000),
-                            source_system=system,
                             pid=_svc_pid("sshd"),
                         )
 
@@ -1164,7 +1163,6 @@ class BaselineMixin:
                             proto="tcp",
                             conn_state="REJ",
                             src_port=spt,
-                            source_system=system,
                         )
                         # Paired syslog via canonical dispatch
                         self.activity_generator.generate_syslog_event(
@@ -1226,7 +1224,6 @@ class BaselineMixin:
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
-                        source_system=system,
                         pid=sys_pids.get("sshd", -1),
                     )
                     msgs = [
@@ -1424,7 +1421,6 @@ class BaselineMixin:
                     duration=rng.uniform(0.0005, 0.005),
                     orig_bytes=64,
                     resp_bytes=64,
-                    source_system=system,
                 )
 
         # IDS false-positive alerts

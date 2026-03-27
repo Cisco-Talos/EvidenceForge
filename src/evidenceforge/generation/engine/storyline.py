@@ -345,6 +345,13 @@ class StorylineMixin:
                     tags=[],
                 )
 
+            # Resolve source system from source_ip (not storyline system, which may be the target)
+            src_sys = None
+            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+            if source_ip in ip_map:
+                src_sys = ip_map[source_ip]
+            elif source_ip == system.ip:
+                src_sys = system
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -355,7 +362,7 @@ class StorylineMixin:
                 orig_bytes=rng.randint(1000, 10000),
                 resp_bytes=rng.randint(5000, 50000),
                 emit_dns=True,
-                source_system=system,
+                source_system=src_sys,
                 http=http_ctx,
                 pid=getattr(self, "_last_storyline_pid", -1) or -1,
             )
