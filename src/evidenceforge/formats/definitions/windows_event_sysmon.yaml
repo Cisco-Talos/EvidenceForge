@@ -10,7 +10,7 @@ fields:
     required: true
     description: "Sysmon Event ID"
     constraints:
-      allowed_values: [1, 8]
+      allowed_values: [1, 8, 10]
 
   - name: TimeCreated
     type: timestamp
@@ -138,6 +138,51 @@ variants:
         type: string
         required: true
 
+  # Sysmon EventID 10: ProcessAccess
+  - name: sysmon_process_access
+    event_id: "10"
+    description: "Process accessed another process (credential dumping detection)"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: SourceProcessGUID
+        type: string
+        required: true
+      - name: SourceProcessId
+        type: integer
+        required: true
+      - name: SourceImage
+        type: string
+        required: true
+      - name: SourceThreadId
+        type: integer
+        required: true
+      - name: SourceUser
+        type: string
+        required: true
+      - name: TargetProcessGUID
+        type: string
+        required: true
+      - name: TargetProcessId
+        type: integer
+        required: true
+      - name: TargetImage
+        type: string
+        required: true
+      - name: TargetUser
+        type: string
+        required: true
+      - name: GrantedAccess
+        type: string
+        required: true
+      - name: CallTrace
+        type: string
+        required: false
+
 # Output template in Sysmon Event Log XML format
 output:
   format: xml
@@ -152,7 +197,7 @@ output:
       <System>
         <Provider Name="Microsoft-Windows-Sysmon" Guid="{5770385f-c22a-43e0-bf4c-06f5698ffbd9}"/>
         <EventID>{{ EventID }}</EventID>
-        <Version>{{ 5 if EventID == 1 else 2 }}</Version>
+        <Version>{{ {1: 5, 8: 2, 10: 3}.get(EventID, 2) }}</Version>
         <Level>4</Level>
         <Task>{{ EventID }}</Task>
         <Opcode>0</Opcode>
@@ -202,6 +247,20 @@ output:
         <Data Name="StartAddress">{{ StartAddress }}</Data>
         <Data Name="StartModule">{{ StartModule | default('') }}</Data>
         <Data Name="StartFunction">{{ StartFunction | default('') }}</Data>
+        {% elif EventID == 10 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="SourceProcessGUID">{{ SourceProcessGUID }}</Data>
+        <Data Name="SourceProcessId">{{ SourceProcessId }}</Data>
+        <Data Name="SourceImage">{{ SourceImage }}</Data>
+        <Data Name="SourceThreadId">{{ SourceThreadId }}</Data>
+        <Data Name="SourceUser">{{ SourceUser }}</Data>
+        <Data Name="TargetProcessGUID">{{ TargetProcessGUID }}</Data>
+        <Data Name="TargetProcessId">{{ TargetProcessId }}</Data>
+        <Data Name="TargetImage">{{ TargetImage }}</Data>
+        <Data Name="TargetUser">{{ TargetUser }}</Data>
+        <Data Name="GrantedAccess">{{ GrantedAccess }}</Data>
+        <Data Name="CallTrace">{{ CallTrace | default('') }}</Data>
         {% endif %}
       </EventData>
     </Event>

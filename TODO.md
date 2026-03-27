@@ -75,15 +75,15 @@ Data is *wrong* — a hunter hits dead ends. Fix these first; several unblock Ti
 
 Data is structurally correct but the hunt doesn't work — key attack steps are undetectable or trivially obvious.
 
-- [ ] **RDP lateral movement invisible + zero RDP noise** — storyline RDP sessions don't produce Zeek conn records, and there are no background IT admin RDP connections. The most common lateral movement technique is either undetectable or (if 1 conn appears) trivially obvious.
-- [ ] **No DC Kerberos events for compromised user** — domain logon chain incomplete; no TGT/TGS (4768/4769) events to correlate with 4624 on target hosts.
-- [ ] **No LSASS access events (4656/4663/Sysmon 10)** — primary credential-dumping detection is missing. Sysmon 8 (CreateRemoteThread) is present but Event 10 (ProcessAccess) is not.
-- [ ] **No 4672 (Special Privileges) on Domain Controller** — standard privilege-escalation detection missing on the DC.
-- [ ] **Storyline events too perfect** — real attacks are messy. Add attacker fumbles, typos, dead-end paths, unnecessary recon, and corrected mistakes to make hunting more realistic.
-- [ ] **C2/exfiltration SNI values are auto-generated CDN names** — ssl.log shows `host-x-x-x-x.cdn-provider.net` pattern, trivially identifiable. Should use plausible domains.
-- [ ] **Proxy log issues** — CONNECT entries use raw IPs instead of SNI domain names; storyline exfiltration connections missing from proxy_access.log entirely.
-- [ ] **Zeek http.log doesn't reflect storyline HTTP activity** — exfiltration POST appears as a benign favicon GET; engine doesn't use storyline connection metadata for HTTP rendering.
-- [ ] **Vastly expand canned data** — syslog has only 1-3 programs per host (need 30+), only 4 User-Agents (need 10-15), only ~8 Snort SIDs. Audit all formats and expand template pools.
+- [x] **RDP lateral movement invisible + zero RDP noise** — added background IT admin RDP connections (1-3/hour) to Windows servers/DCs in baseline. Storyline RDP sessions already produce Zeek conn records via generate_rdp_session().
+- [x] **No DC Kerberos events for compromised user** — generate_logon() now emits 4768 (TGT) + 4769 (service ticket) on the DC for Kerberos-authenticated domain logons, with realistic timing offsets.
+- [x] **No LSASS access events (Sysmon 10)** — added Sysmon Event 10 (ProcessAccess) emitter, format template, and generate_process_access() method. Auto-emits alongside create_remote_thread when target is lsass.exe.
+- [x] **No 4672 (Special Privileges) on Domain Controller** — new `special_privileges` event type emits standalone 4672 on DC during Kerberos authentication for elevated users.
+- [x] **Storyline events too perfect** — /eforge scenario skill now interviews about attacker sophistication and generates fumbles (mistakes) and dead ends (abandoned paths) appropriate to the chosen level.
+- [x] **C2/exfiltration SNI values are auto-generated CDN names** — replaced `host-x-x-x-x.cdn-provider.net` fallback with 30 plausible SaaS/analytics/CDN domains.
+- [x] **Proxy log issues** — CONNECT entries now use domain names from REVERSE_DNS or plausible random hostnames instead of raw IPs.
+- [x] **Zeek http.log doesn't reflect storyline HTTP activity** — storyline HttpContext host field now uses domain names; skill guidance added to always specify method/uri for HTTP exfiltration events.
+- [x] **Vastly expand canned data** — syslog: 6→20 programs (added NetworkManager, dbus-daemon, rsyslogd, sudo, dhclient, polkitd, etc.); User-Agents: 5→15 (added Opera, IE11, curl, wget, older versions); Snort SIDs: 8→30 (added scanning, web attacks, protocol anomalies, policy violations).
 
 ### Tier 3: Realism Polish
 

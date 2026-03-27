@@ -394,7 +394,42 @@ def _generate_random_hostname(rng, ip: str) -> str:
     elif provider == "microsoft":
         return f"{'-'.join(octets)}.microsoft.com"
     else:
-        return f"host-{'-'.join(octets)}.cdn-provider.net"
+        # Generate plausible domain names for unknown IPs (including RFC 5737
+        # documentation ranges used for attacker C2/exfiltration in storylines).
+        # Realistic mix of SaaS, CDN, analytics, and cloud storage domains.
+        _PLAUSIBLE_DOMAINS = [
+            "api.segment-analytics.io",
+            "cdn.jsdelivr.net",
+            "assets.zendesk.com",
+            "static.intercom-mail.com",
+            "media.licdn.com",
+            "p.typekit.net",
+            "fonts.gstatic.com",
+            "cdn.datatables.net",
+            "js.stripe.com",
+            "cdn.cookielaw.org",
+            "static.hotjar.com",
+            "api.hubspot.com",
+            "widget.intercom.io",
+            "cdn.optimizely.com",
+            "snap.licdn.com",
+            "connect.facebook.net",
+            "cdn.amplitude.com",
+            "api.mixpanel.com",
+            "assets.adobedtm.com",
+            "cdn.heapanalytics.com",
+            "api.segment.io",
+            "px.ads.linkedin.com",
+            "cdn.mouseflow.com",
+            "js.hs-analytics.net",
+            "static.parastorage.com",
+            "cdn.branch.io",
+            "api.logz.io",
+            "cdn.mxpnl.com",
+            "sdk.split.io",
+            "app.launchdarkly.com",
+        ]
+        return rng.choice(_PLAUSIBLE_DOMAINS)
 
 
 def _generate_rdns_name(rng, ip: str) -> str:

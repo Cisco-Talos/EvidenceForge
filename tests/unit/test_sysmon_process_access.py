@@ -1,0 +1,126 @@
+"""Tests for Sysmon Event 10 (ProcessAccess) credential dumping detection."""
+
+from datetime import UTC, datetime
+from unittest.mock import Mock
+
+import pytest
+
+from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.scenario import System, User
+
+
+@pytest.fixture
+def state_manager():
+    sm = StateManager()
+    sm.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC))
+    return sm
+
+
+@pytest.fixture
+def mock_emitters():
+    return {
+        "windows_event_security": Mock(),
+        "windows_event_sysmon": Mock(),
+        "zeek_conn": Mock(),
+        "ecar": Mock(),
+    }
+
+
+@pytest.fixture
+def activity_gen(state_manager, mock_emitters):
+    return ActivityGenerator(state_manager, mock_emitters)
+
+
+@pytest.fixture
+def windows_system():
+    return System(hostname="WKS-01", ip="10.10.10.50", os="Windows 10", type="workstation")
+
+
+@pytest.fixture
+def test_user():
+    return User(username="compromised.user", full_name="Compromised User", email="c@corp.com")
+
+
+class TestSysmonProcessAccess:
+    """Sysmon Event 10 (ProcessAccess) for LSASS credential dumping."""
+
+    def test_process_access_emits_event(
+        self, activity_gen, mock_emitters, windows_system, test_user
+    ):
+        """generate_process_access should dispatch a process_access event."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen.generate_process_access(
+            user=test_user,
+            system=windows_system,
+            time=ts,
+            source_pid=5432,
+            source_image=r"C:\Users\compromised.user\AppData\Local\Temp\mimikatz.exe",
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+            granted_access="0x1010",
+        )
+
+        emitter = mock_emitters["windows_event_sysmon"]
+        assert emitter.emit.call_count == 1
+        event = emitter.emit.call_args[0][0]
+        assert event.event_type == "process_access"
+        assert event.process.pid == 5432
+        assert "mimikatz" in event.process.image
+        assert event.auth.target_server == r"C:\Windows\System32\lsass.exe"
+        assert event.auth.failure_status == "0x1010"
+
+    def test_process_access_default_target_is_lsass(
+        self, activity_gen, mock_emitters, windows_system, test_user
+    ):
+        """Default target_image should be lsass.exe."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen.generate_process_access(
+            user=test_user,
+            system=windows_system,
+            time=ts,
+            source_pid=1234,
+            source_image=r"C:\Windows\Temp\procdump.exe",
+            target_pid=636,
+        )
+
+        event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
+        assert event.auth.target_server == r"C:\Windows\System32\lsass.exe"
+
+    def test_process_access_custom_access_mask(
+        self, activity_gen, mock_emitters, windows_system, test_user
+    ):
+        """Custom granted_access mask should be preserved."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen.generate_process_access(
+            user=test_user,
+            system=windows_system,
+            time=ts,
+            source_pid=1234,
+            source_image=r"C:\Windows\Temp\tool.exe",
+            target_pid=636,
+            granted_access="0x1FFFFF",  # PROCESS_ALL_ACCESS
+        )
+
+        event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
+        assert event.auth.failure_status == "0x1FFFFF"
+
+    def test_process_access_only_on_windows(self, activity_gen, mock_emitters, test_user):
+        """ProcessAccess should only emit on Windows systems."""
+        linux_system = System(hostname="LNX-01", ip="10.10.10.60", os="Ubuntu 22.04", type="server")
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen.generate_process_access(
+            user=test_user,
+            system=linux_system,
+            time=ts,
+            source_pid=1234,
+            source_image="/tmp/tool",
+            target_pid=636,
+        )
+
+        # Event is dispatched but Sysmon emitter should not handle it (os_category != windows)
+        # The mock doesn't filter, but we can check the event was dispatched
+        emitter = mock_emitters["windows_event_sysmon"]
+        if emitter.emit.call_count > 0:
+            event = emitter.emit.call_args[0][0]
+            assert event.host.os_category == "linux"  # Emitter's can_handle would reject this

@@ -51,6 +51,8 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
+**Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
+
 ### Persona Selection
 
 EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Only define personas inline if you need to customize behavior. Read the YAML files in `personas/` for full details.
@@ -283,6 +285,30 @@ The storyline is the most important part — it's what the threat hunter will be
 
 Not every scenario needs all phases — an insider threat won't have privilege escalation if they already have access, a ransomware attack emphasizes impact over exfiltration. But actively consider each phase and include it when it makes the attack realistic. Omitting privilege escalation or persistence from an external attacker scenario is a common gap that makes the storyline feel incomplete.
 
+### Attacker Fumbles and Dead Ends
+
+Real attackers are not perfect. Even experienced operators make mistakes, hit dead ends, and waste time on approaches that don't pan out. Including this messiness makes the data dramatically more realistic and the hunt more interesting — a surgical, zero-waste attack is actually harder to believe than one with false starts.
+
+Based on the user's chosen attacker realism level, weave fumbles and dead ends into the storyline. These are **valid storyline events using standard event types** — the engine handles them normally. The "error" is in-universe (the simulated attacker made a mistake), not in the data structure.
+
+**Mistakes** — the attacker does something wrong and has to correct it:
+- Failed logon attempts before finding valid credentials (`failed_logon` events)
+- Mistyped executable or path in a command (`process` event with wrong binary name, followed by the correct one)
+- Connection to the wrong host or port (`connection` event that produces a Zeek S0/REJ record)
+- Running a tool with incorrect flags that produces an error, then re-running correctly
+- Attempting to access a resource they don't have permissions for
+
+**Dead ends** — the attacker tries something that technically works but doesn't achieve their goal:
+- Searching for files matching a pattern and finding nothing (e.g., `dir /s *.kdbx` on a system with no KeePass databases)
+- Attempting lateral movement to a host via multiple methods (RDP, PsExec, WMI) but failing on each, then moving to a different target
+- Running recon commands that return unhelpful results (e.g., `net group "Domain Admins"` on a system where the attacker already has the info)
+- Enumerating a network share that turns out to be empty or irrelevant
+- Connecting to a database that doesn't contain the data they're looking for
+
+These are just examples — invent additional realistic variations appropriate to the specific scenario and attack chain. A novice attacker might have 5-8 fumbles scattered throughout the storyline; a skilled operator might have 1-2 subtle dead ends. Scale the messiness to the user's chosen level.
+
+**Placement:** Fumbles work best right before a successful action (failed logon → successful logon) or as abandoned branches between kill chain phases. Don't cluster them all at the beginning — distribute them throughout the storyline.
+
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `raw`
@@ -299,6 +325,9 @@ events:
 ```
 
 **Network connections (C2, exfiltration):**
+
+IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
+
 ```yaml
 events:
   - type: connection
@@ -306,6 +335,20 @@ events:
     dst_port: 443
     service: "ssl"
     technique: "T1071.001 - Web Protocols"
+```
+
+**Exfiltration over HTTP (include method/uri for http.log visibility):**
+```yaml
+events:
+  - type: connection
+    dst_ip: "198.51.100.10"
+    dst_port: 80
+    service: http
+    method: "POST"
+    uri: "/api/v2/upload"
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    status_code: 200
+    technique: "T1048.003 - Exfiltration Over Unencrypted Non-C2 Protocol"
 ```
 
 **HTTP requests (web attacks, web shell access):**
@@ -473,6 +516,7 @@ After the interview, generate both files:
    - **Log boundary**: Are all systems in the systems list owned by the victim org? Are there any third-party servers (SaaS, cloud provider, partner) that shouldn't be generating OS-level logs? External entities should only appear as IP addresses in network connections, never as systems with hostnames and OS-level log generation.
    - **Timing realism**: Are attack events spaced realistically? (Not crammed into 30 seconds, not dragged over days with no activity)
    - **Detection opportunity**: Is there enough signal for a hunter to find the attack while still requiring genuine effort?
+   - **Attacker messiness**: Does the storyline include fumbles and dead ends appropriate to the chosen attacker realism level? A storyline with zero mistakes is unrealistic unless the user specifically requested a surgical APT scenario.
    - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
    If you find issues, fix them. Tell the user what you changed and why.
 

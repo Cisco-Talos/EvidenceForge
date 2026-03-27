@@ -321,11 +321,18 @@ class StorylineMixin:
             http_ctx = None
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
+                from evidenceforge.generation.activity.network import (
+                    REVERSE_DNS,
+                    _generate_random_hostname,
+                )
 
+                http_host = REVERSE_DNS.get(dst_ip)
+                if not http_host:
+                    http_host = _generate_random_hostname(rng, dst_ip)
                 resp_bytes = rng.randint(5000, 50000)
                 http_ctx = HttpContext(
                     method=spec.method or "GET",
-                    host=dst_ip,
+                    host=http_host,
                     uri=spec.uri or "/",
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
@@ -509,6 +516,20 @@ class StorylineMixin:
                 target_pid=target_pid,
                 target_image=spec.target_process,
             )
+            # Also emit Sysmon Event 10 (ProcessAccess) when targeting lsass.exe
+            # This is the primary credential-dumping detection in real environments
+            if "lsass" in target_name:
+                access_time = time + timedelta(milliseconds=rng.randint(1, 50))
+                self.activity_generator.generate_process_access(
+                    user=actor,
+                    system=system,
+                    time=access_time,
+                    source_pid=source_pid,
+                    source_image=source_image,
+                    target_pid=target_pid,
+                    target_image=spec.target_process,
+                    granted_access="0x1010",  # PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
+                )
             malicious_event["target_process"] = spec.target_process
 
         elif spec.type == "raw":

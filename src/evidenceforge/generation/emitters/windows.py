@@ -65,6 +65,7 @@ class WindowsEventEmitter(LogEmitter):
         "account_changed",
         "password_change",
         "password_reset",
+        "special_privileges",
     }
 
     @staticmethod
@@ -118,6 +119,7 @@ class WindowsEventEmitter(LogEmitter):
             "account_changed": self._render_account_changed,
             "password_change": self._render_password_change,
             "password_reset": self._render_password_reset,
+            "special_privileges": self._render_special_privileges,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -199,6 +201,52 @@ class WindowsEventEmitter(LogEmitter):
                 "PrivilegeList": privs,
             }
             self.emit_event(priv_data)
+
+    def _render_special_privileges(self, event: SecurityEvent) -> None:
+        """Render standalone Windows 4672 (Special Privileges Assigned).
+
+        Used for DC-side privilege assignment during Kerberos authentication,
+        where the DC logs 4672 independently of the target host's logon event.
+        """
+        rng = random.Random()
+        auth = event.auth
+        host = event.host
+
+        is_admin = (
+            auth.username.endswith("$")
+            or auth.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")
+            or auth.logon_type == 5
+        )
+        if is_admin:
+            privs = (
+                "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
+                "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
+                "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
+                "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
+                "SeDelegateSessionUserImpersonatePrivilege"
+            )
+        else:
+            privs = (
+                "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
+                "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
+                "SeTimeZonePrivilege"
+            )
+
+        priv_data = {
+            "EventID": 4672,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": auth.reporting_pid or 600,
+            "ExecutionThreadID": rng.randint(100, 500),
+            "SubjectUserSid": auth.user_sid,
+            "SubjectUserName": auth.username,
+            "SubjectDomainName": host.netbios_domain,
+            "SubjectLogonId": auth.logon_id or "0x0",
+            "PrivilegeList": privs,
+        }
+        self.emit_event(priv_data)
 
     def _render_logoff(self, event: SecurityEvent) -> None:
         """Render Windows 4634 (logoff)."""

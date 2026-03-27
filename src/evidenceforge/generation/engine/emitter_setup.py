@@ -409,6 +409,8 @@ class EmitterSetupMixin:
         self.activity_generator._db_servers = self._infra_ips.get("db_servers", [])
         self.activity_generator._dns_server_ips = self._infra_ips.get("dns", ["10.0.0.1"])
         self.activity_generator._exchange_ip = self._infra_ips.get("exchange")
+        self.activity_generator._dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+        self.activity_generator._dc_ips = self._infra_ips.get("dc", [])
 
     def _seed_windows_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Windows system process tree in StateManager."""

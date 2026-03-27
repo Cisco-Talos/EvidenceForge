@@ -506,6 +506,18 @@ class ActivityGenerator:
                 ),
             )
 
+        # Phase 2.5: Emit DC-side Kerberos events for domain logons
+        # When a user authenticates via Kerberos to a Windows domain system,
+        # the DC sees a TGT request (4768) then a service ticket request (4769)
+        # before the target system logs the 4624.
+        self._emit_dc_kerberos_for_logon(
+            user=user,
+            system=system,
+            time=time,
+            auth_package=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
+            source_ip=source_ip,
+        )
+
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
@@ -538,6 +550,88 @@ class ActivityGenerator:
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
+
+    def _emit_dc_kerberos_for_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        auth_package: str,
+        source_ip: str,
+    ) -> None:
+        """Emit DC-side Kerberos TGT (4768) and service ticket (4769) for domain logons.
+
+        In a real AD environment, when a user authenticates via Kerberos:
+        1. Client requests TGT from DC (4768) ~50-200ms before logon
+        2. Client requests service ticket for target host (4769) ~20-100ms after TGT
+        3. Target host logs the 4624
+
+        Only emits when:
+        - Auth package is Kerberos (not NTLM)
+        - Target system is Windows
+        - System is not the DC itself
+        - A DC is known in the scenario
+        """
+        # Only emit for explicit Kerberos auth on Windows systems.
+        # "Negotiate" can fall back to NTLM, and CredSSP (RDP) uses its own
+        # auth flow — only pure "Kerberos" auth triggers DC-side TGT/TGS.
+        if auth_package != "Kerberos":
+            return
+
+        os_cat = _get_os_category(system.os)
+        if os_cat != "windows":
+            return
+
+        dc_hostnames = getattr(self, "_dc_hostnames", [])
+        dc_ips = getattr(self, "_dc_ips", [])
+        if not dc_hostnames:
+            return
+
+        # Don't emit Kerberos events when logging onto the DC itself
+        if system.hostname in dc_hostnames or system.ip in dc_ips:
+            return
+
+        rng = _get_rng()
+        dc_idx = rng.randint(0, len(dc_hostnames) - 1)
+        dc_hostname = dc_hostnames[dc_idx]
+
+        # TGT request: 50-200ms before the 4624 on the target
+        tgt_offset_ms = rng.randint(50, 200)
+        tgt_time = time - timedelta(milliseconds=tgt_offset_ms)
+        self.generate_kerberos_tgt(
+            username=user.username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=tgt_time,
+        )
+
+        # Service ticket request: 20-100ms after TGT
+        tgs_offset_ms = rng.randint(20, 100)
+        tgs_time = tgt_time + timedelta(milliseconds=tgs_offset_ms)
+        service_name = f"host/{system.hostname}"
+        self.generate_kerberos_service_ticket(
+            username=user.username,
+            service_name=service_name,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=tgs_time,
+        )
+
+        # 4672 Special Privileges on DC for elevated users (domain admins)
+        if self._should_elevate(user):
+            priv_time = tgt_time + timedelta(milliseconds=rng.randint(1, 10))
+            priv_event = SecurityEvent(
+                timestamp=priv_time,
+                event_type="special_privileges",
+                host=self._build_dc_host_context(dc_hostname),
+                auth=AuthContext(
+                    username=user.username,
+                    user_sid=self._get_sid(user.username),
+                    logon_id="0x0",  # DC Kerberos auth doesn't have a target logon ID
+                    reporting_pid=self._get_system_pid(dc_hostname, "lsass", 0x2E0),
+                ),
+            )
+            self.dispatcher.dispatch(priv_event)
 
     def generate_failed_logon(
         self,
@@ -1156,7 +1250,9 @@ class ActivityGenerator:
                 ad_domain = getattr(self, "_ad_domain", "")
                 if ad_domain and "." not in proxy_fqdn:
                     proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
-                hostname = REVERSE_DNS.get(dst_ip, dst_ip)
+                hostname = REVERSE_DNS.get(dst_ip)
+                if not hostname:
+                    hostname = _generate_random_hostname(_get_rng(), dst_ip)
                 schema = "https" if dst_port == 443 else "http"
                 url = f"{schema}://{hostname}/"
                 # Pick a random user from the scenario (if available)
@@ -1287,10 +1383,20 @@ class ActivityGenerator:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
+                "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
             ]
             _USER_AGENTS_LINUX = [
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+                "curl/7.88.1",
+                "python-requests/2.31.0",
+                "Wget/1.21.3",
             ]
             if source_system and _get_os_category(source_system.os) == "linux":
                 ua = rng.choice(_USER_AGENTS_LINUX)
@@ -2944,6 +3050,54 @@ class ActivityGenerator:
                 username=user.username,
                 target_server=target_image,
                 source_port=target_pid,  # Pack target PID into source_port for emitter
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_process_access(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        source_pid: int,
+        source_image: str,
+        target_pid: int,
+        target_image: str = r"C:\Windows\System32\lsass.exe",
+        granted_access: str = "0x1010",
+    ) -> None:
+        """Generate Sysmon Event 10 (ProcessAccess) for credential dumping detection.
+
+        Emits when a process accesses another process's memory (e.g., mimikatz
+        reading lsass.exe for credential extraction).
+
+        Args:
+            user: User running the source process
+            system: System where the access occurs
+            time: Event timestamp
+            source_pid: PID of the process doing the access
+            source_image: Full path of the source process image
+            target_pid: PID of the target process (typically lsass.exe)
+            target_image: Full path of the target process image
+            granted_access: Access mask (0x1010=VM_READ, 0x1FFFFF=ALL_ACCESS)
+        """
+        from evidenceforge.events.contexts import ProcessContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_access",
+            host=self._build_host_context(system),
+            process=ProcessContext(
+                pid=source_pid,
+                parent_pid=0,
+                image=source_image,
+                command_line="",
+                username=user.username,
+            ),
+            auth=AuthContext(
+                username=user.username,
+                target_server=target_image,
+                source_port=target_pid,  # Pack target PID (same pattern as create_remote_thread)
+                failure_status=granted_access,  # Pack access mask into failure_status
             ),
         )
         self.dispatcher.dispatch(event)

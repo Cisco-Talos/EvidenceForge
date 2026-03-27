@@ -30,6 +30,7 @@ class SysmonEventEmitter(LogEmitter):
         "process_create",
         "system_process_create",
         "create_remote_thread",
+        "process_access",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -46,6 +47,8 @@ class SysmonEventEmitter(LogEmitter):
             self._render_sysmon_process_create(event)
         elif event.event_type == "create_remote_thread":
             self._render_sysmon_create_remote_thread(event)
+        elif event.event_type == "process_access":
+            self._render_sysmon_process_access(event)
         else:
             raise NotImplementedError(
                 f"SysmonEventEmitter: no render method for {event.event_type}"
@@ -161,6 +164,65 @@ class SysmonEventEmitter(LogEmitter):
             "TargetImage": target_image,
             "NewThreadId": rng.randint(100, 9999),
             "StartAddress": f"0x{rng.randint(0x01000000, 0x7FFFFFFF):08X}",
+        }
+        self.emit_event(event_data)
+
+    def _render_sysmon_process_access(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 10 (ProcessAccess).
+
+        Primary detection for credential dumping (e.g., mimikatz accessing lsass.exe).
+        Source process reads target process memory with specific access rights.
+        """
+        rng = random.Random()
+        host = event.host
+        proc = event.process  # Source process
+        auth = event.auth
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        source_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+
+        # Target process info from auth context (same pattern as create_remote_thread)
+        target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
+        target_image = (
+            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe"
+        )
+        target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
+
+        # Determine user string
+        if auth and auth.username:
+            user = f"{host.netbios_domain}\\{auth.username}"
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
+
+        # GrantedAccess values for credential dumping:
+        # 0x1010 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
+        # 0x1FFFFF = PROCESS_ALL_ACCESS
+        # 0x1438 = typical mimikatz access mask
+        granted_access = auth.failure_status if auth and auth.failure_status else "0x1010"
+
+        event_data = {
+            "EventID": 10,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": rng.randint(1800, 3000),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "SourceProcessGUID": source_guid,
+            "SourceProcessId": proc.pid,
+            "SourceImage": proc.image,
+            "SourceThreadId": rng.randint(100, 9999),
+            "SourceUser": user,
+            "TargetProcessGUID": target_guid,
+            "TargetProcessId": target_pid,
+            "TargetImage": target_image,
+            "TargetUser": "NT AUTHORITY\\SYSTEM",
+            "GrantedAccess": granted_access,
+            "CallTrace": (
+                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{rng.randint(0x9C000, 0x9F000):X}"
+                f"|C:\\Windows\\System32\\KERNELBASE.dll+{rng.randint(0x2C000, 0x2F000):X}"
+            ),
         }
         self.emit_event(event_data)
 
