@@ -500,6 +500,27 @@ def generate_logon(self, user, system, time, logon_type=2, source_ip=None):
 - `_emit_ecar_module_event()` -> `EcarEmitter._render_module_load()`
 - `_emit_ecar_flow_event()` -> `EcarEmitter._render_connection()`
 
+### 4.5 eCAR Format Improvements (Post-Migration)
+
+With the canonical event model in place, `EcarEmitter._render_event()` builds JSON directly in Python (no Jinja2 template), producing spec-compliant eCAR records:
+
+**Top-level fields (all records):**
+- `timestamp_ms` (int): Milliseconds since epoch
+- `id` (UUID): Unique event record ID
+- `hostname` (string): Target system
+- `object` / `action` (string): Entity type and operation
+- `objectID` (UUID): Persistent entity ID — same across lifecycle (e.g., CREATE and TERMINATE for one process)
+- `actorID` (UUID, optional): ID of the entity that performed the action (parent process on PROCESS/CREATE, initiating process on FILE/REGISTRY/MODULE/FLOW)
+- `pid` (int): Always present, `-1` if unavailable
+- `tid` (int): Always present, `-1` if unavailable
+- `ppid` (int): PROCESS events only
+- `principal` (string, optional): Username
+- `properties` (dict): Event-specific key-value pairs, **all values are strings** per eCAR spec
+
+**objectID/actorID graph:** Managed via `EdrContext` on `SecurityEvent`. UUIDs are allocated by `StateManager` at entity creation time (`create_session()`, `create_process()`), looked up via `get_session_object_id()` / `get_process_object_id()`, and attached by `ActivityGenerator` to each event.
+
+**FLOW pid mapping:** Baseline connections carry the PID of the realistic initiating system process (svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for SMB, mstsc.exe for RDP). Distro-aware: Ubuntu uses systemd-resolved for DNS, RHEL apps resolve directly (-1). Storyline connections carry `_last_storyline_pid`.
+
 ## 5. Migration Strategy
 
 ### 5.1 Approach: All Activity Types, One at a Time
