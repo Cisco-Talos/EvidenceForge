@@ -16,6 +16,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
+    EdrContext,
     FileContext,
     HostContext,
     HttpContext,
@@ -467,6 +468,7 @@ class ActivityGenerator:
         auth_pkg = self._select_auth_package(logon_type)
 
         # Phase 2: Build SecurityEvent with all contexts
+        session_obj_id = self.state_manager.get_session_object_id(logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -488,6 +490,7 @@ class ActivityGenerator:
                 subject_logon_id="0x3e7",
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
+            edr=EdrContext(object_id=session_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts (sshd logon message)
@@ -706,6 +709,7 @@ class ActivityGenerator:
                 subject_domain="NT AUTHORITY",
                 subject_logon_id="0x3e7",
             ),
+            edr=EdrContext(object_id=str(uuid.uuid4())),
         )
 
         # Attach SyslogContext for Linux hosts (sshd failed logon)
@@ -785,6 +789,7 @@ class ActivityGenerator:
             self.state_manager.end_process(session.system, session.explorer_pid)
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
+        session_obj_id = self.state_manager.get_session_object_id(logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="logoff",
@@ -795,6 +800,7 @@ class ActivityGenerator:
                 logon_id=logon_id,
                 logon_type=logon_type,
             ),
+            edr=EdrContext(object_id=session_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts (sshd session closed)
@@ -858,6 +864,8 @@ class ActivityGenerator:
         )
 
         # Phase 2: Build SecurityEvent
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_create",
@@ -879,6 +887,7 @@ class ActivityGenerator:
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
             ),
+            edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
 
         # Phase 3: Dispatch to matching emitters
@@ -911,6 +920,7 @@ class ActivityGenerator:
                     host=host_ctx,
                     auth=auth_ctx,
                     file=FileContext(path=path, action=action.lower(), pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
@@ -922,6 +932,7 @@ class ActivityGenerator:
                     host=host_ctx,
                     auth=auth_ctx,
                     file=FileContext(path=dll_path, action="load", pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and "system32" in process_name.lower() and rng.random() < 0.20:
@@ -933,6 +944,7 @@ class ActivityGenerator:
                     host=host_ctx,
                     auth=auth_ctx,
                     registry=RegistryContext(key=key, value=value, action="modify", pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
 
@@ -963,6 +975,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
@@ -980,6 +993,7 @@ class ActivityGenerator:
                 username=user.username,
                 logon_id=logon_id,
             ),
+            edr=EdrContext(object_id=proc_obj_id),
         )
 
         self.dispatcher.dispatch(event)
@@ -1194,6 +1208,11 @@ class ActivityGenerator:
         elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
             host_ctx = self._build_host_context(self._ip_to_system[src_ip])
 
+        # Resolve eCAR actor_id from initiating process (if pid is known)
+        conn_actor_id = ""
+        if pid > 0 and source_system:
+            conn_actor_id = self.state_manager.get_process_object_id(source_system.hostname, pid)
+
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
@@ -1223,6 +1242,7 @@ class ActivityGenerator:
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
             ),
+            edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=conn_actor_id),
         )
 
         # Caller-provided context overrides

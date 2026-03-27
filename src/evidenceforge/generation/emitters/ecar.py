@@ -65,6 +65,17 @@ class EcarEmitter(HostMultiplexEmitter):
             return event.host.fqdn or event.host.hostname
         return ""
 
+    @staticmethod
+    def _apply_edr_context(event_data: dict[str, Any], event: SecurityEvent) -> None:
+        """Copy objectID, actorID, and tid from EdrContext into event_data."""
+        if event.edr:
+            if event.edr.object_id:
+                event_data["objectID"] = event.edr.object_id
+            if event.edr.actor_id:
+                event_data["actorID"] = event.edr.actor_id
+            if event.edr.tid != -1:
+                event_data["tid"] = event.edr.tid
+
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event."""
         event_data = {
@@ -76,6 +87,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "src_ip": event.auth.source_ip,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_logoff(self, event: SecurityEvent) -> None:
@@ -88,6 +100,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
@@ -102,6 +115,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "failure_reason": "bad_password",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_process_create(self, event: SecurityEvent) -> None:
@@ -121,6 +135,7 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
@@ -136,6 +151,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "image_path": proc.image,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_file_event(self, event: SecurityEvent) -> None:
@@ -151,6 +167,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_registry_event(self, event: SecurityEvent) -> None:
@@ -166,6 +183,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "registry_value": event.registry.value if event.registry else "",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
@@ -180,6 +198,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_connection(self, event: SecurityEvent) -> None:
@@ -199,6 +218,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "protocol": net.protocol,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
