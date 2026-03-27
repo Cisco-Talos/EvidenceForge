@@ -832,12 +832,17 @@ class ActivityGenerator:
         process_name: str,
         command_line: str,
         parent_pid: int = 4,
+        ensure_file_event: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
         Creates process in StateManager, builds a SecurityEvent, and dispatches
         to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
         probabilistic EDR file/module/registry events.
+
+        When ensure_file_event=True, always emits at least one FILE/CREATE for
+        the process image (useful for storyline processes where FILE visibility
+        is important for hunting).
 
         Args:
             user: User creating the process
@@ -892,6 +897,19 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
+
+        # Guaranteed FILE/CREATE for the process image when requested (storyline processes)
+        if ensure_file_event:
+            self.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=time,
+                    event_type="file_create",
+                    host=self._build_host_context(system),
+                    auth=AuthContext(username=user.username),
+                    file=FileContext(path=process_name, action="create", pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                )
+            )
 
         # Phase 8.2: Probabilistic EDR object diversity via canonical SecurityEvent
         rng = _get_rng()
@@ -3675,20 +3693,58 @@ class ActivityGenerator:
 
     # Phase 5.2: EDR object type diversity data pools
     _EDR_FILE_PATHS_WIN = [
+        # User documents
         "C:\\Users\\{user}\\Documents\\report.docx",
         "C:\\Users\\{user}\\Documents\\spreadsheet.xlsx",
         "C:\\Users\\{user}\\Documents\\presentation.pptx",
+        "C:\\Users\\{user}\\Documents\\Q4-review.pdf",
+        "C:\\Users\\{user}\\Documents\\meeting-notes.txt",
+        # Downloads and desktop
         "C:\\Users\\{user}\\Downloads\\file.pdf",
-        "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp",
+        "C:\\Users\\{user}\\Downloads\\installer-{rand}.exe",
         "C:\\Users\\{user}\\Desktop\\notes.txt",
+        "C:\\Users\\{user}\\Desktop\\shortcut.lnk",
+        # Temp files
+        "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp",
+        "C:\\Users\\{user}\\AppData\\Local\\Temp\\~DF{rand}.tmp",
+        # Application data
+        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Office\\16.0\\OfficeFileCache\\{rand}.dat",
+        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\data_{rand}",
+        "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\{rand}",
+        "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\report.docx.lnk",
+        # System paths
         "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\Report.wer",
+        "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf",
+        "C:\\Windows\\Temp\\{rand}.tmp",
+        "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}",
+        "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx",
     ]
     _EDR_FILE_PATHS_LINUX = [
+        # User files
         "/home/{user}/documents/report.odt",
+        "/home/{user}/documents/notes.md",
         "/home/{user}/downloads/file.pdf",
+        "/home/{user}/downloads/archive-{rand}.tar.gz",
+        "/home/{user}/.bashrc",
+        "/home/{user}/.ssh/known_hosts",
+        # Temp files
         "/tmp/tmp{rand}",
+        "/tmp/systemd-private-{rand}-apache2.service",
+        "/var/tmp/{rand}.lock",
+        # Application caches
         "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}",
+        "/home/{user}/.cache/pip/http/{rand}",
+        "/home/{user}/.local/share/recently-used.xbel",
+        # Logs and system
         "/var/log/syslog",
+        "/var/log/auth.log",
+        "/var/log/apache2/access.log",
+        "/proc/{rand}/status",
+        "/etc/passwd",
+        # Package manager
+        "/var/lib/dpkg/status",
+        "/var/cache/apt/archives/lock",
+        "/var/lib/apt/lists/lock",
     ]
     _EDR_REGISTRY_KEYS = [
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),

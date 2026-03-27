@@ -253,6 +253,7 @@ class StorylineMixin:
                 process_name=process_name,
                 command_line=command_line,
                 parent_pid=parent_pid,
+                ensure_file_event=True,
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
             self._last_storyline_pid = pid
