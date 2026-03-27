@@ -164,8 +164,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 
 Once baseline activity uses SecurityEvent dispatch, these become straightforward:
 
-- [ ] Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch (enables 4663 + Sysmon 11/12/13 correlation)
-- [ ] Migrate syslog system messages: CRON↔eCAR PROCESS, UFW BLOCK↔Zeek conn, systemd↔eCAR PROCESS
+- [x] Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch (enables 4663 + Sysmon 11/12/13 correlation) — completed in Phase 8.2; probabilistic EDR events dispatch via SecurityEvent with EdrContext
+- [x] Migrate syslog system messages: CRON↔eCAR PROCESS, UFW BLOCK↔Zeek conn, systemd↔eCAR PROCESS — CRON and UFW were already working; systemd now uses paired generate_system_process/generate_system_process_termination lifecycle
 - [ ] Sysmon Event 3 (Network), 11 (FileCreate), 13 (Registry) emission
 
 ---

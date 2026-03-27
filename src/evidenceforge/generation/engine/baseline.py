@@ -1097,13 +1097,30 @@ class BaselineMixin:
                         "systemd-tmpfiles-clean",
                     ]
                     svc = rng.choice(services)
-                    action = rng.choice(["Starting", "Finished"])
-                    self.activity_generator.generate_syslog_event(
+                    svc_title = svc.replace("-", " ").title()
+                    systemd_pid = sys_pids.get("systemd", 1)
+
+                    # Paired lifecycle: Starting → process create, Finished → terminate
+                    svc_pid = self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
-                        app_name="systemd",
-                        message=f"{action} {svc}.service - {svc.replace('-', ' ').title()}.",
-                        pid=sys_pids.get("systemd", 1),
+                        process_name=f"/usr/lib/systemd/{svc}",
+                        command_line=f"/usr/lib/systemd/{svc}",
+                        parent_pid=systemd_pid,
+                        username="root",
+                        syslog_message=f"Starting {svc}.service - {svc_title}.",
+                    )
+                    finish_delay = rng.uniform(0.5, 5.0)
+                    finish_ts = ts + timedelta(seconds=finish_delay)
+                    self.state_manager.set_current_time(finish_ts)
+                    self.activity_generator.generate_system_process_termination(
+                        system=system,
+                        time=finish_ts,
+                        pid=svc_pid,
+                        process_name=f"/usr/lib/systemd/{svc}",
+                        parent_pid=systemd_pid,
+                        username="root",
+                        syslog_message=f"Finished {svc}.service - {svc_title}.",
                     )
                 elif source_roll < 0.35:
                     cron_cmds = [

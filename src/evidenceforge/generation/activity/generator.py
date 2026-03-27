@@ -1798,6 +1798,7 @@ class ActivityGenerator:
         command_line: str,
         parent_pid: int = 4,
         username: str = "SYSTEM",
+        syslog_message: str | None = None,
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -1811,6 +1812,7 @@ class ActivityGenerator:
             command_line: Command line string
             parent_pid: Parent process PID
             username: System account name (SYSTEM, root, etc.)
+            syslog_message: Custom syslog message (overrides auto-generated message)
 
         Returns:
             PID of the new process
@@ -1831,6 +1833,8 @@ class ActivityGenerator:
         system_logon_ids = {"SYSTEM": "0x3e7", "LOCAL SERVICE": "0x3e5", "NETWORK SERVICE": "0x3e4"}
         logon_id = system_logon_ids.get(username, "0x3e7")
 
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="system_process_create",
@@ -1856,14 +1860,22 @@ class ActivityGenerator:
                 token_elevation="%%1936",
                 mandatory_label="S-1-16-16384",
             ),
+            edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts
         if event.host and event.host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            is_cron = "cron" in (process_name or "").lower()
-            if is_cron:
+            if syslog_message:
+                event.syslog = SyslogContext(
+                    app_name="systemd",
+                    pid=1,
+                    facility=3,
+                    severity=6,
+                    message=syslog_message,
+                )
+            elif "cron" in (process_name or "").lower():
                 event.syslog = SyslogContext(
                     app_name="CRON",
                     pid=pid,
@@ -1884,6 +1896,52 @@ class ActivityGenerator:
         self.dispatcher.dispatch(event)
 
         return pid
+
+    def generate_system_process_termination(
+        self,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        parent_pid: int = 0,
+        username: str = "root",
+        syslog_message: str | None = None,
+    ) -> None:
+        """Terminate a system process, emitting eCAR PROCESS/TERMINATE + optional syslog.
+
+        Unlike generate_process_termination(), this doesn't require a user session.
+        Used for short-lived system service processes (systemd units, etc.).
+        """
+        from evidenceforge.events.contexts import ProcessContext
+
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_terminate",
+            host=self._build_host_context(system),
+            auth=AuthContext(username=username),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line="",
+                username=username,
+            ),
+            edr=EdrContext(object_id=proc_obj_id),
+        )
+
+        if syslog_message and event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            event.syslog = SyslogContext(
+                app_name="systemd",
+                pid=1,
+                facility=3,
+                severity=6,
+                message=syslog_message,
+            )
+
+        self.dispatcher.dispatch(event)
 
     def _emit_dns_lookup(
         self,
