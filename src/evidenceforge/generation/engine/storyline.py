@@ -321,18 +321,11 @@ class StorylineMixin:
             http_ctx = None
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
-                from evidenceforge.generation.activity.network import (
-                    REVERSE_DNS,
-                    _generate_random_hostname,
-                )
 
-                http_host = REVERSE_DNS.get(dst_ip)
-                if not http_host:
-                    http_host = _generate_random_hostname(rng, dst_ip)
                 resp_bytes = rng.randint(5000, 50000)
                 http_ctx = HttpContext(
                     method=spec.method or "GET",
-                    host=http_host,
+                    host=dst_ip,
                     uri=spec.uri or "/",
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
