@@ -77,6 +77,11 @@ fields:
     required: false
     description: "Executable path for PROCESS events"
 
+  - name: parent_image_path
+    type: string
+    required: false
+    description: "Parent executable path for PROCESS/CREATE events"
+
   - name: file_path
     type: string
     required: false
@@ -126,6 +131,11 @@ fields:
     type: string
     required: false
     description: "Registry value name for REGISTRY events"
+
+  - name: failure_reason
+    type: string
+    required: false
+    description: "Reason for failure on USER_SESSION/LOGIN events (e.g., bad_password)"
 
 output:
   format: json
