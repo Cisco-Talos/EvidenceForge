@@ -1073,6 +1073,13 @@ class BaselineMixin:
             sys_pids = self._system_pids.get(system.hostname, {})
             sys_type = (system.type or "server").lower()
             is_dmz = "dmz" in system.hostname.lower() or "web" in system.hostname.lower()
+            is_rhel_like = any(
+                d in system.os.lower() for d in ("centos", "rhel", "red hat", "rocky", "alma")
+            )
+            has_web_role = (
+                any(r in (system.roles or []) for r in ("web_server", "forward_proxy"))
+                or "web" in system.hostname.lower()
+            )
             num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             scenario_start = self.scenario.time_window.start
@@ -1085,16 +1092,17 @@ class BaselineMixin:
 
                 source_roll = rng.random()
                 if source_roll < 0.20:
+                    # Filter systemd services by distro and role
                     services = [
                         "logrotate",
-                        "phpsessionclean",
-                        "apt-daily",
                         "man-db",
                         "fstrim",
-                        "motd-news",
-                        "ua-timer",
                         "systemd-tmpfiles-clean",
                     ]
+                    if not is_rhel_like:
+                        services.extend(["apt-daily", "motd-news", "ua-timer"])
+                    if has_web_role:
+                        services.append("phpsessionclean")
                     svc = rng.choice(services)
                     svc_title = svc.replace("-", " ").title()
                     systemd_pid = sys_pids.get("systemd", 1)
@@ -1175,25 +1183,29 @@ class BaselineMixin:
                             severity=5,
                         )
                     else:
-                        # AppArmor audit: standalone kernel syslog
-                        self._audit_serials[system.hostname] = self._audit_serials.get(
-                            system.hostname, 1000
-                        ) + rng.randint(1, 5)
-                        audit_serial = self._audit_serials[system.hostname]
-                        msg = (
-                            f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
-                            f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
-                            f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
+                        # AppArmor audit: only on hosts running MySQL (DB role)
+                        has_db = "db" in system.hostname.lower() or "database" in (
+                            system.roles or []
                         )
-                        self.activity_generator.generate_syslog_event(
-                            system=system,
-                            time=ts,
-                            app_name="kernel",
-                            message=msg,
-                            pid=None,
-                            facility=0,
-                            severity=5,
-                        )
+                        if has_db and not is_rhel_like:
+                            self._audit_serials[system.hostname] = self._audit_serials.get(
+                                system.hostname, 1000
+                            ) + rng.randint(1, 5)
+                            audit_serial = self._audit_serials[system.hostname]
+                            msg = (
+                                f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
+                                f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
+                                f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
+                            )
+                            self.activity_generator.generate_syslog_event(
+                                system=system,
+                                time=ts,
+                                app_name="kernel",
+                                message=msg,
+                                pid=None,
+                                facility=0,
+                                severity=5,
+                            )
                 elif source_roll < 0.65:
                     sid = rng.randint(100, 9999)
                     user = rng.choice(["root", "admin", "www-data", "ubuntu"])
@@ -1240,6 +1252,8 @@ class BaselineMixin:
                         facility=10,
                     )
                 elif source_roll < 0.90:
+                    if is_rhel_like:
+                        continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -1254,6 +1268,8 @@ class BaselineMixin:
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
                 elif source_roll < 0.93:
+                    if is_rhel_like:
+                        continue  # RHEL uses chronyd, not systemd-timesyncd
                     ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
                     if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
@@ -1276,7 +1292,8 @@ class BaselineMixin:
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
                 else:
-                    # Additional diverse syslog programs for realism
+                    # Additional diverse syslog programs for realism.
+                    # Entries tagged with _ubuntu or _web are filtered below.
                     _EXTRA_SYSLOG = [
                         (
                             "NetworkManager",
@@ -1386,7 +1403,15 @@ class BaselineMixin:
                             ],
                         ),
                     ]
-                    app, msgs = rng.choice(_EXTRA_SYSLOG)
+                    # Filter by distro and role
+                    _UBUNTU_ONLY = {"snapd", "unattended-upgr", "systemd-resolved"}
+                    _WEB_ONLY = {"cron"}  # www-data cron is web-specific
+                    filtered = [
+                        (a, m) for a, m in _EXTRA_SYSLOG if not (is_rhel_like and a in _UBUNTU_ONLY)
+                    ]
+                    if not filtered:
+                        continue
+                    app, msgs = rng.choice(filtered)
                     # Format placeholders: dhclient uses system IP, others use random int
                     if app == "dhclient":
                         msg = rng.choice(msgs).format(system.ip)

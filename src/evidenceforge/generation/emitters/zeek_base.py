@@ -145,14 +145,37 @@ class SensorMultiplexEmitter(LogEmitter):
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Render and route to sensor writers.
 
+        When multiple sensors observe the same connection, each sensor gets a
+        unique Zeek UID (real Zeek sensors generate UIDs independently).
         Skips events where _render_event returns None (e.g., SnortEmitter
         filters out non-IDS connection events).
         """
-        rendered = self._render_event(event_data)
-        if rendered is None:
-            return
         sensor_hostnames = event_data.pop("_sensor_hostnames", None)
-        self.emit_to_sensors(rendered, sensor_hostnames)
+        targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
+
+        if not targets or len(targets) <= 1:
+            # Single sensor or no sensors — render once
+            rendered = self._render_event(event_data)
+            if rendered is None:
+                return
+            self.emit_to_sensors(rendered, sensor_hostnames)
+        else:
+            # Multiple sensors: each gets a unique UID
+            from evidenceforge.utils.ids import generate_zeek_uid
+
+            original_uid = event_data.get("uid")
+            for i, hostname in enumerate(targets):
+                if i > 0 and original_uid:
+                    # Generate a fresh UID for each additional sensor
+                    prefix = original_uid[0] if original_uid else "C"
+                    event_data["uid"] = generate_zeek_uid(prefix)
+                rendered = self._render_event(event_data)
+                if rendered is None:
+                    return
+                self._get_writer(hostname).write(rendered)
+            # Restore original UID so downstream code isn't affected
+            if original_uid:
+                event_data["uid"] = original_uid
 
     def _render_zeek_json(self, event_data: dict[str, Any]) -> str:
         """Common Zeek NDJSON rendering: timestamp conversion, dotted fields, compact JSON.
