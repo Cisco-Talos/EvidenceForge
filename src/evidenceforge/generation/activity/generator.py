@@ -16,6 +16,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     AuthContext,
     DnsContext,
+    EdrContext,
     FileContext,
     HostContext,
     HttpContext,
@@ -467,6 +468,7 @@ class ActivityGenerator:
         auth_pkg = self._select_auth_package(logon_type)
 
         # Phase 2: Build SecurityEvent with all contexts
+        session_obj_id = self.state_manager.get_session_object_id(logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -488,6 +490,7 @@ class ActivityGenerator:
                 subject_logon_id="0x3e7",
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
+            edr=EdrContext(object_id=session_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts (sshd logon message)
@@ -706,6 +709,7 @@ class ActivityGenerator:
                 subject_domain="NT AUTHORITY",
                 subject_logon_id="0x3e7",
             ),
+            edr=EdrContext(object_id=str(uuid.uuid4())),
         )
 
         # Attach SyslogContext for Linux hosts (sshd failed logon)
@@ -785,6 +789,7 @@ class ActivityGenerator:
             self.state_manager.end_process(session.system, session.explorer_pid)
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
+        session_obj_id = self.state_manager.get_session_object_id(logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="logoff",
@@ -795,6 +800,7 @@ class ActivityGenerator:
                 logon_id=logon_id,
                 logon_type=logon_type,
             ),
+            edr=EdrContext(object_id=session_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts (sshd session closed)
@@ -826,12 +832,17 @@ class ActivityGenerator:
         process_name: str,
         command_line: str,
         parent_pid: int = 4,
+        ensure_file_event: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
         Creates process in StateManager, builds a SecurityEvent, and dispatches
         to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
-        probabilistic eCAR file/module/registry events.
+        probabilistic EDR file/module/registry events.
+
+        When ensure_file_event=True, always emits at least one FILE/CREATE for
+        the process image (useful for storyline processes where FILE visibility
+        is important for hunting).
 
         Args:
             user: User creating the process
@@ -858,6 +869,8 @@ class ActivityGenerator:
         )
 
         # Phase 2: Build SecurityEvent
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_create",
@@ -879,12 +892,26 @@ class ActivityGenerator:
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
             ),
+            edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Phase 8.2: Probabilistic eCAR object diversity via canonical SecurityEvent
+        # Guaranteed FILE/CREATE for the process image when requested (storyline processes)
+        if ensure_file_event:
+            self.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=time,
+                    event_type="file_create",
+                    host=self._build_host_context(system),
+                    auth=AuthContext(username=user.username),
+                    file=FileContext(path=process_name, action="create", pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                )
+            )
+
+        # Phase 8.2: Probabilistic EDR object diversity via canonical SecurityEvent
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
@@ -892,9 +919,7 @@ class ActivityGenerator:
         if rng.random() < 0.40:
             action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
             pool = (
-                self._ECAR_FILE_PATHS_WIN
-                if os_category == "windows"
-                else self._ECAR_FILE_PATHS_LINUX
+                self._EDR_FILE_PATHS_WIN if os_category == "windows" else self._EDR_FILE_PATHS_LINUX
             )
             path = (
                 rng.choice(pool)
@@ -913,10 +938,11 @@ class ActivityGenerator:
                     host=host_ctx,
                     auth=auth_ctx,
                     file=FileContext(path=path, action=action.lower(), pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
-            dll_path = rng.choice(self._ECAR_DLL_POOL)
+            dll_path = rng.choice(self._EDR_DLL_POOL)
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
@@ -924,10 +950,11 @@ class ActivityGenerator:
                     host=host_ctx,
                     auth=auth_ctx,
                     file=FileContext(path=dll_path, action="load", pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and "system32" in process_name.lower() and rng.random() < 0.20:
-            key, value = rng.choice(self._ECAR_REGISTRY_KEYS)
+            key, value = rng.choice(self._EDR_REGISTRY_KEYS)
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
@@ -935,6 +962,7 @@ class ActivityGenerator:
                     host=host_ctx,
                     auth=auth_ctx,
                     registry=RegistryContext(key=key, value=value, action="modify", pid=pid),
+                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
 
@@ -965,6 +993,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
@@ -982,6 +1011,7 @@ class ActivityGenerator:
                 username=user.username,
                 logon_id=logon_id,
             ),
+            edr=EdrContext(object_id=proc_obj_id),
         )
 
         self.dispatcher.dispatch(event)
@@ -1196,6 +1226,11 @@ class ActivityGenerator:
         elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
             host_ctx = self._build_host_context(self._ip_to_system[src_ip])
 
+        # Resolve eCAR actor_id from initiating process (if pid is known)
+        conn_actor_id = ""
+        if pid > 0 and source_system:
+            conn_actor_id = self.state_manager.get_process_object_id(source_system.hostname, pid)
+
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
@@ -1225,6 +1260,7 @@ class ActivityGenerator:
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
             ),
+            edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=conn_actor_id),
         )
 
         # Caller-provided context overrides
@@ -1780,6 +1816,7 @@ class ActivityGenerator:
         command_line: str,
         parent_pid: int = 4,
         username: str = "SYSTEM",
+        syslog_message: str | None = None,
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -1793,6 +1830,7 @@ class ActivityGenerator:
             command_line: Command line string
             parent_pid: Parent process PID
             username: System account name (SYSTEM, root, etc.)
+            syslog_message: Custom syslog message (overrides auto-generated message)
 
         Returns:
             PID of the new process
@@ -1813,6 +1851,8 @@ class ActivityGenerator:
         system_logon_ids = {"SYSTEM": "0x3e7", "LOCAL SERVICE": "0x3e5", "NETWORK SERVICE": "0x3e4"}
         logon_id = system_logon_ids.get(username, "0x3e7")
 
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="system_process_create",
@@ -1838,14 +1878,22 @@ class ActivityGenerator:
                 token_elevation="%%1936",
                 mandatory_label="S-1-16-16384",
             ),
+            edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts
         if event.host and event.host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            is_cron = "cron" in (process_name or "").lower()
-            if is_cron:
+            if syslog_message:
+                event.syslog = SyslogContext(
+                    app_name="systemd",
+                    pid=1,
+                    facility=3,
+                    severity=6,
+                    message=syslog_message,
+                )
+            elif "cron" in (process_name or "").lower():
                 event.syslog = SyslogContext(
                     app_name="CRON",
                     pid=pid,
@@ -1866,6 +1914,52 @@ class ActivityGenerator:
         self.dispatcher.dispatch(event)
 
         return pid
+
+    def generate_system_process_termination(
+        self,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        parent_pid: int = 0,
+        username: str = "root",
+        syslog_message: str | None = None,
+    ) -> None:
+        """Terminate a system process, emitting eCAR PROCESS/TERMINATE + optional syslog.
+
+        Unlike generate_process_termination(), this doesn't require a user session.
+        Used for short-lived system service processes (systemd units, etc.).
+        """
+        from evidenceforge.events.contexts import ProcessContext
+
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="process_terminate",
+            host=self._build_host_context(system),
+            auth=AuthContext(username=username),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=parent_pid,
+                image=process_name,
+                command_line="",
+                username=username,
+            ),
+            edr=EdrContext(object_id=proc_obj_id),
+        )
+
+        if syslog_message and event.host and event.host.os_category == "linux":
+            from evidenceforge.events.contexts import SyslogContext
+
+            event.syslog = SyslogContext(
+                app_name="systemd",
+                pid=1,
+                facility=3,
+                severity=6,
+                message=syslog_message,
+            )
+
+        self.dispatcher.dispatch(event)
 
     def _emit_dns_lookup(
         self,
@@ -3597,31 +3691,69 @@ class ActivityGenerator:
             return self._WELL_KNOWN_SIDS[username]
         return "S-1-5-21-0-0-0-0"
 
-    # Phase 5.2: eCAR object type diversity data pools
-    _ECAR_FILE_PATHS_WIN = [
+    # Phase 5.2: EDR object type diversity data pools
+    _EDR_FILE_PATHS_WIN = [
+        # User documents
         "C:\\Users\\{user}\\Documents\\report.docx",
         "C:\\Users\\{user}\\Documents\\spreadsheet.xlsx",
         "C:\\Users\\{user}\\Documents\\presentation.pptx",
+        "C:\\Users\\{user}\\Documents\\Q4-review.pdf",
+        "C:\\Users\\{user}\\Documents\\meeting-notes.txt",
+        # Downloads and desktop
         "C:\\Users\\{user}\\Downloads\\file.pdf",
-        "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp",
+        "C:\\Users\\{user}\\Downloads\\installer-{rand}.exe",
         "C:\\Users\\{user}\\Desktop\\notes.txt",
+        "C:\\Users\\{user}\\Desktop\\shortcut.lnk",
+        # Temp files
+        "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp",
+        "C:\\Users\\{user}\\AppData\\Local\\Temp\\~DF{rand}.tmp",
+        # Application data
+        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Office\\16.0\\OfficeFileCache\\{rand}.dat",
+        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\data_{rand}",
+        "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\{rand}",
+        "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\report.docx.lnk",
+        # System paths
         "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\Report.wer",
+        "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf",
+        "C:\\Windows\\Temp\\{rand}.tmp",
+        "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}",
+        "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx",
     ]
-    _ECAR_FILE_PATHS_LINUX = [
+    _EDR_FILE_PATHS_LINUX = [
+        # User files
         "/home/{user}/documents/report.odt",
+        "/home/{user}/documents/notes.md",
         "/home/{user}/downloads/file.pdf",
+        "/home/{user}/downloads/archive-{rand}.tar.gz",
+        "/home/{user}/.bashrc",
+        "/home/{user}/.ssh/known_hosts",
+        # Temp files
         "/tmp/tmp{rand}",
+        "/tmp/systemd-private-{rand}-apache2.service",
+        "/var/tmp/{rand}.lock",
+        # Application caches
         "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}",
+        "/home/{user}/.cache/pip/http/{rand}",
+        "/home/{user}/.local/share/recently-used.xbel",
+        # Logs and system
         "/var/log/syslog",
+        "/var/log/auth.log",
+        "/var/log/apache2/access.log",
+        "/proc/{rand}/status",
+        "/etc/passwd",
+        # Package manager
+        "/var/lib/dpkg/status",
+        "/var/cache/apt/archives/lock",
+        "/var/lib/apt/lists/lock",
     ]
-    _ECAR_REGISTRY_KEYS = [
+    _EDR_REGISTRY_KEYS = [
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
         ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
         ("HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin"),
         ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "ProxyEnable"),
     ]
-    _ECAR_DLL_POOL = [
+    _EDR_DLL_POOL = [
         "C:\\Windows\\System32\\ntdll.dll",
         "C:\\Windows\\System32\\kernel32.dll",
         "C:\\Windows\\System32\\user32.dll",

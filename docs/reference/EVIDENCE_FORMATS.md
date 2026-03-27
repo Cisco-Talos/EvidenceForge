@@ -127,16 +127,20 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 ---
 
-## eCAR (EDR/XDR Telemetry)
+## eCAR Format (EDR/XDR Telemetry)
 
 **File:** `ecar.json`
 **Format:** NDJSON
 
-MITRE CAR-based endpoint detection and response telemetry. Represents what an EDR agent would observe.
+EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
+
+**Record structure:** Every eCAR record contains `pid` and `tid` as always-present top-level integers (`-1` = unavailable). `ppid` appears on PROCESS events only. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
+
+**Entity correlation (objectID/actorID graph):** Each record carries a persistent `objectID` (UUID) that identifies the entity being acted upon. Entity lifecycle events share the same objectID — e.g., a PROCESS/CREATE and PROCESS/TERMINATE for the same process, or a USER_SESSION/LOGIN and USER_SESSION/LOGOUT for the same session. The optional `actorID` field links to the objectID of the entity that performed the action — e.g., a PROCESS/CREATE's actorID points to its parent process's objectID, and a FILE/CREATE's actorID points to the process that created it.
 
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
-| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, command_line, user. |
+| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
 | FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
@@ -144,9 +148,9 @@ MITRE CAR-based endpoint detection and response telemetry. Represents what an ED
 | USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. |
 
 **Known Limitations:**
-- eCAR represents an optional EDR layer — not all systems may have it enabled
-- FLOW events use `pid: -1` (real EDR tracks socket-to-process mapping)
-- Limited eCAR object diversity on Linux (mainly PROCESS + USER_SESSION)
+- eCAR format represents an optional EDR layer — not all systems may have it enabled
+- FLOW events carry the initiating system process pid (svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for SMB, mstsc.exe for RDP); `-1` for kernel/unknown/app-specific traffic
+- Limited EDR object diversity on Linux (mainly PROCESS + USER_SESSION)
 - File paths cycle through a small set of templates
 
 ---

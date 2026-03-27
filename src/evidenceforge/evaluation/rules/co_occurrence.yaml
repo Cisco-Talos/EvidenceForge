@@ -139,7 +139,27 @@ zeek_conn:
         in: ["tcp", "udp", "icmp"]
 
 ecar:
-  - name: "PROCESS events have image_path or command_line"
+  # Core fields: always present on every eCAR record
+  - name: "All records have pid"
+    condition: {}
+    checks:
+      - field: pid
+        present: true
+
+  - name: "All records have tid"
+    condition: {}
+    checks:
+      - field: tid
+        present: true
+
+  - name: "All records have objectID"
+    condition: {}
+    checks:
+      - field: objectID
+        present: true
+
+  # PROCESS-specific
+  - name: "PROCESS/CREATE has image_path"
     condition:
       object: "PROCESS"
       action: "CREATE"
@@ -147,6 +167,23 @@ ecar:
       - field: image_path
         present: true
 
+  - name: "PROCESS/CREATE has ppid"
+    condition:
+      object: "PROCESS"
+      action: "CREATE"
+    checks:
+      - field: ppid
+        present: true
+
+  - name: "PROCESS/CREATE has command_line"
+    condition:
+      object: "PROCESS"
+      action: "CREATE"
+    checks:
+      - field: command_line
+        present: true
+
+  # FLOW-specific
   - name: "FLOW events have network fields"
     condition:
       object: "FLOW"
@@ -156,6 +193,7 @@ ecar:
       - field: dst_ip
         present: true
 
+  # USER_SESSION-specific
   - name: "USER_SESSION LOGIN has principal"
     condition:
       object: "USER_SESSION"

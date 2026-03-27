@@ -528,12 +528,27 @@ class EmitterSetupMixin:
             pids["systemd"], "/sbin/agetty", "/sbin/agetty --noclear tty2 linux", "root"
         )
         pids["snapd"] = _c(pids["systemd"], "/usr/lib/snapd/snapd", "/usr/lib/snapd/snapd", "root")
-        pids["timesyncd"] = _c(
-            pids["systemd"],
-            "/usr/lib/systemd/systemd-timesyncd",
-            "/usr/lib/systemd/systemd-timesyncd",
-            "systemd-timesync",
-        )
+        # NTP: Ubuntu uses systemd-timesyncd, RHEL uses chronyd
+        if is_rhel:
+            pids["chronyd"] = _c(
+                pids["systemd"], "/usr/sbin/chronyd", "/usr/sbin/chronyd -F 2", "chrony"
+            )
+        else:
+            pids["timesyncd"] = _c(
+                pids["systemd"],
+                "/usr/lib/systemd/systemd-timesyncd",
+                "/usr/lib/systemd/systemd-timesyncd",
+                "systemd-timesync",
+            )
+
+        # DNS: Ubuntu uses systemd-resolved; RHEL apps resolve directly via glibc
+        if not is_rhel:
+            pids["systemd_resolved"] = _c(
+                pids["systemd"],
+                "/usr/lib/systemd/systemd-resolved",
+                "/usr/lib/systemd/systemd-resolved",
+                "systemd-resolve",
+            )
 
         pids["bash"] = _c(pids["sshd"], "/bin/bash", "-bash", "root")
 

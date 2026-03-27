@@ -359,7 +359,8 @@ variants:                    # For formats with subtypes (channels, log types)
       - rule: object         # JSON Logic expression (see http://jsonlogic.com)
         error: string        # Error message if validation fails
 
-output_template: string      # Jinja2 template for rendering final log format
+output_template: string      # Jinja2 template for rendering final log format (most emitters)
+                             # eCAR builds JSON directly in Python (no template)
                              # Available context: all field values as variables, timestamp(), hex(), escape()
 
 # Validator examples using JSON Logic:
@@ -724,7 +725,7 @@ Skills are plain Markdown files and can be version-controlled, customized, or ex
 **CLI & Output:**
 - Typer for CLI framework
 - Rich for progress bars and console formatting
-- Jinja2 for log format templates
+- Jinja2 for log format templates (eCAR uses direct Python JSON construction)
 - PyYAML for configuration parsing
 - pytz for timezone handling
 
@@ -1139,7 +1140,7 @@ Phase 4 evaluation revealed that while signal integrity is excellent (100/100), 
 #### 5.2 Event Type Diversity
 - **Additional Windows Event IDs**: 4625 (failed logon), 4672 (special privileges), 4689 (process termination), 4648 (explicit credential logon), 5156 (firewall allow). Update format definition, templates, and validation.
 - **Failed logon generation**: 5-15% of logon attempts fail with realistic reasons (bad password, locked account, expired password).
-- **eCAR object type expansion**: Generate FILE/CREATE, FILE/MODIFY, REGISTRY/MODIFY, FLOW/CONNECT, MODULE/LOAD events alongside existing USER_SESSION and PROCESS types.
+- **EDR object type expansion (eCAR format)**: Generate FILE/CREATE, FILE/MODIFY, REGISTRY/MODIFY, FLOW/CONNECT, MODULE/LOAD events alongside existing USER_SESSION and PROCESS types.
 - **Process termination**: Pair 4689 with 4688, track running processes, terminate after realistic durations.
 
 #### 5.3 Protocol & Network Diversity

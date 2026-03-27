@@ -424,6 +424,22 @@ class ProxyContext:
 
 
 @dataclass(slots=True)
+class EdrContext:
+    """EDR-specific entity tracking for eCAR format.
+
+    Carries persistent object/actor UUIDs that form the eCAR object graph.
+    object_id persists across an entity's lifecycle (e.g., same UUID for
+    PROCESS/CREATE and PROCESS/TERMINATE).  actor_id links to the objectID
+    of the entity that performed the action (e.g., parent process UUID on
+    a PROCESS/CREATE, or initiating process UUID on a FILE/CREATE).
+    """
+
+    object_id: str = ""
+    actor_id: str = ""
+    tid: int = -1
+
+
+@dataclass(slots=True)
 class RawContext:
     """Carries arbitrary fields destined for one specific emitter.
 

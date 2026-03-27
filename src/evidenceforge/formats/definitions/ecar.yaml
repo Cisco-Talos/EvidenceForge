@@ -77,6 +77,11 @@ fields:
     required: false
     description: "Executable path for PROCESS events"
 
+  - name: parent_image_path
+    type: string
+    required: false
+    description: "Parent executable path for PROCESS/CREATE events"
+
   - name: file_path
     type: string
     required: false
@@ -88,9 +93,9 @@ fields:
     description: "Source IP for FLOW/SOCKET events"
 
   - name: src_port
-    type: port
+    type: string
     required: false
-    description: "Source port for FLOW/SOCKET events"
+    description: "Source port for FLOW/SOCKET events (string in properties)"
 
   - name: dst_ip
     type: ip_address
@@ -98,9 +103,9 @@ fields:
     description: "Destination IP for FLOW/SOCKET events"
 
   - name: dst_port
-    type: port
+    type: string
     required: false
-    description: "Destination port for FLOW/SOCKET events"
+    description: "Destination port for FLOW/SOCKET events (string in properties)"
 
   - name: protocol
     type: string
@@ -127,80 +132,15 @@ fields:
     required: false
     description: "Registry value name for REGISTRY events"
 
+  - name: failure_reason
+    type: string
+    required: false
+    description: "Reason for failure on USER_SESSION/LOGIN events (e.g., bad_password)"
+
 output:
   format: json
   file_extension: ".json"
   encoding: utf-8
-  template: |
-    {
-      "timestamp_ms": {{ timestamp_ms }},
-      "id": "{{ id }}",
-      "hostname": "{{ hostname }}",
-      "object": "{{ object }}",
-      "action": "{{ action }}",
-      "objectID": "{{ objectID }}",
-      {%- if actorID %}
-      "actorID": "{{ actorID }}",
-      {%- endif %}
-      {%- if pid %}
-      "pid": {{ pid }},
-      {%- endif %}
-      {%- if tid %}
-      "tid": {{ tid }},
-      {%- endif %}
-      {%- if ppid %}
-      "ppid": {{ ppid }},
-      {%- endif %}
-      {%- if principal %}
-      "principal": "{{ principal }}",
-      {%- endif %}
-      "properties": {
-        {%- if command_line %}
-        "command_line": "{{ command_line | replace('\\', '\\\\') | replace('"', '\\"') }}"
-        {%- endif %}
-        {%- if image_path %}
-        {%- if command_line %},{% endif %}
-        "image_path": "{{ image_path | replace('\\', '\\\\') | replace('"', '\\"') }}"
-        {%- endif %}
-        {%- if file_path %}
-        {%- if command_line or image_path %},{% endif %}
-        "file_path": "{{ file_path | replace('\\', '\\\\') | replace('"', '\\"') }}"
-        {%- endif %}
-        {%- if src_ip %}
-        {%- if command_line or image_path or file_path %},{% endif %}
-        "src_ip": "{{ src_ip }}"
-        {%- endif %}
-        {%- if src_port %}
-        {%- if command_line or image_path or file_path or src_ip %},{% endif %}
-        "src_port": {{ src_port }}
-        {%- endif %}
-        {%- if dst_ip %}
-        {%- if command_line or image_path or file_path or src_ip or src_port %},{% endif %}
-        "dst_ip": "{{ dst_ip }}"
-        {%- endif %}
-        {%- if dst_port %}
-        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip %},{% endif %}
-        "dst_port": {{ dst_port }}
-        {%- endif %}
-        {%- if protocol %}
-        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port %},{% endif %}
-        "protocol": "{{ protocol }}"
-        {%- endif %}
-        {%- if md5 %}
-        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol %},{% endif %}
-        "md5": "{{ md5 }}"
-        {%- endif %}
-        {%- if sha256 %}
-        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 %},{% endif %}
-        "sha256": "{{ sha256 }}"
-        {%- endif %}
-        {%- if registry_key %}
-        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 or sha256 %},{% endif %}
-        "registry_key": "{{ registry_key | replace('\\', '\\\\') | replace('"', '\\"') }}"
-        {%- endif %}
-        {%- if registry_value %}
-        {%- if command_line or image_path or file_path or src_ip or src_port or dst_ip or dst_port or protocol or md5 or sha256 or registry_key %},{% endif %}
-        "registry_value": "{{ registry_value | replace('\\', '\\\\') | replace('"', '\\"') }}"
-        {%- endif %}
-      }
-    }
+  # Template not used — EcarEmitter builds JSON directly in Python.
+  # Kept as an empty placeholder for format loader compatibility.
+  template: "{}"

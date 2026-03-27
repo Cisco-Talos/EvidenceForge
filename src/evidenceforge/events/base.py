@@ -15,6 +15,7 @@ from evidenceforge.events.contexts import (
     AuthContext,
     DhcpContext,
     DnsContext,
+    EdrContext,
     FileContext,
     FileTransferContext,
     GroupMembershipContext,
@@ -78,6 +79,9 @@ class SecurityEvent:
     ocsp: OcspContext | None = None
     pe: PeContext | None = None
     proxy: ProxyContext | None = None
+
+    # EDR entity tracking (eCAR object/actor graph)
+    edr: EdrContext | None = None
 
     # Raw event: carries arbitrary fields for a single target emitter.
     # Goes through pipeline (state mgmt, visibility, local_only) unlike dispatch_raw().

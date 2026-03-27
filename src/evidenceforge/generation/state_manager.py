@@ -6,6 +6,7 @@ log generation, ensuring consistency across log formats.
 
 import logging
 import random
+import uuid
 from datetime import datetime, timedelta
 from threading import RLock
 
@@ -102,6 +103,7 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=self.state.current_time,
                 source_ip=source_ip,
+                ecar_object_id=str(uuid.uuid4()),
             )
 
             self.state.active_sessions[logon_id] = session
@@ -256,6 +258,7 @@ class StateManager:
                 system=system,
                 start_time=self.state.current_time,
                 integrity_level=integrity_level,
+                ecar_object_id=str(uuid.uuid4()),
             )
 
             key = (system, pid)
@@ -276,6 +279,18 @@ class StateManager:
         with self._lock:
             key = (system, pid)
             return self.state.running_processes.get(key)
+
+    def get_session_object_id(self, logon_id: str) -> str:
+        """Get the eCAR objectID for a session."""
+        with self._lock:
+            session = self.state.active_sessions.get(logon_id)
+            return session.ecar_object_id if session else ""
+
+    def get_process_object_id(self, system: str, pid: int) -> str:
+        """Get the eCAR objectID for a running process."""
+        with self._lock:
+            proc = self.state.running_processes.get((system, pid))
+            return proc.ecar_object_id if proc else ""
 
     def get_processes_for_user(self, username: str) -> list[RunningProcess]:
         """Get all running processes for a user.

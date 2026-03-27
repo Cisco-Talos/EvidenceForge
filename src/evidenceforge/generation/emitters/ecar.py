@@ -1,4 +1,4 @@
-"""eCAR emitter for EDR/XDR host telemetry."""
+"""Emitter for EDR/XDR host telemetry in eCAR format."""
 
 import json
 import uuid
@@ -65,6 +65,17 @@ class EcarEmitter(HostMultiplexEmitter):
             return event.host.fqdn or event.host.hostname
         return ""
 
+    @staticmethod
+    def _apply_edr_context(event_data: dict[str, Any], event: SecurityEvent) -> None:
+        """Copy objectID, actorID, and tid from EdrContext into event_data."""
+        if event.edr:
+            if event.edr.object_id:
+                event_data["objectID"] = event.edr.object_id
+            if event.edr.actor_id:
+                event_data["actorID"] = event.edr.actor_id
+            if event.edr.tid != -1:
+                event_data["tid"] = event.edr.tid
+
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event."""
         event_data = {
@@ -76,6 +87,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "src_ip": event.auth.source_ip,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_logoff(self, event: SecurityEvent) -> None:
@@ -88,6 +100,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
@@ -102,6 +115,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "failure_reason": "bad_password",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_process_create(self, event: SecurityEvent) -> None:
@@ -119,6 +133,9 @@ class EcarEmitter(HostMultiplexEmitter):
             "command_line": proc.command_line,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        if proc.parent_image:
+            event_data["parent_image_path"] = proc.parent_image
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
@@ -134,6 +151,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "image_path": proc.image,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_file_event(self, event: SecurityEvent) -> None:
@@ -149,6 +167,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_registry_event(self, event: SecurityEvent) -> None:
@@ -164,6 +183,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "registry_value": event.registry.value if event.registry else "",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
@@ -178,6 +198,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_connection(self, event: SecurityEvent) -> None:
@@ -197,6 +218,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "protocol": net.protocol,
             "_host_fqdn": self._get_host_fqdn(event),
         }
+        self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
@@ -205,69 +227,64 @@ class EcarEmitter(HostMultiplexEmitter):
         host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
 
+    # Property keys that belong in the eCAR properties map.
+    _PROPERTY_KEYS = (
+        "command_line",
+        "image_path",
+        "parent_image_path",
+        "file_path",
+        "src_ip",
+        "src_port",
+        "dst_ip",
+        "dst_port",
+        "protocol",
+        "md5",
+        "sha256",
+        "registry_key",
+        "registry_value",
+        "failure_reason",
+    )
+
     def _render_event(self, event_data: dict[str, Any]) -> str:
-        """Render eCAR event to JSON format (NDJSON - one event per line).
+        """Render eCAR event to compact NDJSON.
 
-        Converts timestamp to milliseconds, ensures UUIDs, handles properties.
+        Builds the record as a Python dict and serializes directly with
+        json.dumps, bypassing the Jinja2 template.  This avoids the fragile
+        comma-handling logic in the old template and enforces spec compliance:
+        pid/tid always present (-1 sentinel), all property values are strings.
         """
-        # Convert timestamp to milliseconds
-        if "timestamp" in event_data:
-            ts = event_data["timestamp"]
-            if isinstance(ts, datetime):
-                timestamp_ms = int(ts.timestamp() * 1000)
-            else:
-                timestamp_ms = int(ts * 1000)
-            event_data["timestamp_ms"] = timestamp_ms
+        # Convert timestamp to milliseconds since epoch
+        ts = event_data["timestamp"]
+        timestamp_ms = int(ts.timestamp() * 1000) if isinstance(ts, datetime) else int(ts * 1000)
 
-        # Ensure event has an ID
-        if "id" not in event_data:
-            event_data["id"] = str(uuid.uuid4())
-
-        # Ensure objectID and actorID are UUIDs
-        if "objectID" not in event_data:
-            event_data["objectID"] = str(uuid.uuid4())
-
-        # Handle -1 for unavailable PID/TID/PPID
-        for field in ["pid", "tid", "ppid"]:
-            if field in event_data and event_data[field] is None:
-                event_data[field] = -1
-
-        # Build template context - fill all optional fields
-        context = {
-            "timestamp_ms": event_data.get("timestamp_ms"),
-            "id": event_data.get("id"),
-            "hostname": event_data.get("hostname"),
-            "object": event_data.get("object"),
-            "action": event_data.get("action"),
-            "objectID": event_data.get("objectID"),
-            "actorID": event_data.get("actorID"),
-            "pid": event_data.get("pid"),
-            "tid": event_data.get("tid"),
-            "ppid": event_data.get("ppid"),
-            "principal": event_data.get("principal"),
-            # Properties
-            "command_line": event_data.get("command_line"),
-            "image_path": event_data.get("image_path"),
-            "file_path": event_data.get("file_path"),
-            "src_ip": event_data.get("src_ip"),
-            "src_port": event_data.get("src_port"),
-            "dst_ip": event_data.get("dst_ip"),
-            "dst_port": event_data.get("dst_port"),
-            "protocol": event_data.get("protocol"),
-            "md5": event_data.get("md5"),
-            "sha256": event_data.get("sha256"),
-            "registry_key": event_data.get("registry_key"),
-            "registry_value": event_data.get("registry_value"),
+        record: dict[str, Any] = {
+            "timestamp_ms": timestamp_ms,
+            "id": event_data.get("id") or str(uuid.uuid4()),
+            "hostname": event_data.get("hostname", ""),
+            "object": event_data["object"],
+            "action": event_data["action"],
+            "objectID": event_data.get("objectID") or str(uuid.uuid4()),
         }
 
-        # Render template
-        rendered = self._template.render(**context)
+        if event_data.get("actorID"):
+            record["actorID"] = event_data["actorID"]
 
-        # Compact JSON to single line (NDJSON format)
-        try:
-            parsed = json.loads(rendered)
-            compact = json.dumps(parsed, separators=(",", ":"))
-            return compact
-        except json.JSONDecodeError:
-            # If template rendering failed, return as-is
-            return rendered
+        # pid and tid are always present per eCAR spec (-1 = unavailable).
+        # ppid is only emitted for PROCESS events.
+        record["pid"] = event_data["pid"] if event_data.get("pid") is not None else -1
+        record["tid"] = event_data["tid"] if event_data.get("tid") is not None else -1
+        if "ppid" in event_data:
+            record["ppid"] = event_data["ppid"] if event_data["ppid"] is not None else -1
+
+        if event_data.get("principal"):
+            record["principal"] = event_data["principal"]
+
+        # Properties: all values must be strings per eCAR spec.
+        props: dict[str, str] = {}
+        for key in self._PROPERTY_KEYS:
+            val = event_data.get(key)
+            if val is not None:
+                props[key] = str(val)
+        record["properties"] = props
+
+        return json.dumps(record, separators=(",", ":"))

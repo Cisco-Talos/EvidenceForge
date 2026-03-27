@@ -1,0 +1,171 @@
+"""Tests for eCAR FLOW pid propagation.
+
+Verifies that baseline and storyline connections carry realistic
+initiating process PIDs in eCAR FLOW records.
+"""
+
+from datetime import UTC, datetime
+from unittest.mock import Mock
+
+import pytest
+
+from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models import System
+
+
+@pytest.fixture
+def state_manager():
+    return StateManager()
+
+
+@pytest.fixture
+def mock_emitters():
+    return {
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "ecar": Mock(),
+    }
+
+
+@pytest.fixture
+def activity_gen(state_manager, mock_emitters):
+    return ActivityGenerator(state_manager, mock_emitters)
+
+
+@pytest.fixture
+def win_system():
+    return System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+
+
+@pytest.fixture
+def timestamp():
+    return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+
+
+class TestEmitterSetupProcessTree:
+    """Test that process tree seeding creates the right entries per distro."""
+
+    def test_ubuntu_gets_systemd_resolved(self, state_manager, timestamp):
+        """Ubuntu should have systemd_resolved in _system_pids."""
+        from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+        ubuntu = System(hostname="SRV-01", ip="10.0.10.1", os="Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        mixin = EmitterSetupMixin.__new__(EmitterSetupMixin)
+        mixin.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        mixin._seed_linux_process_tree(ubuntu, pids)
+        assert "systemd_resolved" in pids
+        assert "chronyd" not in pids
+        assert "timesyncd" in pids
+
+    def test_rhel_gets_chronyd(self, state_manager, timestamp):
+        """RHEL/CentOS should have chronyd, not timesyncd or systemd_resolved."""
+        from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+        rhel = System(hostname="SRV-01", ip="10.0.10.1", os="CentOS 8", type="server")
+        state_manager.set_current_time(timestamp)
+        mixin = EmitterSetupMixin.__new__(EmitterSetupMixin)
+        mixin.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        mixin._seed_linux_process_tree(rhel, pids)
+        assert "chronyd" in pids
+        assert "timesyncd" not in pids
+        assert "systemd_resolved" not in pids
+
+
+class TestConnectionPidPropagation:
+    """Test that generate_connection passes pid through to eCAR emitter."""
+
+    def test_connection_with_explicit_pid(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """When pid is passed, eCAR FLOW record should carry it."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01", 4, r"C:\Windows\System32\svchost.exe", "svchost.exe", "SYSTEM", "System"
+        )
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            source_system=win_system,
+            pid=pid,
+        )
+        assert mock_emitters["ecar"].emit.called
+        event = mock_emitters["ecar"].emit.call_args[0][0]
+        assert event.network.initiating_pid == pid
+
+    @staticmethod
+    def _find_connection_event(mock_emitters):
+        """Find the main 'connection' event (not wfp_connection) from eCAR mock calls."""
+        for call in mock_emitters["ecar"].emit.call_args_list:
+            evt = call[0][0]
+            if evt.event_type == "connection":
+                return evt
+        return None
+
+    def test_connection_without_pid_defaults_negative_one(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """When pid= not passed, initiating_pid should be -1."""
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            source_system=win_system,
+        )
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == -1
+
+    def test_connection_with_pid_gets_edr_actor_id(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """FLOW with known pid should have EdrContext with actorID linking to the process."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01", 4, r"C:\Windows\System32\svchost.exe", "svchost.exe", "SYSTEM", "System"
+        )
+        proc_obj_id = state_manager.get_process_object_id("WKS-01", pid)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            source_system=win_system,
+            pid=pid,
+        )
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.edr is not None
+        assert event.edr.actor_id == proc_obj_id
+
+    def test_connection_without_pid_has_no_actor_id(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """FLOW without known pid should have empty actorID."""
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            source_system=win_system,
+        )
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.edr is not None
+        assert event.edr.actor_id == ""

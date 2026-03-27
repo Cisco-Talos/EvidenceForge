@@ -95,7 +95,7 @@ Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what
 | Windows Security Events | Host | 30 event IDs: authentication (4624/4625/4634/4648/4672), process (4688/4689), Kerberos (4768/4769/4770/4771/4776), persistence (4697/4698-4701), account mgmt (4720/4723/4724/4726/4738), group membership (4728/4729/4732/4733/4756/4757), firewall (5156), defense evasion (1102) |
 | Windows Sysmon | Host | Process creation with hashes (Event 1), remote thread injection (Event 8) |
 | Zeek (13 log types) | Network | conn, dns, http, ssl, files, x509, dhcp, ntp, weird, pe, ocsp, packet_filter, reporter |
-| eCAR | Host | MITRE CAR-based EDR/XDR telemetry (PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION) |
+| eCAR | Host | EDR/XDR telemetry in MITRE CAR-based format (PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION) |
 | Syslog | Host | Linux authentication and system logs (BSD format) |
 | Bash History | Host | Per-user timestamped command history |
 | Snort Alert | Network | IDS alert format (fast alert) |

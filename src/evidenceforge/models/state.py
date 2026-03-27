@@ -40,6 +40,7 @@ class ActiveSession:
     explorer_pid: int | None = None
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
+    ecar_object_id: str = ""
 
 
 @dataclass
@@ -68,6 +69,7 @@ class RunningProcess:
     system: str
     start_time: datetime
     integrity_level: str
+    ecar_object_id: str = ""
 
 
 @dataclass
