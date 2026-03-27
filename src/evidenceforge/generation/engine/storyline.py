@@ -356,6 +356,7 @@ class StorylineMixin:
                 emit_dns=True,
                 source_system=system,
                 http=http_ctx,
+                pid=getattr(self, "_last_storyline_pid", -1) or -1,
             )
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port

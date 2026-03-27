@@ -523,6 +523,16 @@ class BaselineMixin:
             services = self._system_service_defaults.get(system.hostname, [])
             os_cat = _get_os_category(system.os)
             sys_pids = self._system_pids.get(system.hostname, {})
+            is_rhel_like = any(
+                d in system.os.lower() for d in ("centos", "rhel", "red hat", "rocky", "alma")
+            )
+
+            def _svc_pid(*keys: str, _pids: dict = sys_pids) -> int:  # noqa: B006
+                """Resolve service PID from _system_pids, -1 if absent."""
+                for k in keys:
+                    if k in _pids:
+                        return _pids[k]
+                return -1
 
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
@@ -536,6 +546,13 @@ class BaselineMixin:
                     jitter = rng.gauss(0, dns_interval * 0.02)
                     ts = self.start_time + timedelta(seconds=t + jitter)
                     self.state_manager.set_current_time(ts)
+                    dns_pid = (
+                        _svc_pid("svchost_net_svc")
+                        if os_cat == "windows"
+                        else _svc_pid("systemd_resolved")
+                        if not is_rhel_like
+                        else -1
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=rng.choice(dns_ips),
@@ -547,6 +564,7 @@ class BaselineMixin:
                         orig_bytes=rng.randint(40, 120),
                         resp_bytes=rng.randint(80, 512),
                         source_system=system,
+                        pid=dns_pid,
                     )
                     t += dns_interval
 
@@ -557,6 +575,11 @@ class BaselineMixin:
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 ntp_ip = rng.choice(ntp_ips)
+                ntp_pid = (
+                    _svc_pid("svchost_local_svc")
+                    if os_cat == "windows"
+                    else _svc_pid("chronyd", "timesyncd")
+                )
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
                     dst_ip=ntp_ip,
@@ -568,6 +591,7 @@ class BaselineMixin:
                     orig_bytes=48,
                     resp_bytes=48,
                     source_system=system,
+                    pid=ntp_pid,
                 )
 
             # SMB browsing: Windows workstations only
@@ -599,6 +623,7 @@ class BaselineMixin:
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=rng.randint(500, 5000),
                         source_system=system,
+                        pid=4,  # SMB: kernel System process
                     )
                     t += smb_interval
 
@@ -622,6 +647,7 @@ class BaselineMixin:
                         orig_bytes=rng.randint(200, 1500),
                         resp_bytes=rng.randint(200, 2000),
                         source_system=system,
+                        pid=_svc_pid("lsass"),
                     )
 
             # LDAP
@@ -644,6 +670,7 @@ class BaselineMixin:
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
                         source_system=system,
+                        pid=_svc_pid("lsass"),
                     )
 
             # HTTPS background traffic
@@ -673,6 +700,7 @@ class BaselineMixin:
                         resp_bytes=rng.randint(500, 50000),
                         emit_dns=True,
                         source_system=system,
+                        pid=_svc_pid("svchost_netsvcs"),
                     )
             elif os_cat == "linux":
                 _linux_https_ips = ["91.189.91.39", "185.125.190.39", "151.101.0.204"]
@@ -693,6 +721,7 @@ class BaselineMixin:
                         resp_bytes=rng.randint(500, 30000),
                         emit_dns=True,
                         source_system=system,
+                        pid=_svc_pid("snapd") if not is_rhel_like else -1,
                     )
 
             # Database traffic
@@ -831,6 +860,7 @@ class BaselineMixin:
                             orig_bytes=rng.randint(2000, 50000),
                             resp_bytes=rng.randint(5000, 200000),
                             source_system=system,
+                            pid=_svc_pid("sshd"),
                         )
 
         # RDP: IT admin connections to Windows servers/DCs
@@ -859,6 +889,18 @@ class BaselineMixin:
                 offset = rng.randint(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
+
+                # Seed short-lived mstsc.exe on the source workstation
+                src_pids = self._system_pids.get(src_sys.hostname, {})
+                explorer_pid = src_pids.get("explorer", 4)
+                mstsc_pid = self.state_manager.create_process(
+                    system=src_sys.hostname,
+                    parent_pid=explorer_pid,
+                    image=r"C:\Windows\System32\mstsc.exe",
+                    command_line=f"mstsc.exe /v:{system.hostname}",
+                    username="SYSTEM",
+                    integrity_level="Medium",
+                )
                 self.activity_generator.generate_connection(
                     src_ip=src_sys.ip,
                     dst_ip=system.ip,
@@ -869,8 +911,10 @@ class BaselineMixin:
                     duration=rng.uniform(60.0, 1800.0),
                     orig_bytes=rng.randint(50000, 500000),
                     resp_bytes=rng.randint(100000, 2000000),
-                    source_system=system,
+                    source_system=src_sys,
+                    pid=mstsc_pid,
                 )
+                self.state_manager.end_process(src_sys.hostname, mstsc_pid)
 
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
@@ -1166,6 +1210,7 @@ class BaselineMixin:
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
                         source_system=system,
+                        pid=sys_pids.get("sshd", -1),
                     )
                     msgs = [
                         f"Received disconnect from {ip} port {port}:11: disconnected by user",
