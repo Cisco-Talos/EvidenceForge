@@ -134,9 +134,11 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
 
+**Record structure:** Every eCAR record contains `pid` and `tid` as always-present top-level integers (`-1` = unavailable). `ppid` appears on PROCESS events only. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
+
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
-| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, command_line, user. |
+| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. |
 | FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
@@ -145,7 +147,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
-- FLOW events use `pid: -1` (real EDR tracks socket-to-process mapping)
+- FLOW events use `pid: -1` for system traffic (process-to-connection mapping planned)
 - Limited EDR object diversity on Linux (mainly PROCESS + USER_SESSION)
 - File paths cycle through a small set of templates
 
