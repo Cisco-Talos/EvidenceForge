@@ -225,7 +225,7 @@ class TestFailedLogonDC:
 
         # Collect all emitted events
         events = [call[0][0] for call in win_emitter.emit.call_args_list]
-        hosts = {e.host.hostname for e in events}
+        hosts = {e.dst_host.hostname for e in events}
 
         # Both workstation and DC should have events
         assert "WKS-01" in hosts, "Missing 4625 on workstation"
@@ -251,7 +251,7 @@ class TestFailedLogonDC:
         dc_events = [
             call[0][0]
             for call in win_emitter.emit.call_args_list
-            if call[0][0].host.hostname == "DC-01"
+            if call[0][0].dst_host.hostname == "DC-01"
         ]
         event_types = {e.event_type for e in dc_events}
         assert "ntlm_validation" in event_types, "Missing 4776 on DC"
@@ -267,5 +267,5 @@ class TestFailedLogonDC:
         ag.generate_failed_logon(user=user, system=wks, time=timestamp, source_ip="10.0.10.1")
 
         win_emitter = mock_emitters["windows_event_security"]
-        hosts = {call[0][0].host.hostname for call in win_emitter.emit.call_args_list}
+        hosts = {call[0][0].dst_host.hostname for call in win_emitter.emit.call_args_list}
         assert hosts == {"WKS-01"}, "Should only emit on workstation without DC"

@@ -372,7 +372,7 @@ class TestWeirdContext:
         event = SecurityEvent(
             timestamp=timestamp,
             event_type="connection",
-            host=HostContext(
+            src_host=HostContext(
                 hostname="FW-01",
                 ip="10.0.0.1",
                 os="Linux",

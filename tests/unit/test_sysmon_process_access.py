@@ -123,4 +123,4 @@ class TestSysmonProcessAccess:
         emitter = mock_emitters["windows_event_sysmon"]
         if emitter.emit.call_count > 0:
             event = emitter.emit.call_args[0][0]
-            assert event.host.os_category == "linux"  # Emitter's can_handle would reject this
+            assert event.src_host.os_category == "linux"  # Emitter's can_handle would reject this

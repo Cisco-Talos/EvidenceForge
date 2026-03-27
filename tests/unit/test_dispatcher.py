@@ -123,7 +123,7 @@ class TestNetworkVisibilityFiltering:
         event = SecurityEvent(
             timestamp=_make_ts(),
             event_type="logon",
-            host=HostContext(
+            dst_host=HostContext(
                 hostname="WS-01",
                 ip="10.0.1.50",
                 os="Windows 10",
@@ -247,7 +247,7 @@ class TestStateManagerApply:
         event = SecurityEvent(
             timestamp=_make_ts(),
             event_type="process_terminate",
-            host=HostContext(
+            src_host=HostContext(
                 hostname="WS-01",
                 ip="10.0.1.50",
                 os="Windows 10",

@@ -20,7 +20,7 @@ class ZeekReporterEmitter(SensorMultiplexEmitter):
         """Render sensor startup reporter.log entries."""
         if event.event_type != "sensor_startup":
             return
-        hostname = event.host.hostname if event.host else "unknown"
+        hostname = event.src_host.hostname if event.src_host else "unknown"
         # Reporter startup messages are stored in shell.command field
         level = "Reporter::INFO"
         message = ""

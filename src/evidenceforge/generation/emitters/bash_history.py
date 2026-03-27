@@ -77,19 +77,18 @@ class BashHistoryEmitter(LogEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Bash history only for Linux hosts."""
-        return (
-            event.event_type in self._supported_types
-            and event.host is not None
-            and event.host.os_category == "linux"
+        return event.event_type in self._supported_types and (
+            event.src_host is not None and event.src_host.os_category == "linux"
         )
 
     def emit(self, event: SecurityEvent) -> None:
         """Extract fields from SecurityEvent and delegate to existing dispatch."""
+        host = event.src_host
         event_data = {
             "timestamp": event.timestamp,
             "username": event.auth.username if event.auth else "unknown",
-            "hostname": event.host.hostname if event.host else "unknown",
-            "host_fqdn": (event.host.fqdn or event.host.hostname) if event.host else "unknown",
+            "hostname": host.hostname if host else "unknown",
+            "host_fqdn": (host.fqdn or host.hostname) if host else "unknown",
             "command": event.shell.command if event.shell else "",
             "exit_code": event.shell.exit_code if event.shell else 0,
         }

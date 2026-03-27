@@ -250,7 +250,7 @@ class TestMachineAccountLogon:
         event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
         assert event.event_type == "machine_logon"
         assert event.auth.username == "WKS-01$"
-        assert event.host.fqdn.startswith("DC-01.")
+        assert event.dst_host.fqdn.startswith("DC-01.")
         assert event.auth.logon_type == 3
         assert event.auth.auth_package == "Kerberos"
 
@@ -269,7 +269,7 @@ class TestKerberosEvents:
         event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
         assert event.event_type == "kerberos_tgt"
         assert event.kerberos.service_name == "krbtgt"
-        assert event.host.fqdn.startswith("DC-01.")
+        assert event.dst_host.fqdn.startswith("DC-01.")
 
     def test_service_ticket_emits_4769(self, activity_gen, mock_emitters):
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)

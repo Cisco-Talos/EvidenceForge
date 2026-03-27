@@ -596,8 +596,8 @@ class StateManager:
         with self._lock:
             if event.event_type == "logoff" and event.auth:
                 self.end_session(event.auth.logon_id)
-            elif event.event_type == "process_terminate" and event.process and event.host:
-                self.end_process(event.host.hostname, event.process.pid)
+            elif event.event_type == "process_terminate" and event.process and event.src_host:
+                self.end_process(event.src_host.hostname, event.process.pid)
             elif event.event_type == "connection" and event.network:
                 if event.network.conn_id and (event.network.orig_bytes or event.network.resp_bytes):
                     self.update_connection_bytes(

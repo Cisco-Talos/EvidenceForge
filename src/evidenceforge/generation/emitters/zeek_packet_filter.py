@@ -20,7 +20,7 @@ class ZeekPacketFilterEmitter(SensorMultiplexEmitter):
         """Render a sensor startup packet_filter.log entry."""
         if event.event_type != "sensor_startup":
             return
-        hostname = event.host.hostname if event.host else "unknown"
+        hostname = event.src_host.hostname if event.src_host else "unknown"
         event_data = {
             "ts": event.timestamp,
             "node": hostname,

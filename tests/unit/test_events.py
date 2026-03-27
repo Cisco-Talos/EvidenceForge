@@ -34,7 +34,8 @@ class TestSecurityEvent:
             timestamp=datetime.now(UTC),
             event_type="logon",
         )
-        assert event.host is None
+        assert event.src_host is None
+        assert event.dst_host is None
         assert event.auth is None
         assert event.process is None
         assert event.network is None
@@ -49,7 +50,7 @@ class TestSecurityEvent:
         event = SecurityEvent(
             timestamp=ts,
             event_type="logon",
-            host=HostContext(
+            dst_host=HostContext(
                 hostname="WS-01",
                 ip="10.0.1.50",
                 os="Windows 10",
@@ -76,7 +77,7 @@ class TestSecurityEvent:
             registry=RegistryContext(key="HKLM\\Software\\Test"),
             ids=IdsContext(sid=1000001, message="Test alert", classification="misc"),
         )
-        assert event.host.hostname == "WS-01"
+        assert event.dst_host.hostname == "WS-01"
         assert event.auth.username == "alice"
         assert event.process.pid == 1234
         assert event.network.dst_port == 443
@@ -85,14 +86,30 @@ class TestSecurityEvent:
         assert event.registry.key == "HKLM\\Software\\Test"
         assert event.ids.sid == 1000001
 
-    def test_slots_prevents_dynamic_attributes(self):
-        """slots=True prevents adding undeclared attributes."""
+    def test_src_dst_host_fields(self):
+        """SecurityEvent supports dual src_host/dst_host fields."""
+        host_a = HostContext(
+            hostname="SRC",
+            ip="10.0.0.1",
+            os="Windows",
+            os_category="windows",
+            system_type="workstation",
+        )
+        host_b = HostContext(
+            hostname="DST",
+            ip="10.0.0.2",
+            os="Linux",
+            os_category="linux",
+            system_type="server",
+        )
         event = SecurityEvent(
             timestamp=datetime.now(UTC),
-            event_type="logon",
+            event_type="connection",
+            src_host=host_a,
+            dst_host=host_b,
         )
-        with pytest.raises(AttributeError):
-            event.bogus_field = "should fail"
+        assert event.src_host is host_a
+        assert event.dst_host is host_b
 
 
 class TestHostContext:

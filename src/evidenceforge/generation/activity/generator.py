@@ -468,11 +468,18 @@ class ActivityGenerator:
         auth_pkg = self._select_auth_package(logon_type)
 
         # Phase 2: Build SecurityEvent with all contexts
+        # For network logons (type 3, 10), resolve source host from source_ip
+        src_host_ctx = None
+        if logon_type in (3, 10) and source_ip:
+            if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+                src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
+
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
-            host=self._build_host_context(system),
+            src_host=src_host_ctx,
+            dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 user_sid=self._get_sid(user.username),
@@ -494,7 +501,7 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts (sshd logon message)
-        if event.host and event.host.os_category == "linux":
+        if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(logon_id) % 59000)
@@ -626,7 +633,7 @@ class ActivityGenerator:
             priv_event = SecurityEvent(
                 timestamp=priv_time,
                 event_type="special_privileges",
-                host=self._build_dc_host_context(dc_hostname),
+                dst_host=self._build_dc_host_context(dc_hostname),
                 auth=AuthContext(
                     username=user.username,
                     user_sid=self._get_sid(user.username),
@@ -693,7 +700,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="failed_logon",
-            host=self._build_host_context(system),
+            dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username=effective_username,
                 user_sid=user_sid,
@@ -713,7 +720,7 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts (sshd failed logon)
-        if event.host and event.host.os_category == "linux":
+        if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             event.syslog = SyslogContext(
@@ -734,7 +741,7 @@ class ActivityGenerator:
             dc_event = SecurityEvent(
                 timestamp=time,
                 event_type="failed_logon",
-                host=self._build_dc_host_context(dc_system.hostname),
+                dst_host=self._build_dc_host_context(dc_system.hostname),
                 auth=AuthContext(
                     username=effective_username,
                     user_sid=user_sid,
@@ -793,7 +800,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="logoff",
-            host=self._build_host_context(system),
+            dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 user_sid=self._get_sid(user.username),
@@ -804,7 +811,7 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts (sshd session closed)
-        if event.host and event.host.os_category == "linux":
+        if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(logon_id) % 59000)
@@ -874,7 +881,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="process_create",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 user_sid=self._get_sid(user.username),
@@ -904,7 +911,7 @@ class ActivityGenerator:
                 SecurityEvent(
                     timestamp=time,
                     event_type="file_create",
-                    host=self._build_host_context(system),
+                    src_host=self._build_host_context(system),
                     auth=AuthContext(username=user.username),
                     file=FileContext(path=process_name, action="create", pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -935,7 +942,7 @@ class ActivityGenerator:
                 SecurityEvent(
                     timestamp=time,
                     event_type=event_type,
-                    host=host_ctx,
+                    src_host=host_ctx,
                     auth=auth_ctx,
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -947,7 +954,7 @@ class ActivityGenerator:
                 SecurityEvent(
                     timestamp=time,
                     event_type="module_load",
-                    host=host_ctx,
+                    src_host=host_ctx,
                     auth=auth_ctx,
                     file=FileContext(path=dll_path, action="load", pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -959,7 +966,7 @@ class ActivityGenerator:
                 SecurityEvent(
                     timestamp=time,
                     event_type="registry_modify",
-                    host=host_ctx,
+                    src_host=host_ctx,
                     auth=auth_ctx,
                     registry=RegistryContext(key=key, value=value, action="modify", pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -997,7 +1004,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 user_sid=self._get_sid(user.username),
@@ -1219,12 +1226,17 @@ class ActivityGenerator:
             service = _PORT_SERVICE[dst_port]
 
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
-        # Resolve source system for HostContext (needed by eCAR emitter for hostname/routing)
-        host_ctx = None
+        # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
+        src_host_ctx = None
         if source_system:
-            host_ctx = self._build_host_context(source_system)
+            src_host_ctx = self._build_host_context(source_system)
         elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            host_ctx = self._build_host_context(self._ip_to_system[src_ip])
+            src_host_ctx = self._build_host_context(self._ip_to_system[src_ip])
+
+        # Resolve destination system for dst_host
+        dst_host_ctx = None
+        if hasattr(self, "_ip_to_system") and dst_ip in self._ip_to_system:
+            dst_host_ctx = self._build_host_context(self._ip_to_system[dst_ip])
 
         # Resolve eCAR actor_id from initiating process (if pid is known)
         conn_actor_id = ""
@@ -1234,7 +1246,8 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
-            host=host_ctx,
+            src_host=src_host_ctx,
+            dst_host=dst_host_ctx,
             local_only=local_only,
             network=NetworkContext(
                 src_ip=src_ip,
@@ -1620,11 +1633,17 @@ class ActivityGenerator:
         # Emit DNS for SSH target
         self._emit_dns_lookup(source_ip, target_system.ip, time)
 
+        # Resolve source host context (SSH client)
+        src_host_ctx = None
+        if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+            src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
+
         # Build compound SSH session event
         event = SecurityEvent(
             timestamp=time,
             event_type="ssh_session",
-            host=self._build_host_context(target_system),
+            src_host=src_host_ctx,
+            dst_host=self._build_host_context(target_system),
             auth=AuthContext(
                 username=user.username,
                 source_ip=source_ip,
@@ -1653,7 +1672,7 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
-        if event.host and event.host.os_category == "linux":
+        if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
@@ -1673,14 +1692,14 @@ class ActivityGenerator:
         self.dispatcher.dispatch(event)
 
         # Emit follow-up syslog entries (pam_unix + systemd-logind)
-        if event.host and event.host.os_category == "linux":
+        if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             pam_event = SecurityEvent(
                 timestamp=time + timedelta(microseconds=rng.randint(1000, 50000)),
                 event_type="syslog",
-                host=event.host,
+                src_host=event.dst_host,
                 syslog=SyslogContext(
                     app_name="sshd",
                     pid=sshd_pid,
@@ -1698,7 +1717,7 @@ class ActivityGenerator:
             logind_event = SecurityEvent(
                 timestamp=time + timedelta(microseconds=rng.randint(50000, 80000)),
                 event_type="syslog",
-                host=event.host,
+                src_host=event.dst_host,
                 syslog=SyslogContext(
                     app_name="systemd-logind",
                     pid=1000 + (hash("logind") % 59000),
@@ -1800,7 +1819,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="bash_command",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(username=user.username),
             shell=ShellContext(command=command),
         )
@@ -1856,7 +1875,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="system_process_create",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=username,
                 user_sid=sid,
@@ -1882,7 +1901,7 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts
-        if event.host and event.host.os_category == "linux":
+        if event.src_host and event.src_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             if syslog_message:
@@ -1936,7 +1955,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(username=username),
             process=ProcessContext(
                 pid=pid,
@@ -1948,7 +1967,7 @@ class ActivityGenerator:
             edr=EdrContext(object_id=proc_obj_id),
         )
 
-        if syslog_message and event.host and event.host.os_category == "linux":
+        if syslog_message and event.src_host and event.src_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             event.syslog = SyslogContext(
@@ -2472,7 +2491,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
-            host=self._build_dc_host_context(dc_hostname),
+            dst_host=self._build_dc_host_context(dc_hostname),
             auth=AuthContext(
                 username=machine_username,
                 user_sid=self._get_sid(machine_username),
@@ -2521,7 +2540,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_tgt",
-            host=self._build_dc_host_context(dc_hostname),
+            dst_host=self._build_dc_host_context(dc_hostname),
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=domain,
@@ -2555,7 +2574,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_tgt_renewal",
-            host=self._build_dc_host_context(dc_hostname),
+            dst_host=self._build_dc_host_context(dc_hostname),
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=domain,
@@ -2589,7 +2608,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_service",
-            host=self._build_dc_host_context(dc_hostname),
+            dst_host=self._build_dc_host_context(dc_hostname),
             kerberos=KerberosContext(
                 target_username=f"{username}@{domain}",
                 target_domain=domain,
@@ -2617,7 +2636,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="ntlm_validation",
-            host=self._build_dc_host_context(dc_hostname),
+            dst_host=self._build_dc_host_context(dc_hostname),
             auth=AuthContext(
                 username=username,
                 source_ip=workstation,  # SourceWorkstation stored in source_ip
@@ -2649,7 +2668,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",
-            host=self._build_host_context(system),
+            dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username=target_username,
                 user_sid=self._get_sid(target_username),
@@ -2689,7 +2708,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="wfp_connection",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             network=NetworkContext(
                 src_ip=src_ip,
                 src_port=src_port,
@@ -2782,7 +2801,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=service_account,
                 user_sid=sid,
@@ -2819,7 +2838,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_preauth_failed",
-            host=dc_host,
+            dst_host=dc_host,
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=dc_host.netbios_domain,
@@ -2857,7 +2876,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="log_cleared",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 subject_sid=self._get_sid(user.username),
@@ -2886,7 +2905,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="service_installed",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 subject_sid=self._get_sid(user.username),
@@ -2921,7 +2940,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type=f"scheduled_task_{action}",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
                 subject_sid=self._get_sid(user.username),
@@ -2963,7 +2982,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type=event_type,
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=actor.username,
                 subject_sid=self._get_sid(actor.username),
@@ -2998,7 +3017,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="account_created",
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=actor.username,
                 subject_sid=self._get_sid(actor.username),
@@ -3035,7 +3054,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="account_deleted",
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=actor.username,
                 subject_sid=self._get_sid(actor.username),
@@ -3068,7 +3087,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="password_reset",
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=actor.username,
                 subject_sid=self._get_sid(actor.username),
@@ -3099,7 +3118,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="password_change",
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=user.username,
                 subject_sid=self._get_sid(user.username),
@@ -3132,7 +3151,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="create_remote_thread",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=source_pid,
                 parent_pid=0,
@@ -3179,7 +3198,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=source_pid,
                 parent_pid=0,
@@ -3212,7 +3231,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="account_changed",
-            host=host,
+            dst_host=host,
             auth=AuthContext(
                 username=actor.username,
                 subject_sid=self._get_sid(actor.username),
@@ -3245,7 +3264,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="dhcp_lease",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             dhcp=DhcpContext(
                 client_addr=system.ip,
                 server_addr=server_addr,
@@ -3273,7 +3292,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
-            host=self._build_host_context(system),
+            dst_host=self._build_host_context(system),
             auth=AuthContext(
                 username="ANONYMOUS LOGON",
                 user_sid="S-1-5-7",
@@ -3313,7 +3332,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="syslog",
-            host=self._build_host_context(system),
+            src_host=self._build_host_context(system),
             syslog=SyslogContext(
                 app_name=app_name,
                 message=message,
@@ -3351,7 +3370,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="raw",
-            host=host_ctx,
+            src_host=host_ctx,
             raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
@@ -3378,7 +3397,7 @@ class ActivityGenerator:
         event = SecurityEvent(
             timestamp=time,
             event_type="sensor_startup",
-            host=HostContext(
+            src_host=HostContext(
                 hostname=sensor_hostname,
                 ip="",
                 os="",
@@ -3394,7 +3413,7 @@ class ActivityGenerator:
                 reporter_event = SecurityEvent(
                     timestamp=time + timedelta(milliseconds=i * 50),
                     event_type="sensor_startup",
-                    host=HostContext(
+                    src_host=HostContext(
                         hostname=sensor_hostname,
                         ip="",
                         os="",

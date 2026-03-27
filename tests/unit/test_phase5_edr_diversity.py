@@ -58,7 +58,7 @@ class TestEdrFileEvent:
         SecurityEvent(
             timestamp=timestamp,
             event_type="file_create",
-            host=activity_gen._build_host_context(win_system),
+            src_host=activity_gen._build_host_context(win_system),
             auth=AuthContext(username="alice.smith"),
             file=FileContext(path="C:\\Users\\alice\\doc.docx", action="create", pid=1234),
         )
@@ -81,7 +81,7 @@ class TestEdrRegistryEvent:
         event = SecurityEvent(
             timestamp=timestamp,
             event_type="registry_modify",
-            host=activity_gen._build_host_context(win_system),
+            src_host=activity_gen._build_host_context(win_system),
             auth=AuthContext(username="alice.smith"),
             registry=RegistryContext(
                 key="HKLM\\SOFTWARE\\Test", value="1", action="modify", pid=1234
@@ -131,7 +131,7 @@ class TestEdrModuleEvent:
         event = SecurityEvent(
             timestamp=timestamp,
             event_type="module_load",
-            host=activity_gen._build_host_context(win_system),
+            src_host=activity_gen._build_host_context(win_system),
             auth=AuthContext(username="alice.smith"),
             file=FileContext(path="C:\\Windows\\System32\\ntdll.dll", action="load", pid=1234),
         )

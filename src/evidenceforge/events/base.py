@@ -41,18 +41,26 @@ from evidenceforge.events.contexts import (
 )
 
 
-@dataclass(slots=True)
+@dataclass
 class SecurityEvent:
     """Canonical event carrying all shared metadata for a single logical event.
 
     Composable contexts are populated as needed by ActivityGenerator.
     Emitters render their format-specific view from these contexts.
+
+    Host context uses a dual src/dst model:
+    - src_host: the system that originates or performs the action
+    - dst_host: the system that is the target or receiver of the action
+    For single-host events, only one is set (src_host for local events like
+    process_create; dst_host for target events like logon).  For network events,
+    both may be set when both endpoints are internal/known.
     """
 
     timestamp: datetime
     event_type: str
 
-    host: HostContext | None = None
+    src_host: HostContext | None = None
+    dst_host: HostContext | None = None
     auth: AuthContext | None = None
     process: ProcessContext | None = None
     network: NetworkContext | None = None

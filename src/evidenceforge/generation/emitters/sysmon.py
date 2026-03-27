@@ -37,8 +37,8 @@ class SysmonEventEmitter(LogEmitter):
         """Sysmon emitter handles process events on Windows hosts."""
         return (
             event.event_type in self._supported_types
-            and event.host is not None
-            and event.host.os_category == "windows"
+            and event.src_host is not None
+            and event.src_host.os_category == "windows"
         )
 
     def emit(self, event: SecurityEvent) -> None:
@@ -77,7 +77,7 @@ class SysmonEventEmitter(LogEmitter):
         rng = random.Random()
         proc = event.process
         auth = event.auth
-        host = event.host
+        host = event.src_host
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
@@ -131,7 +131,7 @@ class SysmonEventEmitter(LogEmitter):
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
         rng = random.Random()
-        host = event.host
+        host = event.src_host
         proc = event.process  # Source process
         # Target info passed via network context fields or extra context
         # For simplicity, we use process context for source and auth for target hints
@@ -174,7 +174,7 @@ class SysmonEventEmitter(LogEmitter):
         Source process reads target process memory with specific access rights.
         """
         rng = random.Random()
-        host = event.host
+        host = event.src_host
         proc = event.process  # Source process
         auth = event.auth
 

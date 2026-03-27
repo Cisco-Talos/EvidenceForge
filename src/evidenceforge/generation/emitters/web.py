@@ -23,13 +23,14 @@ class WebEmitter(HostMultiplexEmitter):
         return (
             event.event_type in self._supported_types
             and event.http is not None
-            and event.host is not None
+            and (event.dst_host is not None or event.src_host is not None)
         )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render HttpContext to Combined Log Format."""
         http = event.http
-        host = event.host
+        # Web access logs are written on the web server (dst_host)
+        host = event.dst_host or event.src_host
         net = event.network
 
         event_data = {

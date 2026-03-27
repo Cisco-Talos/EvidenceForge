@@ -118,7 +118,7 @@ class TestActivityGenerator:
         assert event.event_type == "logon"
         assert event.auth.username == test_user.username
         assert event.auth.logon_id == logon_id
-        assert event.host.os_category == "windows"
+        assert event.dst_host.os_category == "windows"
 
     def test_generate_logon_interactive_uses_system_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

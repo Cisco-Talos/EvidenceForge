@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
@@ -13,6 +14,10 @@ class EcarEmitter(HostMultiplexEmitter):
     """Emitter for eCAR (extended Cyber Analytics Repository) format.
 
     Per-host FQDN directory routing: each host gets its own ecar.json.
+
+    Dual-host model: connection events emit OUTBOUND on src_host and
+    INBOUND on dst_host.  Other events use the appropriate host per
+    event type (dst_host for logon, src_host for process, etc.).
     """
 
     _log_filename = "ecar.json"
@@ -59,11 +64,17 @@ class EcarEmitter(HostMultiplexEmitter):
             raise NotImplementedError(f"EcarEmitter: no render method for {event.event_type}")
         renderer(event)
 
-    def _get_host_fqdn(self, event: SecurityEvent) -> str:
-        """Extract host FQDN for per-host routing."""
-        if event.host:
-            return event.host.fqdn or event.host.hostname
+    @staticmethod
+    def _host_fqdn(host: HostContext | None) -> str:
+        """Extract FQDN from a HostContext for per-host routing."""
+        if host:
+            return host.fqdn or host.hostname
         return ""
+
+    @staticmethod
+    def _host_name(host: HostContext | None) -> str:
+        """Extract hostname from a HostContext."""
+        return host.hostname if host else ""
 
     @staticmethod
     def _apply_edr_context(event_data: dict[str, Any], event: SecurityEvent) -> None:
@@ -77,53 +88,57 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["tid"] = event.edr.tid
 
     def _render_logon(self, event: SecurityEvent) -> None:
-        """Render eCAR USER_SESSION/LOGIN event."""
+        """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
+        host = event.dst_host
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_logoff(self, event: SecurityEvent) -> None:
-        """Render eCAR USER_SESSION/LOGOUT event."""
+        """Render eCAR USER_SESSION/LOGOUT event (logged on dst_host)."""
+        host = event.dst_host
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGOUT",
             "principal": event.auth.username,
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
-        """Render eCAR USER_SESSION/LOGIN with failure_reason."""
+        """Render eCAR USER_SESSION/LOGIN with failure_reason (logged on dst_host)."""
+        host = event.dst_host
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "failure_reason": "bad_password",
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_process_create(self, event: SecurityEvent) -> None:
-        """Render eCAR PROCESS/CREATE event."""
+        """Render eCAR PROCESS/CREATE event (logged on src_host)."""
+        host = event.src_host
         proc = event.process
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "CREATE",
             "pid": proc.pid,
@@ -131,7 +146,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": proc.username,
             "image_path": proc.image,
             "command_line": proc.command_line,
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
@@ -139,87 +154,118 @@ class EcarEmitter(HostMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
-        """Render eCAR PROCESS/TERMINATE event."""
+        """Render eCAR PROCESS/TERMINATE event (logged on src_host)."""
+        host = event.src_host
         proc = event.process
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "TERMINATE",
             "pid": proc.pid,
             "principal": proc.username,
             "image_path": proc.image,
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_file_event(self, event: SecurityEvent) -> None:
-        """Render eCAR FILE event from canonical FileContext."""
+        """Render eCAR FILE event from canonical FileContext (logged on src_host)."""
+        host = event.src_host
         action_map = {"file_create": "CREATE", "file_modify": "MODIFY", "file_delete": "DELETE"}
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "FILE",
             "action": action_map.get(event.event_type, "CREATE"),
             "pid": event.file.pid if event.file else -1,
             "principal": event.auth.username if event.auth else "",
             "file_path": event.file.path if event.file else "",
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_registry_event(self, event: SecurityEvent) -> None:
-        """Render eCAR REGISTRY event from canonical RegistryContext."""
+        """Render eCAR REGISTRY event from canonical RegistryContext (logged on src_host)."""
+        host = event.src_host
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "REGISTRY",
             "action": "MODIFY",
             "pid": event.registry.pid if event.registry else -1,
             "principal": event.auth.username if event.auth else "",
             "registry_key": event.registry.key if event.registry else "",
             "registry_value": event.registry.value if event.registry else "",
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
-        """Render eCAR MODULE/LOAD event from canonical FileContext."""
+        """Render eCAR MODULE/LOAD event from canonical FileContext (logged on src_host)."""
+        host = event.src_host
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname if event.host else "",
+            "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
             "pid": event.file.pid if event.file else -1,
             "principal": event.auth.username if event.auth else "",
             "file_path": event.file.path if event.file else "",
-            "_host_fqdn": self._get_host_fqdn(event),
+            "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
     def _render_connection(self, event: SecurityEvent) -> None:
-        """Render eCAR FLOW/CONNECT event from canonical NetworkContext."""
+        """Render eCAR FLOW/CONNECT events -- OUTBOUND on src_host, INBOUND on dst_host.
+
+        For internal-to-internal connections, emits TWO records (one per host).
+        For external-to-internal, emits only the INBOUND on dst_host.
+        For internal-to-external, emits only the OUTBOUND on src_host.
+        """
         net = event.network
-        hostname = event.host.hostname if event.host else net.src_ip
-        event_data = {
-            "timestamp": event.timestamp,
-            "hostname": hostname,
-            "object": "FLOW",
-            "action": "CONNECT",
-            "pid": net.initiating_pid,
-            "src_ip": net.src_ip,
-            "src_port": net.src_port,
-            "dst_ip": net.dst_ip,
-            "dst_port": net.dst_port,
-            "protocol": net.protocol,
-            "_host_fqdn": self._get_host_fqdn(event),
-        }
-        self._apply_edr_context(event_data, event)
-        self.emit_event(event_data)
+
+        # OUTBOUND FLOW on source host (if source is internal/known)
+        if event.src_host:
+            event_data = {
+                "timestamp": event.timestamp,
+                "hostname": event.src_host.hostname,
+                "object": "FLOW",
+                "action": "CONNECT",
+                "direction": "OUTBOUND",
+                "pid": net.initiating_pid,
+                "src_ip": net.src_ip,
+                "src_port": net.src_port,
+                "dst_ip": net.dst_ip,
+                "dst_port": net.dst_port,
+                "protocol": net.protocol,
+                "_host_fqdn": self._host_fqdn(event.src_host),
+            }
+            self._apply_edr_context(event_data, event)
+            self.emit_event(event_data)
+
+        # INBOUND FLOW on destination host (if destination is internal/known)
+        if event.dst_host:
+            event_data = {
+                "timestamp": event.timestamp,
+                "hostname": event.dst_host.hostname,
+                "object": "FLOW",
+                "action": "CONNECT",
+                "direction": "INBOUND",
+                "pid": -1,  # Destination doesn't know the initiating PID
+                "src_ip": net.src_ip,
+                "src_port": net.src_port,
+                "dst_ip": net.dst_ip,
+                "dst_port": net.dst_port,
+                "protocol": net.protocol,
+                "_host_fqdn": self._host_fqdn(event.dst_host),
+            }
+            # INBOUND flow gets its own objectID (separate telemetry observation)
+            self.emit_event(event_data)
 
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route event to per-host writer."""
@@ -238,6 +284,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "dst_ip",
         "dst_port",
         "protocol",
+        "direction",
         "md5",
         "sha256",
         "registry_key",

@@ -8,6 +8,7 @@ just formats the context fields into the syslog template.
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
@@ -27,11 +28,16 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Syslog emitter handles any event with SyslogContext on a Linux host."""
-        return (
-            event.syslog is not None
-            and event.host is not None
-            and event.host.os_category == "linux"
-        )
+        return event.syslog is not None and self._linux_host(event) is not None
+
+    @staticmethod
+    def _linux_host(event: SecurityEvent) -> "HostContext | None":
+        """Return whichever host has os_category == 'linux'."""
+        if event.src_host and event.src_host.os_category == "linux":
+            return event.src_host
+        if event.dst_host and event.dst_host.os_category == "linux":
+            return event.dst_host
+        return None
 
     def emit(self, event: SecurityEvent) -> None:
         """Render syslog entry from SyslogContext."""
@@ -39,16 +45,17 @@ class SyslogEmitter(HostMultiplexEmitter):
             raise NotImplementedError(
                 f"SyslogEmitter: event has no SyslogContext (event_type={event.event_type})"
             )
+        host = self._linux_host(event)
         ctx = event.syslog
         event_data = {
             "timestamp": event.timestamp,
-            "hostname": event.host.hostname,
+            "hostname": host.hostname if host else "",
             "app_name": ctx.app_name,
             "pid": ctx.pid,
             "facility": ctx.facility,
             "severity": ctx.severity,
             "message": ctx.message,
-            "_host_fqdn": event.host.fqdn or event.host.hostname,
+            "_host_fqdn": (host.fqdn or host.hostname) if host else "",
         }
         self.emit_event(event_data)
 

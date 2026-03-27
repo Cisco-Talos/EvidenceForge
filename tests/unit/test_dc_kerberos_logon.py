@@ -98,12 +98,12 @@ class TestDCKerberosOnLogon:
             tgt_event = next(e for e in events if e.event_type == "kerberos_tgt")
             assert tgt_event.kerberos.service_name == "krbtgt"
             assert tgt_event.kerberos.target_username == "john.smith"
-            assert tgt_event.host.hostname == "DC-01"
+            assert tgt_event.dst_host.hostname == "DC-01"
 
             # Service ticket should target host/WKS-01
             tgs_event = next(e for e in events if e.event_type == "kerberos_service")
             assert tgs_event.kerberos.service_name == "host/WKS-01"
-            assert tgs_event.host.hostname == "DC-01"
+            assert tgs_event.dst_host.hostname == "DC-01"
 
             # TGT timestamp should be before logon, service ticket between TGT and logon
             logon_event = next(e for e in events if e.event_type == "logon")
@@ -256,7 +256,7 @@ class TestDCKerberosOnLogon:
                     special_priv_count += 1
                     # Verify 4672 is on the DC
                     priv_event = next(e for e in events if e.event_type == "special_privileges")
-                    assert priv_event.host.hostname == "DC-01"
+                    assert priv_event.dst_host.hostname == "DC-01"
                     assert priv_event.auth.username == "admin.user"
 
         # Should have at least some Kerberos logons with 4672
