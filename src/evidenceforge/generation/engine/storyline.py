@@ -274,7 +274,7 @@ class StorylineMixin:
                     SecurityEvent(
                         timestamp=file_time,
                         event_type="file_create",
-                        host=host_ctx,
+                        src_host=host_ctx,
                         auth=AuthContext(username=actor.username),
                         file=FileContext(path=output_file, action="create", pid=pid),
                     )
