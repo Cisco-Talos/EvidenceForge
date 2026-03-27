@@ -1387,13 +1387,37 @@ class BaselineMixin:
                         ),
                     ]
                     app, msgs = rng.choice(_EXTRA_SYSLOG)
-                    msg = rng.choice(msgs).format(rng.randint(100000, 999999))
+                    # Format placeholders: dhclient uses system IP, others use random int
+                    if app == "dhclient":
+                        msg = rng.choice(msgs).format(system.ip)
+                    else:
+                        msg = rng.choice(msgs).format(rng.randint(100000, 999999))
+                    # Map syslog app names to sys_pids keys for persistent daemons
+                    _APP_TO_PID_KEY = {
+                        "NetworkManager": "networkmanager",
+                        "dbus-daemon": "dbus",
+                        "rsyslogd": "rsyslogd",
+                        "systemd-logind": "logind",
+                        "systemd-resolved": "systemd_resolved",
+                        "cron": "cron",
+                        "snapd": "snapd",
+                        "dhclient": "networkmanager",
+                        "polkitd": "dbus",
+                        "thermald": "systemd",
+                        "irqbalance": "systemd",
+                    }
+                    pid_key = _APP_TO_PID_KEY.get(app)
+                    pid = (
+                        sys_pids.get(pid_key, rng.randint(500, 60000))
+                        if pid_key
+                        else rng.randint(500, 60000)
+                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name=app,
                         message=msg,
-                        pid=rng.randint(500, 60000),
+                        pid=pid,
                     )
 
         # ICMP ping between systems on same subnet
@@ -1425,94 +1449,185 @@ class BaselineMixin:
 
         # IDS false-positive alerts
         if "snort_alert" in self.emitters and self.scenario.environment.network:
-            _FP_SIGS = [
-                # ICMP
-                (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3),
-                (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3),
-                (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3),
-                # Policy
-                (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3),
-                (
-                    2010935,
-                    "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
-                    "policy-violation",
-                    2,
-                ),
-                (
-                    2016149,
-                    "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
-                    "policy-violation",
-                    3,
-                ),
-                # TLS/SSL
-                (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3),
-                (2025331, "ET POLICY SSLv3 Outbound Connection Detected", "policy-violation", 2),
-                (2027316, "ET INFO Observed Let's Encrypt Certificate", "misc-activity", 3),
-                # Protocol anomalies
-                (2210044, "SURICATA STREAM Packet with broken ack", "protocol-command-decode", 3),
-                (
-                    2210020,
-                    "SURICATA STREAM ESTABLISHED retransmission packet",
-                    "protocol-command-decode",
-                    3,
-                ),
-                (
-                    2210054,
-                    "SURICATA STREAM Packet with invalid timestamp",
-                    "protocol-command-decode",
-                    2,
-                ),
-                # Scanning/recon
-                (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2),
-                (2010937, "ET SCAN Suspicious inbound to mySQL port 3306", "attempted-recon", 2),
-                (2010936, "ET SCAN Suspicious inbound to MSSQL port 1433", "attempted-recon", 2),
-                (2002910, "ET SCAN Potential VNC Scan 5900-5920", "attempted-recon", 2),
-                # Info/misc
-                (2019876, "ET INFO Packed Executable Download", "misc-activity", 2),
-                (2027865, "ET DNS Query to a .top domain", "potentially-bad-traffic", 2),
-                (2029706, "ET DNS Query to .cloud TLD", "misc-activity", 3),
-                (2025712, "ET INFO External IP Lookup Domain (ipify.org)", "misc-activity", 2),
-                (2024897, "ET INFO External IP Lookup (ipinfo.io)", "misc-activity", 2),
-                (
-                    2013504,
-                    "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
-                    "policy-violation",
-                    3,
-                ),
-                (
-                    2018959,
-                    "ET POLICY PE EXE or DLL Windows file download HTTP",
-                    "policy-violation",
-                    2,
-                ),
-                (2016360, "ET INFO Observed Discord Domain (discordapp.com)", "misc-activity", 3),
-                (2023882, "ET INFO Observed Telegram Domain (t.me)", "misc-activity", 3),
-                (
-                    2028401,
-                    "ET JA3 Hash - Possible Malware - Various RAT",
-                    "potentially-bad-traffic",
-                    1,
-                ),
-                # Web
-                (
-                    2009582,
-                    "ET WEB_SERVER SQL Injection Attempt SELECT FROM",
-                    "web-application-attack",
-                    1,
-                ),
-                (
-                    2009714,
-                    "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT",
-                    "web-application-attack",
-                    1,
-                ),
-                (
-                    2024317,
-                    "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt",
-                    "web-application-attack",
-                    1,
-                ),
-            ]
+            # Signatures keyed by protocol — each sig also declares its expected
+            # destination port so the alert is physically plausible.
+            # Tuple: (sid, message, classification, priority, dst_port)
+            _FP_SIGS_BY_PROTO: dict[str, list[tuple[int, str, str, int, int]]] = {
+                "icmp": [
+                    (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3, 0),
+                    (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3, 0),
+                    (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3, 0),
+                ],
+                "tcp": [
+                    # Policy (HTTP-layer)
+                    (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3, 80),
+                    (
+                        2010935,
+                        "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
+                        "policy-violation",
+                        2,
+                        80,
+                    ),
+                    # TLS/SSL
+                    (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3, 443),
+                    (
+                        2025331,
+                        "ET POLICY SSLv3 Outbound Connection Detected",
+                        "policy-violation",
+                        2,
+                        443,
+                    ),
+                    (
+                        2027316,
+                        "ET INFO Observed Let's Encrypt Certificate",
+                        "misc-activity",
+                        3,
+                        443,
+                    ),
+                    # Protocol anomalies (TCP stream)
+                    (
+                        2210044,
+                        "SURICATA STREAM Packet with broken ack",
+                        "protocol-command-decode",
+                        3,
+                        80,
+                    ),
+                    (
+                        2210020,
+                        "SURICATA STREAM ESTABLISHED retransmission packet",
+                        "protocol-command-decode",
+                        3,
+                        443,
+                    ),
+                    (
+                        2210054,
+                        "SURICATA STREAM Packet with invalid timestamp",
+                        "protocol-command-decode",
+                        2,
+                        80,
+                    ),
+                    # Scanning/recon
+                    (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2, 22),
+                    (
+                        2010937,
+                        "ET SCAN Suspicious inbound to mySQL port 3306",
+                        "attempted-recon",
+                        2,
+                        3306,
+                    ),
+                    (
+                        2010936,
+                        "ET SCAN Suspicious inbound to MSSQL port 1433",
+                        "attempted-recon",
+                        2,
+                        1433,
+                    ),
+                    (
+                        2002910,
+                        "ET SCAN Potential VNC Scan 5900-5920",
+                        "attempted-recon",
+                        2,
+                        5900,
+                    ),
+                    # Info/misc (HTTP/HTTPS)
+                    (2019876, "ET INFO Packed Executable Download", "misc-activity", 2, 80),
+                    (
+                        2025712,
+                        "ET INFO External IP Lookup Domain (ipify.org)",
+                        "misc-activity",
+                        2,
+                        443,
+                    ),
+                    (
+                        2024897,
+                        "ET INFO External IP Lookup (ipinfo.io)",
+                        "misc-activity",
+                        2,
+                        443,
+                    ),
+                    (
+                        2013504,
+                        "ET POLICY GNU/Linux APT User-Agent Outbound"
+                        " likely related to package management",
+                        "policy-violation",
+                        3,
+                        80,
+                    ),
+                    (
+                        2018959,
+                        "ET POLICY PE EXE or DLL Windows file download HTTP",
+                        "policy-violation",
+                        2,
+                        80,
+                    ),
+                    (
+                        2016360,
+                        "ET INFO Observed Discord Domain (discordapp.com)",
+                        "misc-activity",
+                        3,
+                        443,
+                    ),
+                    (
+                        2023882,
+                        "ET INFO Observed Telegram Domain (t.me)",
+                        "misc-activity",
+                        3,
+                        443,
+                    ),
+                    (
+                        2028401,
+                        "ET JA3 Hash - Possible Malware - Various RAT",
+                        "potentially-bad-traffic",
+                        1,
+                        443,
+                    ),
+                    # Web attacks
+                    (
+                        2009582,
+                        "ET WEB_SERVER SQL Injection Attempt SELECT FROM",
+                        "web-application-attack",
+                        1,
+                        80,
+                    ),
+                    (
+                        2009714,
+                        "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT",
+                        "web-application-attack",
+                        1,
+                        80,
+                    ),
+                    (
+                        2024317,
+                        "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt",
+                        "web-application-attack",
+                        1,
+                        8080,
+                    ),
+                ],
+                "udp": [
+                    (
+                        2016149,
+                        "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
+                        "policy-violation",
+                        3,
+                        3478,
+                    ),
+                    (
+                        2027865,
+                        "ET DNS Query to a .top domain",
+                        "potentially-bad-traffic",
+                        2,
+                        53,
+                    ),
+                    (
+                        2029706,
+                        "ET DNS Query to .cloud TLD",
+                        "misc-activity",
+                        3,
+                        53,
+                    ),
+                ],
+            }
             from evidenceforge.events.dispatcher import expand_formats
 
             segment_systems: dict[str, list] = {}
@@ -1547,7 +1662,10 @@ class BaselineMixin:
                 for _ in range(num_alerts):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    sig = rng.choice(_FP_SIGS)
+                    # Pick protocol first, then choose a matching signature
+                    alert_proto = rng.choice(["tcp", "udp", "icmp"])
+                    sig = rng.choice(_FP_SIGS_BY_PROTO[alert_proto])
+                    alert_dst_port = sig[4]  # port declared by signature
                     dst_sys = rng.choice(monitored_systems)
                     if sensor.direction == "inbound" or len(monitored_systems) < 2:
                         src_ip = rng.choice(_EXTERNAL_SCAN_IPS)
@@ -1558,9 +1676,6 @@ class BaselineMixin:
                         src_ip = src_sys.ip
                     from evidenceforge.events.contexts import IdsContext
 
-                    alert_proto_str = rng.choice(["TCP", "UDP", "ICMP"])
-                    alert_proto = alert_proto_str.lower()
-                    alert_dst_port = rng.choice([22, 80, 443, 53, 8080])
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
                         dst_ip=dst_sys.ip,

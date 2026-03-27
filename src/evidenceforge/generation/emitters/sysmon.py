@@ -33,6 +33,22 @@ class SysmonEventEmitter(LogEmitter):
         "process_access",
     }
 
+    def _get_sysmon_pid(self, hostname: str) -> int:
+        """Return stable Sysmon service PID for a given host.
+
+        The Sysmon driver runs as a single persistent process; its PID
+        must be the same across all events from that host.
+        """
+        cache = getattr(self, "_sysmon_pids", None)
+        if cache is None:
+            cache = self._sysmon_pids = {}
+        if hostname not in cache:
+            h = int(
+                hashlib.md5(f"sysmon:{hostname}".encode(), usedforsecurity=False).hexdigest(), 16
+            )
+            cache[hostname] = 1800 + (h % 1200)  # range 1800-2999
+        return cache[hostname]
+
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles process events on Windows hosts."""
         return (
@@ -107,7 +123,7 @@ class SysmonEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
-            "ExecutionProcessID": rng.randint(1800, 3000),  # Sysmon service PID
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
             "ExecutionThreadID": rng.randint(1000, 5000),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
@@ -153,7 +169,7 @@ class SysmonEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
-            "ExecutionProcessID": rng.randint(1800, 3000),
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
             "ExecutionThreadID": rng.randint(1000, 5000),
             "UtcTime": utc_time,
             "SourceProcessGuid": source_guid,
@@ -206,7 +222,7 @@ class SysmonEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
-            "ExecutionProcessID": rng.randint(1800, 3000),
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
             "ExecutionThreadID": rng.randint(1000, 5000),
             "UtcTime": utc_time,
             "SourceProcessGUID": source_guid,
