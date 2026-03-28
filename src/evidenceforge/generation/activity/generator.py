@@ -1384,7 +1384,7 @@ class ActivityGenerator:
             event.x509 = X509Context(
                 fingerprint=cert_hash,
                 certificate_version=3,
-                certificate_serial=f"{rng.randint(0x1000000000, 0xFFFFFFFFFF):X}",
+                certificate_serial=f"{rng.getrandbits(128):032X}",
                 certificate_subject=f"CN={server_name}",
                 certificate_issuer=rng.choice(_ISSUERS),
                 certificate_not_valid_before=now_epoch - rng.randint(86400, 86400 * 365),
@@ -1541,6 +1541,9 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import NtpContext
 
             ntp_rng = _get_rng()
+            # Populate NTP timestamps relative to event time
+            ntp_epoch = time.timestamp()
+            ntp_jitter = ntp_rng.uniform(-0.01, 0.01)
             event.ntp = NtpContext(
                 version=ntp_rng.choice([3, 4]),
                 mode=3,  # client
@@ -1550,6 +1553,10 @@ class ActivityGenerator:
                 root_delay=ntp_rng.uniform(0.0, 0.1),
                 root_disp=ntp_rng.uniform(0.0, 0.05),
                 ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
+                ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
+                org_ts=round(ntp_epoch + ntp_jitter - 0.001, 6),
+                rec_ts=round(ntp_epoch + ntp_jitter, 6),
+                xmt_ts=round(ntp_epoch + ntp_jitter + 0.0001, 6),
             )
 
         # Zeek weird.log: probabilistic network anomalies (~3% of connections)

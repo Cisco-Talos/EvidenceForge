@@ -1218,7 +1218,12 @@ class BaselineMixin:
                                 severity=5,
                             )
                 elif source_roll < 0.65:
-                    sid = rng.randint(100, 9999)
+                    # Sequential session IDs per host (systemd-logind increments from boot)
+                    if not hasattr(self, "_session_counters"):
+                        self._session_counters = {}
+                    self._session_counters.setdefault(system.hostname, 0)
+                    self._session_counters[system.hostname] += 1
+                    sid = self._session_counters[system.hostname]
                     # Use OS-appropriate usernames
                     session_users = ["root", "admin"]
                     if has_web_role:
