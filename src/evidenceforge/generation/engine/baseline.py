@@ -1130,15 +1130,26 @@ class BaselineMixin:
                         syslog_message=f"Finished {svc}.service - {svc_title}.",
                     )
                 elif source_roll < 0.35:
+                    # Distro-aware cron commands
                     cron_cmds = [
-                        (
-                            "root",
-                            "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
-                        ),
-                        ("root", "command -v debian-sa1 > /dev/null && debian-sa1 1 1"),
                         ("root", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                        ("www-data", "/usr/bin/php /var/www/html/cron.php"),
                     ]
+                    if is_rhel_like:
+                        cron_cmds.append(
+                            ("root", "run-parts /etc/cron.daily"),
+                        )
+                    else:
+                        cron_cmds.extend(
+                            [
+                                (
+                                    "root",
+                                    "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
+                                ),
+                                ("root", "command -v debian-sa1 > /dev/null && debian-sa1 1 1"),
+                            ]
+                        )
+                    if has_web_role:
+                        cron_cmds.append(("www-data", "/usr/bin/php /var/www/html/cron.php"))
                     user, cmd = rng.choice(cron_cmds)
                     self.activity_generator.generate_system_process(
                         system=system,
@@ -1208,7 +1219,13 @@ class BaselineMixin:
                             )
                 elif source_roll < 0.65:
                     sid = rng.randint(100, 9999)
-                    user = rng.choice(["root", "admin", "www-data", "ubuntu"])
+                    # Use OS-appropriate usernames
+                    session_users = ["root", "admin"]
+                    if has_web_role:
+                        session_users.append("www-data")
+                    if not is_rhel_like:
+                        session_users.append("ubuntu")
+                    user = rng.choice(session_users)
                     action = rng.choice(
                         [f"New session {sid} of user {user}.", f"Removed session {sid}."]
                     )
@@ -1417,7 +1434,8 @@ class BaselineMixin:
                         msg = rng.choice(msgs).format(system.ip)
                     else:
                         msg = rng.choice(msgs).format(rng.randint(100000, 999999))
-                    # Map syslog app names to sys_pids keys for persistent daemons
+                    # Map syslog app names to sys_pids keys for persistent daemons.
+                    # Only map to sys_pids entries that are the SAME daemon.
                     _APP_TO_PID_KEY = {
                         "NetworkManager": "networkmanager",
                         "dbus-daemon": "dbus",
@@ -1426,17 +1444,22 @@ class BaselineMixin:
                         "systemd-resolved": "systemd_resolved",
                         "cron": "cron",
                         "snapd": "snapd",
-                        "dhclient": "networkmanager",
-                        "polkitd": "dbus",
-                        "thermald": "systemd",
-                        "irqbalance": "systemd",
                     }
                     pid_key = _APP_TO_PID_KEY.get(app)
-                    pid = (
-                        sys_pids.get(pid_key, rng.randint(500, 60000))
-                        if pid_key
-                        else rng.randint(500, 60000)
-                    )
+                    if pid_key and pid_key in sys_pids:
+                        pid = sys_pids[pid_key]
+                    else:
+                        # Derive a stable per-host PID for daemons not in sys_pids
+                        import hashlib as _hl
+
+                        _h = int(
+                            _hl.md5(
+                                f"{system.hostname}:{app}".encode(),
+                                usedforsecurity=False,
+                            ).hexdigest(),
+                            16,
+                        )
+                        pid = 500 + (_h % 59500)  # range 500-59999
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -1474,33 +1497,40 @@ class BaselineMixin:
 
         # IDS false-positive alerts
         if "snort_alert" in self.emitters and self.scenario.environment.network:
-            # Signatures keyed by protocol — each sig also declares its expected
-            # destination port so the alert is physically plausible.
-            # Tuple: (sid, message, classification, priority, dst_port)
-            _FP_SIGS_BY_PROTO: dict[str, list[tuple[int, str, str, int, int]]] = {
+            # Signatures keyed by protocol — each sig declares expected port and
+            # direction ("in" = external→internal, "out" = internal→external).
+            # Tuple: (sid, message, classification, priority, dst_port, direction)
+            _FP_SIGS_BY_PROTO: dict[str, list[tuple[int, str, str, int, int, str]]] = {
                 "icmp": [
-                    (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3, 0),
-                    (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3, 0),
-                    (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3, 0),
+                    (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3, 0, "in"),
+                    (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3, 0, "in"),
+                    (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3, 0, "in"),
                 ],
                 "tcp": [
-                    # Policy (HTTP-layer)
-                    (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3, 80),
+                    # Outbound policy (internal host → external)
+                    (
+                        2013028,
+                        "ET POLICY curl User-Agent Outbound",
+                        "policy-violation",
+                        3,
+                        80,
+                        "out",
+                    ),
                     (
                         2010935,
                         "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
                         "policy-violation",
                         2,
                         80,
+                        "out",
                     ),
-                    # TLS/SSL
-                    (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3, 443),
                     (
                         2025331,
                         "ET POLICY SSLv3 Outbound Connection Detected",
                         "policy-violation",
                         2,
                         443,
+                        "out",
                     ),
                     (
                         2027316,
@@ -1508,75 +1538,15 @@ class BaselineMixin:
                         "misc-activity",
                         3,
                         443,
-                    ),
-                    # Protocol anomalies (TCP stream)
-                    (
-                        2210044,
-                        "SURICATA STREAM Packet with broken ack",
-                        "protocol-command-decode",
-                        3,
-                        80,
-                    ),
-                    (
-                        2210020,
-                        "SURICATA STREAM ESTABLISHED retransmission packet",
-                        "protocol-command-decode",
-                        3,
-                        443,
-                    ),
-                    (
-                        2210054,
-                        "SURICATA STREAM Packet with invalid timestamp",
-                        "protocol-command-decode",
-                        2,
-                        80,
-                    ),
-                    # Scanning/recon
-                    (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2, 22),
-                    (
-                        2010937,
-                        "ET SCAN Suspicious inbound to mySQL port 3306",
-                        "attempted-recon",
-                        2,
-                        3306,
-                    ),
-                    (
-                        2010936,
-                        "ET SCAN Suspicious inbound to MSSQL port 1433",
-                        "attempted-recon",
-                        2,
-                        1433,
-                    ),
-                    (
-                        2002910,
-                        "ET SCAN Potential VNC Scan 5900-5920",
-                        "attempted-recon",
-                        2,
-                        5900,
-                    ),
-                    # Info/misc (HTTP/HTTPS)
-                    (2019876, "ET INFO Packed Executable Download", "misc-activity", 2, 80),
-                    (
-                        2025712,
-                        "ET INFO External IP Lookup Domain (ipify.org)",
-                        "misc-activity",
-                        2,
-                        443,
-                    ),
-                    (
-                        2024897,
-                        "ET INFO External IP Lookup (ipinfo.io)",
-                        "misc-activity",
-                        2,
-                        443,
+                        "out",
                     ),
                     (
                         2013504,
-                        "ET POLICY GNU/Linux APT User-Agent Outbound"
-                        " likely related to package management",
+                        "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
                         "policy-violation",
                         3,
                         80,
+                        "out",
                     ),
                     (
                         2018959,
@@ -1584,6 +1554,7 @@ class BaselineMixin:
                         "policy-violation",
                         2,
                         80,
+                        "out",
                     ),
                     (
                         2016360,
@@ -1591,6 +1562,7 @@ class BaselineMixin:
                         "misc-activity",
                         3,
                         443,
+                        "out",
                     ),
                     (
                         2023882,
@@ -1598,6 +1570,23 @@ class BaselineMixin:
                         "misc-activity",
                         3,
                         443,
+                        "out",
+                    ),
+                    (
+                        2025712,
+                        "ET INFO External IP Lookup Domain (ipify.org)",
+                        "misc-activity",
+                        2,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2024897,
+                        "ET INFO External IP Lookup (ipinfo.io)",
+                        "misc-activity",
+                        2,
+                        443,
+                        "out",
                     ),
                     (
                         2028401,
@@ -1605,14 +1594,67 @@ class BaselineMixin:
                         "potentially-bad-traffic",
                         1,
                         443,
+                        "out",
                     ),
-                    # Web attacks
+                    # Inbound (external → internal)
+                    (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3, 443, "in"),
+                    (
+                        2210044,
+                        "SURICATA STREAM Packet with broken ack",
+                        "protocol-command-decode",
+                        3,
+                        80,
+                        "in",
+                    ),
+                    (
+                        2210020,
+                        "SURICATA STREAM ESTABLISHED retransmission packet",
+                        "protocol-command-decode",
+                        3,
+                        443,
+                        "in",
+                    ),
+                    (
+                        2210054,
+                        "SURICATA STREAM Packet with invalid timestamp",
+                        "protocol-command-decode",
+                        2,
+                        80,
+                        "in",
+                    ),
+                    (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2, 22, "in"),
+                    (
+                        2010937,
+                        "ET SCAN Suspicious inbound to mySQL port 3306",
+                        "attempted-recon",
+                        2,
+                        3306,
+                        "in",
+                    ),
+                    (
+                        2010936,
+                        "ET SCAN Suspicious inbound to MSSQL port 1433",
+                        "attempted-recon",
+                        2,
+                        1433,
+                        "in",
+                    ),
+                    (
+                        2002910,
+                        "ET SCAN Potential VNC Scan 5900-5920",
+                        "attempted-recon",
+                        2,
+                        5900,
+                        "in",
+                    ),
+                    (2019876, "ET INFO Packed Executable Download", "misc-activity", 2, 80, "in"),
                     (
                         2009582,
                         "ET WEB_SERVER SQL Injection Attempt SELECT FROM",
                         "web-application-attack",
                         1,
                         80,
+                        "in",
                     ),
                     (
                         2009714,
@@ -1620,6 +1662,7 @@ class BaselineMixin:
                         "web-application-attack",
                         1,
                         80,
+                        "in",
                     ),
                     (
                         2024317,
@@ -1627,6 +1670,7 @@ class BaselineMixin:
                         "web-application-attack",
                         1,
                         8080,
+                        "in",
                     ),
                 ],
                 "udp": [
@@ -1636,6 +1680,7 @@ class BaselineMixin:
                         "policy-violation",
                         3,
                         3478,
+                        "out",
                     ),
                     (
                         2027865,
@@ -1643,14 +1688,9 @@ class BaselineMixin:
                         "potentially-bad-traffic",
                         2,
                         53,
+                        "out",
                     ),
-                    (
-                        2029706,
-                        "ET DNS Query to .cloud TLD",
-                        "misc-activity",
-                        3,
-                        53,
-                    ),
+                    (2029706, "ET DNS Query to .cloud TLD", "misc-activity", 3, 53, "out"),
                 ],
             }
             from evidenceforge.events.dispatcher import expand_formats
@@ -1691,19 +1731,21 @@ class BaselineMixin:
                     alert_proto = rng.choice(["tcp", "udp", "icmp"])
                     sig = rng.choice(_FP_SIGS_BY_PROTO[alert_proto])
                     alert_dst_port = sig[4]  # port declared by signature
-                    dst_sys = rng.choice(monitored_systems)
-                    if sensor.direction == "inbound" or len(monitored_systems) < 2:
-                        src_ip = rng.choice(_EXTERNAL_SCAN_IPS)
-                    else:
-                        src_sys = rng.choice(monitored_systems)
-                        if src_sys.ip == dst_sys.ip:
-                            continue
-                        src_ip = src_sys.ip
+                    sig_direction = sig[5]  # "in" or "out"
+                    local_sys = rng.choice(monitored_systems)
+                    ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
                     from evidenceforge.events.contexts import IdsContext
 
+                    # Direction: "in" = external→internal, "out" = internal→external
+                    if sig_direction == "out":
+                        src_ip = local_sys.ip
+                        dst_ip = ext_ip
+                    else:
+                        src_ip = ext_ip
+                        dst_ip = local_sys.ip
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
-                        dst_ip=dst_sys.ip,
+                        dst_ip=dst_ip,
                         time=ts,
                         dst_port=alert_dst_port,
                         proto=alert_proto,
