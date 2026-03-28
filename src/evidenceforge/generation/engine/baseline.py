@@ -1434,9 +1434,12 @@ class BaselineMixin:
                     if not filtered:
                         continue
                     app, msgs = rng.choice(filtered)
-                    # Format placeholders: dhclient uses system IP, others use random int
+                    # Format placeholders vary by daemon
                     if app == "dhclient":
                         msg = rng.choice(msgs).format(system.ip)
+                    elif app == "NetworkManager":
+                        # NM uses monotonic kernel uptime seconds in [brackets]
+                        msg = rng.choice(msgs).format(uptime)
                     else:
                         msg = rng.choice(msgs).format(rng.randint(100000, 999999))
                     # Map syslog app names to sys_pids keys for persistent daemons.
