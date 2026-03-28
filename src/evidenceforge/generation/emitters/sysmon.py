@@ -166,9 +166,8 @@ class SysmonEventEmitter(LogEmitter):
     @classmethod
     def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
         """Look up PE metadata for a Windows binary by image path or name."""
-        import os
-
-        basename = os.path.basename(image_path).lower()
+        # Handle Windows paths on any OS (backslash is not a separator on Unix)
+        basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         return cls._PE_METADATA.get(basename, ("-", "-", "-", "-", "-"))
 
     def _get_sysmon_pid(self, hostname: str) -> int:
@@ -210,8 +209,16 @@ class SysmonEventEmitter(LogEmitter):
 
     @staticmethod
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
-        """Generate a deterministic Sysmon ProcessGuid from host+pid+time."""
-        seed = f"{hostname}:{pid}:{timestamp.isoformat()}"
+        """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
+
+        The timestamp should be the process creation time, not the event time.
+        This ensures the same PID produces the same GUID across all Sysmon
+        events (Event 1, 8, 10) referencing that process.
+        """
+        # Truncate to second precision so minor timestamp variations don't
+        # produce different GUIDs for the same process
+        ts_key = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+        seed = f"{hostname}:{pid}:{ts_key}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
         return f"{{{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
 
@@ -291,6 +298,17 @@ class SysmonEventEmitter(LogEmitter):
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
 
+    @staticmethod
+    def _resolve_full_image_path(image: str) -> str:
+        """Ensure a Windows image path is fully qualified.
+
+        Sysmon always logs full paths. If only a bare filename is provided
+        (e.g., 'lsass.exe'), prepend the standard System32 directory.
+        """
+        if "\\" not in image and "/" not in image:
+            return rf"C:\Windows\System32\{image}"
+        return image
+
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
         rng = random.Random()
@@ -305,7 +323,7 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (target_server=target_image, process_name=unused)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
-        target_image = (
+        target_image = self._resolve_full_image_path(
             auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe"
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
@@ -346,7 +364,7 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (same pattern as create_remote_thread)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
-        target_image = (
+        target_image = self._resolve_full_image_path(
             auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe"
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
