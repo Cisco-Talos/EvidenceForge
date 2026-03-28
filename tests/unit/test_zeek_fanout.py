@@ -255,5 +255,13 @@ class TestMultiSensorFanOut:
             for sensor in ["fw01", "fw02"]:
                 assert (base / sensor / "conn.json").exists()
                 assert (base / sensor / "ssl.json").exists()
-                with open(base / sensor / "conn.json") as f:
-                    assert json.loads(f.readline())["uid"] == "CMultiSensor1234"
+
+            # First sensor gets original UID, second sensor gets a unique UID
+            # (real Zeek sensors generate UIDs independently)
+            with open(base / "fw01" / "conn.json") as f:
+                uid1 = json.loads(f.readline())["uid"]
+            with open(base / "fw02" / "conn.json") as f:
+                uid2 = json.loads(f.readline())["uid"]
+            assert uid1 == "CMultiSensor1234"  # First sensor keeps original
+            assert uid2 != uid1  # Second sensor gets a unique UID
+            assert uid2.startswith("C")  # Same prefix

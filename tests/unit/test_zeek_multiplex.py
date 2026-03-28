@@ -38,12 +38,14 @@ class TestPerSensorDirectoryRouting:
             assert (base / "fw01" / "conn.json").exists()
             assert (base / "fw02" / "conn.json").exists()
 
-            # Both files should have the same content
+            # First sensor gets original UID, second gets a unique per-sensor UID
             with open(base / "fw01" / "conn.json") as f:
                 line1 = json.loads(f.readline())
             with open(base / "fw02" / "conn.json") as f:
                 line2 = json.loads(f.readline())
-            assert line1["uid"] == line2["uid"] == "CTest123456789ab"
+            assert line1["uid"] == "CTest123456789ab"
+            assert line2["uid"] != line1["uid"]  # Independent sensors have unique UIDs
+            assert line2["uid"].startswith("C")
 
     def test_single_sensor_single_subdir(self):
         """Single sensor creates a single subdirectory."""

@@ -1073,6 +1073,13 @@ class BaselineMixin:
             sys_pids = self._system_pids.get(system.hostname, {})
             sys_type = (system.type or "server").lower()
             is_dmz = "dmz" in system.hostname.lower() or "web" in system.hostname.lower()
+            is_rhel_like = any(
+                d in system.os.lower() for d in ("centos", "rhel", "red hat", "rocky", "alma")
+            )
+            has_web_role = (
+                any(r in (system.roles or []) for r in ("web_server", "forward_proxy"))
+                or "web" in system.hostname.lower()
+            )
             num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             scenario_start = self.scenario.time_window.start
@@ -1085,16 +1092,17 @@ class BaselineMixin:
 
                 source_roll = rng.random()
                 if source_roll < 0.20:
+                    # Filter systemd services by distro and role
                     services = [
                         "logrotate",
-                        "phpsessionclean",
-                        "apt-daily",
                         "man-db",
                         "fstrim",
-                        "motd-news",
-                        "ua-timer",
                         "systemd-tmpfiles-clean",
                     ]
+                    if not is_rhel_like:
+                        services.extend(["apt-daily", "motd-news", "ua-timer"])
+                    if has_web_role:
+                        services.append("phpsessionclean")
                     svc = rng.choice(services)
                     svc_title = svc.replace("-", " ").title()
                     systemd_pid = sys_pids.get("systemd", 1)
@@ -1122,15 +1130,26 @@ class BaselineMixin:
                         syslog_message=f"Finished {svc}.service - {svc_title}.",
                     )
                 elif source_roll < 0.35:
+                    # Distro-aware cron commands
                     cron_cmds = [
-                        (
-                            "root",
-                            "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
-                        ),
-                        ("root", "command -v debian-sa1 > /dev/null && debian-sa1 1 1"),
                         ("root", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                        ("www-data", "/usr/bin/php /var/www/html/cron.php"),
                     ]
+                    if is_rhel_like:
+                        cron_cmds.append(
+                            ("root", "run-parts /etc/cron.daily"),
+                        )
+                    else:
+                        cron_cmds.extend(
+                            [
+                                (
+                                    "root",
+                                    "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
+                                ),
+                                ("root", "command -v debian-sa1 > /dev/null && debian-sa1 1 1"),
+                            ]
+                        )
+                    if has_web_role:
+                        cron_cmds.append(("www-data", "/usr/bin/php /var/www/html/cron.php"))
                     user, cmd = rng.choice(cron_cmds)
                     self.activity_generator.generate_system_process(
                         system=system,
@@ -1175,28 +1194,43 @@ class BaselineMixin:
                             severity=5,
                         )
                     else:
-                        # AppArmor audit: standalone kernel syslog
-                        self._audit_serials[system.hostname] = self._audit_serials.get(
-                            system.hostname, 1000
-                        ) + rng.randint(1, 5)
-                        audit_serial = self._audit_serials[system.hostname]
-                        msg = (
-                            f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
-                            f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
-                            f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
+                        # AppArmor audit: only on hosts running MySQL (DB role)
+                        has_db = "db" in system.hostname.lower() or "database" in (
+                            system.roles or []
                         )
-                        self.activity_generator.generate_syslog_event(
-                            system=system,
-                            time=ts,
-                            app_name="kernel",
-                            message=msg,
-                            pid=None,
-                            facility=0,
-                            severity=5,
-                        )
+                        if has_db and not is_rhel_like:
+                            self._audit_serials[system.hostname] = self._audit_serials.get(
+                                system.hostname, 1000
+                            ) + rng.randint(1, 5)
+                            audit_serial = self._audit_serials[system.hostname]
+                            msg = (
+                                f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
+                                f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
+                                f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
+                            )
+                            self.activity_generator.generate_syslog_event(
+                                system=system,
+                                time=ts,
+                                app_name="kernel",
+                                message=msg,
+                                pid=None,
+                                facility=0,
+                                severity=5,
+                            )
                 elif source_roll < 0.65:
-                    sid = rng.randint(100, 9999)
-                    user = rng.choice(["root", "admin", "www-data", "ubuntu"])
+                    # Sequential session IDs per host (systemd-logind increments from boot)
+                    if not hasattr(self, "_session_counters"):
+                        self._session_counters = {}
+                    self._session_counters.setdefault(system.hostname, 0)
+                    self._session_counters[system.hostname] += 1
+                    sid = self._session_counters[system.hostname]
+                    # Use OS-appropriate usernames
+                    session_users = ["root", "admin"]
+                    if has_web_role:
+                        session_users.append("www-data")
+                    if not is_rhel_like:
+                        session_users.append("ubuntu")
+                    user = rng.choice(session_users)
                     action = rng.choice(
                         [f"New session {sid} of user {user}.", f"Removed session {sid}."]
                     )
@@ -1240,6 +1274,8 @@ class BaselineMixin:
                         facility=10,
                     )
                 elif source_roll < 0.90:
+                    if is_rhel_like:
+                        continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -1254,6 +1290,8 @@ class BaselineMixin:
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
                 elif source_roll < 0.93:
+                    if is_rhel_like:
+                        continue  # RHEL uses chronyd, not systemd-timesyncd
                     ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
                     if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
@@ -1276,7 +1314,8 @@ class BaselineMixin:
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
                 else:
-                    # Additional diverse syslog programs for realism
+                    # Additional diverse syslog programs for realism.
+                    # Entries tagged with _ubuntu or _web are filtered below.
                     _EXTRA_SYSLOG = [
                         (
                             "NetworkManager",
@@ -1368,8 +1407,7 @@ class BaselineMixin:
                             "cron",
                             [
                                 "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))",
-                                "(root) CMD (/usr/lib/apt/apt.systemd.daily install)",
-                                "(www-data) CMD (/usr/bin/php /var/www/cron.php --quiet)",
+                                "(root) CMD (/usr/sbin/logrotate /etc/logrotate.conf)",
                             ],
                         ),
                         (
@@ -1386,14 +1424,60 @@ class BaselineMixin:
                             ],
                         ),
                     ]
-                    app, msgs = rng.choice(_EXTRA_SYSLOG)
-                    msg = rng.choice(msgs).format(rng.randint(100000, 999999))
+                    # Filter by distro and role
+                    _UBUNTU_ONLY = {"snapd", "unattended-upgr", "systemd-resolved"}
+                    _WEB_ONLY = {"cron"}  # www-data cron is web-specific
+                    filtered = [
+                        (a, m) for a, m in _EXTRA_SYSLOG if not (is_rhel_like and a in _UBUNTU_ONLY)
+                    ]
+                    if not filtered:
+                        continue
+                    app, msgs = rng.choice(filtered)
+                    # Format placeholders vary by daemon
+                    if app == "dhclient":
+                        msg = rng.choice(msgs).format(system.ip)
+                    elif app == "NetworkManager":
+                        # NM uses monotonic kernel uptime seconds in [brackets]
+                        msg = rng.choice(msgs).format(uptime)
+                    else:
+                        msg = rng.choice(msgs).format(rng.randint(100000, 999999))
+                    # Map syslog app names to sys_pids keys for persistent daemons.
+                    # Only map to sys_pids entries that are the SAME daemon.
+                    _APP_TO_PID_KEY = {
+                        "NetworkManager": "networkmanager",
+                        "dbus-daemon": "dbus",
+                        "rsyslogd": "rsyslogd",
+                        "systemd-logind": "logind",
+                        "systemd-resolved": "systemd_resolved",
+                        "cron": "cron",
+                        "snapd": "snapd",
+                    }
+                    # Transient processes (forked per invocation) get random PIDs;
+                    # persistent daemons get stable PIDs.
+                    _TRANSIENT_APPS = {"sudo", "cron"}
+                    pid_key = _APP_TO_PID_KEY.get(app)
+                    if pid_key and pid_key in sys_pids:
+                        pid = sys_pids[pid_key]
+                    elif app in _TRANSIENT_APPS:
+                        pid = rng.randint(1000, 60000)
+                    else:
+                        # Derive a stable per-host PID for persistent daemons not in sys_pids
+                        import hashlib as _hl
+
+                        _h = int(
+                            _hl.md5(
+                                f"{system.hostname}:{app}".encode(),
+                                usedforsecurity=False,
+                            ).hexdigest(),
+                            16,
+                        )
+                        pid = 500 + (_h % 59500)  # range 500-59999
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name=app,
                         message=msg,
-                        pid=rng.randint(500, 60000),
+                        pid=pid,
                     )
 
         # ICMP ping between systems on same subnet
@@ -1425,94 +1509,202 @@ class BaselineMixin:
 
         # IDS false-positive alerts
         if "snort_alert" in self.emitters and self.scenario.environment.network:
-            _FP_SIGS = [
-                # ICMP
-                (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3),
-                (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3),
-                (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3),
-                # Policy
-                (2013028, "ET POLICY curl User-Agent Outbound", "policy-violation", 3),
-                (
-                    2010935,
-                    "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
-                    "policy-violation",
-                    2,
-                ),
-                (
-                    2016149,
-                    "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
-                    "policy-violation",
-                    3,
-                ),
-                # TLS/SSL
-                (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3),
-                (2025331, "ET POLICY SSLv3 Outbound Connection Detected", "policy-violation", 2),
-                (2027316, "ET INFO Observed Let's Encrypt Certificate", "misc-activity", 3),
-                # Protocol anomalies
-                (2210044, "SURICATA STREAM Packet with broken ack", "protocol-command-decode", 3),
-                (
-                    2210020,
-                    "SURICATA STREAM ESTABLISHED retransmission packet",
-                    "protocol-command-decode",
-                    3,
-                ),
-                (
-                    2210054,
-                    "SURICATA STREAM Packet with invalid timestamp",
-                    "protocol-command-decode",
-                    2,
-                ),
-                # Scanning/recon
-                (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2),
-                (2010937, "ET SCAN Suspicious inbound to mySQL port 3306", "attempted-recon", 2),
-                (2010936, "ET SCAN Suspicious inbound to MSSQL port 1433", "attempted-recon", 2),
-                (2002910, "ET SCAN Potential VNC Scan 5900-5920", "attempted-recon", 2),
-                # Info/misc
-                (2019876, "ET INFO Packed Executable Download", "misc-activity", 2),
-                (2027865, "ET DNS Query to a .top domain", "potentially-bad-traffic", 2),
-                (2029706, "ET DNS Query to .cloud TLD", "misc-activity", 3),
-                (2025712, "ET INFO External IP Lookup Domain (ipify.org)", "misc-activity", 2),
-                (2024897, "ET INFO External IP Lookup (ipinfo.io)", "misc-activity", 2),
-                (
-                    2013504,
-                    "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
-                    "policy-violation",
-                    3,
-                ),
-                (
-                    2018959,
-                    "ET POLICY PE EXE or DLL Windows file download HTTP",
-                    "policy-violation",
-                    2,
-                ),
-                (2016360, "ET INFO Observed Discord Domain (discordapp.com)", "misc-activity", 3),
-                (2023882, "ET INFO Observed Telegram Domain (t.me)", "misc-activity", 3),
-                (
-                    2028401,
-                    "ET JA3 Hash - Possible Malware - Various RAT",
-                    "potentially-bad-traffic",
-                    1,
-                ),
-                # Web
-                (
-                    2009582,
-                    "ET WEB_SERVER SQL Injection Attempt SELECT FROM",
-                    "web-application-attack",
-                    1,
-                ),
-                (
-                    2009714,
-                    "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT",
-                    "web-application-attack",
-                    1,
-                ),
-                (
-                    2024317,
-                    "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt",
-                    "web-application-attack",
-                    1,
-                ),
-            ]
+            # Signatures keyed by protocol — each sig declares expected port and
+            # direction ("in" = external→internal, "out" = internal→external).
+            # Tuple: (sid, message, classification, priority, dst_port, direction)
+            _FP_SIGS_BY_PROTO: dict[str, list[tuple[int, str, str, int, int, str]]] = {
+                "icmp": [
+                    (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3, 0, "in"),
+                    (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3, 0, "in"),
+                    (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3, 0, "in"),
+                ],
+                "tcp": [
+                    # Outbound policy (internal host → external)
+                    (
+                        2013028,
+                        "ET POLICY curl User-Agent Outbound",
+                        "policy-violation",
+                        3,
+                        80,
+                        "out",
+                    ),
+                    (
+                        2010935,
+                        "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
+                        "policy-violation",
+                        2,
+                        80,
+                        "out",
+                    ),
+                    (
+                        2025331,
+                        "ET POLICY SSLv3 Outbound Connection Detected",
+                        "policy-violation",
+                        2,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2027316,
+                        "ET INFO Observed Let's Encrypt Certificate",
+                        "misc-activity",
+                        3,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2013504,
+                        "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
+                        "policy-violation",
+                        3,
+                        80,
+                        "out",
+                    ),
+                    (
+                        2018959,
+                        "ET POLICY PE EXE or DLL Windows file download HTTP",
+                        "policy-violation",
+                        2,
+                        80,
+                        "out",
+                    ),
+                    (
+                        2016360,
+                        "ET INFO Observed Discord Domain (discordapp.com)",
+                        "misc-activity",
+                        3,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2023882,
+                        "ET INFO Observed Telegram Domain (t.me)",
+                        "misc-activity",
+                        3,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2025712,
+                        "ET INFO External IP Lookup Domain (ipify.org)",
+                        "misc-activity",
+                        2,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2024897,
+                        "ET INFO External IP Lookup (ipinfo.io)",
+                        "misc-activity",
+                        2,
+                        443,
+                        "out",
+                    ),
+                    (
+                        2028401,
+                        "ET JA3 Hash - Possible Malware - Various RAT",
+                        "potentially-bad-traffic",
+                        1,
+                        443,
+                        "out",
+                    ),
+                    # Inbound (external → internal)
+                    (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3, 443, "in"),
+                    (
+                        2210044,
+                        "SURICATA STREAM Packet with broken ack",
+                        "protocol-command-decode",
+                        3,
+                        80,
+                        "in",
+                    ),
+                    (
+                        2210020,
+                        "SURICATA STREAM ESTABLISHED retransmission packet",
+                        "protocol-command-decode",
+                        3,
+                        443,
+                        "in",
+                    ),
+                    (
+                        2210054,
+                        "SURICATA STREAM Packet with invalid timestamp",
+                        "protocol-command-decode",
+                        2,
+                        80,
+                        "in",
+                    ),
+                    (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2, 22, "in"),
+                    (
+                        2010937,
+                        "ET SCAN Suspicious inbound to mySQL port 3306",
+                        "attempted-recon",
+                        2,
+                        3306,
+                        "in",
+                    ),
+                    (
+                        2010936,
+                        "ET SCAN Suspicious inbound to MSSQL port 1433",
+                        "attempted-recon",
+                        2,
+                        1433,
+                        "in",
+                    ),
+                    (
+                        2002910,
+                        "ET SCAN Potential VNC Scan 5900-5920",
+                        "attempted-recon",
+                        2,
+                        5900,
+                        "in",
+                    ),
+                    (2019876, "ET INFO Packed Executable Download", "misc-activity", 2, 80, "in"),
+                    (
+                        2009582,
+                        "ET WEB_SERVER SQL Injection Attempt SELECT FROM",
+                        "web-application-attack",
+                        1,
+                        80,
+                        "in",
+                    ),
+                    (
+                        2009714,
+                        "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT",
+                        "web-application-attack",
+                        1,
+                        80,
+                        "in",
+                    ),
+                    (
+                        2024317,
+                        "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt",
+                        "web-application-attack",
+                        1,
+                        8080,
+                        "in",
+                    ),
+                ],
+                "udp": [
+                    (
+                        2016149,
+                        "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
+                        "policy-violation",
+                        3,
+                        3478,
+                        "out",
+                    ),
+                    (
+                        2027865,
+                        "ET DNS Query to a .top domain",
+                        "potentially-bad-traffic",
+                        2,
+                        53,
+                        "out",
+                    ),
+                    (2029706, "ET DNS Query to .cloud TLD", "misc-activity", 3, 53, "out"),
+                ],
+            }
             from evidenceforge.events.dispatcher import expand_formats
 
             segment_systems: dict[str, list] = {}
@@ -1547,23 +1739,25 @@ class BaselineMixin:
                 for _ in range(num_alerts):
                     offset = rng.randint(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    sig = rng.choice(_FP_SIGS)
-                    dst_sys = rng.choice(monitored_systems)
-                    if sensor.direction == "inbound" or len(monitored_systems) < 2:
-                        src_ip = rng.choice(_EXTERNAL_SCAN_IPS)
-                    else:
-                        src_sys = rng.choice(monitored_systems)
-                        if src_sys.ip == dst_sys.ip:
-                            continue
-                        src_ip = src_sys.ip
+                    # Pick protocol first, then choose a matching signature
+                    alert_proto = rng.choice(["tcp", "udp", "icmp"])
+                    sig = rng.choice(_FP_SIGS_BY_PROTO[alert_proto])
+                    alert_dst_port = sig[4]  # port declared by signature
+                    sig_direction = sig[5]  # "in" or "out"
+                    local_sys = rng.choice(monitored_systems)
+                    ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
                     from evidenceforge.events.contexts import IdsContext
 
-                    alert_proto_str = rng.choice(["TCP", "UDP", "ICMP"])
-                    alert_proto = alert_proto_str.lower()
-                    alert_dst_port = rng.choice([22, 80, 443, 53, 8080])
+                    # Direction: "in" = external→internal, "out" = internal→external
+                    if sig_direction == "out":
+                        src_ip = local_sys.ip
+                        dst_ip = ext_ip
+                    else:
+                        src_ip = ext_ip
+                        dst_ip = local_sys.ip
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
-                        dst_ip=dst_sys.ip,
+                        dst_ip=dst_ip,
                         time=ts,
                         dst_port=alert_dst_port,
                         proto=alert_proto,
@@ -1599,11 +1793,16 @@ class BaselineMixin:
                 ("/phpmyadmin/", "GET", 404),
                 ("/xmlrpc.php", "POST", 404),
             ]
-            _WEB_UAS = [
+            _WEB_UAS_BROWSER = [
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
                 "curl/7.88.1",
                 "python-requests/2.31.0",
+            ]
+            _WEB_UAS_BOT = [
+                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
             ]
             for sys_obj in systems:
                 if "web_server" not in (sys_obj.roles or []):
@@ -1627,6 +1826,9 @@ class BaselineMixin:
                         client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     from evidenceforge.events.contexts import HttpContext
 
+                    # Bots only from external IPs; browsers from anywhere
+                    is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
+                    ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
                     _URI_MIME = {
                         "/": "text/html",
@@ -1654,7 +1856,7 @@ class BaselineMixin:
                             host=sys_obj.hostname,
                             uri=path,
                             version="1.1",
-                            user_agent=rng.choice(_WEB_UAS),
+                            user_agent=rng.choice(ua_pool),
                             request_body_len=rng.randint(0, 500) if method == "POST" else 0,
                             response_body_len=resp_bytes,
                             status_code=status,

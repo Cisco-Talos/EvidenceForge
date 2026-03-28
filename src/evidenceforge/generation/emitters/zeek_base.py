@@ -142,17 +142,63 @@ class SensorMultiplexEmitter(LogEmitter):
         else:
             self._dispatch(event_data)
 
+    @staticmethod
+    def _derive_sensor_uid(original_uid: str, sensor_hostname: str) -> str:
+        """Derive a deterministic per-sensor UID from the original UID.
+
+        All emitters processing the same event for the same sensor will derive
+        the same UID, preserving cross-log correlation (conn↔dns↔http↔ssl)
+        within a sensor. Different sensors get different UIDs.
+
+        Uses HMAC-like hashing to produce a base62 UID of the same length
+        and prefix as the original.
+        """
+        import hashlib
+        import string
+
+        base62 = string.ascii_uppercase + string.ascii_lowercase + string.digits
+        prefix = original_uid[0] if original_uid else "C"
+        target_len = len(original_uid) - 1  # Exclude prefix
+
+        h = hashlib.sha256(f"{original_uid}:{sensor_hostname}".encode()).digest()
+        chars = []
+        for byte in h[:target_len]:
+            chars.append(base62[byte % 62])
+        return prefix + "".join(chars)
+
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Render and route to sensor writers.
 
+        When multiple sensors observe the same connection, each sensor gets a
+        deterministic unique Zeek UID derived from hash(original_uid, sensor).
+        All emitters for the same event+sensor produce the same derived UID,
+        preserving cross-log correlation within each sensor.
         Skips events where _render_event returns None (e.g., SnortEmitter
         filters out non-IDS connection events).
         """
-        rendered = self._render_event(event_data)
-        if rendered is None:
-            return
         sensor_hostnames = event_data.pop("_sensor_hostnames", None)
-        self.emit_to_sensors(rendered, sensor_hostnames)
+        targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
+
+        if not targets or len(targets) <= 1:
+            # Single sensor or no sensors — render once
+            rendered = self._render_event(event_data)
+            if rendered is None:
+                return
+            self.emit_to_sensors(rendered, sensor_hostnames)
+        else:
+            # Multiple sensors: each gets a deterministic unique UID
+            original_uid = event_data.get("uid")
+            for i, hostname in enumerate(targets):
+                if i > 0 and original_uid:
+                    # Derive a deterministic UID for this sensor
+                    event_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
+                rendered = self._render_event(event_data)
+                if rendered is None:
+                    return
+                self._get_writer(hostname).write(rendered)
+            # Restore original UID so downstream code isn't affected
+            if original_uid:
+                event_data["uid"] = original_uid
 
     def _render_zeek_json(self, event_data: dict[str, Any]) -> str:
         """Common Zeek NDJSON rendering: timestamp conversion, dotted fields, compact JSON.

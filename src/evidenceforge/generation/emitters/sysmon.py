@@ -33,6 +33,159 @@ class SysmonEventEmitter(LogEmitter):
         "process_access",
     }
 
+    # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
+    _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
+        "cmd.exe": (
+            "10.0.19041.1",
+            "Windows Command Processor",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "Cmd.Exe",
+        ),
+        "powershell.exe": (
+            "10.0.19041.1",
+            "Windows PowerShell",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "PowerShell.EXE",
+        ),
+        "svchost.exe": (
+            "10.0.19041.1",
+            "Host Process for Windows Services",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "svchost.exe",
+        ),
+        "explorer.exe": (
+            "10.0.19041.1",
+            "Windows Explorer",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "EXPLORER.EXE",
+        ),
+        "taskhostw.exe": (
+            "10.0.19041.1",
+            "Host Process for Windows Tasks",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "taskhostw.exe",
+        ),
+        "usoclient.exe": (
+            "10.0.19041.1",
+            "Update Session Orchestrator",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "UsoClient.exe",
+        ),
+        "lsass.exe": (
+            "10.0.19041.1",
+            "Local Security Authority Process",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "lsass.exe",
+        ),
+        "services.exe": (
+            "10.0.19041.1",
+            "Services and Controller app",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "services.exe",
+        ),
+        "net.exe": (
+            "10.0.19041.1",
+            "Net Command",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "net.exe",
+        ),
+        "net1.exe": (
+            "10.0.19041.1",
+            "Net Command",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "net1.exe",
+        ),
+        "sc.exe": (
+            "10.0.19041.1",
+            "Service Control Manager Configuration Tool",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "sc.exe",
+        ),
+        "schtasks.exe": (
+            "10.0.19041.1",
+            "Task Scheduler Configuration Tool",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "schtasks.exe",
+        ),
+        "whoami.exe": (
+            "10.0.19041.1",
+            "whoami - displays logged on user information",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "whoami.exe",
+        ),
+        "notepad.exe": (
+            "10.0.19041.1",
+            "Notepad",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "NOTEPAD.EXE",
+        ),
+        "mstsc.exe": (
+            "10.0.19041.1",
+            "Remote Desktop Connection",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "mstsc.exe",
+        ),
+        "wmic.exe": (
+            "10.0.19041.1",
+            "WMI Commandline Utility",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "wmic.exe",
+        ),
+        "rundll32.exe": (
+            "10.0.19041.1",
+            "Windows host process (Rundll32)",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "RUNDLL32.EXE",
+        ),
+        "conhost.exe": (
+            "10.0.19041.1",
+            "Console Window Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "conhost.exe",
+        ),
+    }
+
+    @classmethod
+    def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
+        """Look up PE metadata for a Windows binary by image path or name."""
+        # Handle Windows paths on any OS (backslash is not a separator on Unix)
+        basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        return cls._PE_METADATA.get(basename, ("-", "-", "-", "-", "-"))
+
+    def _get_sysmon_pid(self, hostname: str) -> int:
+        """Return stable Sysmon service PID for a given host.
+
+        The Sysmon driver runs as a single persistent process; its PID
+        must be the same across all events from that host.
+        """
+        cache = getattr(self, "_sysmon_pids", None)
+        if cache is None:
+            cache = self._sysmon_pids = {}
+        if hostname not in cache:
+            h = int(
+                hashlib.md5(f"sysmon:{hostname}".encode(), usedforsecurity=False).hexdigest(), 16
+            )
+            cache[hostname] = 1800 + (h % 1200)  # range 1800-2999
+        return cache[hostname]
+
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles process events on Windows hosts."""
         return (
@@ -56,8 +209,16 @@ class SysmonEventEmitter(LogEmitter):
 
     @staticmethod
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
-        """Generate a deterministic Sysmon ProcessGuid from host+pid+time."""
-        seed = f"{hostname}:{pid}:{timestamp.isoformat()}"
+        """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
+
+        The timestamp should be the process creation time, not the event time.
+        This ensures the same PID produces the same GUID across all Sysmon
+        events (Event 1, 8, 10) referencing that process.
+        """
+        # Truncate to second precision so minor timestamp variations don't
+        # produce different GUIDs for the same process
+        ts_key = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+        seed = f"{hostname}:{pid}:{ts_key}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
         return f"{{{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
 
@@ -107,7 +268,7 @@ class SysmonEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
-            "ExecutionProcessID": rng.randint(1800, 3000),  # Sysmon service PID
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
             "ExecutionThreadID": rng.randint(1000, 5000),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
@@ -124,9 +285,29 @@ class SysmonEventEmitter(LogEmitter):
             "ParentProcessGuid": parent_guid,
             "ParentProcessId": proc.parent_pid,
             "ParentImage": proc.parent_image or "-",
-            "ParentCommandLine": "-",
+            "ParentCommandLine": proc.parent_command_line
+            if hasattr(proc, "parent_command_line") and proc.parent_command_line
+            else "-",
         }
+        # Populate PE metadata from known binary lookup
+        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image)
+        event_data["FileVersion"] = fv
+        event_data["Description"] = desc
+        event_data["Product"] = prod
+        event_data["Company"] = company
+        event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
+
+    @staticmethod
+    def _resolve_full_image_path(image: str) -> str:
+        """Ensure a Windows image path is fully qualified.
+
+        Sysmon always logs full paths. If only a bare filename is provided
+        (e.g., 'lsass.exe'), prepend the standard System32 directory.
+        """
+        if "\\" not in image and "/" not in image:
+            return rf"C:\Windows\System32\{image}"
+        return image
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
@@ -142,7 +323,7 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (target_server=target_image, process_name=unused)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
-        target_image = (
+        target_image = self._resolve_full_image_path(
             auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe"
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
@@ -153,7 +334,7 @@ class SysmonEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
-            "ExecutionProcessID": rng.randint(1800, 3000),
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
             "ExecutionThreadID": rng.randint(1000, 5000),
             "UtcTime": utc_time,
             "SourceProcessGuid": source_guid,
@@ -183,7 +364,7 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (same pattern as create_remote_thread)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
-        target_image = (
+        target_image = self._resolve_full_image_path(
             auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe"
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
@@ -206,7 +387,7 @@ class SysmonEventEmitter(LogEmitter):
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
-            "ExecutionProcessID": rng.randint(1800, 3000),
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
             "ExecutionThreadID": rng.randint(1000, 5000),
             "UtcTime": utc_time,
             "SourceProcessGUID": source_guid,

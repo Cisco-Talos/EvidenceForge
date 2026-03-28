@@ -72,7 +72,7 @@ class WindowsEventEmitter(LogEmitter):
     @staticmethod
     def _ipv6_mapped(ip: str | None) -> str:
         """Format IPv4 as ::ffff:-mapped for Windows event consistency."""
-        if not ip:
+        if not ip or ip == "-":
             return "-"
         if ":" in ip:
             return ip  # Already IPv6
