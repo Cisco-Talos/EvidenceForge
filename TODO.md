@@ -96,14 +96,44 @@ Data is structurally correct but the hunt doesn't work — key attack steps are 
 
 ### Tier 3: Realism Polish
 
-Data works but experienced analysts spot tells. Grouped by format for efficient fix passes.
+Data works but experienced analysts spot tells. Grouped by format for efficient fix passes. Items marked with ✓ were fixed in the blind expert panel improvement loop (2026-03-27).
+
+**Snort/IDS:**
+- [x] ✓ Snort protocol field randomly assigned (no binding to SID/rule) — restructured `_FP_SIGS` to protocol-keyed dict with per-signature port and direction
+- [x] ✓ Snort flow directions inverted for outbound rules — signatures tagged "in"/"out", src/dst swapped for outbound alerts
+- [x] ✓ ICMP connections carry TCP/UDP ports — force src_port=0, dst_port=0 for ICMP in generate_connection()
+
+**Sysmon:**
+- [x] ✓ Sysmon Execution ProcessID rotates every event — stable per-host PID via hostname hash
+- [x] ✓ PE metadata fields (FileVersion/Company/etc.) always "-" — lookup table of 17 common Windows binaries; fixed Windows path parsing on non-Windows OS
+- [x] ✓ Sysmon TargetImage bare "lsass.exe" — resolve bare filenames to full System32 paths in Events 8/10
+- [x] ✓ Sysmon ProcessGuid inconsistent for same PID — truncate timestamp to second precision for stable GUIDs
+- [ ] Only EventID 1 in Sysmon (no Event 3 network, 11 file, 12/13 registry, 22 DNS)
+- [ ] ParentCommandLine always "-"
+
+**Zeek:**
+- [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
+- [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
+- [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
+- [ ] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states
+- [ ] SMB volume too low for Windows file server environments
+- [ ] DNS UIDs missing from conn.log (~7%)
+- [ ] UFW BLOCK entries don't appear in conn.log
+- [ ] weird.json TCP-specific types attributed to UDP sources
+- [ ] Exfiltration connections show 0 bytes transferred
+- [ ] No port 135 (RPC/EPMAP) traffic
+- [ ] Inconsistent sensor coverage for SSH pivot
 
 **DNS:**
+- [ ] DNS IP pool reuse: 15+ unrelated SaaS domains resolve to same IP (need per-domain IP assignment)
+- [ ] DNS AAAA records: unrelated services share IPv6 prefix (cross-provider)
+- [ ] CloudFront distributions resolve to Microsoft IP ranges (cross-provider)
 - [ ] No TXT queries (SPF/DKIM/DMARC checks)
 - [ ] No Windows telemetry noise in query set
 - [ ] TTL distribution too uniform
-- [ ] HTTP connections without preceding DNS queries
+- [ ] HTTP connections without preceding DNS queries (no DNS caching model)
 - [ ] Queries default to corp.local instead of scenario domain
+- [ ] MX records for CDN domains that shouldn't have mail exchangers
 
 **TLS/SSL:**
 - [ ] TLSv13 ratio too low for 2024 timeframe
@@ -112,13 +142,25 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] No SSL certificate subject/issuer data in ssl.log
 
 **Syslog:**
+- [x] ✓ DHCP messages contain integers instead of IP addresses — use system.ip
+- [x] ✓ Persistent daemon PIDs randomized per message — map to sys_pids for known daemons; hash-derived stable PIDs for others
+- [x] ✓ CentOS hosts run Ubuntu daemons (snapd, systemd-timesyncd, debian-sa1, user ubuntu, APT) — filter by is_rhel_like
+- [x] ✓ dhclient shares PID with NetworkManager — isolated PID derivation per daemon
+- [x] ✓ NetworkManager internal timestamps non-monotonic — use kernel uptime counter
+- [x] ✓ Googlebot user-agent on internal hosts — split UA pool; bots only from external IPs
+- [x] ✓ AppArmor mysqld audit on all hosts — only on DB-role hosts, skip RHEL
+- [x] ✓ phpsessionclean on non-PHP hosts — only on web_server/forward_proxy role
+- [x] ✓ Transient process (sudo) gets stable PID — sudo/cron children now get random PIDs
+- [x] ✓ systemd-logind session IDs random — sequential per-host counter from boot
+- [ ] Session IDs appear out-of-order (assigned in generation order, not chronological)
 - [ ] NTP server mismatch (Zeek shows NIST, syslog shows Ubuntu pool)
 - [ ] No SSH protocol negotiation messages
-- [ ] Logrotate runs every 15 minutes (should be daily)
+- [ ] Logrotate/cron.daily fire too frequently (should be daily, not multiple times per hour)
 - [ ] Centralized syslog timestamps not chronologically sorted
 - [ ] Dual SSH syslog entries with mismatched PIDs/ports
 
 **Windows Events:**
+- [x] ✓ IpAddress "::ffff:-" malformed — handle "-" string in _ipv6_mapped()
 - [ ] DLL file as NewProcessName in 4688
 - [ ] Low 4689:4688 process termination ratio (57% vs 80-90%)
 - [ ] EventRecordID gaps too regular
@@ -129,21 +171,15 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] No 4778/4779 (RDP reconnect/disconnect)
 - [ ] Process creation timestamp can precede its authorizing logon
 - [ ] Missing 4634 logoff events for network logon sessions
+- [ ] Only AES-256 Kerberos encryption; no RC4/AES-128 mix
+- [ ] Only 2 unique TicketOptions values; zero 4771 pre-auth failures
+- [ ] File server has no domain user logon events
+- [ ] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY"
 
 **Process Trees:**
 - [ ] explorer.exe parent for RDP sessions (should be per-session userinit→explorer)
 - [ ] All Linux user processes share same ppid
-- [ ] Human Burstiness at 54/100 — events too uniformly distributed, need more clustering/idle
-
-**Zeek:**
-- [ ] OTH/"Cc" conn_state over-represented
-- [ ] SMB volume too low for Windows file server environments
-- [ ] DNS UIDs missing from conn.log (~7%)
-- [ ] UFW BLOCK entries don't appear in conn.log
-- [ ] weird.json TCP-specific types attributed to UDP sources
-- [ ] Exfiltration connections show 0 bytes transferred
-- [ ] No port 135 (RPC/EPMAP) traffic
-- [ ] Inconsistent sensor coverage for SSH pivot
+- [ ] Human Burstiness at 65/100 — events too uniformly distributed, need more clustering/idle
 
 **HTTP/Proxy:**
 - [ ] User-Agent OS mismatch with source hosts
