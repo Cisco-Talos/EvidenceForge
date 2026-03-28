@@ -1407,8 +1407,7 @@ class BaselineMixin:
                             "cron",
                             [
                                 "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))",
-                                "(root) CMD (/usr/lib/apt/apt.systemd.daily install)",
-                                "(www-data) CMD (/usr/bin/php /var/www/cron.php --quiet)",
+                                "(root) CMD (/usr/sbin/logrotate /etc/logrotate.conf)",
                             ],
                         ),
                         (
@@ -1453,11 +1452,16 @@ class BaselineMixin:
                         "cron": "cron",
                         "snapd": "snapd",
                     }
+                    # Transient processes (forked per invocation) get random PIDs;
+                    # persistent daemons get stable PIDs.
+                    _TRANSIENT_APPS = {"sudo", "cron"}
                     pid_key = _APP_TO_PID_KEY.get(app)
                     if pid_key and pid_key in sys_pids:
                         pid = sys_pids[pid_key]
+                    elif app in _TRANSIENT_APPS:
+                        pid = rng.randint(1000, 60000)
                     else:
-                        # Derive a stable per-host PID for daemons not in sys_pids
+                        # Derive a stable per-host PID for persistent daemons not in sys_pids
                         import hashlib as _hl
 
                         _h = int(
