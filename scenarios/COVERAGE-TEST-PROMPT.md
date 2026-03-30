@@ -30,7 +30,9 @@
   All 8 log formats: windows, zeek, ecar, syslog, bash_history, snort_alert, web_access, proxy_access.
 
   Attack storyline — APT via web app exploit, full kill chain:
-  1. Initial Access (+1h): External attacker (203.0.113.45) scans and exploits SQL injection on
+  1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
+  (dhcp_lease event with explicit MAC address). Actor: attacker on rogue device.
+  2. Initial Access (+1h): External attacker (203.0.113.45) scans and exploits SQL injection on
   WEB-EXT-01's EHR portal. Actor: root.
   2. Execution (+1h20m): Web shell upload, reverse shell to C2 at 198.51.100.30:8443. Use real
   base64-encoded reverse shell payload.
@@ -61,9 +63,9 @@
   18. Ongoing C2 (+10h, +12h): Periodic beacons from WEB-EXT-01 and DC-01.
 
   Key requirements:
-  - Exercise all 15 typed event types: process, logon, failed_logon, logoff (baseline), connection,
+  - Exercise all 16 typed event types: process, logon, failed_logon, logoff (baseline), connection,
   ssh_session, rdp_session, account_created, group_member_added, service_installed,
-  scheduled_task_created, log_cleared, create_remote_thread, process_access, raw
+  scheduled_task_created, log_cleared, create_remote_thread, process_access, dhcp_lease, raw
   - Use connection events with HTTP fields (method, uri, status_code, user_agent) for web access log entries showing the SQLi and web shell access — NOT raw events
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
@@ -98,7 +100,8 @@
 
   Sysmon coverage (verify in generated data):
   - Event 1 (ProcessCreate): baseline + storyline process events
-  - Event 5 (ProcessTerminate): baseline process terminations for Windows hosts
+  - Event 5 (ProcessTerminate): baseline process terminations for Windows hosts plus storyline
+    process terminations with realistic delays (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination)
   - Event 8 (CreateRemoteThread): baseline benign pairs (MsMpEng→explorer, csrss→svchost, etc.)
     plus storyline mimikatz create_remote_thread targeting lsass
   - Event 10 (ProcessAccess): baseline benign pairs (MsMpEng→lsass with 0x1410, services→svchost

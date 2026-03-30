@@ -33,6 +33,193 @@ POWERSHELL_COMMANDS = [
     "New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'WindowsUpdate' -Value 'powershell.exe -w hidden -ep bypass -f C:\\Users\\Public\\update.ps1'",
 ]
 
+# ── Story process lifetime estimation ──────────────────────────────────
+# Returns (min_seconds, max_seconds) or None for long-running (no termination).
+
+_SHORT_COMMANDS: set[str] = {
+    # Windows recon
+    "whoami",
+    "whoami.exe",
+    "ipconfig",
+    "ipconfig.exe",
+    "hostname",
+    "hostname.exe",
+    "systeminfo",
+    "systeminfo.exe",
+    "tasklist",
+    "tasklist.exe",
+    "nltest",
+    "nltest.exe",
+    "dir",
+    "type",
+    "findstr",
+    "findstr.exe",
+    "reg",
+    "reg.exe",
+    "net.exe",
+    "net1.exe",
+    "net",
+    "net1",
+    "query",
+    "klist",
+    "klist.exe",
+    "nslookup",
+    "nslookup.exe",
+    "netstat",
+    "netstat.exe",
+    "arp",
+    "arp.exe",
+    "route",
+    "route.exe",
+    "qwinsta",
+    "qwinsta.exe",
+    "dsquery",
+    "dsquery.exe",
+    # Linux recon
+    "id",
+    "uname",
+    "ifconfig",
+    "cat",
+    "ls",
+    "ps",
+    "ss",
+    "find",
+    "grep",
+    "awk",
+    "head",
+    "tail",
+    "wc",
+    "env",
+    "printenv",
+    "df",
+    "mount",
+    "w",
+    "last",
+    "ip",
+    "hostnamectl",
+}
+
+_MEDIUM_COMMANDS: set[str] = {
+    "powershell.exe",
+    "powershell",
+    "pwsh",
+    "certutil",
+    "certutil.exe",
+    "bitsadmin",
+    "bitsadmin.exe",
+    "wmic",
+    "wmic.exe",
+    "schtasks",
+    "schtasks.exe",
+    "sc",
+    "sc.exe",
+    "mshta",
+    "mshta.exe",
+    "cscript",
+    "cscript.exe",
+    "wscript",
+    "wscript.exe",
+    "rundll32",
+    "rundll32.exe",
+    "cmd.exe",
+    "cmd",  # cmd itself is medium; the inner command may be short
+    "msbuild",
+    "msbuild.exe",
+    "regsvr32",
+    "regsvr32.exe",
+    # Linux attack tools
+    "curl",
+    "wget",
+    "python",
+    "python3",
+    "perl",
+    "ruby",
+    "mysqldump",
+    "pg_dump",
+    "tar",
+    "gzip",
+    "zip",
+    "scp",
+}
+
+# Patterns in command_line that indicate long-running / persistent processes
+_LONG_RUNNING_PATTERNS: list[str] = [
+    "TCPClient",
+    "TCPListener",
+    "$s.Read",
+    "ncat",
+    "socat",
+    "nc -l",
+    "nc.exe -l",
+    "meterpreter",
+    "beacon",
+    "reverse_tcp",
+    "bind_tcp",
+    "-persist",
+    "--keep-alive",
+    "while(true)",
+    "while True",
+    "Start-Sleep -Seconds 99",
+    "tail -f",
+]
+
+_LONG_RUNNING_EXES: set[str] = {
+    "mstsc.exe",
+    "mstsc",
+    "rdpclip.exe",
+    "rdpclip",
+    "ncat",
+    "ncat.exe",
+    "nc",
+    "nc.exe",
+    "socat",
+}
+
+
+def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
+    """Estimate how long a story process should run before terminating.
+
+    Returns (min_seconds, max_seconds) for the termination delay,
+    or None if the process should be left running (long-lived/persistent).
+    """
+    # Extract bare executable name
+    if "\\" in process_name:
+        exe = process_name.rsplit("\\", 1)[-1].lower()
+    elif "/" in process_name:
+        exe = process_name.rsplit("/", 1)[-1].lower()
+    else:
+        exe = process_name.lower()
+
+    # Check long-running first
+    if exe in _LONG_RUNNING_EXES:
+        return None
+    cl_lower = command_line.lower()
+    for pattern in _LONG_RUNNING_PATTERNS:
+        if pattern.lower() in cl_lower:
+            return None
+
+    # For cmd.exe /c, classify based on the inner command
+    if exe in ("cmd.exe", "cmd") and "/c " in cl_lower:
+        inner = cl_lower.split("/c ", 1)[1].strip()
+        inner_exe = inner.split()[0] if inner else ""
+        # Strip path from inner exe
+        if "\\" in inner_exe:
+            inner_exe = inner_exe.rsplit("\\", 1)[-1]
+        elif "/" in inner_exe:
+            inner_exe = inner_exe.rsplit("/", 1)[-1]
+        if inner_exe in _SHORT_COMMANDS:
+            return (0.3, 3.0)
+        if inner_exe in _MEDIUM_COMMANDS:
+            return (3.0, 20.0)
+
+    if exe in _SHORT_COMMANDS:
+        return (0.3, 5.0)
+    if exe in _MEDIUM_COMMANDS:
+        return (5.0, 30.0)
+
+    # Default: medium-lived unknown command
+    return (2.0, 15.0)
+
 
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
@@ -310,6 +497,22 @@ class StorylineMixin:
                     skip_types=explicit_types,
                 )
 
+            # Mark as story process and schedule termination
+            self.state_manager.mark_story_process(system.hostname, pid)
+            lifetime = _estimate_process_lifetime(process_name, command_line)
+            if lifetime is not None:
+                term_delay = rng.uniform(lifetime[0], lifetime[1])
+                term_time = time + timedelta(seconds=term_delay)
+                self.activity_generator.generate_process_termination(
+                    user=actor,
+                    system=system,
+                    time=term_time,
+                    pid=pid,
+                    process_name=process_name,
+                    logon_id=logon_id,
+                )
+                self.state_manager.end_process(system.hostname, pid)
+
         elif spec.type == "connection":
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]
             source_ip = spec.source_ip or system.ip
@@ -533,6 +736,23 @@ class StorylineMixin:
                     granted_access="0x1010",  # PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
                 )
             malicious_event["target_process"] = spec.target_process
+
+        elif spec.type == "dhcp_lease":
+            ip_hash = hash(f"mac_{spec.requested_ip or system.ip}")
+            mac = spec.mac_address or (
+                f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
+                f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
+            )
+            from evidenceforge.utils.ids import generate_zeek_uid
+
+            self.activity_generator.generate_dhcp_lease(
+                system=system,
+                time=time,
+                mac=mac,
+                lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
+                uid=generate_zeek_uid("C"),
+            )
+            malicious_event["mac_address"] = mac
 
         elif spec.type == "raw":
             self.activity_generator.generate_raw(

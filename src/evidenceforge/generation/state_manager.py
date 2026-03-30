@@ -316,6 +316,21 @@ class StateManager:
         with self._lock:
             return [p for p in self.state.running_processes.values() if p.system == system]
 
+    def mark_story_process(self, system: str, pid: int) -> None:
+        """Mark a process as created by a storyline event.
+
+        Story-created processes handle their own termination and should
+        be skipped by baseline's _terminate_stale_processes().
+
+        Args:
+            system: System hostname
+            pid: Process ID
+        """
+        with self._lock:
+            proc = self.state.running_processes.get((system, pid))
+            if proc:
+                proc.story_created = True
+
     def end_process(self, system: str, pid: int) -> bool:
         """End a running process.
 

@@ -272,6 +272,9 @@ class BaselineMixin:
                     continue
                 if proc.pid in protected_pids:
                     continue
+                # Story processes handle their own termination
+                if proc.story_created:
+                    continue
 
                 if any(p in image_lower for p in short_lived):
                     max_hours = rng.uniform(0.08, 0.5)
@@ -887,6 +890,17 @@ class BaselineMixin:
 
                 if os_cat == "windows":
                     parent_pid = sys_pids.get("svchost_local_system", sys_pids.get("services", 4))
+                    # 4648 explicit credentials for scheduled task execution
+                    cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
+                    self.activity_generator.generate_explicit_credentials(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=cred_ts,
+                        target_username="SYSTEM",
+                        target_server=system.hostname,
+                        process_name=r"C:\Windows\System32\svchost.exe",
+                        process_pid=parent_pid,
+                    )
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
@@ -988,6 +1002,11 @@ class BaselineMixin:
                         offset = rng.randint(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
+                        # Resolve source system for WFP 5156 emission
+                        src_sys_obj = next(
+                            (s for s in self.scenario.environment.systems if s.ip == src_ip),
+                            None,
+                        )
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=system.ip,
@@ -999,6 +1018,7 @@ class BaselineMixin:
                             orig_bytes=rng.randint(2000, 50000),
                             resp_bytes=rng.randint(5000, 200000),
                             pid=_svc_pid("sshd"),
+                            source_system=src_sys_obj,
                         )
 
         # RDP: IT admin connections to Windows servers/DCs
@@ -1386,6 +1406,11 @@ class BaselineMixin:
                     ]
                     ip = rng.choice(other_ips) if other_ips else system.ip
                     port = rng.randint(49152, 65535)
+                    # Resolve source system for WFP 5156 emission
+                    src_sys_obj = next(
+                        (s for s in self.scenario.environment.systems if s.ip == ip),
+                        None,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=ip,
                         dst_ip=system.ip,
@@ -1398,6 +1423,7 @@ class BaselineMixin:
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
                         pid=sys_pids.get("sshd", -1),
+                        source_system=src_sys_obj,
                     )
                     msgs = [
                         f"Received disconnect from {ip} port {port}:11: disconnected by user",

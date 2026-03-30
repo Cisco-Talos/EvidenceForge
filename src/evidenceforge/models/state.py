@@ -70,6 +70,7 @@ class RunningProcess:
     start_time: datetime
     integrity_level: str
     ecar_object_id: str = ""
+    story_created: bool = False
 
 
 @dataclass

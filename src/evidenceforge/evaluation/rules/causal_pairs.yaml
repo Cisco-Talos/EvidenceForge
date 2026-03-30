@@ -77,6 +77,20 @@ pairs:
       after: pid
     extra_match: hostname
 
+  - name: "Sysmon process create before process terminate"
+    before:
+      format: windows_event_sysmon
+      condition:
+        EventID: 1
+    after:
+      format: windows_event_sysmon
+      condition:
+        EventID: 5
+    match_fields:
+      before: ProcessGuid
+      after: ProcessGuid
+    extra_match: Computer
+
   - name: "SSH accept before bash commands"
     before:
       format: syslog
