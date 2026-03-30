@@ -368,6 +368,15 @@ class CreateRemoteThreadEventSpec(_EventSpecBase):
     target_process: str
 
 
+class DhcpLeaseEventSpec(_EventSpecBase):
+    """DHCP lease event for rogue/new devices appearing on the network."""
+
+    type: Literal["dhcp_lease"] = "dhcp_lease"
+    mac_address: str | None = None
+    requested_ip: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -397,6 +406,7 @@ EventSpec = Annotated[
     | ScheduledTaskCreatedEventSpec
     | LogClearedEventSpec
     | CreateRemoteThreadEventSpec
+    | DhcpLeaseEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]
