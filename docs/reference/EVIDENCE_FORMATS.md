@@ -85,13 +85,15 @@ output/
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
 | 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. |
-| 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. |
+| 5 | ProcessTerminate | Execution | Version 3. Emitted alongside Security 4689 and eCAR PROCESS/TERMINATE for the same process exit. Fields: ProcessGuid, ProcessId, Image, User. |
+| 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. Baseline generates benign noise (1-3/hr) from Defender, CSRSS, svchost. Correlated with eCAR THREAD/REMOTE_CREATE. |
+| 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz accessing lsass.exe). Includes GrantedAccess mask, CallTrace. Baseline generates benign noise (3-8/hr) from Defender, CSRSS, Services.exe. Correlated with eCAR PROCESS/OPEN. |
 
 **Known Limitations:**
 - ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
-- Only events 1 and 8 are implemented; real Sysmon has 29 event types (network connections, registry, file create, etc.)
+- Only events 1, 5, 8, and 10 are implemented; real Sysmon has 29 event types (network connections, registry, file create, etc.)
 
 ---
 
@@ -140,7 +142,8 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
-| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
+| PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) — includes granted_access mask in properties. |
+| THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, tgt_pid, tgt_pid_uuid, start_address, and stack addresses matching OpTC eCAR format. |
 | FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |

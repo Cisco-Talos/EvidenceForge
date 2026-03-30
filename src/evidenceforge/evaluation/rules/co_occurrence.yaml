@@ -183,6 +183,26 @@ ecar:
       - field: command_line
         present: true
 
+  # THREAD-specific
+  - name: "THREAD/REMOTE_CREATE has target info"
+    condition:
+      object: "THREAD"
+      action: "REMOTE_CREATE"
+    checks:
+      - field: tgt_pid
+        present: true
+      - field: image_path
+        present: true
+
+  # PROCESS/OPEN-specific
+  - name: "PROCESS/OPEN has source image"
+    condition:
+      object: "PROCESS"
+      action: "OPEN"
+    checks:
+      - field: image_path
+        present: true
+
   # FLOW-specific
   - name: "FLOW events have network fields"
     condition:

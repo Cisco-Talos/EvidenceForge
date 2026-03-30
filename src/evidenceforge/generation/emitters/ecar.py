@@ -37,6 +37,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "file_delete",
         "registry_modify",
         "module_load",
+        "create_remote_thread",
+        "process_access",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -59,6 +61,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_delete": self._render_file_event,
             "registry_modify": self._render_registry_event,
             "module_load": self._render_module_event,
+            "create_remote_thread": self._render_create_remote_thread,
+            "process_access": self._render_process_access,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(f"EcarEmitter: no render method for {event.event_type}")
@@ -267,6 +271,84 @@ class EcarEmitter(HostMultiplexEmitter):
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
 
+    def _render_create_remote_thread(self, event: SecurityEvent) -> None:
+        """Render eCAR THREAD/REMOTE_CREATE event (logged on src_host).
+
+        Maps Sysmon Event 8 (CreateRemoteThread) to eCAR format.
+        Source process creates a thread in a different target process.
+
+        OpTC field structure: objectID = new thread UUID, actorID = source
+        process UUID, tgt_pid_uuid = target process UUID in properties.
+        """
+        import random as rng_mod
+
+        host = event.src_host
+        proc = event.process
+        auth = event.auth
+        target_pid = int(auth.source_port) if auth and auth.source_port else -1
+        src_tid = rng_mod.randint(1000, 9999)
+        tgt_tid = rng_mod.randint(1000, 9999)
+        event_data = {
+            "timestamp": event.timestamp,
+            "hostname": self._host_name(host),
+            "object": "THREAD",
+            "action": "REMOTE_CREATE",
+            "pid": proc.pid,
+            "ppid": proc.parent_pid,
+            "tid": src_tid,
+            "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
+            "image_path": proc.image,
+            "src_pid": str(proc.pid),
+            "src_tid": str(src_tid),
+            "tgt_pid": str(target_pid),
+            "tgt_pid_uuid": str(uuid.uuid4()),
+            "tgt_tid": str(tgt_tid),
+            "start_address": f"{rng_mod.randint(0x7FF700000000, 0x7FFF00000000):x}",
+            "stack_base": f"ffff{rng_mod.randint(0x800000000000, 0x900000000000):012x}",
+            "stack_limit": f"ffff{rng_mod.randint(0x800000000000, 0x900000000000):012x}",
+            "user_stack_base": f"{rng_mod.randint(0x0000000000, 0xFF00000000):010x}",
+            "user_stack_limit": f"{rng_mod.randint(0x0000000000, 0xFF00000000):010x}",
+            "_host_fqdn": self._host_fqdn(host),
+        }
+        self._apply_edr_context(event_data, event)
+        self.emit_event(event_data)
+
+    def _render_process_access(self, event: SecurityEvent) -> None:
+        """Render eCAR PROCESS/OPEN event (logged on src_host).
+
+        Maps Sysmon Event 10 (ProcessAccess) to eCAR format.
+        Source process opens a handle to target process with access rights.
+
+        OpTC field structure: objectID = target process UUID,
+        actorID = source process UUID, image_path = source image,
+        command_line = target command line.
+        """
+        import random as rng_mod
+
+        host = event.src_host
+        proc = event.process
+        auth = event.auth
+        target_image = auth.target_server if auth and auth.target_server else ""
+        granted_access = auth.failure_status if auth and auth.failure_status else "0x0"
+        event_data = {
+            "timestamp": event.timestamp,
+            "hostname": self._host_name(host),
+            "object": "PROCESS",
+            "action": "OPEN",
+            "objectID": str(uuid.uuid4()),  # Target process UUID
+            "actorID": str(uuid.uuid4()),  # Source process UUID
+            "pid": proc.pid,
+            "ppid": proc.parent_pid,
+            "tid": rng_mod.randint(1000, 9999),
+            "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
+            "image_path": proc.image,
+            "command_line": target_image,  # OpTC puts target command_line here
+            "parent_image_path": proc.parent_image or proc.image,
+            "granted_access": granted_access,
+            "_host_fqdn": self._host_fqdn(host),
+        }
+        self.emit_event(event_data)
+
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route event to per-host writer."""
         rendered = self._render_event(event_data)
@@ -290,6 +372,17 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_key",
         "registry_value",
         "failure_reason",
+        "src_pid",
+        "src_tid",
+        "tgt_pid",
+        "tgt_tid",
+        "tgt_pid_uuid",
+        "start_address",
+        "stack_base",
+        "stack_limit",
+        "user_stack_base",
+        "user_stack_limit",
+        "granted_access",
     )
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

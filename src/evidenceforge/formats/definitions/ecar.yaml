@@ -33,7 +33,7 @@ fields:
     required: true
     description: "Operation performed (CREATE, OPEN, MODIFY, DELETE, etc.)"
     constraints:
-      allowed_values: [CREATE, TERMINATE, OPEN, CLOSE, MODIFY, DELETE, WRITE, READ, CONNECT, ACCEPT, SEND, RECEIVE, LOAD, UNLOAD, START, STOP, LOGIN, LOGOUT]
+      allowed_values: [CREATE, TERMINATE, OPEN, CLOSE, MODIFY, DELETE, WRITE, READ, CONNECT, ACCEPT, SEND, RECEIVE, LOAD, UNLOAD, START, STOP, LOGIN, LOGOUT, REMOTE_CREATE]
 
   - name: objectID
     type: string
@@ -143,6 +143,62 @@ fields:
     type: string
     required: false
     description: "Reason for failure on USER_SESSION/LOGIN events (e.g., bad_password)"
+
+  # Cross-process event properties (THREAD/REMOTE_CREATE, PROCESS/OPEN)
+  - name: src_pid
+    type: string
+    required: false
+    description: "Source process ID (string in properties per eCAR spec)"
+
+  - name: src_tid
+    type: string
+    required: false
+    description: "Source thread ID"
+
+  - name: tgt_pid
+    type: string
+    required: false
+    description: "Target process ID"
+
+  - name: tgt_tid
+    type: string
+    required: false
+    description: "Target thread ID (new thread for REMOTE_CREATE)"
+
+  - name: tgt_pid_uuid
+    type: string
+    required: false
+    description: "Target process objectID UUID for cross-reference"
+
+  - name: start_address
+    type: string
+    required: false
+    description: "Thread start address (hex) for THREAD events"
+
+  - name: stack_base
+    type: string
+    required: false
+    description: "Kernel stack base address for THREAD events"
+
+  - name: stack_limit
+    type: string
+    required: false
+    description: "Kernel stack limit address for THREAD events"
+
+  - name: user_stack_base
+    type: string
+    required: false
+    description: "User-mode stack base address for THREAD events"
+
+  - name: user_stack_limit
+    type: string
+    required: false
+    description: "User-mode stack limit address for THREAD events"
+
+  - name: granted_access
+    type: string
+    required: false
+    description: "Access mask for PROCESS/OPEN events (e.g., 0x1410)"
 
 output:
   format: json

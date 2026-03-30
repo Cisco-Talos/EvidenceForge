@@ -382,6 +382,42 @@ class SignalIntegrityScorer(DimensionScorer):
                     and self._host_matches(f.get("hostname"), event.system)
                 )
 
+        elif event_type == "process_terminate":
+            if format_name == "windows_event_security":
+                return f.get("EventID") == 4689 and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+            if format_name == "windows_event_sysmon":
+                return f.get("EventID") == 5 and self._host_matches(f.get("Computer"), event.system)
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "PROCESS"
+                    and f.get("action") == "TERMINATE"
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
+        elif event_type == "create_remote_thread":
+            if format_name == "windows_event_sysmon":
+                return f.get("EventID") == 8 and self._host_matches(f.get("Computer"), event.system)
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "THREAD"
+                    and f.get("action") == "REMOTE_CREATE"
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
+        elif event_type == "process_access":
+            if format_name == "windows_event_sysmon":
+                return f.get("EventID") == 10 and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "PROCESS"
+                    and f.get("action") == "OPEN"
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
         return False
 
     def _connection_matches_zeek(self, fields: dict, event: ResolvedEvent) -> bool:

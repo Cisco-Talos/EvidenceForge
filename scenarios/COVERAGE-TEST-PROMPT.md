@@ -43,8 +43,8 @@
   compromised sysadmin account (sarah.oconnell).
   8. Discovery (+3h50m): AD enumeration — whoami /all, net user /domain, net group "Domain Admins", LDAP
   query to DC, net view file shares.
-  9. Credential Access (+4h30m): Mimikatz (disguised as ms-index-service.exe) with create_remote_thread
-  targeting lsass.exe.
+  9. Credential Access (+4h30m): Mimikatz (disguised as ms-index-service.exe) with process_access
+  (granted_access: "0x1FFFFF") and create_remote_thread targeting lsass.exe.
   10. Lateral Movement (+5h): PsExec to DC-01 via SMB.
   11. Privilege Escalation (+5h15m): Create backdoor account svc_sqlreader, add to Domain Admins (with
   explicit account_created and group_member_added events).
@@ -61,9 +61,9 @@
   18. Ongoing C2 (+10h, +12h): Periodic beacons from WEB-EXT-01 and DC-01.
 
   Key requirements:
-  - Exercise all 14 typed event types: process, logon, failed_logon, logoff (baseline), connection,
+  - Exercise all 15 typed event types: process, logon, failed_logon, logoff (baseline), connection,
   ssh_session, rdp_session, account_created, group_member_added, service_installed,
-  scheduled_task_created, log_cleared, create_remote_thread, raw
+  scheduled_task_created, log_cleared, create_remote_thread, process_access, raw
   - Use connection events with HTTP fields (method, uri, status_code, user_agent) for web access log entries showing the SQLi and web shell access — NOT raw events
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
@@ -78,7 +78,10 @@
   - objectID persists across entity lifecycle: same objectID on logon/logoff pairs and
     process create/terminate pairs
   - actorID links to acting entity: PROCESS/CREATE actorID = parent process objectID;
-    FILE/REGISTRY/MODULE actorID = initiating process objectID
+    FILE/REGISTRY/MODULE actorID = initiating process objectID;
+    PROCESS/OPEN actorID = source process objectID, objectID = target process objectID;
+    THREAD/REMOTE_CREATE actorID = source process objectID, properties include
+    tgt_pid, tgt_pid_uuid, start_address, and stack addresses
   - FLOW records carry realistic system process PIDs:
     - Windows DNS → svchost NetworkService pid
     - Windows NTP → svchost LocalService pid
@@ -92,5 +95,14 @@
   - Storyline connection events carry the attack process pid (from _last_storyline_pid)
   - The mix of Ubuntu (WEB-EXT-01, PROXY-01, APP-INT-01, LOG-SRV-01) and CentOS (DB-PROD-01)
     exercises distro-aware process tree seeding
+
+  Sysmon coverage (verify in generated data):
+  - Event 1 (ProcessCreate): baseline + storyline process events
+  - Event 5 (ProcessTerminate): baseline process terminations for Windows hosts
+  - Event 8 (CreateRemoteThread): baseline benign pairs (MsMpEng→explorer, csrss→svchost, etc.)
+    plus storyline mimikatz create_remote_thread targeting lsass
+  - Event 10 (ProcessAccess): baseline benign pairs (MsMpEng→lsass with 0x1410, services→svchost
+    with 0x1000, etc.) plus storyline mimikatz process_access on lsass with 0x1FFFFF
+  - Baseline Event 8/10 noise ensures storyline attack events are not instant red flags
 
   Save to scenarios/apt-healthcare-breach/scenario.yaml with accompanying ENVIRONMENT.md.

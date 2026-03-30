@@ -108,7 +108,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ PE metadata fields (FileVersion/Company/etc.) always "-" — lookup table of 17 common Windows binaries; fixed Windows path parsing on non-Windows OS
 - [x] ✓ Sysmon TargetImage bare "lsass.exe" — resolve bare filenames to full System32 paths in Events 8/10
 - [x] ✓ Sysmon ProcessGuid inconsistent for same PID — truncate timestamp to second precision for stable GUIDs
-- [ ] Only EventID 1 in Sysmon (no Event 3 network, 11 file, 12/13 registry, 22 DNS)
+- [x] ✓ Sysmon Event 5 (ProcessTerminate), Event 8 baseline noise, Event 10 baseline noise — added to baseline + eCAR THREAD/REMOTE_CREATE and PROCESS/OPEN correlation
+- [ ] Sysmon Event 3 (NetworkConnect), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) not yet implemented
 - [ ] ParentCommandLine always "-"
 
 **Zeek:**

@@ -47,6 +47,36 @@ pairs:
     extra_match: hostname
     exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "root"]
 
+  - name: "Process creation before process termination"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4688
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4689
+    match_fields:
+      before: NewProcessId
+      after: ProcessId
+    extra_match: Computer
+
+  - name: "eCAR process create before process terminate"
+    before:
+      format: ecar
+      condition:
+        object: PROCESS
+        action: CREATE
+    after:
+      format: ecar
+      condition:
+        object: PROCESS
+        action: TERMINATE
+    match_fields:
+      before: pid
+      after: pid
+    extra_match: hostname
+
   - name: "SSH accept before bash commands"
     before:
       format: syslog

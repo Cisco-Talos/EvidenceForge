@@ -29,6 +29,7 @@ class SysmonEventEmitter(LogEmitter):
     _supported_types: set[str] = {
         "process_create",
         "system_process_create",
+        "process_terminate",
         "create_remote_thread",
         "process_access",
     }
@@ -198,6 +199,8 @@ class SysmonEventEmitter(LogEmitter):
         """Dispatch to per-type render method."""
         if event.event_type in ("process_create", "system_process_create"):
             self._render_sysmon_process_create(event)
+        elif event.event_type == "process_terminate":
+            self._render_sysmon_process_terminate(event)
         elif event.event_type == "create_remote_thread":
             self._render_sysmon_create_remote_thread(event)
         elif event.event_type == "process_access":
@@ -296,6 +299,37 @@ class SysmonEventEmitter(LogEmitter):
         event_data["Product"] = prod
         event_data["Company"] = company
         event_data["OriginalFileName"] = orig
+        self.emit_event(event_data)
+
+    def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 5 (ProcessTerminate)."""
+        rng = random.Random()
+        proc = event.process
+        auth = event.auth
+        host = event.src_host
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+
+        if auth and auth.username:
+            user = f"{host.netbios_domain}\\{auth.username}"
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
+
+        event_data = {
+            "EventID": 5,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": proc.pid,
+            "Image": proc.image,
+            "User": user,
+        }
         self.emit_event(event_data)
 
     @staticmethod

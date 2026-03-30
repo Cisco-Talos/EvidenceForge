@@ -141,13 +141,33 @@ def _extract_event_type(record: ParsedRecord) -> str:
         if eid == 4624:
             logon_type = f.get("LogonType", 0)
             return f"win_4624_type{logon_type}"
+        if eid == 4689:
+            return "win_4689_terminate"
         return f"win_{eid}" if eid else "win_unknown"
+    if fmt == "windows_event_sysmon":
+        eid = f.get("EventID")
+        if eid == 1:
+            proc = f.get("Image", "")
+            return f"sysmon_1_{_process_category(proc)}"
+        if eid == 5:
+            return "sysmon_5_terminate"
+        if eid == 8:
+            return "sysmon_8_remote_thread"
+        if eid == 10:
+            return "sysmon_10_process_access"
+        return f"sysmon_{eid}" if eid else "sysmon_unknown"
     if fmt == "ecar":
         obj = f.get("object", "?")
         act = f.get("action", "?")
         if obj == "PROCESS" and act == "CREATE":
             proc = f.get("image_path", "")
             return f"ecar_PROCESS_CREATE_{_process_category(proc)}"
+        if obj == "PROCESS" and act == "TERMINATE":
+            return "ecar_PROCESS_TERMINATE"
+        if obj == "THREAD" and act == "REMOTE_CREATE":
+            return "ecar_THREAD_REMOTE_CREATE"
+        if obj == "PROCESS" and act == "OPEN":
+            return "ecar_PROCESS_OPEN"
         return f"ecar_{obj}_{act}"
     if fmt == "bash_history":
         cmd = f.get("command", "")

@@ -28,6 +28,102 @@ PERSONA_CLUSTER_CONFIG = {
 }
 
 
+# Benign CreateRemoteThread pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image)
+_BENIGN_CRT_PAIRS = [
+    (
+        "msmpeng",
+        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
+        "explorer",
+        r"C:\Windows\explorer.exe",
+    ),
+    (
+        "msmpeng",
+        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
+        "runtime_broker",
+        r"C:\Windows\System32\RuntimeBroker.exe",
+    ),
+    (
+        "csrss_s0",
+        r"C:\Windows\System32\csrss.exe",
+        "svchost_local_system",
+        r"C:\Windows\System32\svchost.exe",
+    ),
+    (
+        "svchost_netsvcs",
+        r"C:\Windows\System32\svchost.exe",
+        "taskhostw",
+        r"C:\Windows\System32\taskhostw.exe",
+    ),
+]
+
+# Benign ProcessAccess pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image, granted_access)
+_BENIGN_PA_PAIRS = [
+    (
+        "msmpeng",
+        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
+        "explorer",
+        r"C:\Windows\explorer.exe",
+        "0x1410",
+    ),
+    (
+        "msmpeng",
+        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
+        "svchost_netsvcs",
+        r"C:\Windows\System32\svchost.exe",
+        "0x1010",
+    ),
+    (
+        "msmpeng",
+        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1410",
+    ),
+    (
+        "csrss_s0",
+        r"C:\Windows\System32\csrss.exe",
+        "explorer",
+        r"C:\Windows\explorer.exe",
+        "0x1000",
+    ),
+    (
+        "csrss_s0",
+        r"C:\Windows\System32\csrss.exe",
+        "svchost_local_system",
+        r"C:\Windows\System32\svchost.exe",
+        "0x1000",
+    ),
+    (
+        "services",
+        r"C:\Windows\System32\services.exe",
+        "svchost_netsvcs",
+        r"C:\Windows\System32\svchost.exe",
+        "0x1000",
+    ),
+    (
+        "services",
+        r"C:\Windows\System32\services.exe",
+        "msmpeng",
+        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
+        "0x1000",
+    ),
+    (
+        "svchost_local_system",
+        r"C:\Windows\System32\svchost.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
+]
+
+# Synthetic SYSTEM user for baseline Event 8/10 generation
+_SYSTEM_USER = User(
+    username="SYSTEM",
+    full_name="NT AUTHORITY\\SYSTEM",
+    email="system@system.local",
+)
+
+
 class BaselineMixin:
     """Mixin providing baseline activity generation methods."""
 
@@ -808,6 +904,49 @@ class BaselineMixin:
                         command_line=task_cmd,
                         parent_pid=parent_pid,
                         username="root",
+                    )
+
+            # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
+            if os_cat == "windows":
+                num_crt = rng.randint(1, 3)
+                for _ in range(num_crt):
+                    src_key, src_image, tgt_key, tgt_image = rng.choice(_BENIGN_CRT_PAIRS)
+                    src_pid = sys_pids.get(src_key, rng.randint(1000, 5000))
+                    tgt_pid = sys_pids.get(tgt_key, rng.randint(1000, 5000))
+                    if src_pid == tgt_pid:
+                        continue
+                    offset = rng.randint(0, 3599) + rng.random()
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_create_remote_thread(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=ts,
+                        source_pid=src_pid,
+                        source_image=src_image,
+                        target_pid=tgt_pid,
+                        target_image=tgt_image,
+                    )
+
+            # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
+            if os_cat == "windows":
+                num_pa = rng.randint(3, 8)
+                for _ in range(num_pa):
+                    src_key, src_image, tgt_key, tgt_image, access = rng.choice(_BENIGN_PA_PAIRS)
+                    src_pid = sys_pids.get(src_key, rng.randint(1000, 5000))
+                    tgt_pid = sys_pids.get(tgt_key, rng.randint(1000, 5000))
+                    offset = rng.randint(0, 3599) + rng.random()
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    self.activity_generator.generate_process_access(
+                        user=_SYSTEM_USER,
+                        system=system,
+                        time=ts,
+                        source_pid=src_pid,
+                        source_image=src_image,
+                        target_pid=tgt_pid,
+                        target_image=tgt_image,
+                        granted_access=access,
                     )
 
             # ICMP: monitoring pings between servers

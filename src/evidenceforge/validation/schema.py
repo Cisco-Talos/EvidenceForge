@@ -61,6 +61,7 @@ _WINDOWS_EVENT_TYPES = {
     "scheduled_task_created",
     "log_cleared",
     "create_remote_thread",
+    "process_access",
 }
 
 # Event types that imply Linux/SSH

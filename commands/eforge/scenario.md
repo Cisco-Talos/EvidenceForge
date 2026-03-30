@@ -311,7 +311,7 @@ These are just examples — invent additional realistic variations appropriate t
 
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `raw`
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `process_access`, `raw`
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 
@@ -397,7 +397,7 @@ events:
 - `net user backdoor P@ss /add` → declare both `process` and `account_created` (with `target_username`)
 - `sc create evilsvc binPath=...` → declare both `process` and `service_installed` (with `service_name` and `service_file_name`)
 - `wevtutil cl Security` → declare both `process` and `log_cleared`
-- mimikatz credential dumping → declare `process` and `create_remote_thread` (with `target_process: lsass.exe`)
+- mimikatz credential dumping → declare `process`, `create_remote_thread` (with `target_process: lsass.exe`), and optionally `process_access` (with `target_process: lsass.exe`, `granted_access: "0x1010"`)
 
 The engine auto-infers 6 common Windows command patterns as a safety net, but do not rely on this -- always declare correlated events explicitly.
 

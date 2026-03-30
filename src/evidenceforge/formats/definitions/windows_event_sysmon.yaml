@@ -10,7 +10,7 @@ fields:
     required: true
     description: "Sysmon Event ID"
     constraints:
-      allowed_values: [1, 8, 10]
+      allowed_values: [1, 5, 8, 10]
 
   - name: TimeCreated
     type: timestamp
@@ -101,6 +101,30 @@ variants:
       - name: ParentCommandLine
         type: string
         required: false
+
+  # Sysmon EventID 5: Process Terminated
+  - name: sysmon_process_terminate
+    event_id: "5"
+    description: "Process terminated"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: User
+        type: string
+        required: true
 
   # Sysmon EventID 8: CreateRemoteThread
   - name: sysmon_create_remote_thread
@@ -197,7 +221,7 @@ output:
       <System>
         <Provider Name="Microsoft-Windows-Sysmon" Guid="{5770385f-c22a-43e0-bf4c-06f5698ffbd9}"/>
         <EventID>{{ EventID }}</EventID>
-        <Version>{{ {1: 5, 8: 2, 10: 3}.get(EventID, 2) }}</Version>
+        <Version>{{ {1: 5, 5: 3, 8: 2, 10: 3}.get(EventID, 2) }}</Version>
         <Level>4</Level>
         <Task>{{ EventID }}</Task>
         <Opcode>0</Opcode>
@@ -234,6 +258,13 @@ output:
         <Data Name="ParentProcessId">{{ ParentProcessId | default(0) }}</Data>
         <Data Name="ParentImage">{{ ParentImage | default('-') }}</Data>
         <Data Name="ParentCommandLine">{{ ParentCommandLine | default('-') }}</Data>
+        {% elif EventID == 5 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         {% elif EventID == 8 %}
         <Data Name="RuleName">{{ RuleName | default('') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>

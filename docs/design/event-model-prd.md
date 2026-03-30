@@ -368,10 +368,11 @@ class LogEmitter(ABC):
 | Emitter | `_supported_types` |
 |---|---|
 | `WindowsEventEmitter` | `{logon, logon_failed, logoff, process_create, process_terminate, system_process_create, machine_logon, kerberos_tgt, kerberos_service, ntlm_validation}` |
+| `SysmonEventEmitter` | `{process_create, system_process_create, process_terminate, create_remote_thread, process_access}` |
 | `SyslogEmitter` | `{logon, logon_failed, logoff, process_create, bash_command}` |
 | `ZeekEmitter` (conn) | `{connection}` |
 | `ZeekDnsEmitter` | `{dns_query}` |
-| `EcarEmitter` | `{logon, logoff, process_create, process_terminate, file_operation, registry_operation, module_load, connection}` |
+| `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, module_load, create_remote_thread, process_access}` |
 | `SnortEmitter` | `{connection}` (only when `event.ids` is populated) |
 | `BashHistoryEmitter` | `{bash_command}` |
 | `WebEmitter` | `{web_request}` |

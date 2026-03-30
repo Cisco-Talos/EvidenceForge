@@ -225,7 +225,8 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `service_installed` | 4697 | `service_name`, `service_file_name` | `service_account` |
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
-| `create_remote_thread` | Sysmon 8 | `target_process` | |
+| `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
+| `process_access` | Sysmon 10, eCAR PROCESS/OPEN | `target_process` | `granted_access` (default `0x1010`) |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
