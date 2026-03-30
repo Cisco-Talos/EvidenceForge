@@ -768,6 +768,19 @@ class ActivityGenerator:
                 time=time,
             )
 
+            # 4771 Kerberos pre-authentication failure on DC
+            # In real AD, Kerberos is tried first; 4771 fires before 4625/4776
+            # for wrong-password failures.
+            if substatus == "0xc000006a":  # Wrong password
+                krb_time = time - timedelta(milliseconds=_get_rng().randint(5, 50))
+                self.generate_kerberos_preauth_failed(
+                    username=effective_username,
+                    source_ip=source_ip,
+                    dc_hostname=dc_system.hostname,
+                    time=krb_time,
+                    status="0x18",  # KDC_ERR_PREAUTH_FAILED
+                )
+
         logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
 
     def generate_logoff(
@@ -2334,6 +2347,23 @@ class ActivityGenerator:
                 source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip
             else:
                 source_ip = None  # Local console on Windows — defaults to system.ip
+
+            # For Linux hosts with remote logon, emit SSH session (network-side evidence)
+            # before the host-side auth event — matches real-world ordering.
+            if (
+                _get_os_category(system.os) == "linux"
+                and logon_type in (2, 10)
+                and source_ip
+                and source_ip != system.ip
+            ):
+                ssh_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
+                self.generate_ssh_session(
+                    user=user,
+                    target_system=system,
+                    time=ssh_time,
+                    source_ip=source_ip,
+                )
+
             self.generate_logon(user, system, time, logon_type=logon_type, source_ip=source_ip)
 
         # Process activities
