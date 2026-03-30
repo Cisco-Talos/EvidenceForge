@@ -222,14 +222,33 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
 | `group_member_added` | 4728/4732/4756 (on DC) | `group_name`, `member_name` | `scope` (global/local/universal) |
-| `service_installed` | 4697 | `service_name`, `service_file_name` | `service_account` |
+| `service_installed` | 4697, eCAR SERVICE/CREATE | `service_name`, `service_file_name` | `service_account` |
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `process_access` | Sysmon 10, eCAR PROCESS/OPEN | `target_process` | `granted_access` (default `0x1010`) |
+| `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+### DHCP Lease Events
+
+Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attacker plugging in a device during physical access, or a compromised host requesting a new IP).
+
+```yaml
+- time: "+5m"
+  actor: attacker
+  system: ROGUE-LAPTOP
+  activity: "Rogue device obtains IP via DHCP"
+  events:
+    - type: dhcp_lease
+      mac_address: "00:50:56:a1:b2:c3"
+      requested_ip: "10.10.10.99"
+      technique: "T1200 - Hardware Additions"
+```
+
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC from the system IP and uses the system's configured IP if omitted.
 
 ### HTTP Connection Events
 

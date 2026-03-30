@@ -372,7 +372,7 @@ class LogEmitter(ABC):
 | `SyslogEmitter` | `{logon, logon_failed, logoff, process_create, bash_command}` |
 | `ZeekEmitter` (conn) | `{connection}` |
 | `ZeekDnsEmitter` | `{dns_query}` |
-| `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, module_load, create_remote_thread, process_access}` |
+| `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, module_load, create_remote_thread, process_access, service_installed}` |
 | `SnortEmitter` | `{connection}` (only when `event.ids` is populated) |
 | `BashHistoryEmitter` | `{bash_command}` |
 | `WebEmitter` | `{web_request}` |

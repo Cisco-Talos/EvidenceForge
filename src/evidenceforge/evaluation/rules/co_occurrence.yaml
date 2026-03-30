@@ -95,6 +95,15 @@ windows_event_security:
       - field: TargetUserName
         min_length: 1
 
+  - name: "Kerberos preauth failure has status"
+    condition:
+      EventID: 4771
+    checks:
+      - field: Status
+        present: true
+      - field: TargetUserName
+        min_length: 1
+
   - name: "WFP connection has direction"
     condition:
       EventID: 5156
@@ -211,6 +220,15 @@ ecar:
       - field: src_ip
         present: true
       - field: dst_ip
+        present: true
+
+  # SERVICE-specific
+  - name: "SERVICE/CREATE has service name"
+    condition:
+      object: "SERVICE"
+      action: "CREATE"
+    checks:
+      - field: service_name
         present: true
 
   # USER_SESSION-specific

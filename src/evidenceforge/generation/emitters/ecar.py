@@ -39,6 +39,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "module_load",
         "create_remote_thread",
         "process_access",
+        "service_installed",
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
@@ -63,6 +64,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "module_load": self._render_module_event,
             "create_remote_thread": self._render_create_remote_thread,
             "process_access": self._render_process_access,
+            "service_installed": self._render_service_installed,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(f"EcarEmitter: no render method for {event.event_type}")
@@ -349,6 +351,26 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         self.emit_event(event_data)
 
+    def _render_service_installed(self, event: SecurityEvent) -> None:
+        """Render eCAR SERVICE/CREATE event (logged on src_host)."""
+        host = event.src_host
+        service = event.service
+        event_data = {
+            "timestamp": event.timestamp,
+            "hostname": self._host_name(host),
+            "object": "SERVICE",
+            "action": "CREATE",
+            "pid": -1,
+            "principal": event.auth.username if event.auth else "",
+            "_host_fqdn": self._host_fqdn(host),
+        }
+        if service:
+            event_data["service_name"] = service.service_name
+            event_data["image_path"] = service.service_file_name
+            event_data["service_account"] = service.service_account
+        self._apply_edr_context(event_data, event)
+        self.emit_event(event_data)
+
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Route event to per-host writer."""
         rendered = self._render_event(event_data)
@@ -383,6 +405,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "user_stack_base",
         "user_stack_limit",
         "granted_access",
+        "service_name",
+        "service_account",
     )
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
