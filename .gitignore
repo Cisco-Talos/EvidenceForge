@@ -55,6 +55,7 @@ checkpoints/
 
 # Ignore any scenarios we might produce
 scenarios/
+!scenarios/COVERAGE-TEST-PROMPT.md
 
 
 # Sample data (reference only, not tracked)

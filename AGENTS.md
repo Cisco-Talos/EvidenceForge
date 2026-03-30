@@ -45,37 +45,6 @@ This project uses `TODO.md` as the **persistent implementation plan and progress
    - Add them to `TODO.md` in the appropriate phase/section
    - Use `- [ ]` for pending tasks
 
-### TODO.md Format
-
-Use markdown checkboxes organized by phase/feature:
-
-```markdown
-# EvidenceForge Implementation Plan
-
-## Phase 1: Core Generation (Target: 2-3 weeks)
-
-### Setup & Foundation
-- [x] Initialize project structure with uv
-- [x] Create Pydantic models for configuration
-- [ ] **IN PROGRESS** Create Pydantic models for scenario schema
-- [ ] Set up pytest infrastructure with fixtures
-
-### State Management
-- [ ] Implement StateManager class
-- [ ] Add session tracking (ActiveSession)
-- [ ] Add process tracking (RunningProcess)
-...
-```
-
-### Why This Matters
-
-- **Recovery:** If a session is interrupted, the next agent (or you in a new session) can pick up exactly where work left off
-- **Visibility:** Always know what's done, what's in progress, what's next
-- **Planning:** Break down PRD requirements into concrete, trackable work items
-- **History:** Keep completed items checked off to show progress
-
-**Never delete completed tasks** - they show the project's progress and help with debugging/context.
-
 ### Changelog Workflow
 
 When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line summary and move the detailed task history to `CHANGELOG.md`. This keeps `TODO.md` focused on active/future work while preserving the full development record.
@@ -106,21 +75,7 @@ When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line su
 
 ## Dependency Management
 
-```bash
-# Add runtime dependency
-uv add package-name
-
-# Add dev dependency
-uv add --dev package-name
-
-# Run tests
-uv run pytest
-
-# Run the CLI
-uv run python -m evidenceforge --help
-```
-
-**Important:** Never use `pip` directly. Always use `uv` for dependency management. The `pyproject.toml` is the source of truth.
+Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the source of truth.
 
 ## Code Style & Standards
 
@@ -148,11 +103,7 @@ uv run python -m evidenceforge --help
 - Annotate variables when the type isn't obvious from the assignment
 
 ### Docstrings
-- Google-style docstrings for all public functions, classes, and modules
-- Include Args, Returns, Raises sections for non-trivial functions
-- Private functions (`_`-prefixed): optional but encouraged for complex logic
-- Test functions: optional (name should be self-documenting)
-- One-liners acceptable for simple utilities
+- Google-style docstrings for public functions/classes. Test functions: name is the doc.
 
 ### Error Handling
 - Define specific custom exceptions inheriting from `EvidenceForgeError` base
@@ -176,16 +127,7 @@ uv run python -m evidenceforge --help
 - Provide clear error messages in validators
 
 ### Path Handling
-- Always use `pathlib.Path`, never string paths
-- Use Path methods (`.exists()`, `.mkdir()`, `.read_text()`, `.open()`)
-- Resolve paths early at boundaries: `Path(user_input).resolve()`
-- Check paths before operations — fail fast with clear messages
-
-## Configuration
-
-Configuration is primarily through scenario YAML files and CLI arguments. No config.yaml or .env file is needed.
-
-**Secrets:** Never log credential values or include secrets in error messages. Use redaction in debug output.
+- Always use `pathlib.Path`, never string paths. Resolve paths early at boundaries.
 
 ## Key Architecture Patterns
 
@@ -229,6 +171,17 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 - Support per-system timezone overrides with pattern matching
 - Default timezone from `environment.timezone.default`
 
+### Event & Schema Change Checklist
+
+When adding or significantly modifying event types, emitters, or the event schema, update ALL of the following:
+
+1. **Documentation** — `docs/reference/EVIDENCE_FORMATS.md`, `docs/reference/scenario-reference.md`, `README.md`
+2. **Architecture & design docs** — `docs/ARCHITECTURE.md` (emitter tree, event type list), `docs/design/event-model-prd.md` (supported types tables)
+3. **Skills** — `commands/eforge/scenario.md` (event type list + examples), other skills as relevant
+4. **Validation** — `src/evidenceforge/validation/schema.py` (event type sets, OS-gating)
+5. **Evaluation** — `src/evidenceforge/evaluation/dimensions/` (signal_integrity, noise_realism), `src/evidenceforge/evaluation/rules/` (co_occurrence.yaml, causal_pairs.yaml)
+6. **Coverage test prompt** — `scenarios/COVERAGE-TEST-PROMPT.md` (event type count, storyline steps, format-specific verification sections)
+
 ## CLI Design Patterns
 
 - Use Typer with `Annotated` type hints for all options/arguments
@@ -267,15 +220,6 @@ Claude Code Skills handle the interactive, creative aspects of scenario creation
 
 **Location:** `commands/eforge/` directory
 
-**Installation:**
-```bash
-# Install skills for the current project
-eforge install-skills --project
-
-# Install skills globally
-eforge install-skills --global
-```
-
 **Skills:**
 - `/eforge scenario` — Guided scenario creation through a structured interview, producing a validated YAML scenario file
 - `/eforge generate` — Generation workflow that validates a scenario and runs the deterministic engine
@@ -301,10 +245,3 @@ Skills are markdown prompt files (`.md`), not Python code. They run inside Claud
 - Scenario schema: `docs/reference/scenario-reference.md`
 - Evidence formats: `docs/reference/EVIDENCE_FORMATS.md`
 - Data quality: `docs/design/data-quality-prd.md`
-
-**Getting Started:**
-```bash
-uv sync
-uv run pytest
-uv run python -m evidenceforge --help
-```
