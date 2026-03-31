@@ -434,6 +434,11 @@ class TemporalRealismScorer(DimensionScorer):
             if not before_records or not after_records:
                 continue
 
+            # match_mode: "exact" (default) or "list_contains" (before field is a list,
+            # any element matching the after field value counts)
+            match_mode = rule.get("match_mode", "exact")
+            exclude_ports = rule.get("exclude_ports", [])
+
             # Build index of "before" records by match field value
             before_index: dict[str, list[ParsedRecord]] = defaultdict(list)
             for rec in before_records:
@@ -447,11 +452,20 @@ class TemporalRealismScorer(DimensionScorer):
                 if before_field:
                     key_val = rec.fields.get(before_field)
                     if key_val:
-                        idx_key = str(key_val)
-                        if extra_match:
-                            extra_val = rec.fields.get(extra_match, "")
-                            idx_key = f"{idx_key}|{extra_val}"
-                        before_index[idx_key].append(rec)
+                        if match_mode == "list_contains" and isinstance(key_val, list):
+                            # Index each element of the list separately
+                            for item in key_val:
+                                idx_key = str(item)
+                                if extra_match:
+                                    extra_val = rec.fields.get(extra_match, "")
+                                    idx_key = f"{idx_key}|{extra_val}"
+                                before_index[idx_key].append(rec)
+                        else:
+                            idx_key = str(key_val)
+                            if extra_match:
+                                extra_val = rec.fields.get(extra_match, "")
+                                idx_key = f"{idx_key}|{extra_val}"
+                            before_index[idx_key].append(rec)
 
             # Accounts that are always active (SYSTEM, machine accounts) don't need
             # a preceding logon — they run from boot, not via interactive logon.
@@ -463,6 +477,12 @@ class TemporalRealismScorer(DimensionScorer):
                     continue
                 if not self._condition_matches(after_cond, rec.fields):
                     continue
+
+                # Skip connections on excluded ports (e.g., DNS port 53)
+                if exclude_ports:
+                    resp_p = rec.fields.get("id.resp_p")
+                    if resp_p is not None and int(resp_p) in exclude_ports:
+                        continue
 
                 # Skip built-in/machine accounts from causal checks
                 if exclude_accounts:

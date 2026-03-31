@@ -104,6 +104,21 @@ pairs:
 
   # Causal expansion engine rules — verify auto-generated prerequisites
 
+  - name: "DNS resolution before TCP connection"
+    before:
+      format: zeek_dns
+      condition:
+        rcode_name: NOERROR
+    after:
+      format: zeek_conn
+      condition:
+        proto: tcp
+    match_fields:
+      before: "answers"
+      after: "id.resp_h"
+    match_mode: list_contains
+    exclude_ports: [53]
+
   - name: "Kerberos TGT before service ticket"
     before:
       format: windows_event_security
