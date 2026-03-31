@@ -101,3 +101,32 @@ pairs:
     match_fields:
       before: hostname
       after: hostname
+
+  # Causal expansion engine rules — verify auto-generated prerequisites
+
+  - name: "Kerberos TGT before service ticket"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4768
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4769
+    match_fields:
+      before: TargetUserName
+      after: TargetUserName
+    extra_match: Computer
+
+  - name: "Kerberos TGT before domain logon"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4768
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4624
+    match_fields:
+      before: TargetUserName
+      after: TargetUserName
