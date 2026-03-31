@@ -397,6 +397,8 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Process→network correlation:** Baseline process creation triggers correlated network connections when the executable normally generates traffic (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID carried for eCAR FLOW correlation.
 
+**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages including SSH login/key exchange (70% key / 30% password), package management (apt-daily / dnf-automatic), systemd timer execution, logrotate file detail, and journald statistics — alongside existing systemd lifecycle, cron, UFW, logind, snapd, NTP, and other daemon messages.
+
 **Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
 ### Key Patterns

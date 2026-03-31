@@ -214,11 +214,11 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ---
 
-## Data Realism — IN PROGRESS
+## Data Realism — COMPLETE
 
 **Goal:** Address structural realism gaps identified by adversarial review. These are issues where the generated data is technically correct but experienced analysts or ML models would identify it as synthetic due to missing real-world patterns. Prioritized by impact on analyst training, then implementation complexity.
 
-**Completed so far:** Causal expansion engine (#1), Hawkes temporal model (#2), network-level red herrings (#4), entity lifecycle validation (#5), day-of-week variation (#6), process→network correlation (#7), stale account enrichment (#9), legitimate lateral movement (#11, 26 patterns), command pool diversification (#12). Sensor timestamp skew (#10) dropped — tight NTP is best practice.
+**Completed:** All items except #13 (Cloud/SaaS formats, deferred to post-MVP). Sensor timestamp skew (#10) dropped — tight NTP is best practice.
 
 ### Temporal Realism
 
@@ -230,7 +230,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 ### Baseline Depth
 
 - [x] **Process → network correlation** — Baseline processes now emit correlated connections via _PROCESS_NETWORK_MAP (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID for eCAR FLOW correlation.
-- [ ] **Linux baseline activity** — Add cron jobs, systemd service restarts, package manager activity, log rotation, NFS mounts. Currently Linux hosts get storyline commands but minimal baseline noise, making any Linux activity immediately suspicious.
+- [x] **Linux baseline activity** — SSH login/key exchange messages (70% key / 30% password), package management (apt-daily/dnf-automatic), systemd timer execution (fstrim/logrotate/tmpfiles), logrotate file detail, journald runtime statistics. 18 syslog categories total.
 - [x] **Legitimate lateral movement** — 26 patterns: backup agents, monitoring, AD replication, app→DB, config management, DNS zone transfers, NFS, Docker registry, syslog relay, etc. Conditional on environment topology and system roles.
 - [x] **Stale account enrichment** — Kerberos pre-auth failures (4771, 0x12), scheduled task failures (batch logon type 4), service startup failures (type 5, first hour), plus existing failed network logons.
 
@@ -245,7 +245,6 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ### Format Expansion
 
-- [ ] **Cloud/SaaS log formats** — Azure AD sign-in logs, AWS CloudTrail, GCP audit logs, M365 audit logs. Most modern SOCs are hybrid; on-prem-only formats limit training relevance.
 - [x] **Static command pool diversification** — All process template categories parameterized with {placeholder} syntax. New _GENERAL_PARAMS pool (project paths, doc names, build configs, git branches, internal URLs). Per-user affinity via {username} substitution.
 
 ---
@@ -255,6 +254,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 ### Short-term
 - [ ] **Configurable work-week schedules** — Allow scenario authors to shift the typical workday (e.g., Tues–Sunday for retail/healthcare), define shift workers with non-standard hours, or specify per-persona day-of-week overrides
 - [ ] **Storyline cadence field** — `cadence: human|automated|periodic(interval, jitter)` on storyline steps for malware beacons, AI-driven attacks, and automated exfiltration with appropriate timing (currently all steps use human typing cadence by default)
+- [ ] **Cloud/SaaS log formats** — Azure AD sign-in logs, AWS CloudTrail, GCP audit logs, M365 audit logs. Most modern SOCs are hybrid; on-prem-only formats limit training relevance
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation
