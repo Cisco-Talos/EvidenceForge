@@ -30,6 +30,7 @@ import logging
 import sys
 from pathlib import Path
 
+import click
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -48,11 +49,36 @@ from evidenceforge.generation import GenerationEngine
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
 
+
+class AbbreviatedGroup(typer.core.TyperGroup):
+    """Typer Group that resolves unique command prefixes.
+
+    Allows 'eforge v' instead of 'eforge validate', 'eforge g' instead
+    of 'eforge generate', etc. Exact matches always win. Ambiguous
+    prefixes produce a clear error listing the matching commands.
+    """
+
+    def resolve_command(self, ctx: click.Context, args: list[str]) -> tuple:
+        cmd_name = args[0] if args else None
+        if cmd_name is not None:
+            # Exact match takes priority
+            if cmd_name in self.commands:
+                return super().resolve_command(ctx, args)
+            # Find all commands that start with the prefix
+            matches = [name for name in self.commands if name.startswith(cmd_name)]
+            if len(matches) == 1:
+                args[0] = matches[0]
+            elif len(matches) > 1:
+                ctx.fail(f"Ambiguous command '{cmd_name}': could be {', '.join(sorted(matches))}")
+        return super().resolve_command(ctx, args)
+
+
 # Initialize Typer app and Rich console
 app = typer.Typer(
     name="eforge",
     help="EvidenceForge - Generate realistic synthetic security logs for threat hunting training",
     add_completion=False,
+    cls=AbbreviatedGroup,
 )
 console = Console()
 
