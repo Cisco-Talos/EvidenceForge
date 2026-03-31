@@ -214,9 +214,11 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ---
 
-## Data Realism — PLANNED
+## Data Realism — IN PROGRESS
 
 **Goal:** Address structural realism gaps identified by adversarial review. These are issues where the generated data is technically correct but experienced analysts or ML models would identify it as synthetic due to missing real-world patterns. Prioritized by impact on analyst training, then implementation complexity.
+
+**Completed so far:** Causal expansion engine (#1), day-of-week variation (#6), stale account enrichment (#9), legitimate lateral movement (#11, 26 patterns), command pool diversification (#12). Sensor timestamp skew (#10) dropped — tight NTP is best practice.
 
 ### Temporal Realism
 
