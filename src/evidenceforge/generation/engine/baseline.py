@@ -39,8 +39,11 @@ from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
+    generate_scheduled_scan_overlap,
     generate_service_account_anomaly,
     generate_suspicious_cli,
+    generate_suspicious_dns,
+    generate_unusual_outbound,
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
@@ -769,6 +772,85 @@ class BaselineMixin:
                         time=result["time"],
                         logon_type=result["logon_type"],
                     )
+
+            elif pattern_type == "suspicious_dns":
+                result = generate_suspicious_dns(rng, enabled_users, systems, current_hour)
+                if result:
+                    # Emit DNS query via a UDP/53 connection with DnsContext
+                    from evidenceforge.events.contexts import DnsContext
+
+                    dns_ctx = DnsContext(
+                        query=result["hostname"],
+                        trans_id=rng.randint(1, 65535),
+                        qtype=1,
+                        query_type="A",
+                        rcode="NOERROR",
+                        rcode_num=0,
+                        answers=[f"198.51.100.{rng.randint(1, 254)}"],
+                        TTLs=[float(rng.randint(30, 300))],
+                        rtt=rng.uniform(0.005, 0.1),
+                    )
+                    dns_server_ips = getattr(
+                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                    )
+                    self.state_manager.set_current_time(result["time"])
+                    self.activity_generator.generate_connection(
+                        src_ip=result["system"].ip,
+                        dst_ip=rng.choice(dns_server_ips),
+                        time=result["time"],
+                        dst_port=53,
+                        proto="udp",
+                        service="dns",
+                        duration=rng.uniform(0.001, 0.05),
+                        orig_bytes=rng.randint(40, 100),
+                        resp_bytes=rng.randint(80, 400),
+                        dns=dns_ctx,
+                    )
+
+            elif pattern_type == "unusual_outbound":
+                result = generate_unusual_outbound(rng, enabled_users, systems, current_hour)
+                if result:
+                    self.state_manager.set_current_time(result["time"])
+                    # Large transfers get bigger byte counts
+                    if result.get("large_transfer"):
+                        orig_bytes = rng.randint(500000, 5000000)
+                        resp_bytes = rng.randint(1000, 50000)
+                        duration = rng.uniform(10.0, 120.0)
+                    else:
+                        orig_bytes = rng.randint(500, 5000)
+                        resp_bytes = rng.randint(1000, 50000)
+                        duration = rng.uniform(0.5, 10.0)
+                    self.activity_generator.generate_connection(
+                        src_ip=result["system"].ip,
+                        dst_ip=result["dst_ip"],
+                        time=result["time"],
+                        dst_port=result["dst_port"],
+                        service=result["service"],
+                        duration=duration,
+                        orig_bytes=orig_bytes,
+                        resp_bytes=resp_bytes,
+                        emit_dns=True,
+                    )
+
+            elif pattern_type == "scheduled_scan_overlap":
+                result = generate_scheduled_scan_overlap(rng, enabled_users, systems, current_hour)
+                if result:
+                    scanner = result["scanner"]
+                    scan_ports = [22, 80, 135, 443, 445, 3389, 8080, 8443]
+                    for target in result["targets"]:
+                        for port in rng.sample(scan_ports, rng.randint(2, 4)):
+                            scan_time = result["time"] + timedelta(seconds=rng.uniform(0, 30))
+                            self.state_manager.set_current_time(scan_time)
+                            self.activity_generator.generate_connection(
+                                src_ip=scanner.ip,
+                                dst_ip=target.ip,
+                                time=scan_time,
+                                dst_port=port,
+                                proto="tcp",
+                                duration=rng.uniform(0.01, 0.5),
+                                orig_bytes=rng.randint(50, 200),
+                                resp_bytes=rng.randint(50, 500),
+                            )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
         """Terminate processes that have exceeded their expected lifetime.

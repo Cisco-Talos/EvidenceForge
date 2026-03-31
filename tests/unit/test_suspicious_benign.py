@@ -177,6 +177,9 @@ class TestPickSuspiciousPattern:
             "suspicious_cli",
             "failed_logon_burst",
             "service_account_anomaly",
+            "suspicious_dns",
+            "unusual_outbound",
+            "scheduled_scan_overlap",
         }
         for seed in range(50):
             result = pick_suspicious_pattern(
@@ -190,20 +193,15 @@ class TestPickSuspiciousPattern:
         sysadmin_users = [
             User(username="admin1", full_name="Admin", email="a@x.com", persona="sysadmin")
         ]
-        counts = {
-            "after_hours_admin": 0,
-            "suspicious_cli": 0,
-            "failed_logon_burst": 0,
-            "service_account_anomaly": 0,
-        }
+        counts: dict[str, int] = {}
         for seed in range(200):
             result = pick_suspicious_pattern(
                 random.Random(seed), sysadmin_users, systems, None, current_hour
             )
             if result:
-                counts[result["type"]] += 1
+                counts[result["type"]] = counts.get(result["type"], 0) + 1
         # With sysadmin users, after_hours_admin should have weight 3 (vs 1 for suspicious_cli without devs)
-        assert counts["after_hours_admin"] > counts["suspicious_cli"]
+        assert counts.get("after_hours_admin", 0) > counts.get("suspicious_cli", 0)
 
 
 class TestGenerateAfterHoursAdmin:
