@@ -475,6 +475,10 @@ class ActivityGenerator:
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
+        dc_systems = getattr(self, "_dc_systems", [])
+        if not hasattr(self, "_created_account_sids"):
+            self._created_account_sids: dict[str, str] = {}
+
         return ExpansionContext(
             event_type=event_type,
             timestamp=timestamp,
@@ -491,11 +495,19 @@ class ActivityGenerator:
             source_system=kwargs.get("source_system"),
             target_system=kwargs.get("target_system"),
             actor=kwargs.get("actor"),
+            source_pid=kwargs.get("source_pid"),
+            source_image=kwargs.get("source_image"),
+            target_pid=kwargs.get("target_pid"),
+            target_image=kwargs.get("target_image"),
+            skip_types=kwargs.get("skip_types", set()),
             dns_cache=self._dns_cache,
             kerberos_cache=self._kerberos_cache,
             dns_server_ips=dns_server_ips,
             dc_hostnames=dc_hostnames,
+            dc_systems=dc_systems,
             ad_domain=ad_domain,
+            sid_registry=self.sid_registry,
+            created_account_sids=self._created_account_sids,
         )
 
     def _expand_and_emit(

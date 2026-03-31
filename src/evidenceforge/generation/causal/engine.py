@@ -62,12 +62,25 @@ class ExpansionContext:
     target_system: Any = None
     actor: Any = None
 
+    # Process/thread fields (for create_remote_thread, process_access)
+    source_pid: int | None = None
+    source_image: str | None = None
+    target_pid: int | None = None
+    target_image: str | None = None
+
+    # Supplementary event dedup: event types explicitly declared in the
+    # storyline step, so the engine skips auto-generating them.
+    skip_types: set[str] = field(default_factory=set)
+
     # Engine state for caching/dedup
     dns_cache: dict[tuple[str, str], float] = field(default_factory=dict)
     kerberos_cache: dict[str, float] = field(default_factory=dict)
     dns_server_ips: list[str] = field(default_factory=lambda: ["10.0.0.1"])
     dc_hostnames: list[str] = field(default_factory=list)
+    dc_systems: list[Any] = field(default_factory=list)
     ad_domain: str = "corp.local"
+    sid_registry: dict[str, str] = field(default_factory=dict)
+    created_account_sids: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

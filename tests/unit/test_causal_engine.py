@@ -35,6 +35,8 @@ from evidenceforge.generation.causal.rules import (
     DnsBeforeConnection,
     ExpansionRule,
     KerberosBeforeLogon,
+    ProcessAccessAfterRemoteThread,
+    SupplementaryAuditEvents,
 )
 from evidenceforge.generation.causal.timing import TimingSpec
 
@@ -381,3 +383,181 @@ class TestKerberosBeforeLogon:
         assert ev.kwargs["auth_package"] == "Kerberos"
         assert ev.kwargs["source_ip"] == "10.10.10.5"
         assert ev.timing.position == "before"
+
+
+# --- ProcessAccessAfterRemoteThread rule ---
+
+
+class TestProcessAccessAfterRemoteThread:
+    def test_matches_crt_targeting_lsass(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(target_image=r"C:\Windows\System32\lsass.exe")
+        assert rule.matches("create_remote_thread", ctx) is True
+
+    def test_matches_lsass_case_insensitive(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(target_image=r"C:\Windows\System32\LSASS.EXE")
+        assert rule.matches("create_remote_thread", ctx) is True
+
+    def test_skips_non_lsass_target(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(target_image=r"C:\Windows\System32\svchost.exe")
+        assert rule.matches("create_remote_thread", ctx) is False
+
+    def test_skips_non_crt_event(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(target_image=r"C:\Windows\System32\lsass.exe")
+        assert rule.matches("process_create", ctx) is False
+
+    def test_skips_no_target_image(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(target_image=None)
+        assert rule.matches("create_remote_thread", ctx) is False
+
+    def test_expand_returns_process_access(self):
+        rule = ProcessAccessAfterRemoteThread()
+        ctx = _make_ctx(
+            actor="attacker",
+            target_system="WS-01",
+            source_pid=1234,
+            source_image=r"C:\temp\mimikatz.exe",
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+        result = rule.expand("create_remote_thread", ctx)
+        assert len(result) == 1
+        ev = result[0]
+        assert ev.method == "generate_process_access"
+        assert ev.kwargs["granted_access"] == "0x1010"
+        assert ev.kwargs["source_pid"] == 1234
+        assert ev.kwargs["target_pid"] == 636
+        assert ev.timing.position == "after"
+        assert ev.timing.min_ms == 1
+        assert ev.timing.max_ms == 50
+
+
+# --- SupplementaryAuditEvents rule ---
+
+
+class TestSupplementaryAuditEvents:
+    def test_matches_windows_process_with_command(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(os_category="windows", command_line="cmd.exe /c whoami")
+        assert rule.matches("process_create", ctx) is True
+
+    def test_skips_linux(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(os_category="linux", command_line="whoami")
+        assert rule.matches("process_create", ctx) is False
+
+    def test_skips_empty_command(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(os_category="windows", command_line="")
+        assert rule.matches("process_create", ctx) is False
+
+    def test_skips_non_process_event(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(os_category="windows", command_line="net user hacker P@ss /add")
+        assert rule.matches("connection", ctx) is False
+
+    def test_expand_net_user_add(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line="net user hacker P@ssw0rd /add /domain",
+            actor="attacker",
+            target_system="DC-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        ev = result[0]
+        assert ev.method == "generate_account_created"
+        assert ev.kwargs["target_username"] == "hacker"
+        assert ev.timing.position == "after"
+
+    def test_expand_net_user_delete(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line="net user hacker /delete",
+            actor="attacker",
+            target_system="DC-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        assert result[0].method == "generate_account_deleted"
+
+    def test_expand_schtasks_create(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line='schtasks /create /tn "Backdoor" /tr "C:\\temp\\evil.exe" /sc daily',
+            actor="attacker",
+            target_system="WS-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        assert result[0].method == "generate_scheduled_task"
+        assert result[0].kwargs["task_name"] == "Backdoor"
+
+    def test_expand_sc_create(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line='sc create EvilSvc binpath= "C:\\temp\\evil.exe"',
+            actor="attacker",
+            target_system="WS-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        assert result[0].method == "generate_service_installed"
+        assert result[0].kwargs["service_name"] == "EvilSvc"
+
+    def test_expand_wevtutil_cl(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line="wevtutil cl Security",
+            actor="attacker",
+            target_system="WS-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        assert result[0].method == "generate_log_cleared"
+
+    def test_skip_types_prevents_duplicate(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line="net user hacker P@ssw0rd /add /domain",
+            actor="attacker",
+            target_system="DC-01",
+            skip_types={"account_created"},
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 0
+
+    def test_no_match_for_benign_command(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line="whoami /all",
+            actor="attacker",
+            target_system="WS-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 0
+
+    def test_expand_net_group_add(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line='net group "Domain Admins" hacker /add /domain',
+            actor="attacker",
+            target_system="DC-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        assert result[0].method == "generate_group_membership_change"
+        assert result[0].kwargs["group_name"] == "Domain Admins"
+        assert result[0].kwargs["member_username"] == "hacker"

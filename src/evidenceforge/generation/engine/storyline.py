@@ -552,15 +552,26 @@ class StorylineMixin:
                 )
 
             if os_category == "windows" and getattr(spec, "supplementary", "auto") != "none":
-                self._emit_supplementary_events(
-                    actor,
-                    system,
-                    time,
-                    command_line,
-                    pid,
-                    logon_id,
-                    skip_types=explicit_types,
-                )
+                if self.activity_generator._causal_engine is not None:
+                    self.activity_generator._expand_and_emit(
+                        "process_create",
+                        time,
+                        actor=actor,
+                        target_system=system,
+                        command_line=command_line,
+                        os_category=os_category,
+                        skip_types=explicit_types,
+                    )
+                else:
+                    self._emit_supplementary_events(
+                        actor,
+                        system,
+                        time,
+                        command_line,
+                        pid,
+                        logon_id,
+                        skip_types=explicit_types,
+                    )
 
             # Mark as story process and schedule termination
             self.state_manager.mark_story_process(system.hostname, pid)
@@ -786,19 +797,18 @@ class StorylineMixin:
                 target_pid=target_pid,
                 target_image=spec.target_process,
             )
-            # Also emit Sysmon Event 10 (ProcessAccess) when targeting lsass.exe
-            # This is the primary credential-dumping detection in real environments
+            # Emit ProcessAccess via causal expansion engine (or legacy fallback)
+            # when targeting lsass.exe — primary credential-dumping detection signal
             if "lsass" in target_name:
-                access_time = time + timedelta(milliseconds=rng.randint(1, 50))
-                self.activity_generator.generate_process_access(
-                    user=actor,
-                    system=system,
-                    time=access_time,
+                self.activity_generator._expand_and_emit(
+                    "create_remote_thread",
+                    time,
+                    actor=actor,
+                    target_system=system,
                     source_pid=source_pid,
                     source_image=source_image,
                     target_pid=target_pid,
                     target_image=spec.target_process,
-                    granted_access="0x1010",  # PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
                 )
             malicious_event["target_process"] = spec.target_process
 
