@@ -108,4 +108,24 @@
     with 0x1000, etc.) plus storyline mimikatz process_access on lsass with 0x1FFFFF
   - Baseline Event 8/10 noise ensures storyline attack events are not instant red flags
 
+  Data Realism coverage (verify in generated data):
+  - Causal expansion: DNS queries precede TCP connections in zeek_dns/zeek_conn; Kerberos 4768/4769
+    precede 4624 domain logons; process_access (Event 10) follows create_remote_thread targeting lsass
+  - Hawkes temporal model: user events show bursty clusters (CV > 1.0 in eval), not uniform spacing
+  - Typing cadence: multi-event storyline steps (e.g., step 3 discovery commands, step 8 AD enum)
+    have 1-15 second gaps between events, not identical timestamps
+  - Day-of-week variation: if scenario spans a weekend, Saturday/Sunday activity near-zero
+  - Lateral movement: backup/monitoring/AD replication traffic between servers (conditional on topology)
+  - Process→network correlation: chrome.exe/git/sqlcmd baseline processes produce matching connections
+  - Stale account enrichment: if stale_accounts defined, expect Kerberos 4771 (0x12) failures on DC
+    plus failed batch (type 4) and service (type 5) logons, not just network logon failures
+  - Network red herrings: suspicious-but-benign DNS (high-entropy CDN subdomains), unusual outbound
+    (cloud backup sync), and scan overlap patterns in Zeek conn/dns logs
+  - Linux syslog depth: SSH "Accepted publickey/password" login messages, apt-daily or dnf-automatic
+    package management, systemd timer trigger/deactivate, logrotate file rotation detail, journald
+    runtime statistics. Verify distro-aware (Ubuntu vs CentOS paths/daemons).
+  - Command diversification: baseline process commands contain user-specific paths and varied
+    project/document names, not identical fixed strings across all users
+  - Entity lifecycle: no process_access events targeting PIDs that don't exist in running_processes
+
   Save to scenarios/apt-healthcare-breach/scenario.yaml with accompanying ENVIRONMENT.md.

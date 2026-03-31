@@ -49,8 +49,10 @@ This separation means scenario creation benefits from LLM reasoning about attack
           ┌────────────▼────────────────┐
           │     GenerationEngine        │
           │  Hour-by-hour time loop     │
-          │  Persona-based activity     │
-          │  Storyline event execution  │
+          │  Hawkes timing (user)       │
+          │  Periodic timing (system)   │
+          │  Day-of-week variation      │
+          │  Storyline typing cadence   │
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
@@ -191,6 +193,7 @@ StateManager
 ├── Open Connections   {conn_id → OpenConnection}
 │   └── src/dst IP/port, protocol, zeek_uid, bytes, state
 ├── DNS Cache          {hostname → IP}
+├── Boot Times         {system → datetime} (entity lifecycle validation)
 └── Current Time       datetime (advances during generation)
 ```
 
