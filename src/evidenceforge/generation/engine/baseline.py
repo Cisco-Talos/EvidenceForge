@@ -48,6 +48,22 @@ from evidenceforge.utils.rng import _get_rng
 
 logger = logging.getLogger(__name__)
 
+# Day-of-week intensity multipliers (0=Monday, 6=Sunday).
+# Models weekly rhythm: Monday login storms, Friday early departures,
+# weekend near-zero (only sysadmin/oncall personas active).
+_DAY_OF_WEEK_MULTIPLIERS = {
+    0: 1.15,  # Monday: login storms, catching up
+    1: 1.05,  # Tuesday: peak productivity
+    2: 1.05,  # Wednesday: peak productivity
+    3: 1.00,  # Thursday: normal
+    4: 0.85,  # Friday: early departures, lighter load
+    5: 0.08,  # Saturday: near-zero
+    6: 0.05,  # Sunday: near-zero
+}
+
+# Personas that are active on weekends (IT operations, oncall)
+_WEEKEND_ACTIVE_PERSONAS = {"sysadmin", "security_analyst", "help_desk"}
+
 # Per-persona cluster configuration
 PERSONA_CLUSTER_CONFIG = {
     "developer": {"cluster_size": (5, 15), "inter_gap_mean": 600},
@@ -193,19 +209,31 @@ class BaselineMixin:
                 {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
             )
 
+            # Compute local weekday for day-of-week variation
+            if hasattr(self, "_scenario_tz") and self._scenario_tz:
+                local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+            else:
+                local_dt = current_hour
+            local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
+            is_weekend = local_weekday >= 5
+
             for user in enabled_users:
                 persona = self._get_user_persona(user)
                 user_offsets = self._user_time_offsets.get(user.username)
 
-                local_hour = current_hour.hour
-                if hasattr(self, "_scenario_tz") and self._scenario_tz:
-                    utc_dt = current_hour.replace(tzinfo=UTC)
-                    local_hour = utc_dt.astimezone(self._scenario_tz).hour
+                # Weekend filtering: skip non-IT personas on weekends
+                if is_weekend and persona:
+                    persona_key = (persona.name or "").lower()
+                    if persona_key not in _WEEKEND_ACTIVE_PERSONAS:
+                        continue
+
+                local_hour = local_dt.hour
                 num_events = self._calculate_events_for_hour(
                     user,
                     current_hour=local_hour,
                     persona=persona,
                     user_offsets=user_offsets,
+                    weekday=local_weekday,
                 )
 
                 if num_events > 0:
@@ -572,11 +600,14 @@ class BaselineMixin:
         hour: int,
         whp: dict,
         user_offsets: dict | None = None,
+        weekday: int | None = None,
     ) -> float:
         """Calculate activity multiplier based on work hours with smooth transitions.
 
-        Returns 0.0-1.5 multiplier. Uses sigmoid ramps for gradual transitions
-        at work start/end and lunch, instead of binary on/off.
+        Returns 0.0-1.5 multiplier (before day-of-week scaling). Uses sigmoid
+        ramps for gradual transitions at work start/end and lunch, instead of
+        binary on/off. When weekday is provided (0=Monday..6=Sunday), the result
+        is further scaled by _DAY_OF_WEEK_MULTIPLIERS.
         """
         start = whp["start"]
         end = whp["end"]
@@ -594,34 +625,42 @@ class BaselineMixin:
 
         h = float(hour) + 0.5
 
+        # Compute intra-day multiplier from work-hour sigmoid model
         if h < start - 1.5:
-            return 0.05
-        if h < start + 0.5:
+            base = 0.05
+        elif h < start + 0.5:
             t = (h - (start - 1.0)) / 1.5
-            return 0.05 + 0.95 * self._sigmoid(t * 2 - 1)
-
-        if h > end + 1.5:
-            return 0.05
-        if h > end - 0.5:
+            base = 0.05 + 0.95 * self._sigmoid(t * 2 - 1)
+        elif h > end + 1.5:
+            base = 0.05
+        elif h > end - 0.5:
             t = (h - (end - 0.5)) / 1.5
-            return 0.05 + 0.95 * (1.0 - self._sigmoid(t * 2 - 1))
-
-        if lunch:
+            base = 0.05 + 0.95 * (1.0 - self._sigmoid(t * 2 - 1))
+        elif lunch:
             lunch_start, lunch_end = lunch
             lunch_mid = (lunch_start + lunch_end) / 2.0
             lunch_half = (lunch_end - lunch_start) / 2.0
             if lunch_start - 0.5 < h < lunch_end + 0.5:
                 dist_from_mid = abs(h - lunch_mid)
                 if dist_from_mid < lunch_half:
-                    return 0.5
+                    base = 0.5
                 else:
                     t = (dist_from_mid - lunch_half) / 0.5
-                    return 0.5 + 0.5 * min(1.0, t)
+                    base = 0.5 + 0.5 * min(1.0, t)
+            elif hour in peak_hours:
+                base = 1.5
+            else:
+                base = 1.0
+        elif hour in peak_hours:
+            base = 1.5
+        else:
+            base = 1.0
 
-        if hour in peak_hours:
-            return 1.5
+        # Apply day-of-week scaling (Monday login storms, weekend near-zero)
+        if weekday is not None:
+            base *= _DAY_OF_WEEK_MULTIPLIERS.get(weekday, 1.0)
 
-        return 1.0
+        return base
 
     def _calculate_events_for_hour(
         self,
@@ -629,6 +668,7 @@ class BaselineMixin:
         current_hour: int | None = None,
         persona: Persona | None = None,
         user_offsets: dict | None = None,
+        weekday: int | None = None,
     ) -> int:
         """Calculate number of events for user this hour."""
         intensity_map = {"low": 5, "medium": 15, "high": 40}
@@ -640,7 +680,7 @@ class BaselineMixin:
 
         if persona and persona.work_hours_parsed and current_hour is not None:
             multiplier = self._work_hour_multiplier(
-                current_hour, persona.work_hours_parsed, user_offsets
+                current_hour, persona.work_hours_parsed, user_offsets, weekday=weekday
             )
             base_events = int(base_events * multiplier)
 
