@@ -35,7 +35,6 @@ from pathlib import Path
 
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.causal import CausalExpansionEngine
 from evidenceforge.generation.engine.baseline import BaselineMixin
 from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
@@ -248,7 +247,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             emitters=self.emitters,
             visibility_engine=visibility_engine,
         )
-        causal_engine = CausalExpansionEngine()
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
             emitters=self.emitters,
@@ -256,7 +254,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             network_visibility=visibility_engine,
             sid_registry=sid_registry,
             dispatcher=self.dispatcher,
-            causal_engine=causal_engine,
         )
         # Build IP->System lookup for HostContext resolution on connection events
         self.activity_generator._ip_to_system = {s.ip: s for s in self.scenario.environment.systems}

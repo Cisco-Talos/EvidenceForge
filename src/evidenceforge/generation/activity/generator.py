@@ -420,8 +420,8 @@ class ActivityGenerator:
         # Network visibility stored on dispatcher; keep local ref for fast-path check
         self._network_visibility = network_visibility
 
-        # Causal expansion engine and recursion guard
-        self._causal_engine = causal_engine
+        # Causal expansion engine (auto-created if not provided) and recursion guard
+        self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding: bool = False
 
     def _build_host_context(self, system: System) -> HostContext:
@@ -526,7 +526,7 @@ class ActivityGenerator:
         trigger event's timestamp, then calls the corresponding generate_* method
         on this ActivityGenerator instance.
         """
-        if self._causal_engine is None or self._expanding:
+        if self._expanding:
             return
 
         ctx = self._build_expansion_context(event_type, timestamp, **kwargs)
@@ -637,29 +637,19 @@ class ActivityGenerator:
                 ),
             )
 
-        # Phase 2.5: Emit DC-side Kerberos events for domain logons
-        # When a user authenticates via Kerberos to a Windows domain system,
-        # the DC sees a TGT request (4768) then a service ticket request (4769)
-        # before the target system logs the 4624.
+        # Emit DC-side Kerberos events for domain logons via causal expansion.
+        # The KerberosBeforeLogon rule handles TGT (4768), TGS (4769), and
+        # optional 4672 for elevated users.
         auth_package_name = auth_pkg.get("AuthenticationPackageName", "Negotiate")
-        if self._causal_engine is not None and not self._expanding:
-            self._expand_and_emit(
-                "logon",
-                time,
-                actor=user,
-                target_system=system,
-                auth_package=auth_package_name,
-                src_ip=source_ip,
-                os_category=_get_os_category(system.os),
-            )
-        else:
-            self._emit_dc_kerberos_for_logon(
-                user=user,
-                system=system,
-                time=time,
-                auth_package=auth_package_name,
-                source_ip=source_ip,
-            )
+        self._expand_and_emit(
+            "logon",
+            time,
+            actor=user,
+            target_system=system,
+            auth_package=auth_package_name,
+            src_ip=source_ip,
+            os_category=_get_os_category(system.os),
+        )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
@@ -1223,20 +1213,18 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
-        # Emit DNS lookup before connection (causal engine or legacy path)
+        # Emit DNS lookup before connection via causal expansion.
+        # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         if emit_dns and proto == "tcp" and dst_port not in (53,):
-            if self._causal_engine is not None and not self._expanding:
-                self._expand_and_emit(
-                    "connection",
-                    time,
-                    src_ip=src_ip,
-                    dst_ip=dst_ip,
-                    dst_port=dst_port,
-                    proto=proto,
-                    service=service,
-                )
-            else:
-                self._emit_dns_lookup(src_ip, dst_ip, time)
+            self._expand_and_emit(
+                "connection",
+                time,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                proto=proto,
+                service=service,
+            )
 
         # Same-host connections are valid for host-based logs (eCAR FLOW)
         # but invisible to network sensors (Zeek/Snort)

@@ -552,26 +552,15 @@ class StorylineMixin:
                 )
 
             if os_category == "windows" and getattr(spec, "supplementary", "auto") != "none":
-                if self.activity_generator._causal_engine is not None:
-                    self.activity_generator._expand_and_emit(
-                        "process_create",
-                        time,
-                        actor=actor,
-                        target_system=system,
-                        command_line=command_line,
-                        os_category=os_category,
-                        skip_types=explicit_types,
-                    )
-                else:
-                    self._emit_supplementary_events(
-                        actor,
-                        system,
-                        time,
-                        command_line,
-                        pid,
-                        logon_id,
-                        skip_types=explicit_types,
-                    )
+                self.activity_generator._expand_and_emit(
+                    "process_create",
+                    time,
+                    actor=actor,
+                    target_system=system,
+                    command_line=command_line,
+                    os_category=os_category,
+                    skip_types=explicit_types,
+                )
 
             # Mark as story process and schedule termination
             self.state_manager.mark_story_process(system.hostname, pid)
@@ -839,143 +828,6 @@ class StorylineMixin:
             malicious_event["target_format"] = spec.target_format
 
         return malicious_event
-
-    def _emit_supplementary_events(
-        self,
-        actor: User,
-        system: System,
-        time: datetime,
-        command_line: str,
-        pid: int,
-        logon_id: str,
-        skip_types: set[str] | None = None,
-    ) -> None:
-        """Emit supplementary Windows events based on command-line patterns.
-
-        Detects administrative commands (net user, net group, schtasks, sc create,
-        wevtutil cl) and emits corresponding high-level audit events (4720, 4726,
-        4728, 4697, 4698, 1102) that Windows would generate alongside the 4688.
-
-        skip_types: set of event types already explicitly declared in the storyline
-        events list. Supplementary inference skips these to avoid duplicates.
-        """
-        skip_types = skip_types or set()
-        cmd_lower = command_line.lower()
-
-        dc = next(
-            (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
-            system,
-        )
-
-        rng = _get_rng()
-        delay_s = rng.uniform(0.1, 0.5)
-
-        def _domain_sid_prefix() -> str:
-            for sid in self.activity_generator.sid_registry.values():
-                if sid.startswith("S-1-5-21-") and sid.count("-") == 7:
-                    return "-".join(sid.split("-")[:7])
-            return f"S-1-5-21-{rng.randint(100000000, 999999999)}-{rng.randint(100000000, 999999999)}-{rng.randint(100000000, 999999999)}"
-
-        def _make_sid(rid: int | None = None) -> str:
-            prefix = _domain_sid_prefix()
-            if rid is None:
-                rid = rng.randint(1100, 9999)
-            return f"{prefix}-{rid}"
-
-        # net user <name> /add /domain -> 4720 (account created)
-        match = re.search(r"net\s+user\s+(\S+)\s+\S+\s+/add", cmd_lower)
-        if match and "account_created" not in skip_types:
-            orig_match = re.search(r"net\s+user\s+(\S+)\s+\S+\s+/add", command_line, re.IGNORECASE)
-            target_name = orig_match.group(1) if orig_match else match.group(1)
-            target_sid = _make_sid()
-            self.activity_generator.generate_account_created(
-                actor=actor,
-                system=dc,
-                time=time + timedelta(seconds=delay_s),
-                target_username=target_name,
-                target_sid=target_sid,
-            )
-            # Store SID for later group_member_added reuse
-            self._ensure_account_sid_tracking()
-            self._created_account_sids[target_name] = target_sid
-
-        # net user <name> /delete /domain -> 4726 (account deleted)
-        match = re.search(r"net\s+user\s+(\S+)\s+/delete", cmd_lower)
-        if match and "account_deleted" not in skip_types:
-            orig_match = re.search(r"net\s+user\s+(\S+)\s+/delete", command_line, re.IGNORECASE)
-            target_name = orig_match.group(1) if orig_match else match.group(1)
-            target_sid = _make_sid()
-            self.activity_generator.generate_account_deleted(
-                actor=actor,
-                system=dc,
-                time=time + timedelta(seconds=delay_s),
-                target_username=target_name,
-                target_sid=target_sid,
-            )
-
-        # net group "<GroupName>" <user> /add /domain -> 4728 (global group member added)
-        match = re.search(r'net\s+group\s+"?([^"]+)"?\s+(\S+)\s+/add', command_line, re.IGNORECASE)
-        if match and "group_member_added" not in skip_types:
-            group_name = match.group(1)
-            member_name = match.group(2)
-            group_rid = 512 if "admin" in group_name.lower() else rng.randint(1100, 9999)
-            group_sid = _make_sid(group_rid)
-            # Reuse SID from earlier account_created if available
-            self._ensure_account_sid_tracking()
-            member_sid = (
-                self._created_account_sids.get(member_name)
-                or self.activity_generator.sid_registry.get(member_name)
-                or _make_sid()
-            )
-            self.activity_generator.generate_group_membership_change(
-                actor=actor,
-                system=dc,
-                time=time + timedelta(seconds=delay_s),
-                action="add",
-                scope="global",
-                group_name=group_name,
-                group_sid=group_sid,
-                member_username=member_name,
-                member_sid=member_sid,
-            )
-
-        # schtasks /Create ... /TN "<TaskName>" -> 4698 (scheduled task created)
-        match = re.search(r'schtasks\s+/create\b.*?/tn\s+"?([^"]+)"?', command_line, re.IGNORECASE)
-        if match and "scheduled_task_created" not in skip_types:
-            task_name = match.group(1)
-            tr_match = re.search(r'/tr\s+"?([^"]+)"?', command_line, re.IGNORECASE)
-            task_action = tr_match.group(1) if tr_match else ""
-            self.activity_generator.generate_scheduled_task(
-                user=actor,
-                system=system,
-                time=time + timedelta(seconds=delay_s),
-                task_name=task_name,
-                action="created",
-                task_content=f"<Actions><Exec><Command>{task_action}</Command></Exec></Actions>",
-            )
-
-        # sc create <ServiceName> binPath= "<path>" -> 4697 (service installed)
-        match = re.search(
-            r'sc\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?', command_line, re.IGNORECASE
-        )
-        if match and "service_installed" not in skip_types:
-            svc_name = match.group(1)
-            svc_path = match.group(2)
-            self.activity_generator.generate_service_installed(
-                user=actor,
-                system=system,
-                time=time + timedelta(seconds=delay_s),
-                service_name=svc_name,
-                service_file_name=svc_path,
-            )
-
-        # wevtutil cl Security -> 1102 (log cleared)
-        if "wevtutil" in cmd_lower and "cl" in cmd_lower and "log_cleared" not in skip_types:
-            self.activity_generator.generate_log_cleared(
-                user=actor,
-                system=system,
-                time=time + timedelta(seconds=delay_s),
-            )
 
     @staticmethod
     def _extract_output_file(command_line: str, os_category: str) -> str | None:
