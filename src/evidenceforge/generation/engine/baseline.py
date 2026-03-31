@@ -424,9 +424,13 @@ class BaselineMixin:
         local_hour = local_dt.hour
         is_business_hours = 8 <= local_hour <= 18
 
-        def _emit_conn(src_sys, dst_sys, port, service=None, proto="tcp"):
-            """Helper: emit a connection between two systems."""
-            offset = rng.randint(0, 3599) + rng.random()
+        def _emit_conn(src_sys, dst_sys, port, service=None, proto="tcp", pattern_key=""):
+            """Helper: emit a connection with hash-based periodic offset."""
+            # Deterministic phase per (pattern, src, dst) triple for reproducibility
+            phase_seed = f"lat_{pattern_key}_{src_sys.hostname}_{dst_sys.hostname}_{port}"
+            phase = hash(phase_seed) % 3600
+            jitter = rng.gauss(0, 60)  # ~1min jitter
+            offset = max(0, min(3599, phase + jitter))
             ts = current_hour + timedelta(seconds=offset)
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_connection(
