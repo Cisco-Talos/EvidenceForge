@@ -14,7 +14,9 @@ This architecture combines LLM flexibility/realism with deterministic speed, cos
 
 **Key Principle:** The `eforge` CLI is a deterministic tool. Creative/interactive work happens through Claude Code Skills, not built-in LLM calls. Phase 2 is a deterministic renderer that executes the plan. Never call LLMs during generation. LLM integration is not built-in; scenario creation uses Claude Code Skills.
 
-**Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). Process events auto-generate supplementary Windows audit events (4720, 4697, etc.) from command-line patterns unless `supplementary: none` is set. See `docs/reference/scenario-reference.md` for the full event type reference.
+**Storyline Events (Phase 8.4):** Storyline entries use typed `events` lists, not free-text keyword matching. Each event has a `type` field (`process`, `logon`, `connection`, `ssh_session`, etc.) with per-type validated fields. The `activity` field is documentation only (for GROUND_TRUTH.md). See `docs/reference/scenario-reference.md` for the full event type reference.
+
+**Causal Expansion Engine:** The `CausalExpansionEngine` (`src/evidenceforge/generation/causal/`) auto-generates prerequisite and consequent events via composable rules. DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass injection, and supplementary audit events from command-line patterns are all handled automatically — scenario authors should NOT manually specify these as prerequisites. Authors CAN still specify these event types when they are part of the attack narrative itself (e.g., DNS tunneling, golden ticket forging). The validator warns on potentially redundant manual specifications. See `docs/ARCHITECTURE.md` § Causal Expansion Engine for implementation details.
 
 ## MANDATORY: Implementation State Tracking
 
@@ -179,11 +181,12 @@ Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, n
 When adding or significantly modifying event types, emitters, or the event schema, update ALL of the following:
 
 1. **Documentation** — `docs/reference/EVIDENCE_FORMATS.md`, `docs/reference/scenario-reference.md`, `README.md`
-2. **Architecture & design docs** — `docs/ARCHITECTURE.md` (emitter tree, event type list), `docs/design/event-model-prd.md` (supported types tables)
+2. **Architecture & design docs** — `docs/ARCHITECTURE.md` (emitter tree, event type list, causal expansion rules), `docs/design/event-model-prd.md` (supported types tables)
 3. **Skills** — `commands/eforge/scenario.md` (event type list + examples), other skills as relevant
-4. **Validation** — `src/evidenceforge/validation/schema.py` (event type sets, OS-gating)
+4. **Validation** — `src/evidenceforge/validation/schema.py` (event type sets, OS-gating, expansion redundancy)
 5. **Evaluation** — `src/evidenceforge/evaluation/dimensions/` (signal_integrity, noise_realism), `src/evidenceforge/evaluation/rules/` (co_occurrence.yaml, causal_pairs.yaml)
-6. **Coverage test prompt** — `scenarios/COVERAGE-TEST-PROMPT.md` (event type count, storyline steps, format-specific verification sections)
+6. **Causal expansion** — `src/evidenceforge/generation/causal/rules.py` (if the new event type needs auto-generated prerequisites), `src/evidenceforge/generation/causal/registry.py` (register new rules)
+7. **Coverage test prompt** — `scenarios/COVERAGE-TEST-PROMPT.md` (event type count, storyline steps, format-specific verification sections)
 
 ## CLI Design Patterns
 

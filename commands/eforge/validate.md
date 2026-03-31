@@ -27,7 +27,9 @@ Exit codes:
 
 **If validation passes:** Tell the user the scenario is valid. Summarize what's in it (users, systems, personas, storyline events, network topology) based on the validator output.
 
-**If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR, OS/format mismatches, missing logon events before process execution).
+**If validation passes with warnings:** Explain each warning. Warnings don't block generation but may indicate suboptimal configuration (e.g., a system IP outside its segment CIDR, OS/format mismatches, missing logon events before process execution, causal expansion redundancy — see below).
+
+**Causal expansion redundancy warnings:** The validator detects when storyline events manually specify prerequisites that the causal expansion engine auto-generates (e.g., a DNS query alongside a TCP connection, or Kerberos events alongside a logon). These are warnings, not errors. The fix is to remove the redundant manual events UNLESS they are part of the attack narrative itself (e.g., DNS tunneling, golden ticket forging).
 
 **If validation passes with info-level notes:** Info-level issues (shown with ℹ) are informational observations, not problems. For example, consecutive storyline events that don't share an obvious pivot indicator. Mention them briefly but don't suggest fixes unless the user asks.
 

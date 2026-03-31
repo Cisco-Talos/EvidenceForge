@@ -57,6 +57,10 @@ This separation means scenario creation benefits from LLM reasoning about attack
           │    ActivityGenerator         │
           │  Builds SecurityEvents      │
           │  with composable contexts   │
+          │                              │
+          │  CausalExpansionEngine       │
+          │  auto-emits prerequisites   │
+          │  (DNS, Kerberos, audit, etc)│
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
@@ -330,6 +334,48 @@ Three layers of validation (`src/evidenceforge/validation/schema.py`):
 3. **Generation-time checks** — OS compatibility, builtin account validation
 
 Builtin accounts (SYSTEM, root, NT AUTHORITY\SYSTEM, etc.) are always valid as storyline actors without being defined in the users list.
+
+### Causal Expansion Engine
+
+The `CausalExpansionEngine` (`src/evidenceforge/generation/causal/`) centralizes the logic for auto-generating prerequisite and consequent events. Instead of scattering DNS-before-connection checks, Kerberos TGT/TGS emission, and command-line pattern inference across ActivityGenerator and StorylineMixin, all causal relationships are defined as composable `ExpansionRule` dataclasses in a flat registry.
+
+```
+ActivityGenerator.generate_connection()
+    │
+    ├──▶ _expand_and_emit("connection", ...)
+    │        │
+    │        ├──▶ CausalExpansionEngine.expand()
+    │        │        │
+    │        │        ├── DnsBeforeConnection        (priority 10)
+    │        │        ├── KerberosBeforeLogon         (priority 20)
+    │        │        ├── ProcessAccessAfterRemoteThread (priority 40)
+    │        │        └── SupplementaryAuditEvents    (priority 60)
+    │        │
+    │        └──▶ For each ExpandedEvent:
+    │             compute timing offset → call generate_*()
+    │             (recursion guard: _expanding flag prevents re-expansion)
+    │
+    └──▶ Build SecurityEvent → dispatch
+```
+
+**Key components:**
+- `ExpansionRule` (ABC) — `matches(event_type, ctx) → bool` + `expand(event_type, ctx) → list[ExpandedEvent]`
+- `ExpansionContext` — carries event params + engine state (DNS cache, Kerberos cache, SID registry, skip_types)
+- `TimingSpec` — `(min_ms, max_ms, position: "before"|"after")` for realistic inter-event timing
+- `CausalExpansionEngine` — evaluates all matching rules, sorts by timing (before-events first), returns ordered list
+
+**Currently registered rules:**
+
+| Rule | Trigger | Emits | Timing |
+|------|---------|-------|--------|
+| `DnsBeforeConnection` | TCP connection (not port 53) | DNS query (UDP/53) | 5-80ms before |
+| `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) + optional 4672 | TGT 50-200ms before, TGS 20-100ms after TGT |
+| `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) | 1-50ms after |
+| `SupplementaryAuditEvents` | Process creation with admin commands | 4720/4726/4728/4697/4698/1102 | 100-500ms after |
+
+**Adding a new rule:** Create a new `ExpansionRule` subclass in `rules.py`, implement `matches()` and `expand()`, and add it to `default_rules()` in `registry.py`. The engine auto-creates with defaults — no wiring needed in ActivityGenerator or GenerationEngine.
+
+**Recursion prevention:** The `_expanding` flag on ActivityGenerator prevents expansion-generated events from re-expanding (e.g., DNS query → connection → DNS query → ∞).
 
 ### Key Patterns
 

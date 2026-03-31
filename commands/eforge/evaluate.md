@@ -82,7 +82,7 @@ Present a clear summary of the evaluation results. For each dimension, explain w
 **Dimension 4: Temporal Realism (weight 0.15)**
 - Work Hours: Do user events cluster in persona-defined work hours?
 - Burstiness: Are inter-event times bursty (realistic) or metronomic (robotic)?
-- Causal Ordering: Are logon→process→logoff sequences correctly ordered?
+- Causal Ordering: Are logon→process→logoff sequences correctly ordered? Are DNS queries before TCP connections? Are Kerberos TGT/TGS before domain logons? (Expanded by the causal expansion engine — these should score near 100% when the engine is active.)
 - Timing Plausibility: No impossible timing (50 commands in 3 seconds)?
 
 **Dimension 5: Signal Integrity (weight 0.20)**

@@ -393,13 +393,20 @@ events:
     technique: "T1087.001 - Account Discovery: Local Account"
 ```
 
-**Correlated events for process commands:** When a storyline step runs a command that would produce additional audit events (account creation, service installation, scheduled task creation, log clearing, process injection, etc.), explicitly declare those as separate events in the same step's `events` list alongside the `process` event. Think about what audit trail the command would leave in a real environment and declare each distinct event. For example:
-- `net user backdoor P@ss /add` → declare both `process` and `account_created` (with `target_username`)
-- `sc create evilsvc binPath=...` → declare both `process` and `service_installed` (with `service_name` and `service_file_name`)
-- `wevtutil cl Security` → declare both `process` and `log_cleared`
-- mimikatz credential dumping → declare `process`, `create_remote_thread` (with `target_process: lsass.exe`), and optionally `process_access` (with `target_process: lsass.exe`, `granted_access: "0x1010"`)
+**Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets. You do NOT need to manually specify these as prerequisites:
 
-The engine auto-infers 6 common Windows command patterns as a safety net, but do not rely on this -- always declare correlated events explicitly.
+- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions
+- **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC, plus 4672 for elevated users
+- **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
+- **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
+- **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events
+
+**When to manually specify these event types:** Only when they are part of the attack narrative itself — not as prerequisites for another event. For example:
+- DNS tunneling exfiltration → manually declare the DNS `connection` events (they ARE the attack, not a prerequisite)
+- Kerberos golden ticket forging → manually declare the Kerberos events
+- Explicit credential dumping via process access → manually declare `process_access` if you need specific access masks
+
+The validator warns if it detects potentially redundant manual specifications alongside events that would auto-generate them.
 
 Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
 

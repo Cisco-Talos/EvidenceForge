@@ -102,6 +102,7 @@ After successful generation:
 - Check that expected formats were produced
 - If the scenario had a storyline, note that `GROUND_TRUTH.md` was generated alongside the scenario file — this is the answer key containing the full attack timeline and IOCs
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
+- Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, Kerberos TGT/TGS before logons, audit events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
 
 ### 4. Diagnose Errors
