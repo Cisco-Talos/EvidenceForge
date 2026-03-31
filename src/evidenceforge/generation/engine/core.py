@@ -96,6 +96,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         # Event counter for record IDs
         self.event_record_counter = 10000
 
+        # Hawkes process state per user for cross-hour continuity
+        self._hawkes_states: dict = {}
+
     def _report_progress(self, event_type: str, data: dict) -> None:
         """Report progress to callback if registered.
 

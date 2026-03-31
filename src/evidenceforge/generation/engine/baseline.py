@@ -65,7 +65,7 @@ _DAY_OF_WEEK_MULTIPLIERS = {
 # Personas that are active on weekends (IT operations, oncall)
 _WEEKEND_ACTIVE_PERSONAS = {"sysadmin", "security_analyst", "help_desk"}
 
-# Per-persona cluster configuration
+# Per-persona cluster configuration (legacy — used as fallback only)
 PERSONA_CLUSTER_CONFIG = {
     "developer": {"cluster_size": (5, 15), "inter_gap_mean": 600},
     "executive": {"cluster_size": (2, 6), "inter_gap_mean": 300},
@@ -73,6 +73,25 @@ PERSONA_CLUSTER_CONFIG = {
     "sysadmin": {"cluster_size": (3, 8), "inter_gap_mean": 360},
     "default": {"cluster_size": (3, 10), "inter_gap_mean": 420},
 }
+
+# Hawkes process parameters derived from risk_profile.
+# No hardcoded persona names — new personas work automatically.
+_HAWKES_RISK_PARAMS = {
+    "high": {"alpha_beta_ratio": 0.7, "beta": 0.05},  # big bursts, slow decay (~20s)
+    "medium": {"alpha_beta_ratio": 0.5, "beta": 0.07},  # moderate bursts
+    "low": {"alpha_beta_ratio": 0.3, "beta": 0.10},  # small bursts, fast decay (~10s)
+}
+
+
+def _hawkes_params_from_persona(persona: Persona | None) -> dict:
+    """Derive Hawkes kernel parameters from persona risk_profile.
+
+    Returns dict with alpha_beta_ratio and beta. Caller computes:
+        alpha = alpha_beta_ratio * beta
+        mu = num_events / duration * (1 - alpha/beta)
+    """
+    risk = persona.risk_profile if persona and persona.risk_profile else "medium"
+    return _HAWKES_RISK_PARAMS.get(risk, _HAWKES_RISK_PARAMS["medium"])
 
 
 # Benign CreateRemoteThread pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image)
@@ -1044,51 +1063,81 @@ class BaselineMixin:
         persona_name: str | None = None,
         username: str | None = None,
     ) -> list[datetime]:
-        """Distribute events in activity clusters within an hour.
+        """Distribute events using a Hawkes self-exciting process.
 
-        Phase 5.5: Replaces uniform spacing with realistic bursty clusters.
-        Events within a cluster are spaced 0.5-3 seconds apart.
-        Inter-cluster gaps follow exponential distribution.
+        Replaces the Phase 5.5 cluster model with a Hawkes process that
+        produces self-exciting bursts with exponential decay. Parameters
+        are derived from persona risk_profile, so new personas work
+        automatically without code changes.
+
+        Cross-hour continuity: intensity state carries across hours via
+        _hawkes_states dict, so a burst at 9:55 naturally continues into 10:00.
         """
         if num_events == 0:
             return []
 
-        config = self.PERSONA_CLUSTER_CONFIG.get(
-            (persona_name or "").lower(), self.PERSONA_CLUSTER_CONFIG["default"]
-        )
-        cluster_min, cluster_max = config["cluster_size"]
-        inter_gap_mean = config["inter_gap_mean"]
+        from evidenceforge.utils.timing import hawkes_timestamps
 
+        # Derive Hawkes parameters from persona
+        persona = None
+        if persona_name:
+            for p in self.scenario.personas:
+                if p.name == persona_name:
+                    persona = p
+                    break
+        params = _hawkes_params_from_persona(persona)
+        alpha_beta_ratio = params["alpha_beta_ratio"]
+        beta = params["beta"]
+
+        # Apply per-user biases
         if username and hasattr(self, "_user_time_offsets"):
-            offsets = self._user_time_offsets.get(username, {})
-            size_bias = 1.0 + offsets.get("cluster_size_bias", 0)
-            cluster_min = max(2, int(cluster_min * size_bias))
-            cluster_max = max(cluster_min + 1, int(cluster_max * size_bias))
-            gap_bias = 1.0 + offsets.get("inter_gap_bias", 0)
-            inter_gap_mean = max(60, inter_gap_mean * gap_bias)
+            user_offsets = self._user_time_offsets.get(username, {})
+            size_bias = 1.0 + user_offsets.get("cluster_size_bias", 0)
+            alpha_beta_ratio = min(0.95, alpha_beta_ratio * size_bias)
+            gap_bias = 1.0 + user_offsets.get("inter_gap_bias", 0)
+            beta = max(0.01, beta * gap_bias)
+
+        alpha = alpha_beta_ratio * beta
+        # Adaptive mu: calibrate base rate so expected count ≈ num_events
+        mu = num_events / 3600.0 * (1.0 - alpha_beta_ratio)
+        mu = max(0.0001, mu)
 
         rng = _get_rng()
-        times: list[datetime] = []
-        remaining = num_events
-        t = rng.expovariate(1.0 / 60)
 
-        while remaining > 0:
-            cluster_size = min(remaining, rng.randint(max(1, cluster_min - 1), cluster_max))
-            for i in range(cluster_size):
-                if i > 0:
-                    t += rng.uniform(0.3, 2.0)
-                if t < 3600:
-                    times.append(hour_start + timedelta(seconds=t))
-            remaining -= cluster_size
-            t += rng.expovariate(1.0 / inter_gap_mean) + rng.expovariate(1.0 / inter_gap_mean)
+        # Retrieve cross-hour state
+        state = None
+        elapsed = 0.0
+        state_key = username or "_default"
+        if hasattr(self, "_hawkes_states"):
+            prev_state = self._hawkes_states.get(state_key)
+            if prev_state is not None:
+                state = prev_state
+                elapsed = 3600.0  # one full hour since last window
 
-        if not times:
+        offsets, new_state = hawkes_timestamps(
+            num_events=num_events,
+            duration=3600.0,
+            mu=mu,
+            alpha=alpha,
+            beta=beta,
+            rng=rng,
+            state=state,
+            elapsed_since_last=elapsed,
+        )
+
+        # Store state for next hour
+        if hasattr(self, "_hawkes_states"):
+            self._hawkes_states[state_key] = new_state
+
+        if not offsets:
             return []
 
-        sorted_times = sorted(times)
+        # Convert offsets to datetimes
+        times = [hour_start + timedelta(seconds=t) for t in offsets]
 
-        final: list[datetime] = [sorted_times[0]]
-        for ts in sorted_times[1:]:
+        # Dedup: max 5 events within 5 seconds (prevent multi-format collisions)
+        final: list[datetime] = [times[0]]
+        for ts in times[1:]:
             recent = sum(1 for prev in final[-5:] if (ts - prev).total_seconds() <= 5.0)
             if recent < 5:
                 final.append(ts)
