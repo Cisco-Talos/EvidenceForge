@@ -311,6 +311,8 @@ These are just examples — invent additional realistic variations appropriate t
 
 **Placement:** Fumbles work best right before a successful action (failed logon → successful logon) or as abandoned branches between kill chain phases. Don't cluster them all at the beginning — distribute them throughout the storyline.
 
+**Storyline timing:** Events within a multi-event storyline step are automatically spaced with human typing rhythm (1-2 second gaps with occasional thinking pauses). You don't need to create separate storyline steps for sequential commands — put them in the same step's `events` list and the engine will space them realistically.
+
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `process_access`, `raw`

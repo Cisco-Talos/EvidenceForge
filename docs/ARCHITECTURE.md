@@ -381,6 +381,10 @@ ActivityGenerator.generate_connection()
 
 The baseline generation engine includes several layers of realism beyond simple random event emission:
 
+**Hawkes self-exciting temporal model:** User baseline events are distributed using a Hawkes process (`src/evidenceforge/utils/timing.py:hawkes_timestamps()`) — a self-exciting point process where each event temporarily increases the probability of more events nearby. Parameters are derived from persona `risk_profile` (not hardcoded per persona name), so new personas work automatically. Cross-hour state continuity prevents artificial gaps at hour boundaries. System/service traffic uses `periodic_timestamps()` with deterministic phase + jitter instead.
+
+**Storyline typing cadence:** Multi-event storyline steps space events with human typing rhythm (`typing_cadence()`) — Gaussian inter-action delays (~1.5s mean) with 15% chance of thinking pauses (3-12s). Single-event steps are unaffected.
+
 **Day-of-week variation:** Activity multipliers scale by weekday (Monday 1.15x login storms → Friday 0.85x early departures → Saturday/Sunday 0.05-0.08x near-zero). Non-IT personas are skipped entirely on weekends; only sysadmin, security_analyst, and help_desk remain active.
 
 **Stale account enrichment:** Disabled accounts generate four types of evidence: failed network logons (15%/hour), Kerberos pre-auth failures on DC (5%/hour, status 0x12 KDC_ERR_CLIENT_REVOKED), scheduled task failures with batch logon (3%/hour), and service startup failures at scenario start (2%, first hour only).

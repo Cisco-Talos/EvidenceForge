@@ -223,7 +223,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 ### Temporal Realism
 
 - [x] **Causal event ordering** — CausalExpansionEngine with 4 composable rules (DnsBeforeConnection, KerberosBeforeLogon, ProcessAccessAfterRemoteThread, SupplementaryAuditEvents). Validator warns on redundant manual prerequisites. Evaluator scores DNS→connection and Kerberos→logon causal pairs.
-- [ ] **Hawkes/bursty temporal model** — Replace flat Poisson arrivals with clustered, self-similar traffic patterns. Real networks exhibit heavy-tailed inter-arrival times from backup jobs, patch cycles, login storms, etc. Current uniform jitter within each hour is a major synthetic tell.
+- [x] **Hawkes/bursty temporal model** — Replaced cluster model with Hawkes self-exciting process (Lewis-Shedler thinning). Parameters derived from persona risk_profile. Cross-hour state continuity. Storyline multi-event steps use typing cadence. System traffic uses periodic+jitter. Lateral movement uses hash-based periodic offsets.
 - [x] **Day-of-week variation** — Monday 1.15x login storms, Friday 0.85x early departures, Saturday/Sunday 0.05-0.08x near-zero. Non-IT personas skipped on weekends.
 - ~~**Sensor timestamp skew**~~ — Dropped: tight NTP is best practice in production environments.
 
@@ -254,6 +254,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ### Short-term
 - [ ] **Configurable work-week schedules** — Allow scenario authors to shift the typical workday (e.g., Tues–Sunday for retail/healthcare), define shift workers with non-standard hours, or specify per-persona day-of-week overrides
+- [ ] **Storyline cadence field** — `cadence: human|automated|periodic(interval, jitter)` on storyline steps for malware beacons, AI-driven attacks, and automated exfiltration with appropriate timing (currently all steps use human typing cadence by default)
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation

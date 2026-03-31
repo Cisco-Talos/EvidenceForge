@@ -250,6 +250,10 @@ The generation engine automatically emits prerequisite events for certain event 
 
 The generation engine automatically provides several layers of realism in baseline activity:
 
+**Hawkes temporal model:** User baseline events use a self-exciting Hawkes process — activity naturally clusters into bursts that taper off, producing realistic human work patterns. Parameters are derived from persona `risk_profile` (high = intense bursts, low = gentle clusters). System/service traffic uses periodic intervals with small jitter instead.
+
+**Storyline typing cadence:** Events within a multi-event storyline step are spaced with human typing rhythm (~1.5s between actions, occasional 3-12s thinking pauses) instead of sharing a single timestamp.
+
 **Day-of-week variation:** Scenarios spanning multiple days show weekly rhythm — Monday login storms, Friday early departures, near-zero weekend activity (only sysadmin/security_analyst/help_desk personas active on Saturday/Sunday).
 
 **Stale account evidence:** Stale accounts defined in `environment.stale_accounts` generate not just failed logons but also Kerberos pre-auth failures (4771, status 0x12) on DCs, scheduled task failures (batch logon type 4), and service startup failures (service logon type 5, first hour only).
