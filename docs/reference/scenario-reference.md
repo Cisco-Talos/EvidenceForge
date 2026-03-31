@@ -231,6 +231,21 @@ Each event in the `events` list has a `type` field that selects a validated sche
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
+### Causal Expansion
+
+The generation engine automatically emits prerequisite events for certain event types. You do **not** need to manually specify these — they are generated with realistic timing offsets:
+
+| Trigger Event | Auto-Generated Prerequisites | Timing |
+|---|---|---|
+| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | 5-80ms before |
+| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC, optional 4672 for elevated users | TGT 50-200ms before, TGS 20-100ms after TGT |
+| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
+| `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
+| `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | 100-500ms after |
+| `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | 1-50ms after |
+
+**When to manually specify these events:** Only when they are part of the attack narrative itself (e.g., DNS tunneling exfiltration, Kerberos golden ticket forging, explicit credential dumping via process access). The validator will warn if it detects potentially redundant manual specifications.
+
 ### DHCP Lease Events
 
 Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attacker plugging in a device during physical access, or a compromised host requesting a new IP).
