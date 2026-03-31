@@ -78,6 +78,9 @@ class StateManager:
         self._connection_id_counter = 0
         self._lock = RLock()  # Reentrant lock for thread safety
 
+        # Entity lifecycle: per-system boot times for temporal validation
+        self._system_boot_times: dict[str, datetime] = {}
+
     # ========================================
     # Session Management
     # ========================================
@@ -621,6 +624,67 @@ class StateManager:
                 "dns_cache_entries": len(self.state.dns_cache),
                 "current_time": str(self.state.current_time) if self.state.current_time else None,
             }
+
+    # ========================================
+    # Entity Lifecycle Validation
+    # ========================================
+
+    def register_boot_time(self, system: str, boot_time: datetime) -> None:
+        """Register a system's boot time for temporal validation.
+
+        Called during process tree seeding. Events with timestamps before
+        boot_time will generate warnings.
+        """
+        with self._lock:
+            self._system_boot_times[system] = boot_time
+
+    def get_boot_time(self, system: str) -> datetime | None:
+        """Get a system's registered boot time."""
+        with self._lock:
+            return self._system_boot_times.get(system)
+
+    def validate_event_time(self, system: str, event_time: datetime) -> bool:
+        """Check if an event timestamp is after the system's boot time.
+
+        Returns True if valid (or no boot time registered). Logs a warning
+        if the event precedes boot time.
+        """
+        with self._lock:
+            boot = self._system_boot_times.get(system)
+            if boot is not None and event_time < boot:
+                logger.warning(
+                    "Event at %s precedes boot time %s on %s",
+                    event_time,
+                    boot,
+                    system,
+                )
+                return False
+            return True
+
+    def validate_target_pid(self, system: str, pid: int) -> bool:
+        """Check if a target PID exists as a running process.
+
+        Used by process_access and create_remote_thread to validate
+        that the target process actually exists. Logs a warning if not.
+
+        Returns True if the PID exists (or is a well-known system PID).
+        """
+        with self._lock:
+            # PIDs 0 (idle) and 4 (System) always exist on Windows
+            if pid in (0, 4):
+                return True
+            exists = (system, pid) in self.state.running_processes
+            if not exists:
+                logger.warning(
+                    "Target PID %d not found as running process on %s",
+                    pid,
+                    system,
+                )
+            return exists
+
+    # ========================================
+    # Event Application
+    # ========================================
 
     def apply(self, event: SecurityEvent) -> None:
         """Record state changes from a fully-constructed SecurityEvent.

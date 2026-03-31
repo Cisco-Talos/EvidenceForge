@@ -422,6 +422,10 @@ class EmitterSetupMixin:
 
             self._system_pids[system.hostname] = pids
 
+            # Register boot time for entity lifecycle validation
+            if self.start_time:
+                self.state_manager.register_boot_time(system.hostname, self.start_time)
+
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
 

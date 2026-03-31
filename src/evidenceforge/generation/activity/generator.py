@@ -3353,6 +3353,9 @@ class ActivityGenerator:
         target_image: str,
     ) -> None:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        # Entity lifecycle: validate target PID exists
+        self.state_manager.validate_target_pid(system.hostname, target_pid)
+
         from evidenceforge.events.contexts import ProcessContext
 
         event = SecurityEvent(
@@ -3400,6 +3403,9 @@ class ActivityGenerator:
             target_image: Full path of the target process image
             granted_access: Access mask (0x1010=VM_READ, 0x1FFFFF=ALL_ACCESS)
         """
+        # Entity lifecycle: validate target PID exists
+        self.state_manager.validate_target_pid(system.hostname, target_pid)
+
         from evidenceforge.events.contexts import ProcessContext
 
         event = SecurityEvent(
