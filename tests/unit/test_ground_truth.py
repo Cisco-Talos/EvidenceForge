@@ -486,3 +486,84 @@ class TestGroundTruthGenerator:
         event_conn = {"type": "connection"}
         details = generator._format_event_details(event_conn)
         assert "N/A" in details
+
+    def test_red_herring_section_in_output(self, minimal_scenario, malicious_events, tmp_path):
+        """GROUND_TRUTH.md should include Red Herrings section when red herrings exist."""
+        red_herrings = [
+            {
+                "time": datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC),
+                "actor": "admin.jones",
+                "system": "SRV-DB-01",
+                "activity": "PowerShell maintenance script",
+                "explanation": "Scheduled weekly database maintenance",
+            },
+        ]
+        output_path = tmp_path / "GROUND_TRUTH.md"
+        generator = GroundTruthGenerator(
+            minimal_scenario, malicious_events, red_herring_events=red_herrings
+        )
+        generator.generate(output_path)
+        content = output_path.read_text()
+
+        assert "## Red Herrings" in content
+        assert "appear suspicious but are benign" in content
+
+    def test_red_herring_explanations_included(self, minimal_scenario, malicious_events, tmp_path):
+        """Each red herring's explanation text should appear in the output."""
+        red_herrings = [
+            {
+                "time": datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC),
+                "actor": "admin.jones",
+                "system": "SRV-DB-01",
+                "activity": "PowerShell maintenance script",
+                "explanation": "Scheduled weekly database maintenance",
+            },
+            {
+                "time": datetime(2024, 1, 15, 11, 0, 0, tzinfo=UTC),
+                "actor": "svc_backup",
+                "system": "SRV-FILE-01",
+                "activity": "Large file transfer to cloud",
+                "explanation": "Nightly backup to Azure Blob",
+            },
+        ]
+        output_path = tmp_path / "GROUND_TRUTH.md"
+        generator = GroundTruthGenerator(
+            minimal_scenario, malicious_events, red_herring_events=red_herrings
+        )
+        generator.generate(output_path)
+        content = output_path.read_text()
+
+        assert "Scheduled weekly database maintenance" in content
+        assert "Nightly backup to Azure Blob" in content
+        assert "admin.jones" in content
+        assert "svc_backup" in content
+
+    def test_no_red_herrings_no_section(self, minimal_scenario, malicious_events, tmp_path):
+        """Red Herrings section should be omitted when no red herrings exist."""
+        output_path = tmp_path / "GROUND_TRUTH.md"
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        generator.generate(output_path)
+        content = output_path.read_text()
+
+        assert "## Red Herrings" not in content
+
+    def test_red_herring_table_format(self, minimal_scenario, malicious_events, tmp_path):
+        """Red herring section should use table format with correct columns."""
+        red_herrings = [
+            {
+                "time": datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC),
+                "actor": "admin.jones",
+                "system": "SRV-DB-01",
+                "activity": "Admin PowerShell",
+                "explanation": "Maintenance",
+            },
+        ]
+        output_path = tmp_path / "GROUND_TRUTH.md"
+        generator = GroundTruthGenerator(
+            minimal_scenario, malicious_events, red_herring_events=red_herrings
+        )
+        generator.generate(output_path)
+        content = output_path.read_text()
+
+        assert "| Timestamp | Actor | System | Activity | Why It's Benign |" in content
+        assert "| 2024-01-15 10:45:00 UTC | admin.jones | SRV-DB-01 |" in content

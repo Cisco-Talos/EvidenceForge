@@ -163,6 +163,8 @@ class ScenarioValidator:
         self._validate_format_os_compatibility()
         self._validate_segment_sensor_coverage()
         self._validate_service_account_collisions()
+        self._validate_stale_account_collisions()
+        self._validate_red_herring_references()
         self._validate_storyline_actor_work_hours()
         self._validate_noise_feasibility()
         self._validate_storyline_format_coverage()
@@ -631,6 +633,60 @@ class ScenarioValidator:
                     suggestion="Rename one to avoid ambiguity in log attribution",
                 )
             )
+
+    def _validate_stale_account_collisions(self) -> None:
+        """Check that stale accounts don't collide with active users or service accounts."""
+        stale_usernames = {sa.username for sa in self.scenario.environment.stale_accounts}
+        # Collisions with active users
+        for name in sorted(stale_usernames & self.usernames):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.stale_accounts",
+                    message=(
+                        f"Stale account '{name}' collides with an active user of the same name"
+                    ),
+                    suggestion="Stale accounts must have unique usernames — remove from users or stale_accounts",
+                )
+            )
+        # Collisions with service accounts
+        for name in sorted(stale_usernames & self.service_accounts):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="environment.stale_accounts",
+                    message=(
+                        f"Stale account '{name}' collides with a service account of the same name"
+                    ),
+                    suggestion="Stale accounts must not overlap with service_accounts",
+                )
+            )
+
+    def _validate_red_herring_references(self) -> None:
+        """Check that red herring actors and systems exist in the environment."""
+        valid_actors = self.usernames | self.service_accounts | BUILTIN_ACCOUNTS
+        for idx, rh in enumerate(self.scenario.red_herrings):
+            if rh.actor not in valid_actors:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"red_herrings[{idx}].actor",
+                        message=(
+                            f"Red herring actor '{rh.actor}' is not a defined user, "
+                            f"service account, or built-in account"
+                        ),
+                        suggestion="Add the actor to environment.users or environment.service_accounts",
+                    )
+                )
+            if rh.system not in self.hostnames:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"red_herrings[{idx}].system",
+                        message=(f"Red herring system '{rh.system}' is not a defined system"),
+                        suggestion="Add the system to environment.systems",
+                    )
+                )
 
     def _validate_storyline_actor_work_hours(self) -> None:
         """Check that storyline actors have personas with work_hours defined."""

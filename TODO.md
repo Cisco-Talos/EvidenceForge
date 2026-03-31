@@ -218,6 +218,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 ## Post-MVP Enhancements (Future)
 
 ### Short-term
+- [ ] **Expand suspicious ambient noise types** — Current suspicious_benign.py has 4 pattern types (after-hours admin, suspicious CLI, failed logon burst, service account anomaly). Add: large outbound transfers (backup/cloud sync), process injection false positives (AV/EDR memory scanning), scheduled vulnerability scan overlap, automated software update bursts.
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation

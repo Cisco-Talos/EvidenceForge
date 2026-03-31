@@ -13,7 +13,9 @@ from evidenceforge.models import (
     NetworkSensor,
     OutputSpec,
     Persona,
+    RedHerringEvent,
     Scenario,
+    StaleAccount,
     StorylineEvent,
     System,
     TimeWindow,
@@ -2395,3 +2397,221 @@ class TestLinkabilityTimeGap:
         link_issues = [i for i in issues if "pivot" in i.message.lower()]
         assert len(link_issues) >= 1
         assert all(i.severity == "info" for i in link_issues)
+
+    def test_stale_account_username_collision_with_user(self):
+        """Stale account colliding with active user should produce error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="jsmith", full_name="John Smith", email="j@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+                stale_accounts=[
+                    StaleAccount(username="jsmith", last_active="2023-01-01", reason="duplicate"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        stale_issues = [
+            i
+            for i in issues
+            if "stale_accounts" in i.field_path and "collides" in i.message.lower()
+        ]
+        assert len(stale_issues) == 1
+        assert stale_issues[0].severity == "error"
+        assert "jsmith" in stale_issues[0].message
+
+    def test_stale_account_username_collision_with_service(self):
+        """Stale account colliding with service account should produce error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+                service_accounts=["svc_backup"],
+                stale_accounts=[
+                    StaleAccount(username="svc_backup", last_active="2023-01-01", reason="dup"),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        stale_issues = [
+            i
+            for i in issues
+            if "stale_accounts" in i.field_path and "service account" in i.message.lower()
+        ]
+        assert len(stale_issues) == 1
+        assert stale_issues[0].severity == "error"
+
+    def test_stale_account_no_collision(self):
+        """Stale accounts with unique names should produce no collision errors."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="active_user", full_name="Active", email="a@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+                stale_accounts=[
+                    StaleAccount(
+                        username="old_user", last_active="2023-01-01", reason="Former employee"
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        stale_issues = [i for i in issues if "stale_accounts" in i.field_path]
+        assert len(stale_issues) == 0
+
+    def test_red_herring_actor_not_in_users(self):
+        """Red herring with unknown actor should produce error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            red_herrings=[
+                RedHerringEvent(
+                    id="rh-1",
+                    time="+30m",
+                    actor="nonexistent_user",
+                    system="WS-01",
+                    activity="Test",
+                    explanation="Test explanation",
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
+            ],
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        rh_issues = [
+            i for i in issues if "red_herrings" in i.field_path and "actor" in i.field_path
+        ]
+        assert len(rh_issues) == 1
+        assert rh_issues[0].severity == "error"
+        assert "nonexistent_user" in rh_issues[0].message
+
+    def test_red_herring_system_not_in_systems(self):
+        """Red herring with unknown system should produce error."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            red_herrings=[
+                RedHerringEvent(
+                    id="rh-1",
+                    time="+30m",
+                    actor="u1",
+                    system="NONEXISTENT-HOST",
+                    activity="Test",
+                    explanation="Test explanation",
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
+            ],
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        rh_issues = [
+            i for i in issues if "red_herrings" in i.field_path and "system" in i.field_path
+        ]
+        assert len(rh_issues) == 1
+        assert rh_issues[0].severity == "error"
+        assert "NONEXISTENT-HOST" in rh_issues[0].message
+
+    def test_red_herring_valid_actors_and_systems(self):
+        """Red herrings with valid actors and systems should produce no reference errors."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+                service_accounts=["svc_backup"],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            red_herrings=[
+                RedHerringEvent(
+                    id="rh-1",
+                    time="+30m",
+                    actor="u1",
+                    system="WS-01",
+                    activity="User activity",
+                    explanation="Normal usage",
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
+                RedHerringEvent(
+                    id="rh-2",
+                    time="+45m",
+                    actor="svc_backup",
+                    system="WS-01",
+                    activity="Service activity",
+                    explanation="Scheduled task",
+                    events=[{"type": "process", "process_name": "robocopy.exe"}],
+                ),
+            ],
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        rh_issues = [i for i in issues if "red_herrings" in i.field_path]
+        assert len(rh_issues) == 0

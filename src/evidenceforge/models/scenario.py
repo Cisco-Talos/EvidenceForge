@@ -228,11 +228,18 @@ class BaselineActivity(BaseModel):
                   Phase 1 mapping: low=5, medium=15, high=40 events/user/hour
         variation: Timing variation (low|medium|high)
                   Phase 1 mapping: low=±10%, medium=±25%, high=±50% stddev
+        suspicious_noise: Level of suspicious-but-benign ambient noise
+                  low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr (default: high)
     """
 
     description: str
     intensity: str = Field(..., pattern="^(low|medium|high)$")
     variation: str = Field(..., pattern="^(low|medium|high)$")
+    suspicious_noise: str = Field(
+        default="high",
+        pattern="^(low|medium|high|ludicrous)$",
+        description="Level of suspicious-but-benign ambient noise (default: high)",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -435,6 +442,32 @@ class StorylineEvent(BaseModel):
     events: list[EventSpec]
 
 
+class RedHerringEvent(BaseModel):
+    """Suspicious-but-benign event for analyst training.
+
+    Red herrings use the same event execution path as storyline events but
+    are excluded from the attack ground truth. They are documented in a
+    separate "Red Herrings" section of GROUND_TRUTH.md with their explanations.
+
+    Attributes:
+        id: Unique event identifier
+        time: Event time (ISO 8601, relative offset, or seconds)
+        actor: Username of the account performing the action
+        system: Target system hostname
+        activity: Human-readable activity description (appears in Red Herrings section)
+        explanation: Why this activity is benign (for instructor ground truth)
+        events: List of typed event declarations
+    """
+
+    id: str = Field(..., description="Unique event identifier")
+    time: str
+    actor: str
+    system: str
+    activity: str
+    explanation: str = Field(..., description="Why this is benign (for instructor ground truth)")
+    events: list[EventSpec]
+
+
 class Timezone(BaseModel):
     """Timezone configuration.
 
@@ -545,6 +578,26 @@ class NetworkConfig(BaseModel):
         return v
 
 
+class StaleAccount(BaseModel):
+    """Stale/inactive account that generates background failed logon noise.
+
+    These accounts are NOT in the active users list — they exist only to
+    generate occasional failed logon events during baseline generation,
+    simulating automated systems trying cached credentials that no longer work.
+
+    Attributes:
+        username: Account username (must not collide with active users or service_accounts)
+        last_active: ISO date when the account was last active (for context only)
+        reason: Why the account is stale (e.g., "former employee", "deprecated service")
+    """
+
+    username: str = Field(..., pattern=r"^[a-zA-Z0-9._$-]+$")
+    last_active: str
+    reason: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class Environment(BaseModel):
     """Environment definition.
 
@@ -557,6 +610,7 @@ class Environment(BaseModel):
         users: List of users (at least one required)
         systems: List of systems (at least one required)
         service_accounts: Optional list of service/system account names valid as storyline actors
+        stale_accounts: Optional list of inactive accounts that generate failed logon noise
         groups: Optional list of groups
         network: Optional network topology and sensor configuration
     """
@@ -574,6 +628,10 @@ class Environment(BaseModel):
     service_accounts: list[str] = Field(
         default_factory=list,
         description="Service/system account names valid as storyline actors (e.g., svc_backup, apache)",
+    )
+    stale_accounts: list[StaleAccount] = Field(
+        default_factory=list,
+        description="Inactive accounts that generate background failed logon noise",
     )
     groups: list[Group] | None = Field(default_factory=list)
     network: NetworkConfig | None = Field(
@@ -645,6 +703,10 @@ class Scenario(BaseModel):
     time_window: TimeWindow
     baseline_activity: BaselineActivity
     storyline: list[StorylineEvent] | None = Field(default_factory=list)
+    red_herrings: list[RedHerringEvent] = Field(
+        default_factory=list,
+        description="Suspicious-but-benign events that muddy analyst attribution",
+    )
     output: OutputSpec
     logon_grace_period: str = Field(
         default="30m",

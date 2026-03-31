@@ -337,6 +337,49 @@ class StorylineMixin:
             if malicious_event:
                 self.malicious_events.append(malicious_event)
 
+    def _execute_single_red_herring_event(self, event_idx: int) -> None:
+        """Execute a single red herring event by index.
+
+        Uses the same event execution path as storyline events but tracks
+        results in red_herring_events instead of malicious_events.
+        """
+        self._ensure_account_sid_tracking()
+        rh_event = self.scenario.red_herrings[event_idx]
+
+        event_time = self._parse_storyline_time(rh_event.time)
+        rng = _get_rng()
+        jitter = timedelta(
+            seconds=rng.uniform(-30, 30),
+            microseconds=rng.randint(0, 999999),
+        )
+        event_time = event_time + jitter
+
+        actor = self._find_actor(rh_event.actor)
+        system = self._find_system(rh_event.system)
+        if not actor or not system:
+            return
+
+        logger.info(
+            f"Executing red herring event: {rh_event.actor} on {rh_event.system} at {event_time}"
+        )
+
+        self.state_manager.set_current_time(event_time)
+
+        explicit_types = {spec.type for spec in rh_event.events}
+        for spec in rh_event.events:
+            result = self._execute_typed_event(
+                spec=spec,
+                actor=actor,
+                system=system,
+                time=event_time,
+                activity=rh_event.activity,
+                explicit_types=explicit_types,
+            )
+            if result:
+                # Track as red herring, not malicious
+                result["explanation"] = rh_event.explanation
+                self.red_herring_events.append(result)
+
     def _execute_typed_event(
         self,
         spec,  # EventSpec union type

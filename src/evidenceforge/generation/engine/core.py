@@ -69,6 +69,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.start_time: datetime | None = None
         self.end_time: datetime | None = None
         self.malicious_events: list[dict] = []  # Track for GROUND_TRUTH.md
+        self.red_herring_events: list[dict] = []  # Track for Red Herrings section
 
         # Event counter for record IDs
         self.event_record_counter = 10000
@@ -133,6 +134,22 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                         self._storyline_executed.add(idx)
                     self._barrier_flush_all_emitters()
                     self._report_progress("phase_end", {"phase": "storyline"})
+
+            # Execute remaining red herring events not covered by baseline hours
+            if self.scenario.red_herrings:
+                remaining_rh = [
+                    i
+                    for i in range(len(self.scenario.red_herrings))
+                    if i not in self._red_herring_executed
+                ]
+                if remaining_rh:
+                    logger.info(
+                        f"Executing {len(remaining_rh)} remaining red herring events (outside baseline window)"
+                    )
+                    for idx in remaining_rh:
+                        self._execute_single_red_herring_event(idx)
+                        self._red_herring_executed.add(idx)
+                    self._barrier_flush_all_emitters()
         finally:
             # Phase 4: Finalize and close emitters (always, even on error)
             self._report_progress(
@@ -141,8 +158,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._finalize()
             self._report_progress("phase_end", {"phase": "finalize"})
 
-        # Phase 5: Generate ground truth (if malicious activity present)
-        if self.malicious_events:
+        # Phase 5: Generate ground truth (if malicious activity or red herrings present)
+        if self.malicious_events or self.red_herring_events:
             logger.info(
                 f"Generating GROUND_TRUTH.md with {len(self.malicious_events)} malicious events"
             )
@@ -268,6 +285,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
         self._storyline_executed: set[int] = set()
 
+        # Pre-parse red herring event times for interleaved generation
+        self._red_herring_by_hour: dict[int, list] = {}
+        if self.scenario.red_herrings:
+            for idx, event in enumerate(self.scenario.red_herrings):
+                event_time = self._parse_storyline_time(event.time)
+                hour_key = int(event_time.replace(minute=0, second=0, microsecond=0).timestamp())
+                self._red_herring_by_hour.setdefault(hour_key, []).append((event_time, idx))
+            for key in self._red_herring_by_hour:
+                self._red_herring_by_hour[key].sort()
+            logger.info(
+                f"Pre-parsed {len(self.scenario.red_herrings)} red herring events across {len(self._red_herring_by_hour)} hours"
+            )
+        self._red_herring_executed: set[int] = set()
+
         # Build proxy routing table
         self._proxy_routes: dict[str, list] = {}
         self._build_proxy_routes()
@@ -330,7 +361,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         output_path = self.ground_truth_dir / "GROUND_TRUTH.md"
 
         generator = GroundTruthGenerator(
-            scenario=self.scenario, malicious_events=self.malicious_events
+            scenario=self.scenario,
+            malicious_events=self.malicious_events,
+            red_herring_events=self.red_herring_events,
         )
 
         generator.generate(output_path)

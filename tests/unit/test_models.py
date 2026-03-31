@@ -14,8 +14,10 @@ from evidenceforge.models import (
     OpenConnection,
     OutputSpec,
     Persona,
+    RedHerringEvent,
     RunningProcess,
     Scenario,
+    StaleAccount,
     StorylineEvent,
     System,
     TimeWindow,
@@ -484,3 +486,190 @@ class TestStateModels:
         assert state.active_sessions["0x3e7"].username == "jdoe"
         assert ("WS-01", 1234) in state.running_processes
         assert state.running_processes[("WS-01", 1234)].pid == 1234
+
+
+class TestStaleAccount:
+    """Tests for StaleAccount model."""
+
+    def test_valid_stale_account(self):
+        """Valid stale account should parse correctly."""
+        sa = StaleAccount(
+            username="svc_bkup_2019", last_active="2024-06-15", reason="Deprecated backup service"
+        )
+        assert sa.username == "svc_bkup_2019"
+        assert sa.last_active == "2024-06-15"
+        assert sa.reason == "Deprecated backup service"
+
+    def test_environment_with_stale_accounts(self):
+        """Environment should accept stale_accounts."""
+        env = Environment(
+            description="Test",
+            users=[User(username="u1", full_name="U1", email="u1@x.com")],
+            systems=[System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")],
+            stale_accounts=[
+                StaleAccount(
+                    username="old_user", last_active="2023-01-01", reason="Former employee"
+                ),
+            ],
+        )
+        assert len(env.stale_accounts) == 1
+        assert env.stale_accounts[0].username == "old_user"
+
+    def test_stale_accounts_default_empty(self):
+        """stale_accounts should default to empty list."""
+        env = Environment(
+            description="Test",
+            users=[User(username="u1", full_name="U1", email="u1@x.com")],
+            systems=[System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")],
+        )
+        assert env.stale_accounts == []
+
+    def test_stale_account_username_pattern(self):
+        """Username must match alphanumeric + ._$- pattern."""
+        StaleAccount(username="svc$sqlprod", last_active="2024-01-01", reason="test")
+        StaleAccount(username="user.name", last_active="2024-01-01", reason="test")
+        StaleAccount(username="sa_mon-01", last_active="2024-01-01", reason="test")
+
+        with pytest.raises(ValidationError):
+            StaleAccount(username="bad user", last_active="2024-01-01", reason="test")
+
+        with pytest.raises(ValidationError):
+            StaleAccount(username="bad@user", last_active="2024-01-01", reason="test")
+
+    def test_stale_account_forbids_extra(self):
+        """Extra fields should be rejected."""
+        with pytest.raises(ValidationError):
+            StaleAccount(
+                username="test", last_active="2024-01-01", reason="test", extra_field="bad"
+            )
+
+
+class TestRedHerringEvent:
+    """Tests for RedHerringEvent model."""
+
+    def test_valid_red_herring(self):
+        """Valid red herring should parse correctly."""
+        rh = RedHerringEvent(
+            id="rh-admin-ps",
+            time="+26h",
+            actor="admin.jones",
+            system="SRV-DB-01",
+            activity="Admin runs PowerShell for maintenance",
+            explanation="Scheduled weekly database maintenance",
+            events=[{"type": "process", "process_name": "powershell.exe"}],
+        )
+        assert rh.id == "rh-admin-ps"
+        assert rh.explanation == "Scheduled weekly database maintenance"
+        assert len(rh.events) == 1
+
+    def test_red_herring_requires_explanation(self):
+        """Explanation field should be required."""
+        with pytest.raises(ValidationError, match="explanation"):
+            RedHerringEvent(
+                id="rh-test",
+                time="+1h",
+                actor="user1",
+                system="WS-01",
+                activity="Test",
+                events=[{"type": "process", "process_name": "cmd.exe"}],
+            )
+
+    def test_scenario_with_red_herrings(self):
+        """Scenario should accept red_herrings field."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u1@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="2h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+            red_herrings=[
+                RedHerringEvent(
+                    id="rh-1",
+                    time="+30m",
+                    actor="u1",
+                    system="WS-01",
+                    activity="Test activity",
+                    explanation="Benign explanation",
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                ),
+            ],
+        )
+        assert len(scenario.red_herrings) == 1
+
+    def test_red_herrings_default_empty(self):
+        """red_herrings should default to empty list."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="u1", full_name="U1", email="u1@x.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+        assert scenario.red_herrings == []
+
+    def test_red_herring_events_typed(self):
+        """Red herring events should use typed EventSpec union."""
+        rh = RedHerringEvent(
+            id="rh-conn",
+            time="+1h",
+            actor="user1",
+            system="WS-01",
+            activity="Test connection",
+            explanation="Legitimate backup",
+            events=[
+                {"type": "process", "process_name": "cmd.exe"},
+                {"type": "connection", "dst_ip": "10.0.0.5", "dst_port": 445},
+            ],
+        )
+        assert len(rh.events) == 2
+
+
+class TestBaselineActivitySuspiciousNoise:
+    """Tests for BaselineActivity.suspicious_noise field."""
+
+    def test_suspicious_noise_default_high(self):
+        """suspicious_noise should default to 'high'."""
+        ba = BaselineActivity(description="Test", intensity="medium", variation="low")
+        assert ba.suspicious_noise == "high"
+
+    def test_suspicious_noise_ludicrous(self):
+        """'ludicrous' should be accepted."""
+        ba = BaselineActivity(
+            description="Test", intensity="medium", variation="low", suspicious_noise="ludicrous"
+        )
+        assert ba.suspicious_noise == "ludicrous"
+
+    def test_suspicious_noise_all_valid_values(self):
+        """All valid values should be accepted."""
+        for level in ("low", "medium", "high", "ludicrous"):
+            ba = BaselineActivity(
+                description="Test", intensity="medium", variation="low", suspicious_noise=level
+            )
+            assert ba.suspicious_noise == level
+
+    def test_suspicious_noise_invalid(self):
+        """Invalid values should be rejected."""
+        with pytest.raises(ValidationError):
+            BaselineActivity(
+                description="Test", intensity="medium", variation="low", suspicious_noise="extreme"
+            )

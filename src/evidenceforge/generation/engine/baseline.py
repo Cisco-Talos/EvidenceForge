@@ -13,6 +13,14 @@ import logging
 import math
 from datetime import UTC, datetime, timedelta
 
+from evidenceforge.generation.activity.suspicious_benign import (
+    generate_after_hours_admin,
+    generate_failed_logon_burst,
+    generate_service_account_anomaly,
+    generate_suspicious_cli,
+    get_suspicious_event_count,
+    pick_suspicious_pattern,
+)
 from evidenceforge.models.scenario import Persona, User
 from evidenceforge.utils.rng import _get_rng
 
@@ -195,12 +203,20 @@ class BaselineMixin:
                         self._generate_user_activity(user, event_time)
 
             self._generate_system_traffic(current_hour)
+            self._generate_stale_account_noise(current_hour)
+            self._generate_suspicious_noise(current_hour)
 
             hour_key = int(current_hour.timestamp())
             for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
                 if event_idx not in self._storyline_executed:
                     self._execute_single_storyline_event(event_idx)
                     self._storyline_executed.add(event_idx)
+
+            # Execute red herring events for this hour
+            for _event_time, event_idx in self._red_herring_by_hour.get(hour_key, []):
+                if event_idx not in self._red_herring_executed:
+                    self._execute_single_red_herring_event(event_idx)
+                    self._red_herring_executed.add(event_idx)
 
             self._terminate_stale_processes(current_hour)
             self._generate_logoffs_for_hour(enabled_users, current_hour)
@@ -209,6 +225,150 @@ class BaselineMixin:
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
+
+    def _generate_stale_account_noise(self, current_hour: datetime) -> None:
+        """Generate failed logon events for stale/inactive accounts.
+
+        Simulates automated systems (monitoring, backup, scheduled tasks) trying
+        cached credentials that no longer work. Each stale account has a ~15%
+        chance per hour of generating a failed logon attempt.
+        """
+        stale_accounts = self.scenario.environment.stale_accounts
+        if not stale_accounts:
+            return
+
+        rng = _get_rng()
+        systems = self.scenario.environment.systems
+        # Prefer servers as source systems (monitoring/backup systems try cached creds)
+        servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        target_systems = servers if servers else systems
+
+        for stale in stale_accounts:
+            # ~15% chance per hour per stale account
+            if rng.random() > 0.15:
+                continue
+
+            # Pick a random target system and time within the hour
+            target_system = rng.choice(target_systems)
+            offset_seconds = rng.randint(0, 3599)
+            event_time = current_hour + timedelta(seconds=offset_seconds)
+
+            # Pick a source IP from a server (cached credential source)
+            source_system = rng.choice(target_systems)
+            source_ip = source_system.ip
+
+            # Create a synthetic User object for the stale account
+            stale_user = User(
+                username=stale.username,
+                full_name=stale.username,
+                email=f"{stale.username}@system.local",
+                enabled=False,
+            )
+
+            self.activity_generator.generate_failed_logon(
+                user=stale_user,
+                system=target_system,
+                time=event_time,
+                logon_type=3,  # Network logon (automated system)
+                source_ip=source_ip,
+            )
+
+    def _generate_suspicious_noise(self, current_hour: datetime) -> None:
+        """Generate suspicious-but-benign ambient noise events.
+
+        Creates events that look suspicious in isolation but have legitimate
+        explanations: after-hours admin logins, PowerShell/cmd on non-admin
+        workstations, failed logon bursts, service account anomalies.
+        """
+        noise_level = self.scenario.baseline_activity.suspicious_noise
+        rng = _get_rng()
+
+        num_events = get_suspicious_event_count(noise_level, rng)
+        if num_events == 0:
+            return
+
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+        systems = self.scenario.environment.systems
+        personas = self.scenario.personas
+
+        for _ in range(num_events):
+            pattern_info = pick_suspicious_pattern(
+                rng, enabled_users, systems, personas, current_hour
+            )
+            if not pattern_info:
+                continue
+
+            pattern_type = pattern_info["type"]
+
+            if pattern_type == "after_hours_admin":
+                result = generate_after_hours_admin(rng, enabled_users, systems, current_hour)
+                if result:
+                    self.activity_generator.generate_logon(
+                        user=result["user"],
+                        system=result["system"],
+                        time=result["time"],
+                        logon_type=result["logon_type"],
+                    )
+
+            elif pattern_type == "suspicious_cli":
+                result = generate_suspicious_cli(rng, enabled_users, systems, current_hour)
+                if result:
+                    # Need an active session for the process — reuse existing or create one
+                    sessions = self.state_manager.get_sessions_for_user(result["user"].username)
+                    if sessions:
+                        logon_id = sessions[0].logon_id
+                    else:
+                        logon_time = result["time"] - timedelta(seconds=rng.randint(1, 5))
+                        logon_id = self.activity_generator.generate_logon(
+                            user=result["user"],
+                            system=result["system"],
+                            time=logon_time,
+                            logon_type=2,
+                        )
+                    self.activity_generator.generate_process(
+                        user=result["user"],
+                        system=result["system"],
+                        time=result["time"],
+                        logon_id=logon_id,
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
+                    )
+
+            elif pattern_type == "failed_logon_burst":
+                result = generate_failed_logon_burst(rng, enabled_users, systems, current_hour)
+                if result:
+                    # Generate failed logons followed by a success
+                    user = result["user"]
+                    system = result["system"]
+                    base_time = result["time"]
+                    for i in range(result["num_failures"]):
+                        fail_time = base_time + timedelta(seconds=i * rng.randint(2, 8))
+                        self.activity_generator.generate_failed_logon(
+                            user=user,
+                            system=system,
+                            time=fail_time,
+                            logon_type=2,  # Interactive (typing password wrong)
+                        )
+                    # Successful logon after the failures
+                    success_time = base_time + timedelta(
+                        seconds=result["num_failures"] * 5 + rng.randint(3, 15)
+                    )
+                    self.activity_generator.generate_logon(
+                        user=user,
+                        system=system,
+                        time=success_time,
+                        logon_type=2,
+                    )
+
+            elif pattern_type == "service_account_anomaly":
+                result = generate_service_account_anomaly(rng, enabled_users, systems, current_hour)
+                if result:
+                    self.activity_generator.generate_logon(
+                        user=result["user"],
+                        system=result["system"],
+                        time=result["time"],
+                        logon_type=result["logon_type"],
+                    )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
         """Terminate processes that have exceeded their expected lifetime.

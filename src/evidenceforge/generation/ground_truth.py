@@ -27,15 +27,22 @@ class GroundTruthGenerator:
         malicious_events: List of malicious event dicts from generation
     """
 
-    def __init__(self, scenario: Scenario, malicious_events: list[dict]):
+    def __init__(
+        self,
+        scenario: Scenario,
+        malicious_events: list[dict],
+        red_herring_events: list[dict] | None = None,
+    ):
         """Initialize ground truth generator.
 
         Args:
             scenario: Scenario object with storyline
             malicious_events: List of malicious event dicts tracked during generation
+            red_herring_events: List of red herring event dicts (suspicious but benign)
         """
         self.scenario = scenario
         self.malicious_events = malicious_events
+        self.red_herring_events = red_herring_events or []
 
     def generate(self, output_path: Path) -> None:
         """Generate GROUND_TRUTH.md file.
@@ -64,6 +71,15 @@ class GroundTruthGenerator:
         content.append("\n## Indicators of Compromise (IOCs)\n")
         iocs = self._extract_iocs()
         content.append(self._format_iocs(iocs))
+
+        # 4. Red Herrings (if present)
+        if self.red_herring_events:
+            content.append("\n## Red Herrings\n")
+            content.append(
+                "The following events appear suspicious but are benign. "
+                "They are included to make the dataset more realistic.\n"
+            )
+            content.append(self._create_red_herring_section())
 
         # Write to file
         output_path.write_text("\n".join(content))
@@ -233,6 +249,28 @@ class GroundTruthGenerator:
         iocs = {category: values for category, values in iocs.items() if values}
 
         return iocs
+
+    def _create_red_herring_section(self) -> str:
+        """Create documentation of red herring events with explanations.
+
+        Returns:
+            Formatted red herring section (Markdown)
+        """
+        sorted_events = sorted(self.red_herring_events, key=lambda e: e["time"])
+
+        lines = []
+        lines.append("| Timestamp | Actor | System | Activity | Why It's Benign |")
+        lines.append("|-----------|-------|--------|----------|-----------------|")
+
+        for event in sorted_events:
+            timestamp = event["time"].strftime("%Y-%m-%d %H:%M:%S UTC")
+            actor = event["actor"]
+            system = event["system"]
+            activity = event.get("activity", "N/A")
+            explanation = event.get("explanation", "N/A")
+            lines.append(f"| {timestamp} | {actor} | {system} | {activity} | {explanation} |")
+
+        return "\n".join(lines) + "\n"
 
     def _format_iocs(self, iocs: dict[str, set]) -> str:
         """Format IOCs into Markdown sections.
