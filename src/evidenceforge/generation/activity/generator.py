@@ -47,6 +47,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
@@ -382,6 +383,7 @@ class ActivityGenerator:
         network_visibility=None,
         sid_registry: dict[str, str] | None = None,
         dispatcher: EventDispatcher | None = None,
+        causal_engine: CausalExpansionEngine | None = None,
     ):
         """Initialize activity generator.
 
@@ -392,6 +394,9 @@ class ActivityGenerator:
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
             dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
+            causal_engine: Optional CausalExpansionEngine for auto-generating
+                prerequisite events (DNS before connections, Kerberos before
+                logons, etc.)
         """
         self.state_manager = state_manager
         if dispatcher is None and emitters:
@@ -414,6 +419,10 @@ class ActivityGenerator:
 
         # Network visibility stored on dispatcher; keep local ref for fast-path check
         self._network_visibility = network_visibility
+
+        # Causal expansion engine and recursion guard
+        self._causal_engine = causal_engine
+        self._expanding: bool = False
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build a HostContext from a System model object.
@@ -450,6 +459,84 @@ class ActivityGenerator:
             fqdn=f"{dc_hostname}.{ad_domain}" if ad_domain else dc_hostname,
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
         )
+
+    def _build_expansion_context(
+        self,
+        event_type: str,
+        timestamp: datetime,
+        **kwargs: Any,
+    ) -> ExpansionContext:
+        """Build an ExpansionContext from event parameters and engine state."""
+        dns_server_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
+        dc_hostnames = getattr(self, "_dc_hostnames", [])
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        if not hasattr(self, "_dns_cache"):
+            self._dns_cache: dict[tuple[str, str], float] = {}
+        if not hasattr(self, "_kerberos_cache"):
+            self._kerberos_cache: dict[str, float] = {}
+
+        return ExpansionContext(
+            event_type=event_type,
+            timestamp=timestamp,
+            src_ip=kwargs.get("src_ip"),
+            dst_ip=kwargs.get("dst_ip"),
+            dst_port=kwargs.get("dst_port"),
+            protocol=kwargs.get("protocol") or kwargs.get("proto"),
+            service=kwargs.get("service"),
+            logon_type=kwargs.get("logon_type"),
+            auth_package=kwargs.get("auth_package"),
+            command_line=kwargs.get("command_line"),
+            process_name=kwargs.get("process_name"),
+            os_category=kwargs.get("os_category"),
+            source_system=kwargs.get("source_system"),
+            target_system=kwargs.get("target_system"),
+            actor=kwargs.get("actor"),
+            dns_cache=self._dns_cache,
+            kerberos_cache=self._kerberos_cache,
+            dns_server_ips=dns_server_ips,
+            dc_hostnames=dc_hostnames,
+            ad_domain=ad_domain,
+        )
+
+    def _expand_and_emit(
+        self,
+        event_type: str,
+        timestamp: datetime,
+        **kwargs: Any,
+    ) -> None:
+        """Run causal expansion and emit all expanded prerequisite/consequent events.
+
+        This is a no-op if:
+        - No causal engine is configured.
+        - We are already inside an expansion (recursion guard).
+
+        For each expanded event, computes a randomized timestamp offset from the
+        trigger event's timestamp, then calls the corresponding generate_* method
+        on this ActivityGenerator instance.
+        """
+        if self._causal_engine is None or self._expanding:
+            return
+
+        ctx = self._build_expansion_context(event_type, timestamp, **kwargs)
+        expanded = self._causal_engine.expand(event_type, ctx)
+        if not expanded:
+            return
+
+        rng = _get_rng()
+        self._expanding = True
+        try:
+            for ev in expanded:
+                offset_ms = rng.randint(ev.timing.min_ms, ev.timing.max_ms)
+                offset = timedelta(milliseconds=offset_ms)
+                if ev.timing.position == "before":
+                    ev.kwargs["time"] = timestamp - offset
+                else:
+                    ev.kwargs["time"] = timestamp + offset
+
+                method = getattr(self, ev.method)
+                method(**ev.kwargs)
+        finally:
+            self._expanding = False
 
     def generate_logon(
         self,
