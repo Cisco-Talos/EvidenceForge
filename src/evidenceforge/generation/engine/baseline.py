@@ -277,11 +277,14 @@ class BaselineMixin:
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
 
     def _generate_stale_account_noise(self, current_hour: datetime) -> None:
-        """Generate failed logon events for stale/inactive accounts.
+        """Generate noise events for stale/inactive accounts.
 
-        Simulates automated systems (monitoring, backup, scheduled tasks) trying
-        cached credentials that no longer work. Each stale account has a ~15%
-        chance per hour of generating a failed logon attempt.
+        Simulates multiple traces left by accounts that are disabled but still
+        referenced by automated systems:
+        - Failed network logons (~15%/hour): monitoring, backup trying cached creds
+        - Kerberos pre-auth failures (~5%/hour): cached TGT renewal attempts on DC
+        - Scheduled task failures (~3%/hour): lingering tasks configured with stale creds
+        - Service startup failures (~2%/hour, first hour only): services using stale creds
         """
         stale_accounts = self.scenario.environment.stale_accounts
         if not stale_accounts:
@@ -289,25 +292,15 @@ class BaselineMixin:
 
         rng = _get_rng()
         systems = self.scenario.environment.systems
-        # Prefer servers as source systems (monitoring/backup systems try cached creds)
         servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        windows_servers = [s for s in servers if "windows" in s.os.lower()]
         target_systems = servers if servers else systems
 
+        # Check if this is the first hour of the scenario (for service startup failures)
+        is_first_hour = current_hour == self.start_time
+
         for stale in stale_accounts:
-            # ~15% chance per hour per stale account
-            if rng.random() > 0.15:
-                continue
-
-            # Pick a random target system and time within the hour
-            target_system = rng.choice(target_systems)
-            offset_seconds = rng.randint(0, 3599)
-            event_time = current_hour + timedelta(seconds=offset_seconds)
-
-            # Pick a source IP from a server (cached credential source)
-            source_system = rng.choice(target_systems)
-            source_ip = source_system.ip
-
-            # Create a synthetic User object for the stale account
             stale_user = User(
                 username=stale.username,
                 full_name=stale.username,
@@ -315,13 +308,61 @@ class BaselineMixin:
                 enabled=False,
             )
 
-            self.activity_generator.generate_failed_logon(
-                user=stale_user,
-                system=target_system,
-                time=event_time,
-                logon_type=3,  # Network logon (automated system)
-                source_ip=source_ip,
-            )
+            # Pattern 1: Failed network logon (~15%/hour)
+            if rng.random() < 0.15:
+                target_system = rng.choice(target_systems)
+                source_system = rng.choice(target_systems)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                self.state_manager.set_current_time(event_time)
+                self.activity_generator.generate_failed_logon(
+                    user=stale_user,
+                    system=target_system,
+                    time=event_time,
+                    logon_type=3,
+                    source_ip=source_system.ip,
+                )
+
+            # Pattern 2: Kerberos pre-auth failure on DC (~5%/hour)
+            if rng.random() < 0.05 and dcs:
+                dc = rng.choice(dcs)
+                source_system = rng.choice(target_systems)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                self.state_manager.set_current_time(event_time)
+                self.activity_generator.generate_kerberos_preauth_failed(
+                    username=stale.username,
+                    source_ip=source_system.ip,
+                    dc_hostname=dc.hostname,
+                    time=event_time,
+                    status="0x12",  # KDC_ERR_CLIENT_REVOKED (disabled account)
+                )
+
+            # Pattern 3: Scheduled task failure (~3%/hour)
+            if rng.random() < 0.03 and windows_servers:
+                task_host = rng.choice(windows_servers)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                self.state_manager.set_current_time(event_time)
+                # Failed batch logon for the scheduled task
+                self.activity_generator.generate_failed_logon(
+                    user=stale_user,
+                    system=task_host,
+                    time=event_time,
+                    logon_type=4,  # Batch logon (scheduled task)
+                    source_ip=task_host.ip,
+                )
+
+            # Pattern 4: Service startup failure (first hour only, ~2%)
+            if is_first_hour and rng.random() < 0.02 and windows_servers:
+                svc_host = rng.choice(windows_servers)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 300))
+                self.state_manager.set_current_time(event_time)
+                # Failed service logon
+                self.activity_generator.generate_failed_logon(
+                    user=stale_user,
+                    system=svc_host,
+                    time=event_time,
+                    logon_type=5,  # Service logon
+                    source_ip=svc_host.ip,
+                )
 
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
         """Generate suspicious-but-benign ambient noise events.
