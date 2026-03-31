@@ -1,7 +1,7 @@
 """Shared pytest fixtures for EvidenceForge tests.
 
-This module provides common fixtures used across unit, integration,
-and live test suites.
+This module provides common fixtures used across unit and integration
+test suites.
 """
 
 import random
@@ -10,6 +10,26 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.utils.rng import _thread_local
+
+
+def pytest_addoption(parser):
+    """Register custom CLI options."""
+    parser.addoption(
+        "--include-slow",
+        action="store_true",
+        default=False,
+        help="Include slow tests (large dataset generation, 100+ users)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests marked @pytest.mark.slow unless --include-slow is passed."""
+    if config.getoption("--include-slow"):
+        return
+    skip_slow = pytest.mark.skip(reason="slow test — pass --include-slow to run")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
 
 
 @pytest.fixture(autouse=True)

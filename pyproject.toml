@@ -63,7 +63,6 @@ addopts = [
     "--cov=evidenceforge",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "-m", "not slow",
 ]
 filterwarnings = [
     "error",

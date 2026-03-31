@@ -739,7 +739,7 @@ Skills are plain Markdown files and can be version-controlled, customized, or ex
 - pytest-cov for coverage reporting
 - pytest-mock for mocking
 - pytest-benchmark for performance tests
-- Separate markers for @pytest.mark.live (requires API) and @pytest.mark.slow (large datasets)
+- Separate marker @pytest.mark.slow for large dataset tests (excluded from default run via --include-slow flag)
 
 **Format Support:**
 - Standard library json/csv for text formats

@@ -87,7 +87,7 @@ A single `SecurityEvent` object carries all the data for one logical security ev
                    ▼
         ┌─── SecurityEvent ───┐
         │ timestamp: 09:15:23 │
-        │ host: LNX-001       │
+        │ src_host: LNX-001   │
         │ auth:               │
         │   user: john.doe    │
         │   logon_id: 0x4A2B  │
@@ -126,7 +126,8 @@ The `SecurityEvent` dataclass (`src/evidenceforge/events/base.py`) is the centra
 SecurityEvent
 ├── timestamp: datetime (UTC)
 ├── event_type: str ("logon", "process_create", "connection", ...)
-├── host: HostContext (hostname, IP, OS, domain, FQDN)
+├── src_host: HostContext (originating system — hostname, IP, OS, domain, FQDN)
+├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
 ├── process: ProcessContext (pid, parent_pid, image, command_line)
 ├── network: NetworkContext (src/dst IP/port, protocol, zeek_uid, bytes)
@@ -138,13 +139,14 @@ SecurityEvent
 ├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command, exit_code)
-├── ... (20+ context types total)
+├── ... (27 context types total)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```
 
 All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined in `src/evidenceforge/events/contexts.py`.
 
 **Key design decisions:**
+- Host context uses a dual `src_host`/`dst_host` model — `src_host` is the system that originates or performs the action; `dst_host` is the target or receiver. For single-host events only one is set; for network events both may be set when both endpoints are known
 - Contexts are composable — a logon event has Host + Auth + Syslog contexts; a process event has Host + Process + Syslog contexts
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
@@ -224,7 +226,7 @@ LogEmitter (ABC)
 ├── BashHistoryEmitter               # Per-user bash history
 ├── SnortEmitter                     # Snort IDS alerts
 ├── WebEmitter                       # Apache/Nginx access logs
-└── ProxyEmitter                     # HTTP proxy access logs
+└── ProxyEmitter                     # HTTP forward proxy access logs (W3C Extended)
 ```
 
 **Sensor multiplexing:** Network emitters (Zeek family) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single ZeekEmitter instance manages output for multiple sensors, each writing to `<sensor_hostname>/conn.json`.
@@ -276,9 +278,9 @@ EvaluationEngine
 │
 ├── Dimensions (5 scoring modules)
 │   ├── RecordFidelity     (15%) — parsability, co-occurrence, population stats
-│   ├── CrossSource        (20%) — source correctness, trace coverage, agreement
+│   ├── CrossSource        (25%) — source correctness, trace coverage, agreement
 │   ├── NoiseRealism       (25%) — volume, diversity, plausibility, anomalies
-│   ├── TemporalRealism    (20%) — work hours, burstiness, causal ordering
+│   ├── TemporalRealism    (15%) — work hours, burstiness, causal ordering
 │   └── SignalIntegrity    (20%) — event presence, accuracy, linkability
 │
 └── QualityReport

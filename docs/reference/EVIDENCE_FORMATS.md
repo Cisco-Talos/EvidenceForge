@@ -7,7 +7,7 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 ```
 output/
   GROUND_TRUTH.md                          # Attack narrative, timeline, IOCs
-  ENVIRONMENT.md                           # Student-facing environment description
+  ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
@@ -23,6 +23,8 @@ output/
   syslog.log                               # Linux syslog (BSD format)
   snort_alert.log                          # Snort/Suricata IDS alerts
   web_access.log                           # Apache/Nginx access log
+  <proxy-hostname.domain>/                 # Per-proxy-host directories
+    proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
 ```
 
 ---
@@ -223,3 +225,17 @@ HTTP access logs for web server systems.
 - All responses return HTTP 200 (no 301/302/404/500 mix)
 - Limited User-Agent diversity (~4 strings)
 - Only generated for systems with web server role
+
+---
+
+## HTTP Proxy Log
+
+**File:** `<proxy-hostname.domain>/proxy_access.log`
+**Format:** W3C Extended Log Format
+
+Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. HTTPS connections emit a CONNECT entry followed by the actual request. Includes cache hit/miss status and full destination URLs.
+
+**Known Limitations:**
+- Only generated for systems with the `forward_proxy` role declared
+- Cache hit/miss status is probabilistic, not based on actual content caching logic
+- Limited to HTTP and HTTPS traffic

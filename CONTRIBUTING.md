@@ -37,6 +37,13 @@ We expect new pull requests to include tests for any affected behavior, and, as
 we follow semantic versioning, we may reserve breaking changes until the next
 major version release.
 
+Before submitting, run the full test suite (including slow tests) and confirm
+all tests pass:
+
+```bash
+uv run pytest --include-slow
+```
+
 ## Development Setup
 
 ```bash
@@ -47,8 +54,8 @@ cd EvidenceForge
 # Install dependencies (requires uv: https://docs.astral.sh/uv/)
 uv sync
 
-# Run the test suite (950+ tests)
-uv run pytest tests/ -v
+# Run the test suite (1100+ tests, skips slow by default)
+uv run pytest
 
 # Lint and format
 uv run ruff check src/ tests/
@@ -57,14 +64,12 @@ uv run ruff format src/ tests/
 
 ### Test Markers
 
-- Default: all unit and integration tests run
-- `@pytest.mark.live`: requires LLM API access, skipped by default
 - `@pytest.mark.slow`: large dataset tests (100+ users), skipped by default
 
-Run marked tests explicitly:
 ```bash
-uv run pytest -m live    # LLM integration tests
-uv run pytest -m slow    # Large-scale generation tests
+uv run pytest                  # Quick run (skips slow tests)
+uv run pytest --include-slow   # Full run (all tests, required before PRs)
+uv run pytest -m slow          # Only slow tests
 ```
 
 ## Code Style
@@ -85,7 +90,7 @@ Linting is enforced via `ruff` with pycodestyle, pyflakes, isort, pep8-naming, p
 1. Create a format definition YAML in `src/evidenceforge/formats/definitions/`
 2. Create an emitter class in `src/evidenceforge/generation/emitters/` inheriting from `LogEmitter`
 3. Register the emitter in `src/evidenceforge/generation/emitters/__init__.py`
-4. Add emitter initialization in the engine (`src/evidenceforge/generation/engine.py`)
+4. Add emitter initialization in the engine (`src/evidenceforge/generation/engine/emitter_setup.py`)
 5. Create a parser in `src/evidenceforge/evaluation/parsers/` for eval support
 6. Add tests for the emitter and parser
 7. Document the format in `docs/reference/EVIDENCE_FORMATS.md`
@@ -93,7 +98,7 @@ Linting is enforced via `ruff` with pycodestyle, pyflakes, isort, pep8-naming, p
 ## Adding a New Event Type
 
 1. Add the event spec Pydantic model to `src/evidenceforge/models/scenario.py`
-2. Add a handler in `ActivityGenerator` (`src/evidenceforge/generation/activity.py`)
+2. Add a handler in `ActivityGenerator` (`src/evidenceforge/generation/activity/generator.py`)
 3. Add any needed context fields to `src/evidenceforge/events/contexts.py`
 4. Implement `_render_{event_type}()` on relevant emitters
 5. Update `src/evidenceforge/validation/schema.py` for cross-reference validation

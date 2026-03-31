@@ -226,7 +226,6 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
-| `process_access` | Sysmon 10, eCAR PROCESS/OPEN | `target_process` | `granted_access` (default `0x1010`) |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
@@ -407,7 +406,7 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy`.
 
 ## Backward Compatibility
 

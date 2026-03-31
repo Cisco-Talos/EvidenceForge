@@ -41,7 +41,7 @@ uv run eforge generate scenarios/retail-store-ftp-attack.yaml -o ./output
 uv run eforge validate scenarios/retail-store-ftp-attack.yaml
 
 # Evaluate generated data quality
-uv run eforge eval scenarios/retail-store-ftp-attack.yaml ./output
+uv run eforge eval ./output --scenario scenarios/retail-store-ftp-attack.yaml
 ```
 
 ## Claude Code Skills (Recommended)
@@ -65,7 +65,7 @@ For scripted or non-interactive use:
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir>` | Generate logs from a scenario file |
 | `eforge validate <scenario.yaml>` | Validate scenario schema and cross-references |
-| `eforge eval <scenario.yaml> <output_dir>` | Evaluate data quality (5 dimensions, 23 sub-scores) |
+| `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (5 dimensions, 23 sub-scores) |
 | `eforge install-skills [--global]` | Install Claude Code skills |
 | `eforge version` | Show version |
 
@@ -95,11 +95,12 @@ Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what
 | Windows Security Events | Host | 30 event IDs: authentication (4624/4625/4634/4648/4672), process (4688/4689), Kerberos (4768/4769/4770/4771/4776), persistence (4697/4698-4701), account mgmt (4720/4723/4724/4726/4738), group membership (4728/4729/4732/4733/4756/4757), firewall (5156), defense evasion (1102) |
 | Windows Sysmon | Host | Process create (Event 1), terminate (Event 5), remote thread injection (Event 8), process access (Event 10) |
 | Zeek (13 log types) | Network | conn, dns, http, ssl, files, x509, dhcp, ntp, weird, pe, ocsp, packet_filter, reporter |
-| eCAR | Host | EDR/XDR telemetry in MITRE CAR-based format (PROCESS, FILE, FLOW, REGISTRY, MODULE, THREAD, USER_SESSION) |
+| eCAR | Host | EDR/XDR telemetry in MITRE CAR-based format (PROCESS, FILE, FLOW, REGISTRY, MODULE, THREAD, USER_SESSION, SERVICE) |
 | Syslog | Host | Linux authentication and system logs (BSD format) |
 | Bash History | Host | Per-user timestamped command history |
 | Snort Alert | Network | IDS alert format (fast alert) |
 | Web Access | Network | Apache/Nginx combined log format |
+| HTTP Proxy | Host | Forward proxy access log (W3C Extended format, CONNECT entries for HTTPS, cache status) |
 
 See [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for detailed field documentation, output paths, and known limitations.
 
@@ -164,16 +165,16 @@ EvidenceForge includes a built-in evaluation framework that scores generated dat
 
 | Dimension | Weight | What it measures |
 |-----------|--------|-----------------|
-| Record Fidelity | 15% | Parsability, field co-occurrence, population statistics |
-| Cross-Source Consistency | 20% | Source correctness, trace coverage, cross-format agreement |
-| Noise Realism | 25% | Volume adequacy, diversity, plausibility, anomaly absence |
-| Temporal Realism | 20% | Work-hour distribution, burstiness, causal ordering, timing |
+| Record-Level Fidelity | 15% | Parsability, field co-occurrence, population statistics |
+| Cross-Source Coherence | 25% | Source correctness, trace coverage, cross-format agreement |
+| Background Noise Realism | 25% | Volume adequacy, diversity, plausibility, anomaly absence |
+| Temporal Realism | 15% | Work-hour distribution, burstiness, causal ordering, timing |
 | Signal Integrity | 20% | Event presence, indicator accuracy, pivot linkability |
 
 **Acceptance criteria** (hard pass/fail): Parsability >= 98%, Source Correctness >= 95%, Causal Ordering >= 99%, Event Presence >= 90%.
 
 ```bash
-uv run eforge eval scenario.yaml ./output
+uv run eforge eval ./output -s scenario.yaml
 ```
 
 ## Architecture
@@ -201,6 +202,7 @@ EventDispatcher (routes to StateManager + matching emitters)
     +---> BashHistoryEmitter ----> per-user bash history
     +---> SnortEmitter ----------> snort_alert.log
     +---> WebEmitter ------------> web_access.log
+    +---> ProxyEmitter ----------> proxy_access.log
 ```
 
 See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive including the SecurityEvent model, state management, and emitter system.
@@ -211,8 +213,8 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive in
 # Install dependencies
 uv sync
 
-# Run tests (950+ tests)
-uv run pytest tests/ -v
+# Run tests (1100+ tests)
+uv run pytest
 
 # Run specific test suite
 uv run pytest tests/unit/test_network_visibility.py -v
@@ -228,7 +230,7 @@ uv run ruff format src/ tests/
 - Pydantic v2 for schema validation
 - Jinja2 for log format templates
 - Typer + Rich for CLI
-- pytest (950+ tests)
+- pytest (1100+ tests)
 
 ## Documentation
 
@@ -251,4 +253,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, sendi
 
 ## License
 
-[MIT License](LICENSE) - Copyright (c) 2025 Cisco Systems, Inc.
+[MIT License](LICENSE) - Copyright (c) 2026 Cisco Systems, Inc.
