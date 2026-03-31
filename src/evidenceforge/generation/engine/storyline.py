@@ -307,12 +307,20 @@ class StorylineMixin:
             self.state_manager.set_current_time(event_time)
             explicit_types = {spec.type for spec in storyline_event.events}
 
-            for spec in storyline_event.events:
+            # Apply human typing cadence: space events in a step with
+            # realistic inter-action delays instead of shared timestamps
+            from evidenceforge.utils.timing import typing_cadence
+
+            cadence_offsets = typing_cadence(len(storyline_event.events), rng)
+
+            for i, spec in enumerate(storyline_event.events):
+                event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                self.state_manager.set_current_time(event_t)
                 malicious_event = self._execute_typed_event(
                     spec=spec,
                     actor=actor,
                     system=system,
-                    time=event_time,
+                    time=event_t,
                     activity=storyline_event.activity,
                     explicit_types=explicit_types,
                 )
@@ -347,12 +355,20 @@ class StorylineMixin:
         self.state_manager.set_current_time(event_time)
 
         explicit_types = {spec.type for spec in storyline_event.events}
-        for spec in storyline_event.events:
+
+        # Apply human typing cadence for intra-step event spacing
+        from evidenceforge.utils.timing import typing_cadence
+
+        cadence_offsets = typing_cadence(len(storyline_event.events), rng)
+
+        for i, spec in enumerate(storyline_event.events):
+            event_t = event_time + timedelta(seconds=cadence_offsets[i])
+            self.state_manager.set_current_time(event_t)
             malicious_event = self._execute_typed_event(
                 spec=spec,
                 actor=actor,
                 system=system,
-                time=event_time,
+                time=event_t,
                 activity=storyline_event.activity,
                 explicit_types=explicit_types,
             )
