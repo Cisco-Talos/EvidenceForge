@@ -49,6 +49,8 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
+**System roles** — Assign `roles` to systems in the environment to enable automatic lateral movement patterns in the baseline. Roles like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` trigger corresponding service account traffic (backup agents, monitoring, AD replication, app→DB connections, etc.). These patterns create realistic background lateral movement that analysts must distinguish from malicious activity.
+
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.

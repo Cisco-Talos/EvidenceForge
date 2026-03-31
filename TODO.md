@@ -220,17 +220,17 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ### Temporal Realism
 
-- [ ] **Causal event ordering** — Enforce dependency graph so related events respect causality (DNS → connect → TLS → HTTP, logon → process create → child process → network). Currently storyline events are timestamp-sorted but have no inter-event constraints, allowing impossible sequences.
+- [x] **Causal event ordering** — CausalExpansionEngine with 4 composable rules (DnsBeforeConnection, KerberosBeforeLogon, ProcessAccessAfterRemoteThread, SupplementaryAuditEvents). Validator warns on redundant manual prerequisites. Evaluator scores DNS→connection and Kerberos→logon causal pairs.
 - [ ] **Hawkes/bursty temporal model** — Replace flat Poisson arrivals with clustered, self-similar traffic patterns. Real networks exhibit heavy-tailed inter-arrival times from backup jobs, patch cycles, login storms, etc. Current uniform jitter within each hour is a major synthetic tell.
-- [ ] **Day-of-week variation** — Monday 9am ≠ Friday 9am. Add login storms on Monday morning, early departures Friday afternoon, dramatically different weekend traffic. Currently every hour at the same day-position is treated identically.
-- [ ] **Sensor timestamp skew** — Add ±1-5s NTP drift per sensor and variable SIEM ingestion latency. Currently all sensors observing the same event see identical timestamps, which is unrealistic and removes a real-world correlation challenge.
+- [x] **Day-of-week variation** — Monday 1.15x login storms, Friday 0.85x early departures, Saturday/Sunday 0.05-0.08x near-zero. Non-IT personas skipped on weekends.
+- ~~**Sensor timestamp skew**~~ — Dropped: tight NTP is best practice in production environments.
 
 ### Baseline Depth
 
 - [ ] **Process → network correlation** — Link process creation to corresponding network activity. A `chrome.exe` should generate HTTP/DNS traffic; `git.exe` should connect to GitHub. Currently process and network events are generated independently.
 - [ ] **Linux baseline activity** — Add cron jobs, systemd service restarts, package manager activity, log rotation, NFS mounts. Currently Linux hosts get storyline commands but minimal baseline noise, making any Linux activity immediately suspicious.
-- [ ] **Legitimate lateral movement** — Add service account movement between servers (backup agent → file servers, monitoring agent → all hosts, deployment tool → app servers). Distinguishing malicious from legitimate lateral movement is a core analyst skill.
-- [ ] **Stale account enrichment** — Expand stale accounts beyond failed logons to include cached Kerberos tickets, lingering scheduled tasks, and service configurations that reference them. Creates realistic "why is this disabled account still here?" ambiguity.
+- [x] **Legitimate lateral movement** — 26 patterns: backup agents, monitoring, AD replication, app→DB, config management, DNS zone transfers, NFS, Docker registry, syslog relay, etc. Conditional on environment topology and system roles.
+- [x] **Stale account enrichment** — Kerberos pre-auth failures (4771, 0x12), scheduled task failures (batch logon type 4), service startup failures (type 5, first hour), plus existing failed network logons.
 
 ### Red Herring Sophistication
 
@@ -244,13 +244,14 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 ### Format Expansion
 
 - [ ] **Cloud/SaaS log formats** — Azure AD sign-in logs, AWS CloudTrail, GCP audit logs, M365 audit logs. Most modern SOCs are hybrid; on-prem-only formats limit training relevance.
-- [ ] **Static command pool diversification** — Parameterize benign command templates with randomized paths, version strings, internal hostnames. Currently the same fixed commands repeat across users, which experienced analysts will notice.
+- [x] **Static command pool diversification** — All process template categories parameterized with {placeholder} syntax. New _GENERAL_PARAMS pool (project paths, doc names, build configs, git branches, internal URLs). Per-user affinity via {username} substitution.
 
 ---
 
 ## Post-MVP Enhancements (Future)
 
 ### Short-term
+- [ ] **Configurable work-week schedules** — Allow scenario authors to shift the typical workday (e.g., Tues–Sunday for retail/healthcare), define shift workers with non-standard hours, or specify per-persona day-of-week overrides
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation
