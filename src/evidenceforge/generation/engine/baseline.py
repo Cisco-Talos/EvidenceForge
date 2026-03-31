@@ -35,6 +35,7 @@ import logging
 import math
 from datetime import UTC, datetime, timedelta
 
+from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
@@ -254,6 +255,7 @@ class BaselineMixin:
 
             self._generate_system_traffic(current_hour)
             self._generate_stale_account_noise(current_hour)
+            self._generate_lateral_movement_noise(current_hour)
             self._generate_suspicious_noise(current_hour)
 
             hour_key = int(current_hour.timestamp())
@@ -363,6 +365,290 @@ class BaselineMixin:
                     logon_type=5,  # Service logon
                     source_ip=svc_host.ip,
                 )
+
+    def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
+        """Generate legitimate service account lateral movement between servers.
+
+        Produces realistic inter-server traffic that analysts must distinguish
+        from malicious lateral movement: backup agents, monitoring, patching,
+        AD replication, application-to-database connections, etc.
+
+        Each pattern is conditional on the environment having the required
+        infrastructure (file servers, DB servers, DCs, Linux hosts, etc.).
+        """
+        rng = _get_rng()
+        systems = self.scenario.environment.systems
+        if len(systems) < 2:
+            return
+
+        # Classify systems by role and OS for pattern matching
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        workstations = [s for s in systems if s.type == "workstation"]
+        windows_sys = [s for s in systems if "windows" in s.os.lower()]
+        linux_sys = [s for s in systems if _get_os_category(s.os) == "linux"]
+
+        # Role-based classification
+        file_servers = [s for s in servers if "file_server" in s.roles]
+        db_servers = [s for s in servers if "database" in s.roles or "db_server" in s.roles]
+        web_servers = [s for s in servers if "web_server" in s.roles]
+        mail_servers = [s for s in servers if "mail_server" in s.roles]
+        print_servers = [s for s in servers if "print_server" in s.roles]
+        dns_servers = [s for s in servers if "dns_server" in s.roles]
+        nfs_servers = [s for s in linux_sys if "nfs_server" in s.roles]
+
+        # Compute local hour for time-of-day gating
+        if hasattr(self, "_scenario_tz") and self._scenario_tz:
+            local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+        else:
+            local_dt = current_hour
+        local_hour = local_dt.hour
+        is_business_hours = 8 <= local_hour <= 18
+
+        def _emit_conn(src_sys, dst_sys, port, service=None, proto="tcp"):
+            """Helper: emit a connection between two systems."""
+            offset = rng.randint(0, 3599) + rng.random()
+            ts = current_hour + timedelta(seconds=offset)
+            self.state_manager.set_current_time(ts)
+            self.activity_generator.generate_connection(
+                src_ip=src_sys.ip,
+                dst_ip=dst_sys.ip,
+                time=ts,
+                dst_port=port,
+                proto=proto,
+                service=service,
+                duration=rng.uniform(0.1, 30.0),
+                orig_bytes=rng.randint(200, 5000),
+                resp_bytes=rng.randint(500, 50000),
+                emit_dns=True,
+                source_system=src_sys,
+            )
+
+        # === Windows Server Patterns ===
+
+        # 1. Backup agent → file servers (SMB 445)
+        if file_servers and servers:
+            for fs in file_servers:
+                if rng.random() < 0.40:  # 1-3/hour → ~40% per check
+                    src = rng.choice([s for s in servers if s != fs] or servers)
+                    _emit_conn(src, fs, 445, "smb")
+
+        # 2. Backup agent → database servers (SQL 1433)
+        if db_servers and servers:
+            for db in db_servers:
+                if rng.random() < 0.30:
+                    src = rng.choice([s for s in servers if s != db] or servers)
+                    _emit_conn(src, db, 1433, "sql")
+
+        # 3. Monitoring agent → managed Windows hosts (WMI 135)
+        if windows_sys and len(windows_sys) > 1:
+            monitored = rng.sample(windows_sys, min(rng.randint(1, 3), len(windows_sys)))
+            for target in monitored:
+                if rng.random() < 0.50:
+                    src = rng.choice([s for s in servers if s != target] or windows_sys)
+                    _emit_conn(src, target, 135)
+
+        # 4. Deployment/patching → app servers (WinRM 5985)
+        if servers and len(servers) > 1:
+            if rng.random() < 0.20:
+                src = rng.choice(servers)
+                dst = rng.choice([s for s in servers if s != src] or servers)
+                _emit_conn(src, dst, 5985)
+
+        # 5. Vulnerability scanner → hosts (multi-port, bursty)
+        if rng.random() < 0.05 and len(systems) > 1:  # Rare — scan window
+            targets = rng.sample(systems, min(rng.randint(2, 5), len(systems)))
+            scanner = rng.choice(servers or systems)
+            for target in targets:
+                if target != scanner:
+                    port = rng.choice([22, 80, 135, 443, 445, 3389, 8080])
+                    _emit_conn(scanner, target, port)
+
+        # 6. Log collector → hosts (TCP 9997)
+        if servers and len(systems) > 1:
+            if rng.random() < 0.30:
+                collector = rng.choice(servers)
+                target = rng.choice([s for s in systems if s != collector] or systems)
+                _emit_conn(collector, target, 9997)
+
+        # 7. AD replication between DCs (LDAP 389)
+        if len(dcs) >= 2:
+            for _ in range(rng.randint(2, 4)):
+                src_dc, dst_dc = rng.sample(dcs, 2)
+                _emit_conn(src_dc, dst_dc, 389, "ldap")
+
+        # 8. Print server → workstations (SMB 445)
+        if print_servers and workstations:
+            if rng.random() < 0.25:
+                ps = rng.choice(print_servers)
+                ws = rng.choice(workstations)
+                _emit_conn(ps, ws, 445, "smb")
+
+        # 9. WSUS → Windows clients (HTTP 8530)
+        if servers and workstations:
+            if rng.random() < 0.10:
+                wsus = rng.choice(servers)
+                client = rng.choice(workstations)
+                _emit_conn(wsus, client, 8530, "http")
+
+        # 10. Certificate authority → servers (HTTPS 443)
+        if servers and len(servers) > 1:
+            if rng.random() < 0.05:
+                ca = rng.choice(servers)
+                target = rng.choice([s for s in servers if s != ca] or servers)
+                _emit_conn(ca, target, 443, "ssl")
+
+        # 11. DFS replication → file servers (RPC 135)
+        if len(file_servers) >= 2:
+            for _ in range(rng.randint(1, 3)):
+                src_fs, dst_fs = rng.sample(file_servers, 2)
+                _emit_conn(src_fs, dst_fs, 135)
+
+        # 12. Exchange → DCs (LDAP 389)
+        if mail_servers and dcs:
+            for _ in range(rng.randint(3, 6)):
+                ms = rng.choice(mail_servers)
+                dc = rng.choice(dcs)
+                _emit_conn(ms, dc, 389, "ldap")
+
+        # === Application Patterns ===
+
+        # 13. HR app → database (SQL 1433, business hours)
+        if db_servers and servers and is_business_hours:
+            if rng.random() < 0.50:
+                app_srv = rng.choice([s for s in servers if s not in db_servers] or servers)
+                db = rng.choice(db_servers)
+                for _ in range(rng.randint(2, 5)):
+                    _emit_conn(app_srv, db, 1433, "sql")
+
+        # 14. Web app → database (various ports)
+        if web_servers and db_servers:
+            for ws in web_servers:
+                num_queries = rng.randint(5, 15) if is_business_hours else rng.randint(1, 3)
+                db = rng.choice(db_servers)
+                port = rng.choice([1433, 3306, 5432])
+                svc = {1433: "sql", 3306: "mysql", 5432: "postgresql"}.get(port, "sql")
+                for _ in range(num_queries):
+                    _emit_conn(ws, db, port, svc)
+
+        # 15. CI/CD → build targets (SSH 22, business hours)
+        if linux_sys and len(linux_sys) > 1 and is_business_hours:
+            if rng.random() < 0.20:
+                ci = rng.choice(linux_sys)
+                target = rng.choice([s for s in linux_sys if s != ci] or linux_sys)
+                _emit_conn(ci, target, 22, "ssh")
+
+        # === Security Infrastructure ===
+
+        # 16. EDR management → endpoints (HTTPS 443)
+        if servers and len(systems) > 1:
+            if rng.random() < 0.10:
+                mgmt = rng.choice(servers)
+                endpoint = rng.choice([s for s in systems if s != mgmt] or systems)
+                _emit_conn(mgmt, endpoint, 443, "ssl")
+
+        # 17. DNS zone transfers (TCP 53)
+        if len(dns_servers) >= 2:
+            if rng.random() < 0.30:
+                primary, secondary = rng.sample(dns_servers, 2)
+                _emit_conn(secondary, primary, 53, "dns")
+        elif dcs and len(dcs) >= 2:
+            if rng.random() < 0.30:
+                primary, secondary = rng.sample(dcs, 2)
+                _emit_conn(secondary, primary, 53, "dns")
+
+        # 18. RADIUS auth (UDP 1812)
+        if dcs and workstations:
+            if rng.random() < 0.15:
+                ws = rng.choice(workstations)
+                dc = rng.choice(dcs)
+                offset = rng.randint(0, 3599) + rng.random()
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=ws.ip,
+                    dst_ip=dc.ip,
+                    time=ts,
+                    dst_port=1812,
+                    proto="udp",
+                    duration=rng.uniform(0.01, 0.1),
+                    orig_bytes=rng.randint(100, 300),
+                    resp_bytes=rng.randint(100, 300),
+                    source_system=ws,
+                )
+
+        # 19. VPN concentrator → internal (matches remote user activity)
+        # Modeled as external-to-internal connections through a server
+        if servers and rng.random() < 0.10:
+            vpn_gw = rng.choice(servers)
+            internal = rng.choice([s for s in systems if s != vpn_gw] or systems)
+            _emit_conn(vpn_gw, internal, rng.choice([443, 445, 3389]))
+
+        # === Linux Patterns ===
+
+        # 20. NFS mounts (TCP 2049)
+        if nfs_servers and linux_sys:
+            clients = [s for s in linux_sys if s not in nfs_servers]
+            if clients:
+                for client in rng.sample(clients, min(2, len(clients))):
+                    if rng.random() < 0.40:
+                        _emit_conn(client, rng.choice(nfs_servers), 2049, "nfs")
+
+        # 21. Config management → Linux hosts (SSH 22)
+        if linux_sys and len(linux_sys) > 1:
+            if rng.random() < 0.20:
+                mgmt = rng.choice(linux_sys)
+                target = rng.choice([s for s in linux_sys if s != mgmt] or linux_sys)
+                _emit_conn(mgmt, target, 22, "ssh")
+
+        # 22. rsync backup between Linux servers (SSH 22)
+        linux_servers = [s for s in linux_sys if s.type in ("server", "domain_controller")]
+        if len(linux_servers) >= 2:
+            if rng.random() < 0.20:
+                src, dst = rng.sample(linux_servers, 2)
+                _emit_conn(src, dst, 22, "ssh")
+
+        # 23. Docker registry pull (HTTPS 443 or 5000)
+        if linux_sys and len(linux_sys) > 1:
+            if rng.random() < 0.15:
+                puller = rng.choice(linux_sys)
+                registry = rng.choice([s for s in linux_sys if s != puller] or linux_sys)
+                _emit_conn(puller, registry, rng.choice([443, 5000]), "ssl")
+
+        # 24. Cron SCP/SFTP transfers (SSH 22)
+        if len(linux_sys) >= 2:
+            if rng.random() < 0.15:
+                src, dst = rng.sample(linux_sys, 2)
+                _emit_conn(src, dst, 22, "ssh")
+
+        # 25. Centralized syslog relay (TCP 514)
+        if linux_sys and len(linux_sys) > 1:
+            if rng.random() < 0.30:
+                sender = rng.choice(linux_sys)
+                collector = rng.choice([s for s in linux_sys if s != sender] or linux_sys)
+                offset = rng.randint(0, 3599) + rng.random()
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=sender.ip,
+                    dst_ip=collector.ip,
+                    time=ts,
+                    dst_port=514,
+                    proto="tcp",
+                    duration=rng.uniform(1.0, 60.0),
+                    orig_bytes=rng.randint(500, 10000),
+                    resp_bytes=rng.randint(50, 200),
+                    source_system=sender,
+                )
+
+        # 26. LDAP client → directory server (389/636)
+        if linux_sys and dcs:
+            for lx in rng.sample(linux_sys, min(2, len(linux_sys))):
+                if rng.random() < 0.25:
+                    dc = rng.choice(dcs)
+                    port = rng.choice([389, 636])
+                    svc = "ldap" if port == 389 else "ssl"
+                    _emit_conn(lx, dc, port, svc)
 
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
         """Generate suspicious-but-benign ambient noise events.
