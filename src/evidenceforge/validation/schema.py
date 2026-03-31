@@ -194,6 +194,7 @@ class ScenarioValidator:
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
+        self._validate_expansion_redundancy()
         self._sort_issues()
         return self.issues
 
@@ -1167,6 +1168,100 @@ class ScenarioValidator:
                 return (dt - start).total_seconds()
             except (ValueError, TypeError):
                 return None
+
+    def _validate_expansion_redundancy(self) -> None:
+        """Warn when scenario manually specifies events the causal expansion engine auto-generates.
+
+        Detects patterns where authors have manually specified prerequisite events
+        (DNS queries, Kerberos TGT/TGS) that the causal expansion engine would
+        auto-generate, creating potential duplicates.
+        """
+        if not self.scenario.storyline:
+            return
+
+        for step_idx, step in enumerate(self.scenario.storyline):
+            event_types = [e.type for e in step.events]
+
+            # Check for manual DNS + connection to same destination
+            has_connection = False
+            connection_dst_ips = set()
+            has_dns_connection = False
+
+            for event in step.events:
+                if event.type == "connection":
+                    if event.dst_port == 53:
+                        has_dns_connection = True
+                    else:
+                        has_connection = True
+                        connection_dst_ips.add(getattr(event, "dst_ip", None))
+
+            if has_dns_connection and has_connection:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{step_idx}.events",
+                        message=(
+                            "Storyline step contains both a DNS query (port 53 connection) "
+                            "and a TCP connection. The causal expansion engine auto-generates "
+                            "DNS lookups before TCP connections."
+                        ),
+                        suggestion=(
+                            "Remove the manual DNS connection unless it is part of the "
+                            "attack narrative (e.g., DNS tunneling). The engine will "
+                            "auto-generate DNS evidence for the TCP connection."
+                        ),
+                    )
+                )
+
+            # Check for manual Kerberos events alongside logon
+            has_logon = "logon" in event_types
+            has_kerberos = any(
+                t in event_types for t in ("kerberos_tgt", "kerberos_service_ticket")
+            )
+
+            if has_logon and has_kerberos:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{step_idx}.events",
+                        message=(
+                            "Storyline step contains both a logon event and explicit "
+                            "Kerberos TGT/TGS events. The causal expansion engine "
+                            "auto-generates Kerberos events for domain logons."
+                        ),
+                        suggestion=(
+                            "Remove the manual Kerberos events unless they are part of "
+                            "the attack narrative (e.g., golden ticket forging). The "
+                            "engine will auto-generate Kerberos evidence for the logon."
+                        ),
+                    )
+                )
+
+            # Check for RDP decomposition (rdp_session + separate connection/logon)
+            has_rdp = "rdp_session" in event_types
+            has_rdp_connection = any(
+                e.type == "connection" and getattr(e, "dst_port", 0) == 3389 for e in step.events
+            )
+            has_rdp_logon = any(
+                e.type == "logon" and getattr(e, "logon_type", 0) == 10 for e in step.events
+            )
+
+            if has_rdp and (has_rdp_connection or has_rdp_logon):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{step_idx}.events",
+                        message=(
+                            "Storyline step contains an rdp_session event alongside "
+                            "a separate port 3389 connection or type 10 logon. "
+                            "The rdp_session event already generates both."
+                        ),
+                        suggestion=(
+                            "Use either rdp_session (which auto-generates connection + logon) "
+                            "or manually specify the connection and logon separately, not both."
+                        ),
+                    )
+                )
 
     def _sort_issues(self) -> None:
         """Sort issues by storyline index, with non-storyline issues first."""
