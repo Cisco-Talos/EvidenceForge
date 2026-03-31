@@ -1199,9 +1199,20 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
-        # Emit DNS lookup before connection if requested (ensures DNS evidence exists)
+        # Emit DNS lookup before connection (causal engine or legacy path)
         if emit_dns and proto == "tcp" and dst_port not in (53,):
-            self._emit_dns_lookup(src_ip, dst_ip, time)
+            if self._causal_engine is not None and not self._expanding:
+                self._expand_and_emit(
+                    "connection",
+                    time,
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    proto=proto,
+                    service=service,
+                )
+            else:
+                self._emit_dns_lookup(src_ip, dst_ip, time)
 
         # Same-host connections are valid for host-based logs (eCAR FLOW)
         # but invisible to network sensors (Zeek/Snort)
