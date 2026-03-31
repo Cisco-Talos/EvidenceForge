@@ -2109,19 +2109,52 @@ class BaselineMixin:
                         pid=sys_pids.get("sshd", -1),
                         source_system=src_sys_obj,
                     )
-                    msgs = [
-                        f"Received disconnect from {ip} port {port}:11: disconnected by user",
-                        f"Disconnected from user admin {ip} port {port}",
-                        "pam_unix(sshd:session): session closed for user admin",
-                    ]
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name="sshd",
-                        message=rng.choice(msgs),
-                        pid=rng.randint(5000, 60000),
-                        facility=10,
+                    sshd_pid = rng.randint(5000, 60000)
+                    ssh_user = rng.choice(
+                        ["admin", "root", "ubuntu"] if not is_rhel_like else ["admin", "root"]
                     )
+                    # Generate login + disconnect sequence (realistic sshd log)
+                    if rng.random() < 0.5:
+                        # Login sequence: connection → auth → session open
+                        key_type = rng.choice(["RSA", "ED25519", "ECDSA"])
+                        key_hash = f"SHA256:{''.join(rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
+                        if rng.random() < 0.7:
+                            # Key-based auth (70%)
+                            auth_msg = f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: {key_type} {key_hash}"
+                        else:
+                            # Password auth (30%)
+                            auth_msg = (
+                                f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
+                            )
+                        login_msgs = [
+                            f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
+                            auth_msg,
+                            f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                        ]
+                        for lm in login_msgs:
+                            self.activity_generator.generate_syslog_event(
+                                system=system,
+                                time=ts + timedelta(milliseconds=rng.randint(10, 200)),
+                                app_name="sshd",
+                                message=lm,
+                                pid=sshd_pid,
+                                facility=10,
+                            )
+                    else:
+                        # Disconnect sequence
+                        msgs = [
+                            f"Received disconnect from {ip} port {port}:11: disconnected by user",
+                            f"Disconnected from user {ssh_user} {ip} port {port}",
+                            f"pam_unix(sshd:session): session closed for user {ssh_user}",
+                        ]
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts,
+                            app_name="sshd",
+                            message=rng.choice(msgs),
+                            pid=sshd_pid,
+                            facility=10,
+                        )
                 elif source_roll < 0.90:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
@@ -2161,6 +2194,104 @@ class BaselineMixin:
                         app_name="systemd-timesyncd",
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
+                    )
+                elif source_roll < 0.95:
+                    # Package management (apt-daily / dnf-automatic)
+                    pkg_pid = rng.randint(10000, 60000)
+                    if is_rhel_like:
+                        pkg_msgs = [
+                            "Starting dnf-automatic...",
+                            "No security updates needed.",
+                            "dnf-automatic.service: Deactivated successfully.",
+                        ]
+                        pkg_app = "dnf-automatic"
+                    else:
+                        pkg_msgs = [
+                            "Starting daily apt download activities",
+                            "Checking for package updates...",
+                            "All packages are up to date.",
+                            "apt-daily.service: Deactivated successfully.",
+                        ]
+                        pkg_app = "apt-daily"
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name=pkg_app,
+                        message=rng.choice(pkg_msgs),
+                        pid=pkg_pid,
+                    )
+                elif source_roll < 0.97:
+                    # Systemd timer execution
+                    timer_services = [
+                        ("fstrim.timer", "fstrim.service", "Discard unused blocks on filesystems"),
+                        ("logrotate.timer", "logrotate.service", "Rotate log files"),
+                        (
+                            "systemd-tmpfiles-clean.timer",
+                            "systemd-tmpfiles-clean.service",
+                            "Cleanup of Temporary Directories",
+                        ),
+                    ]
+                    timer_name, svc_name, svc_desc = rng.choice(timer_services)
+                    timer_msgs = [
+                        f"{timer_name}: Triggering {svc_name}...",
+                        f"Started {svc_name} - {svc_desc}.",
+                        f"{svc_name}: Deactivated successfully.",
+                    ]
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name="systemd",
+                        message=rng.choice(timer_msgs),
+                        pid=1,
+                    )
+                elif source_roll < 0.98:
+                    # Logrotate detail messages
+                    log_files = [
+                        "/var/log/syslog",
+                        "/var/log/auth.log",
+                        "/var/log/kern.log",
+                        "/var/log/dpkg.log",
+                        "/var/log/daemon.log",
+                    ]
+                    if is_rhel_like:
+                        log_files = [
+                            "/var/log/messages",
+                            "/var/log/secure",
+                            "/var/log/cron",
+                            "/var/log/maillog",
+                            "/var/log/boot.log",
+                        ]
+                    log_file = rng.choice(log_files)
+                    rotate_msgs = [
+                        f"rotating {log_file}",
+                        f"compressing {log_file}.1 to {log_file}.1.gz",
+                        f"removing old {log_file}.7.gz",
+                    ]
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name="logrotate",
+                        message=rng.choice(rotate_msgs),
+                        pid=rng.randint(10000, 60000),
+                    )
+                elif source_roll < 0.99:
+                    # Journald runtime statistics
+                    machine_id = f"{''.join(rng.choices('0123456789abcdef', k=32))}"
+                    size = rng.randint(4, 128)
+                    max_size = rng.choice([256, 512, 1024, 2048, 4096])
+                    free = max_size - size
+                    journal_type = rng.choice(["Runtime", "System"])
+                    path = (
+                        f"/run/log/journal/{machine_id}"
+                        if journal_type == "Runtime"
+                        else f"/var/log/journal/{machine_id}"
+                    )
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name="systemd-journald",
+                        message=f"{journal_type} Journal ({path}) is {size:.1f}M, max {max_size}M, {free:.1f}M free.",
+                        pid=sys_pids.get("journald", rng.randint(200, 500)),
                     )
                 else:
                     # Additional diverse syslog programs for realism.
