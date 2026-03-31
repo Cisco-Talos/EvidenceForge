@@ -2929,6 +2929,9 @@ class ActivityGenerator:
         rng = _get_rng()
 
         # 1. Network connection (Zeek conn.log port 3389)
+        # emit_dns=True so the causal engine generates DNS evidence for the
+        # RDP destination, matching real-world behavior where the client
+        # resolves the target hostname before connecting.
         uid = self.generate_connection(
             src_ip=source_ip,
             dst_ip=target_system.ip,
@@ -2938,7 +2941,7 @@ class ActivityGenerator:
             duration=rng.uniform(60.0, 3600.0),
             orig_bytes=rng.randint(50000, 500000),
             resp_bytes=rng.randint(100000, 2000000),
-            emit_dns=False,
+            emit_dns=True,
             source_system=source_system,
         )
 
