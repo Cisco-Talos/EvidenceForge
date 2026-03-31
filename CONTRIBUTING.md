@@ -27,6 +27,15 @@ test case.
 **If you discover a security bug, please do not report it through GitHub.
 Instead, please see security procedures in [SECURITY.md](/SECURITY.md).**
 
+## Suggesting Features
+
+Feature requests are welcome! Open a GitHub Issue with the **enhancement** label
+and include:
+
+- A clear description of the feature and the problem it solves
+- Example usage or scenario where the feature would be helpful
+- Any relevant references (e.g., log format specs, MITRE ATT&CK techniques)
+
 ## Sending Pull Requests
 
 Before sending a new pull request, take a look at existing pull requests and
@@ -43,6 +52,32 @@ all tests pass:
 ```bash
 uv run pytest --include-slow
 ```
+
+### Commit Messages
+
+We follow [Conventional Commits](https://www.conventionalcommits.org/). Prefix
+your commit message with a type:
+
+- `feat:` — new feature or capability
+- `fix:` — bug fix
+- `docs:` — documentation changes
+- `test:` — adding or updating tests
+- `refactor:` — code changes that neither fix a bug nor add a feature
+- `chore:` — maintenance tasks (dependencies, CI, tooling)
+
+Examples:
+```
+feat: add SMTP log emitter
+fix: correct Zeek UID correlation for DNS queries
+docs: update scenario reference with dhcp_lease event type
+test: add integration tests for proxy emitter
+```
+
+### Pull Request Descriptions
+
+Describe what changed and why. Reference any related issues (e.g.,
+`Closes #42`). If the change affects log output or scenario schema, include
+a brief example of the before/after behavior.
 
 ## Development Setup
 

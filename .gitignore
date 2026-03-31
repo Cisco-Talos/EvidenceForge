@@ -36,6 +36,10 @@ htmlcov/
 .tox/
 .hypothesis/
 
+# Linting / type checking
+.ruff_cache/
+.mypy_cache/
+
 # IDEs
 .vscode/
 .idea/
@@ -57,6 +61,12 @@ checkpoints/
 scenarios/
 !scenarios/COVERAGE-TEST-PROMPT.md
 
+
+# Scan / analysis tool output
+.codesight/
+
+# Auto-generated dependency pins (pyproject.toml is source of truth)
+requirements.txt
 
 # Sample data (reference only, not tracked)
 sample_data/

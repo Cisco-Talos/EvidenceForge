@@ -86,6 +86,9 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 - **Fail fast** — validate inputs early, fail with clear error messages
 - **No magic** — avoid metaclasses, dynamic imports, or other "clever" patterns unless absolutely necessary
 
+### Commits
+- **Conventional Commits** — prefix every commit message with a type: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`. See [CONTRIBUTING.md](/CONTRIBUTING.md#commit-messages) for details and examples.
+
 ### Linting
 - **Before committing:** always run `uv run ruff check .` and `uv run ruff format --check .` and fix any errors. A `pre-commit` hook enforces this, but verify manually when in doubt.
 - Ruff configuration is in `pyproject.toml` — do not add `# noqa` comments without justification.
