@@ -2420,6 +2420,94 @@ class ActivityGenerator:
 
         return pattern
 
+    # Process→network correlation: maps executable names to connection parameters.
+    # When a baseline process is generated, the engine checks if the executable
+    # normally generates network traffic and emits corresponding connections.
+    _PROCESS_NETWORK_MAP = {
+        # Browsers → HTTPS to external
+        "chrome.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "msedge.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "firefox.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "firefox": {"dst_port": 443, "service": "ssl", "external": True},
+        # Office → HTTPS to O365/cloud
+        "OUTLOOK.EXE": {"dst_port": 443, "service": "ssl", "external": True},
+        "Teams.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "OneDrive.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        # Dev tools → external endpoints
+        "Code.exe": {"dst_port": 443, "service": "ssl", "external": True},  # extensions, telemetry
+        "git": {"dst_port": 443, "service": "ssl", "external": True},
+        "npm": {"dst_port": 443, "service": "ssl", "external": True},
+        "cargo": {"dst_port": 443, "service": "ssl", "external": True},
+        "docker": {"dst_port": 443, "service": "ssl", "external": True},
+        "kubectl": {"dst_port": 443, "service": "ssl", "external": True},
+        # DB clients → internal database
+        "sqlcmd.exe": {"dst_port": 1433, "service": "mssql", "external": False},
+        "mysql": {"dst_port": 3306, "service": "mysql", "external": False},
+        "psql": {"dst_port": 5432, "service": "postgresql", "external": False},
+        # SSH clients
+        "ssh": {"dst_port": 22, "service": "ssh", "external": False},
+        # curl/wget → external
+        "curl": {"dst_port": 443, "service": "ssl", "external": True},
+    }
+
+    def _emit_process_network_correlation(
+        self,
+        system: Any,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+        pid: int,
+        rng: random.Random,
+    ) -> None:
+        """Emit network connections correlated with a process creation.
+
+        When a baseline process is one that normally generates network
+        traffic (browsers, Office apps, dev tools, DB clients), emit
+        a corresponding connection shortly after process creation.
+        """
+        # Extract executable basename
+        exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        # Strip .exe for Linux lookups
+        exe_base = exe.replace(".exe", "") if exe.endswith(".exe") else exe
+
+        conn_info = self._PROCESS_NETWORK_MAP.get(exe) or self._PROCESS_NETWORK_MAP.get(exe_base)
+        if conn_info is None:
+            return
+
+        # Only emit ~60% of the time (not every process invocation connects)
+        if rng.random() > 0.60:
+            return
+
+        conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
+
+        if conn_info["external"]:
+            # External connection: pick a random external IP
+            dst_ip = _generate_random_external_ip(rng)
+        else:
+            # Internal connection: use DB server or any internal server
+            db_servers = getattr(self, "_db_servers", [])
+            all_ips = getattr(self, "_all_system_ips", [])
+            if conn_info["service"] in ("mssql", "mysql", "postgresql") and db_servers:
+                dst_ip = rng.choice(db_servers)
+            elif all_ips:
+                dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
+            else:
+                return  # No internal targets available
+
+        self.generate_connection(
+            src_ip=system.ip,
+            dst_ip=dst_ip,
+            time=conn_time,
+            dst_port=conn_info["dst_port"],
+            proto="tcp",
+            service=conn_info["service"],
+            duration=rng.uniform(0.3, 15.0),
+            orig_bytes=rng.randint(200, 5000),
+            resp_bytes=rng.randint(500, 50000),
+            emit_dns=conn_info["external"],
+            pid=pid,
+        )
+
     def execute_baseline_activity(
         self, user: User, system: System, time: datetime, activity_type: str
     ) -> None:
@@ -2556,35 +2644,10 @@ class ActivityGenerator:
                 )
                 self._record_user_process(system, user, pid, process_name)
 
-                # Generate network connections for processes that connect to remote services
-                exe_lower = process_name.rsplit("\\", 1)[-1].lower()
-                if exe_lower == "sqlcmd.exe" and activity_type == "process_query":
-                    # Extract server from command line (-S flag)
-                    db_port = 1433
-                    db_ip = "127.0.0.1"  # Default localhost
-                    if "-S " in command_line:
-                        server = command_line.split("-S ")[1].split()[0]
-                        # Resolve server name to IP if possible
-                        db_ip = REVERSE_DNS.get(server) or next(
-                            (
-                                ip
-                                for name, ip in REVERSE_DNS.items()
-                                if server.lower() in name.lower()
-                            ),
-                            "10.0.2.50",  # Default DB server IP
-                        )
-                    conn_time = time + timedelta(milliseconds=rng.randint(50, 200))
-                    self.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=db_ip,
-                        time=conn_time,
-                        dst_port=db_port,
-                        proto="tcp",
-                        service="mssql",
-                        duration=rng.uniform(0.5, 5.0),
-                        orig_bytes=rng.randint(200, 2000),
-                        resp_bytes=rng.randint(500, 50000),
-                    )
+                # Generate correlated network connections for processes
+                self._emit_process_network_correlation(
+                    system, process_name, command_line, time, pid, rng
+                )
 
             elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
                 # Phase 5.6: Per-persona app pool for Linux user diversity
@@ -2603,6 +2666,11 @@ class ActivityGenerator:
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
                 self._record_user_process(system, user, pid, process_name)
+
+                # Generate correlated network connections for processes
+                self._emit_process_network_correlation(
+                    system, process_name, command_line, time, pid, rng
+                )
 
                 # Also generate bash history for Linux
                 self.generate_bash_command(user, system, time, activity_type)
