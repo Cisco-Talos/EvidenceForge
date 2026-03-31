@@ -629,13 +629,25 @@ class ActivityGenerator:
         # When a user authenticates via Kerberos to a Windows domain system,
         # the DC sees a TGT request (4768) then a service ticket request (4769)
         # before the target system logs the 4624.
-        self._emit_dc_kerberos_for_logon(
-            user=user,
-            system=system,
-            time=time,
-            auth_package=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
-            source_ip=source_ip,
-        )
+        auth_package_name = auth_pkg.get("AuthenticationPackageName", "Negotiate")
+        if self._causal_engine is not None and not self._expanding:
+            self._expand_and_emit(
+                "logon",
+                time,
+                actor=user,
+                target_system=system,
+                auth_package=auth_package_name,
+                src_ip=source_ip,
+                os_category=_get_os_category(system.os),
+            )
+        else:
+            self._emit_dc_kerberos_for_logon(
+                user=user,
+                system=system,
+                time=time,
+                auth_package=auth_package_name,
+                source_ip=source_ip,
+            )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)

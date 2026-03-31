@@ -59,6 +59,46 @@ class ExpansionRule(ABC):
 
 
 @dataclass
+class KerberosBeforeLogon(ExpansionRule):
+    """Emit DC-side Kerberos TGT/TGS events before domain logons.
+
+    Reproduces the logic from ActivityGenerator._emit_dc_kerberos_for_logon().
+    Fires when auth_package is "Kerberos", target is Windows, and the target
+    system is not a DC. Delegates to the existing method which handles TGT,
+    TGS, and optional 4672 Special Privileges emission.
+    """
+
+    name: str = field(default="kerberos_before_logon")
+    description: str = field(default="Emit Kerberos TGT/TGS on DC before domain logons")
+    priority: int = field(default=20)
+
+    def matches(self, event_type: str, ctx: ExpansionContext) -> bool:
+        return (
+            event_type == "logon"
+            and ctx.auth_package == "Kerberos"
+            and ctx.os_category == "windows"
+        )
+
+    def expand(self, event_type: str, ctx: ExpansionContext) -> list[ExpandedEvent]:
+        from evidenceforge.generation.causal.engine import ExpandedEvent
+        from evidenceforge.generation.causal.timing import TimingSpec
+
+        return [
+            ExpandedEvent(
+                method="_emit_dc_kerberos_for_logon",
+                kwargs={
+                    "user": ctx.actor,
+                    "system": ctx.target_system,
+                    "auth_package": ctx.auth_package,
+                    "source_ip": ctx.src_ip or "",
+                },
+                timing=TimingSpec(min_ms=0, max_ms=0, position="before"),
+                description="Kerberos TGT + TGS on DC before logon",
+            )
+        ]
+
+
+@dataclass
 class DnsBeforeConnection(ExpansionRule):
     """Emit a DNS lookup before TCP connections to named hosts.
 

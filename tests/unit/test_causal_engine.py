@@ -31,7 +31,11 @@ from evidenceforge.generation.causal.engine import (
     ExpandedEvent,
     ExpansionContext,
 )
-from evidenceforge.generation.causal.rules import DnsBeforeConnection, ExpansionRule
+from evidenceforge.generation.causal.rules import (
+    DnsBeforeConnection,
+    ExpansionRule,
+    KerberosBeforeLogon,
+)
 from evidenceforge.generation.causal.timing import TimingSpec
 
 
@@ -321,3 +325,59 @@ class TestDefaultRegistry:
         rules = default_rules()
         names = [r.name for r in rules]
         assert "dns_before_connection" in names
+
+    def test_kerberos_rule_in_defaults(self):
+        from evidenceforge.generation.causal.registry import default_rules
+
+        rules = default_rules()
+        names = [r.name for r in rules]
+        assert "kerberos_before_logon" in names
+
+
+# --- KerberosBeforeLogon rule ---
+
+
+class TestKerberosBeforeLogon:
+    def test_matches_kerberos_logon_on_windows(self):
+        rule = KerberosBeforeLogon()
+        ctx = _make_ctx(auth_package="Kerberos", os_category="windows")
+        assert rule.matches("logon", ctx) is True
+
+    def test_skips_ntlm(self):
+        rule = KerberosBeforeLogon()
+        ctx = _make_ctx(auth_package="NTLM", os_category="windows")
+        assert rule.matches("logon", ctx) is False
+
+    def test_skips_negotiate(self):
+        rule = KerberosBeforeLogon()
+        ctx = _make_ctx(auth_package="Negotiate", os_category="windows")
+        assert rule.matches("logon", ctx) is False
+
+    def test_skips_linux(self):
+        rule = KerberosBeforeLogon()
+        ctx = _make_ctx(auth_package="Kerberos", os_category="linux")
+        assert rule.matches("logon", ctx) is False
+
+    def test_skips_non_logon_event(self):
+        rule = KerberosBeforeLogon()
+        ctx = _make_ctx(auth_package="Kerberos", os_category="windows")
+        assert rule.matches("connection", ctx) is False
+
+    def test_expand_returns_kerberos_call(self):
+        rule = KerberosBeforeLogon()
+        ctx = _make_ctx(
+            auth_package="Kerberos",
+            os_category="windows",
+            actor="alice",
+            target_system="WS-01",
+            src_ip="10.10.10.5",
+        )
+        result = rule.expand("logon", ctx)
+        assert len(result) == 1
+        ev = result[0]
+        assert ev.method == "_emit_dc_kerberos_for_logon"
+        assert ev.kwargs["user"] == "alice"
+        assert ev.kwargs["system"] == "WS-01"
+        assert ev.kwargs["auth_package"] == "Kerberos"
+        assert ev.kwargs["source_ip"] == "10.10.10.5"
+        assert ev.timing.position == "before"
