@@ -391,6 +391,12 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on environment topology — backup agents, monitoring, AD replication, app-to-database connections, config management, etc. Patterns are conditional on the infrastructure (file servers, DCs, Linux hosts) and gated by time-of-day (app traffic peaks during business hours, backup traffic peaks overnight).
 
+**Network-level red herrings:** Three suspicious-but-benign network patterns supplement the existing host-level red herrings: high-entropy DNS queries to CDNs/DoH providers, unusual outbound connections to dev tools/cloud regions/backup sync, and scheduled vulnerability scan bursts.
+
+**Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
+
+**Process→network correlation:** Baseline process creation triggers correlated network connections when the executable normally generates traffic (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID carried for eCAR FLOW correlation.
+
 **Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
 ### Key Patterns

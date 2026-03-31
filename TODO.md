@@ -218,7 +218,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 **Goal:** Address structural realism gaps identified by adversarial review. These are issues where the generated data is technically correct but experienced analysts or ML models would identify it as synthetic due to missing real-world patterns. Prioritized by impact on analyst training, then implementation complexity.
 
-**Completed so far:** Causal expansion engine (#1), Hawkes temporal model (#2), day-of-week variation (#6), stale account enrichment (#9), legitimate lateral movement (#11, 26 patterns), command pool diversification (#12). Sensor timestamp skew (#10) dropped — tight NTP is best practice.
+**Completed so far:** Causal expansion engine (#1), Hawkes temporal model (#2), network-level red herrings (#4), entity lifecycle validation (#5), day-of-week variation (#6), process→network correlation (#7), stale account enrichment (#9), legitimate lateral movement (#11, 26 patterns), command pool diversification (#12). Sensor timestamp skew (#10) dropped — tight NTP is best practice.
 
 ### Temporal Realism
 
@@ -229,19 +229,19 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ### Baseline Depth
 
-- [ ] **Process → network correlation** — Link process creation to corresponding network activity. A `chrome.exe` should generate HTTP/DNS traffic; `git.exe` should connect to GitHub. Currently process and network events are generated independently.
+- [x] **Process → network correlation** — Baseline processes now emit correlated connections via _PROCESS_NETWORK_MAP (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID for eCAR FLOW correlation.
 - [ ] **Linux baseline activity** — Add cron jobs, systemd service restarts, package manager activity, log rotation, NFS mounts. Currently Linux hosts get storyline commands but minimal baseline noise, making any Linux activity immediately suspicious.
 - [x] **Legitimate lateral movement** — 26 patterns: backup agents, monitoring, AD replication, app→DB, config management, DNS zone transfers, NFS, Docker registry, syslog relay, etc. Conditional on environment topology and system roles.
 - [x] **Stale account enrichment** — Kerberos pre-auth failures (4771, 0x12), scheduled task failures (batch logon type 4), service startup failures (type 5, first hour), plus existing failed network logons.
 
 ### Red Herring Sophistication
 
-- [ ] **Network-level red herrings** — Add suspicious-but-benign DNS patterns (high-entropy subdomain queries to CDNs, DNS-over-HTTPS to known providers), unusual-but-legitimate connections (dev VPN to unfamiliar cloud region, CI/CD pulling from new registry). Current red herrings are almost entirely OS-level.
-- [ ] **Expand suspicious ambient noise types** — Add: large outbound transfers (backup/cloud sync), process injection false positives (AV/EDR memory scanning), scheduled vulnerability scan overlap, automated software update bursts. Currently 4 pattern types.
+- [x] **Network-level red herrings** — 3 new patterns: suspicious DNS (high-entropy CDN subdomains, DoH providers), unusual outbound (cloud regions, dev tools, large backup sync), scheduled vulnerability scan overlap. 7 total patterns now.
+- [x] **Expand suspicious ambient noise types** — Covered by network-level red herrings above (large outbound transfers, scan overlap).
 
 ### Entity Consistency
 
-- [ ] **Entity lifecycle validation** — Track system uptime so events can't precede boot time. Validate that Process Access (Sysmon 10) targets existing PIDs. Prevent file operations on nonexistent paths. Currently no lifecycle constraints beyond session/PID tracking.
+- [x] **Entity lifecycle validation** — StateManager tracks per-system boot times (register_boot_time at process tree seeding). validate_target_pid() checks PID existence for Sysmon 8/10 events. Warnings logged for impossible sequences.
 
 ### Format Expansion
 
