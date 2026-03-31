@@ -315,7 +315,7 @@ These are just examples — invent additional realistic variations appropriate t
 
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `process_access`, `raw`
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `raw`
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 
@@ -408,7 +408,7 @@ events:
 **When to manually specify these event types:** Only when they are part of the attack narrative itself — not as prerequisites for another event. For example:
 - DNS tunneling exfiltration → manually declare the DNS `connection` events (they ARE the attack, not a prerequisite)
 - Kerberos golden ticket forging → manually declare the Kerberos events
-- Explicit credential dumping via process access → manually declare `process_access` if you need specific access masks
+- Explicit credential dumping via process access → use `create_remote_thread` with `target_process: lsass.exe`; the engine auto-generates the corresponding ProcessAccess (Sysmon Event 10)
 
 The validator warns if it detects potentially redundant manual specifications alongside events that would auto-generate them.
 
