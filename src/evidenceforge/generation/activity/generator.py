@@ -115,15 +115,27 @@ BASELINE_PATTERNS = {
 # Process names and command lines for baseline activities (Windows)
 PROCESS_TEMPLATES = {
     "process_code": [
-        ("C:\\Program Files\\Microsoft VS Code\\Code.exe", "Code.exe --no-sandbox"),
-        ("C:\\Program Files (x86)\\Notepad++\\notepad++.exe", "notepad++ document.txt"),
+        ("C:\\Program Files\\Microsoft VS Code\\Code.exe", "Code.exe --folder-uri {project_path}"),
+        (
+            "C:\\Program Files (x86)\\Notepad++\\notepad++.exe",
+            "notepad++ {source_file}",
+        ),
         ("C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe", "idea64.exe"),
-        ("C:\\Program Files\\Sublime Text\\sublime_text.exe", "sublime_text.exe project.py"),
+        (
+            "C:\\Program Files\\Sublime Text\\sublime_text.exe",
+            "sublime_text.exe {source_file}",
+        ),
     ],
     "process_build": [
-        ("C:\\Windows\\System32\\msbuild.exe", "msbuild.exe solution.sln /t:Build"),
-        ("C:\\Windows\\System32\\cmd.exe", "cmd.exe /c npm run build"),
-        ("C:\\Program Files\\dotnet\\dotnet.exe", "dotnet.exe build -c Release"),
+        (
+            "C:\\Windows\\System32\\msbuild.exe",
+            "msbuild.exe {solution_name} /t:Build /p:Configuration={build_config}",
+        ),
+        ("C:\\Windows\\System32\\cmd.exe", "cmd.exe /c npm run {npm_script}"),
+        (
+            "C:\\Program Files\\dotnet\\dotnet.exe",
+            "dotnet.exe build -c {build_config}",
+        ),
         ("C:\\Program Files\\nodejs\\node.exe", "node.exe scripts/build.js"),
     ],
     "process_query": [
@@ -156,8 +168,14 @@ PROCESS_TEMPLATES = {
         ),
         ("C:\\Program Files\\Mozilla Firefox\\firefox.exe", "firefox.exe -contentproc -childID 3"),
         ("C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE", "OUTLOOK.EXE"),
-        ("C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "WINWORD.EXE /n"),
-        ("C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE", "EXCEL.EXE"),
+        (
+            "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+            'WINWORD.EXE /n "{doc_path}"',
+        ),
+        (
+            "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
+            'EXCEL.EXE "{spreadsheet_path}"',
+        ),
         (
             "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
             "msedge.exe --type=renderer",
@@ -202,30 +220,30 @@ PROCESS_TEMPLATES = {
 # Process names and command lines for baseline activities (Linux) - Phase 2.10
 PROCESS_TEMPLATES_LINUX = {
     "process_code": [
-        ("/usr/bin/vim", "vim /home/user/script.py"),
-        ("/usr/bin/nano", "nano /etc/config.conf"),
-        ("/usr/bin/code", "code --no-sandbox /home/user/project"),
-        ("/usr/bin/emacs", "emacs -nw /home/user/main.go"),
+        ("/usr/bin/vim", "vim {linux_project}/{linux_source_file}"),
+        ("/usr/bin/nano", "nano {linux_project}/{linux_source_file}"),
+        ("/usr/bin/code", "code --no-sandbox {linux_project}"),
+        ("/usr/bin/emacs", "emacs -nw {linux_project}/{linux_source_file}"),
     ],
     "process_build": [
-        ("/usr/bin/make", "make -j4"),
-        ("/usr/bin/gcc", "gcc -o output source.c"),
-        ("/usr/bin/npm", "npm run build"),
+        ("/usr/bin/make", "make -j4 -C {linux_project}"),
+        ("/usr/bin/gcc", "gcc -o output {linux_source_file}"),
+        ("/usr/bin/npm", "npm run {npm_script}"),
         ("/usr/bin/cargo", "cargo build --release"),
-        ("/usr/bin/python3", "python3 setup.py install"),
+        ("/usr/bin/python3", "python3 -m pip install -e {linux_project}"),
     ],
     "process_query": [
-        ("/usr/bin/mysql", "mysql -u root -p database"),
-        ("/usr/bin/psql", "psql -U postgres -d mydb"),
-        ("/usr/bin/redis-cli", "redis-cli GET session:abc123"),
+        ("/usr/bin/mysql", "mysql -u root -p {mysql_db}"),
+        ("/usr/bin/psql", "psql -U postgres -d {psql_db}"),
+        ("/usr/bin/redis-cli", "{redis_cmd}"),
     ],
     "process_user_apps": [
-        ("/usr/bin/firefox", "firefox --new-tab"),
+        ("/usr/bin/firefox", "firefox --new-tab {internal_url}"),
         ("/usr/bin/thunderbird", "thunderbird"),
-        ("/usr/bin/git", "git pull origin main"),
+        ("/usr/bin/git", "git pull origin {git_branch}"),
         ("/usr/bin/docker", "docker ps"),
         ("/usr/bin/python3", "python3 -m pytest tests/"),
-        ("/usr/bin/ssh", "ssh user@remote-host"),
+        ("/usr/bin/ssh", "ssh {username}@remote-host"),
         ("/usr/bin/curl", "curl -s https://api.example.com/status"),
         ("/usr/bin/kubectl", "kubectl get pods -n production"),
     ],
@@ -2530,9 +2548,8 @@ class ActivityGenerator:
                 process_name, command_line = rng.choice(pool)
                 # Phase 5.1: Substitute username placeholder in paths
                 process_name = process_name.replace("{username}", user.username)
-                command_line = command_line.replace("{username}", user.username)
-                # Parameterize command templates (process_query variety)
-                command_line = _parameterize_command(rng, command_line)
+                # Parameterize command templates (all categories — queries, paths, docs)
+                command_line = _parameterize_command(rng, command_line, username=user.username)
                 parent_pid = self._select_parent_pid(system, user, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
@@ -2578,7 +2595,9 @@ class ActivityGenerator:
                         persona_key, PERSONA_APP_INDICES_LINUX["default"]
                     )
                     pool = [pool[i] for i in indices if i < len(pool)]
-                process_name, command_line = _get_rng().choice(pool)
+                rng = _get_rng()
+                process_name, command_line = rng.choice(pool)
+                command_line = _parameterize_command(rng, command_line, username=user.username)
                 parent_pid = self._select_parent_pid(system, user, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
