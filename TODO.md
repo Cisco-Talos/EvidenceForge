@@ -132,7 +132,6 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] No TXT queries (SPF/DKIM/DMARC checks)
 - [ ] No Windows telemetry noise in query set
 - [ ] TTL distribution too uniform
-- [ ] HTTP connections without preceding DNS queries (no DNS caching model)
 - [ ] Queries default to corp.local instead of scenario domain
 - [ ] MX records for CDN domains that shouldn't have mail exchangers
 
@@ -215,10 +214,43 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ---
 
+## Data Realism — PLANNED
+
+**Goal:** Address structural realism gaps identified by adversarial review. These are issues where the generated data is technically correct but experienced analysts or ML models would identify it as synthetic due to missing real-world patterns. Prioritized by impact on analyst training, then implementation complexity.
+
+### Temporal Realism
+
+- [ ] **Causal event ordering** — Enforce dependency graph so related events respect causality (DNS → connect → TLS → HTTP, logon → process create → child process → network). Currently storyline events are timestamp-sorted but have no inter-event constraints, allowing impossible sequences.
+- [ ] **Hawkes/bursty temporal model** — Replace flat Poisson arrivals with clustered, self-similar traffic patterns. Real networks exhibit heavy-tailed inter-arrival times from backup jobs, patch cycles, login storms, etc. Current uniform jitter within each hour is a major synthetic tell.
+- [ ] **Day-of-week variation** — Monday 9am ≠ Friday 9am. Add login storms on Monday morning, early departures Friday afternoon, dramatically different weekend traffic. Currently every hour at the same day-position is treated identically.
+- [ ] **Sensor timestamp skew** — Add ±1-5s NTP drift per sensor and variable SIEM ingestion latency. Currently all sensors observing the same event see identical timestamps, which is unrealistic and removes a real-world correlation challenge.
+
+### Baseline Depth
+
+- [ ] **Process → network correlation** — Link process creation to corresponding network activity. A `chrome.exe` should generate HTTP/DNS traffic; `git.exe` should connect to GitHub. Currently process and network events are generated independently.
+- [ ] **Linux baseline activity** — Add cron jobs, systemd service restarts, package manager activity, log rotation, NFS mounts. Currently Linux hosts get storyline commands but minimal baseline noise, making any Linux activity immediately suspicious.
+- [ ] **Legitimate lateral movement** — Add service account movement between servers (backup agent → file servers, monitoring agent → all hosts, deployment tool → app servers). Distinguishing malicious from legitimate lateral movement is a core analyst skill.
+- [ ] **Stale account enrichment** — Expand stale accounts beyond failed logons to include cached Kerberos tickets, lingering scheduled tasks, and service configurations that reference them. Creates realistic "why is this disabled account still here?" ambiguity.
+
+### Red Herring Sophistication
+
+- [ ] **Network-level red herrings** — Add suspicious-but-benign DNS patterns (high-entropy subdomain queries to CDNs, DNS-over-HTTPS to known providers), unusual-but-legitimate connections (dev VPN to unfamiliar cloud region, CI/CD pulling from new registry). Current red herrings are almost entirely OS-level.
+- [ ] **Expand suspicious ambient noise types** — Add: large outbound transfers (backup/cloud sync), process injection false positives (AV/EDR memory scanning), scheduled vulnerability scan overlap, automated software update bursts. Currently 4 pattern types.
+
+### Entity Consistency
+
+- [ ] **Entity lifecycle validation** — Track system uptime so events can't precede boot time. Validate that Process Access (Sysmon 10) targets existing PIDs. Prevent file operations on nonexistent paths. Currently no lifecycle constraints beyond session/PID tracking.
+
+### Format Expansion
+
+- [ ] **Cloud/SaaS log formats** — Azure AD sign-in logs, AWS CloudTrail, GCP audit logs, M365 audit logs. Most modern SOCs are hybrid; on-prem-only formats limit training relevance.
+- [ ] **Static command pool diversification** — Parameterize benign command templates with randomized paths, version strings, internal hostnames. Currently the same fixed commands repeat across users, which experienced analysts will notice.
+
+---
+
 ## Post-MVP Enhancements (Future)
 
 ### Short-term
-- [ ] **Expand suspicious ambient noise types** — Current suspicious_benign.py has 4 pattern types (after-hours admin, suspicious CLI, failed logon burst, service account anomaly). Add: large outbound transfers (backup/cloud sync), process injection false positives (AV/EDR memory scanning), scheduled vulnerability scan overlap, automated software update bursts.
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation
@@ -227,12 +259,10 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 - [ ] Config file inheritance/templating
 - [ ] Subset sensor format support (e.g., `log_formats: [zeek, -zeek_dns]`)
 - [ ] PyPI package distribution
-- [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Network diagram ingestion for auto-inferred sensor placement
 - [ ] Performance optimizations (Rust extensions, better parallelization)
 - [ ] Full user directory export as separate CSV
 - [ ] Separate student/instructor output packages
-- [ ] Poisson/Hawkes process timing model
 
 ### Medium-term
 - [ ] Web UI for scenario creation
