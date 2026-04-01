@@ -1252,7 +1252,14 @@ class ActivityGenerator:
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
             logger.warning(
-                f"Skipping invalid network connection: {src_ip} -> {dst_ip}. Reason: {reason}."
+                "Skipping invalid network connection: %s:%s -> %s:%s proto=%s. "
+                "Reason: %s. Check that all systems have routable IPs in the scenario.",
+                src_ip,
+                src_port or "?",
+                dst_ip,
+                dst_port,
+                proto,
+                reason,
             )
             return ""
 
