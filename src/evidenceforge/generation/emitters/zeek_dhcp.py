@@ -38,6 +38,10 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_dhcp.json"
     _supported_types: set[str] = {"dhcp_lease"}
 
+    def can_handle(self, event: SecurityEvent) -> bool:
+        """DHCP emitter handles dhcp_lease events with DHCP context."""
+        return event.event_type in self._supported_types and event.dhcp is not None
+
     def emit(self, event: SecurityEvent) -> None:
         """Render dhcp.log entry from DhcpContext."""
         if event.dhcp is None:

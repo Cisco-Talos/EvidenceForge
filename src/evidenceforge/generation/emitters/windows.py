@@ -134,7 +134,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Windows emitter handles events on Windows hosts."""
-        host = event.src_host or event.dst_host
+        host = self._get_host(event)
         return (
             event.event_type in self._supported_types
             and host is not None
