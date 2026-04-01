@@ -58,10 +58,9 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
             "lease_time": dhcp.lease_time,
             "msg_types": dhcp.msg_types,
             "duration": dhcp.duration,
+            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
-        rendered = self._render_event(event_data)
-        if rendered:
-            self._buffer_event(rendered)
+        self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = ["mac", "host_name", "domain", "duration"]

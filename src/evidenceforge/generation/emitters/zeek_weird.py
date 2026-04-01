@@ -57,14 +57,9 @@ class ZeekWeirdEmitter(SensorMultiplexEmitter):
             "notice": weird.notice,
             "peer": weird.peer,
             "source": weird.source,
+            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
-        if net:
-            event_data["_sensor_hostnames"] = event._sensor_hostnames_by_format.get(
-                "zeek_weird", []
-            )
-        rendered = self._render_event(event_data)
-        if rendered:
-            self._buffer_event(rendered)
+        self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = ["uid", "addl", "source"]
