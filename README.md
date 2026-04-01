@@ -12,11 +12,15 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 - **Consistency by construction.** A canonical `SecurityEvent` model feeds all log formats from a single source of truth. Two emitters cannot disagree about a port number, timestamp, or LogonID because there is only one value — on the event object. This eliminates the cross-source inconsistencies that are the #1 tell of synthetic data.
 
-- **Deterministic engine, LLM-assisted authoring.** Scenario creation uses Claude Code Skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
+- **Causal event ordering.** Events respect real-world dependencies — DNS queries precede connections, Kerberos TGT/TGS precede domain logons, audit events follow administrative commands. A composable rule engine auto-generates prerequisites with realistic timing offsets, so the data tells a coherent causal story across log sources.
+
+- **Self-exciting temporal dynamics.** User activity follows a Hawkes process — events trigger bursts that taper off naturally, matching real human work patterns. System traffic uses periodic intervals with jitter. Day-of-week variation models Monday login storms, Friday early departures, and near-zero weekends. Most generators use uniform random timing that experienced analysts spot instantly.
+
+- **20+ correlated log formats.** Windows Security (30 event IDs), Sysmon, 13 Zeek log types, eCAR EDR/XDR, syslog, bash history, Snort IDS, web access, and proxy logs — all from the same event pipeline.
 
 - **Network visibility modeling.** Define sensor placement (SPAN/TAP), monitored segments, and direction. EvidenceForge determines which connections each sensor can see and only emits network logs where they'd realistically appear.
 
-- **20+ correlated log formats.** Windows Security (30 event IDs), Sysmon, 13 Zeek log types, eCAR EDR/XDR, syslog, bash history, Snort IDS, web access, and proxy logs — all from the same event pipeline.
+- **Deterministic engine, LLM-assisted authoring.** Scenario creation uses Claude Code Skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
 
 - **Built-in quality evaluation.** A 5-dimension scoring framework (23 sub-scores) measures parsability, cross-source consistency, noise realism, temporal patterns, and signal integrity. Know exactly how good your data is before using it.
 
@@ -80,6 +84,8 @@ Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what
 ### Key Capabilities
 
 - **Cross-log consistency** — Shared LogonIDs, PIDs, timestamps, and Zeek UIDs across all formats
+- **Causal expansion engine** — Auto-generates prerequisite events (DNS, Kerberos, audit events) with composable rules
+- **Realistic baseline noise** — 26 lateral movement patterns, process→network correlation, network-level red herrings, and 18 Linux syslog categories create noise that analysts must work through
 - **OS-aware generation** — Windows systems produce Windows Event + Sysmon logs; Linux systems produce syslog + bash history
 - **Network visibility modeling** — Define sensor placement (SPAN/TAP), direction, and monitored segments
 - **Ground truth documentation** — Every attack scenario generates a GROUND_TRUTH.md with narrative, timeline, and IOCs
