@@ -205,7 +205,11 @@ class SignalIntegrityScorer(DimensionScorer):
 
         for i, event in enumerate(storyline):
             event_time = self._parse_event_time(event.time, start_time)
-            event_types = self._match_activity(event.activity)
+            # Prefer typed EventSpec types over keyword matching
+            if event.events:
+                event_types = list({spec.type for spec in event.events})
+            else:
+                event_types = self._match_activity(event.activity)
 
             # Phase 8.4: extract flat details dict from typed EventSpec objects
             details: dict[str, Any] = {}
@@ -439,6 +443,88 @@ class SignalIntegrityScorer(DimensionScorer):
                     and f.get("action") == "OPEN"
                     and self._host_matches(f.get("hostname"), event.system)
                 )
+
+        elif event_type == "service_installed":
+            if format_name == "windows_event_security":
+                return f.get("EventID") in (4697, 7045) and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "SERVICE"
+                    and f.get("action") == "CREATE"
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
+        elif event_type == "failed_logon":
+            if format_name == "windows_event_security":
+                return (
+                    f.get("EventID") == 4625
+                    and self._host_matches(f.get("Computer"), event.system)
+                    and self._user_matches(f.get("TargetUserName"), event.actor)
+                )
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "USER_SESSION"
+                    and f.get("action") == "LOGIN"
+                    and f.get("failure_reason") is not None
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
+        elif event_type == "account_created":
+            if format_name == "windows_event_security":
+                return f.get("EventID") == 4720 and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+
+        elif event_type == "group_member_added":
+            if format_name == "windows_event_security":
+                return f.get("EventID") in (4728, 4732, 4756) and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+
+        elif event_type == "log_cleared":
+            if format_name == "windows_event_security":
+                return f.get("EventID") == 1102 and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+
+        elif event_type == "scheduled_task_created":
+            if format_name == "windows_event_security":
+                return f.get("EventID") == 4698 and self._host_matches(
+                    f.get("Computer"), event.system
+                )
+
+        elif event_type == "ssh_session":
+            if format_name == "syslog":
+                msg = f.get("message", "")
+                return self._host_matches(f.get("hostname"), event.system) and (
+                    "Accepted" in msg or "session opened" in msg
+                )
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "USER_SESSION"
+                    and f.get("action") == "LOGIN"
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
+        elif event_type == "rdp_session":
+            if format_name == "windows_event_security":
+                return (
+                    f.get("EventID") == 4624
+                    and f.get("LogonType") in (10, "10")
+                    and self._host_matches(f.get("Computer"), event.system)
+                )
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "USER_SESSION"
+                    and f.get("action") == "LOGIN"
+                    and self._host_matches(f.get("hostname"), event.system)
+                )
+
+        elif event_type == "dhcp_lease":
+            if format_name == "zeek_dhcp":
+                return True  # Any DHCP record in the time window is a match
 
         return False
 
