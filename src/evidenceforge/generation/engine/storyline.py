@@ -404,12 +404,21 @@ class StorylineMixin:
         self.state_manager.set_current_time(event_time)
 
         explicit_types = {spec.type for spec in rh_event.events}
-        for spec in rh_event.events:
+
+        # Apply typing cadence so logon events precede process events
+        # within compound red herring steps (same as storyline events)
+        from evidenceforge.utils.timing import typing_cadence
+
+        cadence_offsets = typing_cadence(len(rh_event.events), rng)
+
+        for i, spec in enumerate(rh_event.events):
+            event_t = event_time + timedelta(seconds=cadence_offsets[i])
+            self.state_manager.set_current_time(event_t)
             result = self._execute_typed_event(
                 spec=spec,
                 actor=actor,
                 system=system,
-                time=event_time,
+                time=event_t,
                 activity=rh_event.activity,
                 explicit_types=explicit_types,
             )

@@ -488,6 +488,13 @@ class TemporalRealismScorer(DimensionScorer):
             # a preceding logon — they run from boot, not via interactive logon.
             exclude_accounts = rule.get("exclude_accounts", [])
 
+            # Per-rule tolerance: allow a fraction of failures without penalty
+            # (e.g., DNS→TCP allows ~3% direct-IP connections)
+            tolerance = rule.get("tolerance", 0.0)
+
+            rule_total = 0
+            rule_correct = 0
+
             # Check each "after" record for a matching "before"
             for rec in after_records:
                 if rec.timestamp is None:
@@ -532,7 +539,7 @@ class TemporalRealismScorer(DimensionScorer):
                     if not matching_befores:
                         continue  # No matching before — not a countable pair
 
-                    total_pairs += 1
+                    rule_total += 1
                     # Check that at least one before is earlier
                     any_before_earlier = any(
                         b.timestamp <= rec.timestamp
@@ -540,12 +547,22 @@ class TemporalRealismScorer(DimensionScorer):
                         if b.timestamp is not None
                     )
                     if any_before_earlier:
-                        correct_pairs += 1
+                        rule_correct += 1
                     elif len(failures) < 10:
                         failures.append(
                             f"Rule '{rule['name']}': after event at line {rec.line_number} "
                             f"precedes all matching before events"
                         )
+
+            # Apply per-rule tolerance: if failure rate is within tolerance,
+            # treat all pairs as correct for this rule
+            if rule_total > 0 and tolerance > 0:
+                failure_rate = 1.0 - (rule_correct / rule_total)
+                if failure_rate <= tolerance:
+                    rule_correct = rule_total  # Within tolerance — no penalty
+
+            total_pairs += rule_total
+            correct_pairs += rule_correct
 
         score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
         return SubScore(
