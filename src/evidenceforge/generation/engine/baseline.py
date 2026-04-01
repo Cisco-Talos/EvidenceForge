@@ -1460,6 +1460,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.1, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=rng.randint(500, 5000),
+                        emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=4,  # SMB: kernel System process
                     )
@@ -1484,6 +1485,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(200, 1500),
                         resp_bytes=rng.randint(200, 2000),
+                        emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=_svc_pid("lsass"),
                     )
@@ -1507,6 +1509,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.01, 0.5),
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
+                        emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=_svc_pid("lsass"),
                     )
@@ -1587,6 +1590,7 @@ class BaselineMixin:
                             duration=rng.uniform(0.01, 2.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
+                            emit_dns=rng.random() > 0.02,
                             source_system=system,
                         )
 

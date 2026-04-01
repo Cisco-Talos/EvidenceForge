@@ -429,6 +429,15 @@ class EmitterSetupMixin:
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
 
+        # Register system IP→FQDN mappings so DNS queries use correct hostnames
+        # (e.g., DC-01.meridian-healthcare.com instead of host-10.corp.local)
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
+        ad_domain = self._resolve_ad_domain()
+        for system in self.scenario.environment.systems:
+            fqdn = f"{system.hostname}.{ad_domain}"
+            REVERSE_DNS[system.ip] = fqdn
+
         # Share system PIDs with activity generator for dynamic ParentProcessName
         self.activity_generator._system_pids = self._system_pids
         self.activity_generator._all_system_ips = [s.ip for s in self.scenario.environment.systems]
