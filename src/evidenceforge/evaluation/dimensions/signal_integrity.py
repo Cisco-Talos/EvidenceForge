@@ -559,13 +559,22 @@ class SignalIntegrityScorer(DimensionScorer):
         """Check if an eCAR FLOW record's IPs match the event's expected IPs.
 
         Uses sub_details when available to avoid last-writer-wins from merged
-        details. Accepts the record if any sub-event's IPs match.
+        details. Only considers sub-events that declare IP fields (source_ip
+        or dst_ip) — process sub-events without IPs are skipped to prevent
+        them from acting as wildcards that match any FLOW record.
         """
         src_ip = fields.get("src_ip", "")
         dst_ip = fields.get("dst_ip", "")
 
         detail_sets = event.sub_details if event.sub_details else [event.details]
-        for details in detail_sets:
+        # Filter to sub-events that have IP fields (connection specs)
+        ip_details = [d for d in detail_sets if "source_ip" in d or "dst_ip" in d]
+
+        if not ip_details:
+            # No sub-event declares IPs — accept any FLOW on this host
+            return True
+
+        for details in ip_details:
             src_ok = True
             dst_ok = True
             if "source_ip" in details:
@@ -574,9 +583,7 @@ class SignalIntegrityScorer(DimensionScorer):
                 dst_ok = dst_ip == details["dst_ip"] or src_ip == details["dst_ip"]
             if src_ok and dst_ok:
                 return True
-        # If no sub-event declares IPs, accept any FLOW on this host
-        has_any_ip = any("source_ip" in d or "dst_ip" in d for d in detail_sets)
-        return not has_any_ip
+        return False
 
     @staticmethod
     def _user_matches(record_user: Any, expected: str) -> bool:
