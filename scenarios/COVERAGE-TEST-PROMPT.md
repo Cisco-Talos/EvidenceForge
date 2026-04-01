@@ -27,6 +27,22 @@
   Users: 17 users spanning all 15 built-in personas. Realistic diverse names (first.last format). Service
    accounts: svc_backup, svc_monitor, svc_sqlreader.
 
+  Stale accounts (3):
+  - jennifer.walsh: last_active 2023-11-15, reason "Transferred to London office"
+  - svc_legacy_crm: last_active 2024-01-02, reason "CRM system decommissioned"
+  - robert.kim: last_active 2023-09-30, reason "Former contractor, access not revoked"
+
+  Red herrings (3-4 explicit events, in addition to automatic suspicious_noise):
+  - After-hours IT maintenance: sysadmin RDP to DC-01 at an unusual hour, running legitimate
+    diagnostic commands (Get-EventLog, Test-Connection). Should look suspicious but have an
+    innocent explanation.
+  - Failed logon burst from a legitimate user who fat-fingered their password 3-4 times before
+    succeeding. Should trigger lockout-style alerts but is benign.
+  - Large outbound file transfer from a developer workstation to a cloud storage IP — actually a
+    legitimate backup or repo sync, but the volume looks like exfiltration.
+  - Service account (svc_backup) authenticating from an unusual host (not its normal server) —
+    legitimate scheduled task migration, but looks like lateral movement.
+
   All 8 log formats: windows, zeek, ecar, syslog, bash_history, snort_alert, web_access, proxy_access.
 
   Attack storyline — APT via web app exploit, full kill chain:
