@@ -19,6 +19,7 @@ time_window: ...
 baseline_activity: ...
 logon_grace_period: "30m"    # Optional (default: "30m") — suppresses "no prior logon" warnings within this duration of time_window.start
 storyline: [...]              # Optional
+red_herrings: [...]          # Optional: suspicious-but-benign events for analyst training
 output: ...
 ```
 
@@ -35,8 +36,20 @@ environment:
   users: [...]
   systems: [...]
   service_accounts: [...]      # Optional: extra account names valid as storyline actors
+  stale_accounts:              # Optional: inactive accounts that generate background noise
+    - username: former.employee
+      last_active: "2023-11-15"
+      reason: "Transferred to another office"
+    - username: svc_old_crm
+      last_active: "2024-01-02"
+      reason: "CRM system decommissioned"
   groups: [...]               # Optional
 ```
+
+Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Each field:
+- `username`: Account name (must not collide with active users or service_accounts)
+- `last_active`: ISO date when the account was last active (context only, not used by engine)
+- `reason`: Why the account is stale (context only, for ground truth documentation)
 
 ### Timezone Configuration
 
@@ -230,6 +243,38 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+### Red Herrings
+
+Red herrings are suspicious-but-benign events that create false leads for analysts. They use the same event types as the storyline but are documented in a separate "Red Herrings" section of `GROUND_TRUTH.md` with their benign explanations.
+
+```yaml
+red_herrings:
+  - id: rh-afterhours-admin
+    time: "+3h"
+    actor: sarah.oconnell        # Must be in users list
+    system: DC-01
+    activity: "After-hours server maintenance"
+    explanation: "Routine sysadmin maintenance performed outside business hours to avoid user impact"
+    events:
+      - type: logon
+        logon_type: 10
+        source_ip: "10.10.1.15"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -Command Get-EventLog -LogName System -Newest 50"
+```
+
+Each red herring requires:
+- `id`: Unique event identifier (must not collide with storyline IDs)
+- `time`: Same format as storyline (ISO 8601, relative offset, or seconds)
+- `actor`: Username (must be in users list, service_accounts, or a builtin account)
+- `system`: Target system hostname
+- `activity`: Human-readable description (appears in Red Herrings section of GROUND_TRUTH.md)
+- `explanation`: Why this activity is benign (instructor-only context in GROUND_TRUTH.md)
+- `events`: Same typed event list as storyline (all event types supported)
+
+Red herrings are separate from `baseline_activity.suspicious_noise`, which auto-generates ambient suspicious patterns (after-hours logins, suspicious CLI, failed logon bursts, etc.) without explicit scenario configuration.
 
 ### Causal Expansion
 

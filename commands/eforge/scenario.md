@@ -53,6 +53,10 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
+**Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
+
+**Stale accounts** — Does the organization have any disabled or inactive accounts that haven't been fully cleaned up? Former employees, decommissioned service accounts, or un-revoked contractor access are common in real environments. Add 2-4 stale accounts to `environment.stale_accounts` with `username`, `last_active` (ISO date), and `reason`. The engine automatically generates background noise from these: failed logons, Kerberos pre-auth failures on DCs, scheduled task failures, and service startup failures — creating realistic "why is this disabled account still here?" ambiguity for analysts.
+
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
 
 ### Persona Selection
@@ -181,6 +185,11 @@ environment:
 
   service_accounts: []             # Optional: custom service/system accounts valid as storyline actors
 
+  stale_accounts:                  # Optional: inactive accounts for background noise
+    - username: former.employee
+      last_active: "2023-11-15"
+      reason: "Left the company"
+
   groups:                         # Optional
     - name: engineering
       members: [marcus.chen]
@@ -235,12 +244,23 @@ storyline:                        # The attack events to bury in the data
         command_line: "whoami"
         technique: "T1033 - System Owner/User Discovery"
 
+red_herrings:                     # Optional: suspicious-but-benign events
+  - id: rh-afterhours
+    time: "+3h"
+    actor: sarah.admin
+    system: DC-01
+    activity: "After-hours server check"
+    explanation: "Routine sysadmin maintenance outside business hours"
+    events:
+      - type: logon
+        logon_type: 10
+
 output:
   logs:
     - format: windows
     - format: zeek
     # Available: windows, zeek, ecar, syslog,
-    #            bash_history, snort_alert, web_access
+    #            bash_history, snort_alert, web_access, proxy_access
   destination: "./output"
   compression: false
 ```
