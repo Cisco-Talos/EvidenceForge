@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-27
+**Last Updated:** 2026-04-01
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -40,6 +40,21 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Recently Resolved
 
+- [x] Evaluator grace period for causal ordering (logon→process rule skips events within logon_grace_period from scenario start)
+- [x] Evaluator event type detection from typed EventSpec fields (replaces fragile keyword matching) + 9 new record matchers
+- [x] Evaluator per-sub-event indicator accuracy (fixes last-writer-wins IP merge for compound storyline steps) + tighter eCAR FLOW matching
+- [x] Evaluator format group trace coverage (host-local vs network groups instead of checking all formats)
+- [x] Evaluator anomaly rate: red herring events count as anomalies + 2 new suspicious patterns (temp_dir_execution, unusual_powershell) + doubled noise intensity
+- [x] Evaluator burstiness: raised minimum event threshold to 30 for reliable CV estimates + tuned Hawkes alpha/beta ratios
+- [x] Evaluator causal pair tolerance field (DNS→TCP allows 3% direct-IP connections) + expanded eCAR exclude_accounts for Linux daemons
+- [x] ZeekDhcpEmitter missing can_handle() — DHCP events never reached emitter
+- [x] Windows emitter cross-host OS filtering — can_handle() now uses _get_host() for consistent host selection
+- [x] Per-system session check for baseline + suspicious noise — logon emitted on target system, not reused from wrong system
+- [x] Context-aware logon types — interactive (type 2) for workstations, network/RDP (type 3/10) for servers
+- [x] DNS before baseline system traffic — SMB/Kerberos/LDAP/DB connections emit DNS via causal expansion with 2% direct-IP skip
+- [x] System IP→FQDN registration — scenario system hostnames registered in REVERSE_DNS at setup time
+- [x] Red herring typing cadence — compound red herring steps now use typing cadence like storyline events
+- [x] primary_system required for all users — scenario skill, reference, and validation updated; coverage test prompt updated
 - [x] SubjectLogonId hardcoded to SYSTEM (0x3e7) on 4720/4728/4697/4698/1102
 - [x] 4728 MemberSid doesn't match 4720 TargetSid across storyline events
 - [x] 4648 SubjectLogonId is SYSTEM (0x3e7) for domain user
@@ -169,7 +184,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] 4648 targets localhost instead of DC for domain commands
 - [ ] 4728 MemberName is "-" (should be DN of added member)
 - [ ] No 4778/4779 (RDP reconnect/disconnect)
-- [ ] Process creation timestamp can precede its authorizing logon
+- [x] Process creation timestamp can precede its authorizing logon
 - [ ] Missing 4634 logoff events for network logon sessions
 - [ ] Only AES-256 Kerberos encryption; no RC4/AES-128 mix
 - [ ] Only 2 unique TicketOptions values; zero 4771 pre-auth failures

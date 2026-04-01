@@ -297,7 +297,13 @@ EvaluationEngine
     └── flags: list[str]
 ```
 
-Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`.
+Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
+
+- **Grace period:** Events within the scenario's `logon_grace_period` (default 30m) from scenario start are exempt from causal ordering checks, since data collection begins mid-session with pre-existing user sessions.
+- **Per-rule tolerance:** Rules can specify a `tolerance` fraction (e.g., 0.03 for DNS→TCP) allowing a percentage of failures without penalty. Used for intentional direct-IP baseline connections.
+- **Account exclusions:** Rules list system accounts (SYSTEM, root, www-data, etc.) exempt from logon-before-process checks, since daemons run from boot without interactive logins.
+- **Format groups:** Trace coverage uses format groups (host-local vs network) instead of checking all formats. Connection events expect traces in both groups; process/logon events only expect host-local traces.
+- **Typed event detection:** Signal integrity uses typed EventSpec fields to identify event types instead of keyword-matching activity descriptions, with 15 record matchers covering all event types.
 
 ### Scenario Models
 
@@ -397,6 +403,10 @@ The baseline generation engine includes several layers of realism beyond simple 
 **Network-level red herrings:** Three suspicious-but-benign network patterns supplement the existing host-level red herrings: high-entropy DNS queries to CDNs/DoH providers, unusual outbound connections to dev tools/cloud regions/backup sync, and scheduled vulnerability scan bursts.
 
 **Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
+
+**DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames.
+
+**Per-system session management:** The baseline engine checks for active sessions on the specific target system before generating processes. If no session exists, a context-aware logon is emitted (type 2 interactive for workstations, type 3/10 network/RDP for servers). This prevents processes appearing on systems where the user has no logon event.
 
 **Process→network correlation:** Baseline process creation triggers correlated network connections when the executable normally generates traffic (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID carried for eCAR FLOW correlation.
 
