@@ -251,28 +251,32 @@ class CrossSourceScorer(DimensionScorer):
         failures: list[str] = []
 
         for event in resolved:
-            # Determine expected formats for this event's system
-            expected_formats = vis.get_expected_formats(event.system)
+            # Determine expected format groups for this event's types
+            groups = vis.get_expected_format_groups(event.system, event.event_types)
             evt_time = _normalize_ts(event.time)
             evt_bucket = int(evt_time.timestamp()) // 60
 
-            for fmt in expected_formats:
-                if fmt not in records:
-                    continue
+            for group_name, group_formats in groups:
                 total_expected += 1
 
-                # Index lookup: check ±2 minute buckets for traces
-                has_trace = False
-                for b in range(evt_bucket - 2, evt_bucket + 3):
-                    key = f"{event.system.lower()}|{b}"
-                    if key in host_time_index and fmt in host_time_index[key]:
-                        has_trace = True
+                # Check if at least one format in this group has a trace
+                group_found = False
+                for fmt in group_formats:
+                    if fmt not in records:
+                        continue
+                    for b in range(evt_bucket - 2, evt_bucket + 3):
+                        key = f"{event.system.lower()}|{b}"
+                        if key in host_time_index and fmt in host_time_index[key]:
+                            group_found = True
+                            break
+                    if group_found:
                         break
-                if has_trace:
+                if group_found:
                     found += 1
                 elif len(failures) < 10:
                     failures.append(
-                        f"Event {event.index}: no trace in {fmt} for {event.actor}@{event.system}"
+                        f"Event {event.index}: no trace in {group_name} group "
+                        f"for {event.actor}@{event.system}"
                     )
 
         score = (100.0 * found / total_expected) if total_expected > 0 else 100.0

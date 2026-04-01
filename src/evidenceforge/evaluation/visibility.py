@@ -117,6 +117,61 @@ class VisibilityModel:
         """Get expected host-level log formats for a system."""
         return self._host_formats.get(hostname, set())
 
+    def get_expected_format_groups(
+        self, hostname: str, event_types: list[str]
+    ) -> list[tuple[str, set[str]]]:
+        """Get format groups applicable to a storyline event on this host.
+
+        Returns a list of (group_name, formats) tuples. The event should appear
+        in at least one format from each applicable group.
+
+        Groups:
+          - host_local: formats installed on the host (windows_event_security,
+            syslog, bash_history, ecar)
+          - network: sensor-based network formats (zeek_*, snort, web_access,
+            proxy_access)
+
+        Event type determines which groups apply:
+          - connection → host_local + network
+          - ssh_session, rdp_session → host_local only (syslog/windows logs)
+          - All other types → host_local only
+        """
+        host_formats = self._host_formats.get(hostname, set())
+        if not host_formats:
+            return []
+
+        _HOST_LOCAL = {
+            "windows_event_security",
+            "windows_event_sysmon",
+            "syslog",
+            "bash_history",
+            "ecar",
+        }
+        _NETWORK = {
+            "zeek_conn",
+            "zeek_dns",
+            "zeek_http",
+            "zeek_ssl",
+            "zeek_dhcp",
+            "snort_alert",
+            "web_access",
+            "proxy_access",
+        }
+
+        host_local = host_formats & _HOST_LOCAL
+        # Network types apply if connection events are present
+        network_types = {"connection", "dhcp_lease"}
+
+        groups: list[tuple[str, set[str]]] = []
+        if host_local:
+            groups.append(("host_local", host_local))
+        if network_types & set(event_types):
+            # Include network group — these won't be in host_formats but
+            # should be checked in the records if available
+            groups.append(("network", _NETWORK))
+
+        return groups
+
     def get_network_formats(self, src_ip: str, dst_ip: str) -> set[str]:
         """Get network log formats that should observe a connection."""
         formats = self._network_engine.get_log_formats_for_connection(src_ip, dst_ip)
