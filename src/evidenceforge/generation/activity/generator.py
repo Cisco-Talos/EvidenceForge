@@ -2488,7 +2488,9 @@ class ActivityGenerator:
             db_servers = getattr(self, "_db_servers", [])
             all_ips = getattr(self, "_all_system_ips", [])
             if conn_info["service"] in ("mssql", "mysql", "postgresql") and db_servers:
-                dst_ip = rng.choice(db_servers)
+                db_entry = rng.choice(db_servers)
+                # _db_servers entries are dicts with "ip", "port", "service"
+                dst_ip = db_entry["ip"] if isinstance(db_entry, dict) else db_entry
             elif all_ips:
                 dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
             else:
