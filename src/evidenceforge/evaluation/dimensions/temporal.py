@@ -165,7 +165,7 @@ class TemporalRealismScorer(DimensionScorer):
         progress("sub_score_done", {"name": "System Process Regularity", "score": s3.score})
 
         progress("sub_score_start", {"name": "Causal Ordering", "step": 4, "total": 5})
-        s4 = self._score_causal_ordering(records)
+        s4 = self._score_causal_ordering(records, scenario)
         progress("sub_score_done", {"name": "Causal Ordering", "score": s4.score})
 
         progress("sub_score_start", {"name": "Timing Plausibility", "step": 5, "total": 5})
@@ -399,7 +399,11 @@ class TemporalRealismScorer(DimensionScorer):
 
     # --- Sub-score 4: Causal Ordering ---
 
-    def _score_causal_ordering(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_causal_ordering(
+        self, records: dict[str, list[ParsedRecord]], scenario: Scenario
+    ) -> SubScore:
+        from evidenceforge.utils.time import parse_duration
+
         causal_rules = load_rules_file("causal_pairs.yaml")
         pairs_list = causal_rules.get("pairs", [])
         if not pairs_list:
@@ -410,6 +414,17 @@ class TemporalRealismScorer(DimensionScorer):
                 score=100.0,
                 details="No causal pair rules defined",
             )
+
+        # Grace period: skip "after" events near scenario start where users
+        # are assumed already logged in (mid-session data collection).
+        scenario_start = scenario.time_window.start
+        if scenario_start.tzinfo is None:
+            scenario_start = scenario_start.replace(tzinfo=UTC)
+        try:
+            grace_td = parse_duration(scenario.logon_grace_period)
+        except (ValueError, TypeError):
+            grace_td = timedelta(minutes=30)
+        grace_end = scenario_start + grace_td
 
         total_pairs = 0
         correct_pairs = 0
@@ -476,6 +491,14 @@ class TemporalRealismScorer(DimensionScorer):
                 if rec.timestamp is None:
                     continue
                 if not self._condition_matches(after_cond, rec.fields):
+                    continue
+
+                # Grace period: skip "after" events near scenario start where
+                # preceding events (e.g., logons) predate the collection window.
+                rec_ts = rec.timestamp
+                if rec_ts.tzinfo is None:
+                    rec_ts = rec_ts.replace(tzinfo=UTC)
+                if rec_ts <= grace_end:
                     continue
 
                 # Skip connections on excluded ports (e.g., DNS port 53)
