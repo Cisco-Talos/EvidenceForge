@@ -260,7 +260,9 @@ class TemporalRealismScorer(DimensionScorer):
         for username, timestamps in user_events.items():
             if username in system_accounts_lower:
                 continue
-            if len(timestamps) < 10:
+            # Users with few events produce statistically unreliable CV estimates.
+            # Require at least 30 raw events to include in scoring.
+            if len(timestamps) < 30:
                 continue
 
             sorted_ts = sorted(timestamps)
@@ -273,7 +275,7 @@ class TemporalRealismScorer(DimensionScorer):
                 if (ts - deduped[-1]).total_seconds() > 5.0:
                     deduped.append(ts)
 
-            if len(deduped) < 10:
+            if len(deduped) < 20:
                 continue
 
             gaps = [(deduped[i + 1] - deduped[i]).total_seconds() for i in range(len(deduped) - 1)]

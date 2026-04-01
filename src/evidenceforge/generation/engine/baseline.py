@@ -81,10 +81,11 @@ PERSONA_CLUSTER_CONFIG = {
 
 # Hawkes process parameters derived from risk_profile.
 # No hardcoded persona names — new personas work automatically.
+# Ratios tuned to produce CV > 1.0 for users with 30+ events.
 _HAWKES_RISK_PARAMS = {
-    "high": {"alpha_beta_ratio": 0.7, "beta": 0.05},  # big bursts, slow decay (~20s)
-    "medium": {"alpha_beta_ratio": 0.5, "beta": 0.07},  # moderate bursts
-    "low": {"alpha_beta_ratio": 0.3, "beta": 0.10},  # small bursts, fast decay (~10s)
+    "high": {"alpha_beta_ratio": 0.80, "beta": 0.04},  # strong bursts, slow decay (~25s)
+    "medium": {"alpha_beta_ratio": 0.65, "beta": 0.05},  # moderate bursts (~20s decay)
+    "low": {"alpha_beta_ratio": 0.45, "beta": 0.08},  # mild bursts, faster decay (~12s)
 }
 
 

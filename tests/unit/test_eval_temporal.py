@@ -185,11 +185,13 @@ class TestWorkHourDistribution:
 class TestHumanBurstiness:
     def test_bursty_events(self):
         """Events with varied inter-event gaps should score well."""
-        # Create bursts: cluster of events, then long gap, then cluster
+        # Create bursts: clusters of events with long gaps between
         timestamps = (
-            [T0 + timedelta(seconds=i * 2) for i in range(5)]  # burst 1: 5 events in 10s
-            + [T0 + timedelta(minutes=30, seconds=i * 3) for i in range(5)]  # burst 2 after 30m
-            + [T0 + timedelta(hours=2, seconds=i * 1) for i in range(5)]  # burst 3 after 2h
+            [T0 + timedelta(seconds=i * 2) for i in range(8)]  # burst 1
+            + [T0 + timedelta(minutes=20, seconds=i * 3) for i in range(8)]  # burst 2
+            + [T0 + timedelta(hours=1, seconds=i * 2) for i in range(8)]  # burst 3
+            + [T0 + timedelta(hours=2, seconds=i * 1) for i in range(8)]  # burst 4
+            + [T0 + timedelta(hours=3, seconds=i * 4) for i in range(8)]  # burst 5
         )
         records = {
             "windows_event_security": [
@@ -205,7 +207,7 @@ class TestHumanBurstiness:
 
     def test_metronomic_events(self):
         """Exactly evenly-spaced events should score poorly (CV near 0)."""
-        timestamps = [T0 + timedelta(minutes=i * 5) for i in range(20)]
+        timestamps = [T0 + timedelta(minutes=i * 5) for i in range(40)]
         records = {
             "windows_event_security": [
                 _record("windows_event_security", {"TargetUserName": "jsmith"}, ts=t)
