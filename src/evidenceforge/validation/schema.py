@@ -237,6 +237,11 @@ class ScenarioValidator:
 
     def _validate_user_primary_system_references(self) -> None:
         """Check that user primary_system references exist in systems list."""
+        # Build set of users who have a system assigned to them
+        assigned_users = {
+            s.assigned_user for s in self.scenario.environment.systems if s.assigned_user
+        }
+
         for idx, user in enumerate(self.scenario.environment.users):
             if user.primary_system and user.primary_system not in self.hostnames:
                 self.issues.append(
@@ -245,6 +250,20 @@ class ScenarioValidator:
                         field_path=f"environment.users.{idx}.primary_system",
                         message=f"User '{user.username}' references undefined system '{user.primary_system}'",
                         suggestion=f"Available systems: {', '.join(sorted(self.hostnames))}",
+                    )
+                )
+            elif (
+                not user.primary_system
+                and user.username not in assigned_users
+                and user.enabled
+                and user.persona
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"environment.users.{idx}.primary_system",
+                        message=f"User '{user.username}' has no primary_system and no system is assigned to them",
+                        suggestion="Assign a primary_system to ensure realistic logon/process ordering",
                     )
                 )
 

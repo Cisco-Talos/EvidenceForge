@@ -45,7 +45,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Log boundary** — Only include systems and logs that the victim organization would actually have access to. See the "Log Realism: What You'd Actually Have" section below for details. This is especially important for scenarios involving third parties, cloud services, or SaaS vendors.
 
-**Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call.
+**Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call. Every user must have a `primary_system` assigned — ensure there are enough workstations for all users (users can share systems, but each user needs a designated primary).
 
 **Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
@@ -171,7 +171,7 @@ environment:
       full_name: "Marcus Chen"
       email: marcus.chen@example.com
       persona: developer          # Must reference a persona name
-      primary_system: WS-DEV-01   # Optional, must reference a system hostname
+      primary_system: WS-DEV-01   # Required — must reference a system hostname
       enabled: true               # Default: true
       groups: ["engineering"]     # Optional
 
@@ -281,7 +281,7 @@ See `references/evidence-formats.md` for detailed field documentation, output pa
 
 The scenario is validated before generation. Common issues to avoid:
 - Every `user.persona` must match a persona name (from inline personas or pre-built library)
-- Every `user.primary_system` must match a system hostname
+- Every user must have a `primary_system` assigned, and it must match a system hostname
 - Every `system.assigned_user` must match a username
 - Every storyline `actor` must be a username defined in the users list, a well-known built-in account (e.g., `SYSTEM`, `root`), or listed in `environment.service_accounts`
 - Every storyline `system` must match a system hostname

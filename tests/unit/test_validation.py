@@ -75,6 +75,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="nonexistent_persona",  # Invalid reference
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -528,6 +529,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="invalid",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -638,6 +640,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -680,6 +683,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -725,6 +729,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -769,6 +774,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[

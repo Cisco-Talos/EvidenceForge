@@ -1300,11 +1300,26 @@ class BaselineMixin:
                     activities.append(activity_type)
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        if not sessions and activities:
+        has_session_on_system = any(s.system == system.hostname for s in sessions)
+        if not has_session_on_system and activities:
             logon_time = event_time - timedelta(seconds=rng.uniform(1.0, 5.0))
             self.state_manager.set_current_time(logon_time)
-            self.activity_generator.execute_baseline_activity(
-                user=user, system=system, time=logon_time, activity_type="logon"
+
+            # Pick logon type based on context: primary system → interactive,
+            # server → network/RDP, non-primary workstation → interactive
+            sys_type = (system.type or "workstation").lower()
+            if system.hostname == user.primary_system:
+                logon_type = 2  # Interactive — user at their own desk
+            elif sys_type in ("server", "domain_controller"):
+                logon_type = rng.choices([3, 10], weights=[70, 30], k=1)[0]
+            else:
+                logon_type = 2  # Interactive — walked up to another workstation
+
+            self.activity_generator.generate_logon(
+                user=user,
+                system=system,
+                time=logon_time,
+                logon_type=logon_type,
             )
 
         for activity_type in activities:

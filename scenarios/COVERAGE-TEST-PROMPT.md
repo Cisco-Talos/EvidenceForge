@@ -24,8 +24,10 @@
   - zeek-dmz: SPAN, monitors server_vlan + dmz, bidirectional (overlaps with zeek-core on server_vlan)
   - snort-perimeter: TAP, monitors dmz, inbound
 
-  Users: 17 users spanning all 15 built-in personas. Realistic diverse names (first.last format). Service
-   accounts: svc_backup, svc_monitor, svc_sqlreader.
+  Users: 17 users spanning all 15 built-in personas. Realistic diverse names (first.last format). Every
+   user must have a primary_system assigned to one of the workstations (users may share workstations if
+   needed — 17 users across 13 workstations means some sharing). Service accounts: svc_backup,
+   svc_monitor, svc_sqlreader.
 
   Stale accounts (3):
   - jennifer.walsh: last_active 2023-11-15, reason "Transferred to London office"

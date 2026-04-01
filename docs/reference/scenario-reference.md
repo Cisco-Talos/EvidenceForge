@@ -72,7 +72,7 @@ users:
     groups: ["developers"]     # Optional
     enabled: true              # Optional (default: true)
     persona: developer         # Optional: reference to persona name
-    primary_system: WS-01      # Optional: reference to system hostname
+    primary_system: WS-01      # Required: reference to system hostname
 ```
 
 ### Systems

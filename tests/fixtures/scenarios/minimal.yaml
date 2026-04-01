@@ -9,6 +9,7 @@ environment:
     - username: test_user
       full_name: "Test User"
       email: "test.user@example.com"
+      primary_system: TEST-01
       enabled: true
 
   systems:
