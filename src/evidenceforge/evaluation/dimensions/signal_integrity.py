@@ -115,6 +115,7 @@ class ResolvedEvent:
     activity: str
     details: dict[str, Any]
     event_types: list[str]
+    sub_details: list[dict[str, Any]] = field(default_factory=list)
     traces: list[ParsedRecord] = field(default_factory=list)
 
 
@@ -211,12 +212,14 @@ class SignalIntegrityScorer(DimensionScorer):
             else:
                 event_types = self._match_activity(event.activity)
 
-            # Phase 8.4: extract flat details dict from typed EventSpec objects
+            # Build per-sub-event details and merged details
+            sub_details: list[dict[str, Any]] = []
             details: dict[str, Any] = {}
             for spec in event.events:
                 spec_dict = spec.model_dump(
                     exclude_none=True, exclude={"type", "technique", "description", "supplementary"}
                 )
+                sub_details.append(spec_dict)
                 details.update(spec_dict)
 
             resolved.append(
@@ -229,6 +232,7 @@ class SignalIntegrityScorer(DimensionScorer):
                     activity=event.activity,
                     details=details,
                     event_types=event_types,
+                    sub_details=sub_details,
                 )
             )
 
@@ -406,6 +410,7 @@ class SignalIntegrityScorer(DimensionScorer):
                     f.get("object") == "FLOW"
                     and f.get("action") == "CONNECT"
                     and self._host_matches(f.get("hostname"), event.system)
+                    and self._connection_ip_matches(f, event)
                 )
 
         elif event_type == "process_terminate":
@@ -550,6 +555,30 @@ class SignalIntegrityScorer(DimensionScorer):
         return False
 
     @staticmethod
+    def _connection_ip_matches(fields: dict, event: "ResolvedEvent") -> bool:
+        """Check if an eCAR FLOW record's IPs match the event's expected IPs.
+
+        Uses sub_details when available to avoid last-writer-wins from merged
+        details. Accepts the record if any sub-event's IPs match.
+        """
+        src_ip = fields.get("src_ip", "")
+        dst_ip = fields.get("dst_ip", "")
+
+        detail_sets = event.sub_details if event.sub_details else [event.details]
+        for details in detail_sets:
+            src_ok = True
+            dst_ok = True
+            if "source_ip" in details:
+                src_ok = src_ip == details["source_ip"] or dst_ip == details["source_ip"]
+            if "dst_ip" in details:
+                dst_ok = dst_ip == details["dst_ip"] or src_ip == details["dst_ip"]
+            if src_ok and dst_ok:
+                return True
+        # If no sub-event declares IPs, accept any FLOW on this host
+        has_any_ip = any("source_ip" in d or "dst_ip" in d for d in detail_sets)
+        return not has_any_ip
+
+    @staticmethod
     def _user_matches(record_user: Any, expected: str) -> bool:
         if record_user is None:
             return False
@@ -627,7 +656,10 @@ class SignalIntegrityScorer(DimensionScorer):
         """Check expected indicators against a trace record. Returns (name, correct) pairs."""
         checks: list[tuple[str, bool]] = []
         f = trace.fields
-        details = event.details
+
+        # Pick the best-matching sub-detail for IP checks when multiple
+        # sub-events exist (e.g., webshell access + reverse shell callback).
+        details = self._best_sub_detail(event, f) if event.sub_details else event.details
 
         # Username check
         username_fields = ["TargetUserName", "SubjectUserName", "principal", "username"]
@@ -660,6 +692,43 @@ class SignalIntegrityScorer(DimensionScorer):
                     break
 
         return checks
+
+    @staticmethod
+    def _best_sub_detail(event: ResolvedEvent, fields: dict) -> dict[str, Any]:
+        """Pick the sub-event detail dict whose IPs best match the trace record.
+
+        For compound storyline steps with multiple connections (e.g., webshell
+        access to 10.10.3.10 AND reverse shell to 198.51.100.30), the merged
+        details dict has last-writer-wins IPs. This selects the sub-event that
+        actually matches the trace.
+        """
+        if len(event.sub_details) <= 1:
+            return event.sub_details[0] if event.sub_details else event.details
+
+        # Extract IPs from the trace record
+        trace_ips: set[str] = set()
+        for ip_field in ("IpAddress", "id.orig_h", "id.resp_h", "src_ip", "dst_ip"):
+            val = fields.get(ip_field)
+            if val and val != "-":
+                trace_ips.add(val)
+
+        if not trace_ips:
+            return event.details  # No IPs in trace — fall back to merged
+
+        # Score each sub-detail by IP overlap with trace
+        best_detail = event.details
+        best_score = -1
+        for sd in event.sub_details:
+            score = 0
+            for key in ("source_ip", "dst_ip"):
+                val = sd.get(key)
+                if val and val in trace_ips:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_detail = sd
+
+        return best_detail
 
     def _score_pivot_linkability(self, resolved: list[ResolvedEvent]) -> SubScore:
         if len(resolved) < 2:
