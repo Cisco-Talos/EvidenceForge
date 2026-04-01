@@ -679,6 +679,31 @@ class BaselineMixin:
                     svc = "ldap" if port == 389 else "ssl"
                     _emit_conn(lx, dc, port, svc)
 
+    def _ensure_session_on_system(self, user: User, system, time, rng) -> str:
+        """Ensure the user has an active session on the target system.
+
+        Returns the logon_id for the session. If no session exists on
+        this specific system, creates a logon with an appropriate type
+        (interactive for workstations, network/RDP for servers).
+        """
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        session_on_system = next((s for s in sessions if s.system == system.hostname), None)
+        if session_on_system:
+            return session_on_system.logon_id
+
+        logon_time = time - timedelta(seconds=rng.randint(1, 5))
+        self.state_manager.set_current_time(logon_time)
+
+        sys_type = (system.type or "workstation").lower()
+        if sys_type in ("server", "domain_controller"):
+            logon_type = rng.choices([3, 10], weights=[70, 30], k=1)[0]
+        else:
+            logon_type = 2  # Interactive
+
+        return self.activity_generator.generate_logon(
+            user=user, system=system, time=logon_time, logon_type=logon_type
+        )
+
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
         """Generate suspicious-but-benign ambient noise events.
 
@@ -719,18 +744,9 @@ class BaselineMixin:
             elif pattern_type == "suspicious_cli":
                 result = generate_suspicious_cli(rng, enabled_users, systems, current_hour)
                 if result:
-                    # Need an active session for the process — reuse existing or create one
-                    sessions = self.state_manager.get_sessions_for_user(result["user"].username)
-                    if sessions:
-                        logon_id = sessions[0].logon_id
-                    else:
-                        logon_time = result["time"] - timedelta(seconds=rng.randint(1, 5))
-                        logon_id = self.activity_generator.generate_logon(
-                            user=result["user"],
-                            system=result["system"],
-                            time=logon_time,
-                            logon_type=2,
-                        )
+                    logon_id = self._ensure_session_on_system(
+                        result["user"], result["system"], result["time"], rng
+                    )
                     self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
@@ -864,17 +880,9 @@ class BaselineMixin:
                 result = gen_fn(rng, enabled_users, systems, current_hour)
                 if result:
                     self.state_manager.set_current_time(result["time"])
-                    sessions = self.state_manager.get_sessions_for_user(result["user"].username)
-                    if sessions:
-                        logon_id = sessions[0].logon_id
-                    else:
-                        logon_time = result["time"] - timedelta(seconds=rng.randint(1, 5))
-                        logon_id = self.activity_generator.generate_logon(
-                            user=result["user"],
-                            system=result["system"],
-                            time=logon_time,
-                            logon_type=2,
-                        )
+                    logon_id = self._ensure_session_on_system(
+                        result["user"], result["system"], result["time"], rng
+                    )
                     self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
