@@ -749,6 +749,15 @@ variants:
       - name: IpPort
         type: integer
         required: false
+      - name: CertIssuerName
+        type: string
+        required: false
+      - name: CertSerialNumber
+        type: string
+        required: false
+      - name: CertThumbprint
+        type: string
+        required: false
 
   # EventID 1102: Security log cleared
   - name: log_cleared
