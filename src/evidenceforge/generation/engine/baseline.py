@@ -43,7 +43,9 @@ from evidenceforge.generation.activity.suspicious_benign import (
     generate_service_account_anomaly,
     generate_suspicious_cli,
     generate_suspicious_dns,
+    generate_temp_dir_execution,
     generate_unusual_outbound,
+    generate_unusual_powershell,
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
@@ -851,6 +853,23 @@ class BaselineMixin:
                                 orig_bytes=rng.randint(50, 200),
                                 resp_bytes=rng.randint(50, 500),
                             )
+
+            elif pattern_type in ("temp_dir_execution", "unusual_powershell"):
+                gen_fn = (
+                    generate_temp_dir_execution
+                    if pattern_type == "temp_dir_execution"
+                    else generate_unusual_powershell
+                )
+                result = gen_fn(rng, enabled_users, systems, current_hour)
+                if result:
+                    self.state_manager.set_current_time(result["time"])
+                    self.activity_generator.generate_process(
+                        system=result["system"],
+                        user=result["user"],
+                        time=result["time"],
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
+                    )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
         """Terminate processes that have exceeded their expected lifetime.

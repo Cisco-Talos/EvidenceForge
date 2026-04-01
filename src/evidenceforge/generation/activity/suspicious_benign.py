@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Intensity mapping: level -> (mean events per hour)
 SUSPICIOUS_NOISE_INTENSITY = {
-    "low": 1.0,
-    "medium": 2.0,
-    "high": 3.0,
-    "ludicrous": 5.0,
+    "low": 2.0,
+    "medium": 4.0,
+    "high": 6.0,
+    "ludicrous": 10.0,
 }
 
 # PowerShell commands that look suspicious but are benign admin/dev tasks
@@ -133,6 +133,10 @@ def pick_suspicious_pattern(
     patterns.append(("suspicious_dns", 2))
     patterns.append(("unusual_outbound", 2))
     patterns.append(("scheduled_scan_overlap", 1))
+
+    # Process-based anomalies
+    patterns.append(("temp_dir_execution", 2))
+    patterns.append(("unusual_powershell", 2 if has_sysadmins else 1))
 
     pattern_names = [p[0] for p in patterns]
     pattern_weights = [p[1] for p in patterns]
@@ -418,6 +422,90 @@ def generate_scheduled_scan_overlap(
         "scanner": scanner,
         "targets": targets,
         "time": event_time,
+    }
+
+
+def generate_temp_dir_execution(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate a process execution from a temp directory (benign installer/update)."""
+    user = rng.choice(users)
+    system_candidates = [s for s in systems if s.assigned_user == user.username]
+    system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
+
+    os_cat = _get_os_category(system)
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+
+    if os_cat == "windows":
+        temp_exes = [
+            (r"C:\Users\{user}\AppData\Local\Temp\vs_installer.exe", "vs_installer.exe /quiet"),
+            (r"C:\Users\{user}\AppData\Local\Temp\ChromeSetup.exe", "ChromeSetup.exe --silent"),
+            (r"C:\Users\{user}\AppData\Local\Temp\msi_update.exe", "msi_update.exe /norestart"),
+            (
+                r"C:\Users\{user}\AppData\Local\Temp\dotnet-sdk-installer.exe",
+                "dotnet-sdk-installer.exe /install /quiet",
+            ),
+            (r"C:\Windows\Temp\KB5034441_update.exe", "KB5034441_update.exe /quiet"),
+        ]
+        exe_path, cmd = rng.choice(temp_exes)
+        exe_path = exe_path.replace("{user}", user.username)
+    else:
+        temp_exes = [
+            ("/tmp/pip-install-cache/setup.py", "python3 /tmp/pip-install-cache/setup.py install"),
+            ("/tmp/go-build-cache/main", "/tmp/go-build-cache/main --test"),
+            ("/tmp/npm-postinstall.sh", "bash /tmp/npm-postinstall.sh"),
+        ]
+        exe_path, cmd = rng.choice(temp_exes)
+
+    return {
+        "pattern": "temp_dir_execution",
+        "user": user,
+        "system": system,
+        "time": event_time,
+        "process_name": exe_path,
+        "command_line": cmd,
+    }
+
+
+def generate_unusual_powershell(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate PowerShell with suspicious-looking flags (benign admin scripts)."""
+    # Only Windows systems
+    windows_systems = [s for s in systems if "windows" in s.os.lower()]
+    if not windows_systems:
+        return None
+
+    user = rng.choice(users)
+    system_candidates = [s for s in windows_systems if s.assigned_user == user.username]
+    system = rng.choice(system_candidates) if system_candidates else rng.choice(windows_systems)
+
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+
+    suspicious_ps = [
+        r'powershell.exe -WindowStyle Hidden -Command "Get-WinEvent -LogName Security -MaxEvents 100 | Export-Csv C:\Reports\audit.csv"',
+        r"powershell.exe -EncodedCommand RwBlAHQALQBTAGUAcgB2AGkAYwBlAA==",  # Get-Service
+        r"powershell.exe -Exec Bypass -File C:\Scripts\deploy-monitoring.ps1",
+        r'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://internal-api.corp.local/health"',
+        r'powershell.exe -WindowStyle Hidden -Command "Compress-Archive -Path C:\Logs\*.log -DestinationPath C:\Backups\logs.zip"',
+    ]
+
+    cmd = rng.choice(suspicious_ps)
+    return {
+        "pattern": "unusual_powershell",
+        "user": user,
+        "system": system,
+        "time": event_time,
+        "process_name": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "command_line": cmd,
     }
 
 

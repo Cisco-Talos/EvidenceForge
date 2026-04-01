@@ -180,6 +180,8 @@ class TestPickSuspiciousPattern:
             "suspicious_dns",
             "unusual_outbound",
             "scheduled_scan_overlap",
+            "temp_dir_execution",
+            "unusual_powershell",
         }
         for seed in range(50):
             result = pick_suspicious_pattern(
