@@ -152,12 +152,15 @@
   14. Wrong Turn (+9h30m): Attacker RDPs to WS-FIN-01 using compromised dev account — discovers it's
       a finance workstation with no useful admin tools. Browses around, finds nothing useful, disconnects.
       Visible as RDP session + a few process events + logoff.
-  15. Mimikatz Attempt — Fails (+10h): Attacker uploads mimikatz to WS-DEV-02, runs it — but Defender
-      quarantines it immediately. Process create + immediate terminate (< 1 second). Attacker needs
-      to try a different approach.
-  16. Mimikatz with AV Bypass (+10h30m): Attacker renames and packs mimikatz as ms-index-service.exe,
-      tries again. This time succeeds: process_access (0x1FFFFF) and create_remote_thread targeting
-      lsass.exe. Dumps domain admin credentials.
+  15. Mimikatz Attempt — Insufficient Privileges (+10h): Attacker runs mimikatz (disguised as
+      ms-index-service.exe) on WS-DEV-02 under the compromised developer account. Process starts
+      but fails to open lsass.exe — access denied because the developer account lacks
+      SeDebugPrivilege. Process create + quick terminate (< 5 seconds). Attacker realizes they
+      need elevated credentials.
+  16. Mimikatz with Domain Admin (+10h30m): Attacker uses stolen domain admin credentials from the
+      password spray to spawn an elevated process (runas /user:DOMAIN\admin_account). Re-runs
+      mimikatz as ms-index-service.exe — succeeds: process_access (0x1FFFFF) and
+      create_remote_thread targeting lsass.exe. Dumps additional credentials.
   17. C2 Check-in (+11h): HTTPS beacon from WS-DEV-02 to second C2 at 198.51.100.31:443.
       Attacker now has two C2 channels (WEB-EXT-01 and WS-DEV-02).
 
