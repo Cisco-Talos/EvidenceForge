@@ -864,10 +864,22 @@ class BaselineMixin:
                 result = gen_fn(rng, enabled_users, systems, current_hour)
                 if result:
                     self.state_manager.set_current_time(result["time"])
+                    sessions = self.state_manager.get_sessions_for_user(result["user"].username)
+                    if sessions:
+                        logon_id = sessions[0].logon_id
+                    else:
+                        logon_time = result["time"] - timedelta(seconds=rng.randint(1, 5))
+                        logon_id = self.activity_generator.generate_logon(
+                            user=result["user"],
+                            system=result["system"],
+                            time=logon_time,
+                            logon_type=2,
+                        )
                     self.activity_generator.generate_process(
-                        system=result["system"],
                         user=result["user"],
+                        system=result["system"],
                         time=result["time"],
+                        logon_id=logon_id,
                         process_name=result["process_name"],
                         command_line=result["command_line"],
                     )
