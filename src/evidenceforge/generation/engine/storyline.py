@@ -874,8 +874,11 @@ class StorylineMixin:
             # Determine conn_state from firewall drop_mode
             conn_state = self._get_firewall_deny_conn_state()
 
+            # Use source_ip override if specified, otherwise use system IP
+            scan_src_ip = spec.source_ip or system.ip
+
             # Resolve interfaces
-            src_iface = self._resolve_firewall_interface(system.ip)
+            src_iface = self._resolve_firewall_interface(scan_src_ip)
 
             # Generate deny connections: targets × ports
             spacing = 1.0 / spec.scan_rate
@@ -890,7 +893,7 @@ class StorylineMixin:
                     from evidenceforge.events.contexts import FirewallContext
 
                     self.activity_generator.generate_connection(
-                        src_ip=system.ip,
+                        src_ip=scan_src_ip,
                         dst_ip=target_ip,
                         time=scan_time,
                         dst_port=port,
@@ -922,8 +925,11 @@ class StorylineMixin:
             # Determine conn_state from firewall drop_mode
             conn_state = self._get_firewall_deny_conn_state()
 
+            # Use source_ip override if specified, otherwise use system IP
+            c2_src_ip = spec.source_ip or system.ip
+
             # Resolve interfaces
-            src_iface = self._resolve_firewall_interface(system.ip)
+            src_iface = self._resolve_firewall_interface(c2_src_ip)
             dst_iface = self._resolve_firewall_interface(spec.dst_ip)
 
             # Generate periodic denied attempts
@@ -937,7 +943,7 @@ class StorylineMixin:
                 self.state_manager.set_current_time(attempt_time)
 
                 self.activity_generator.generate_connection(
-                    src_ip=system.ip,
+                    src_ip=c2_src_ip,
                     dst_ip=spec.dst_ip,
                     time=attempt_time,
                     dst_port=spec.dst_port,

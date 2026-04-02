@@ -22,6 +22,7 @@
 
 """Snort/Suricata alert emitter."""
 
+import hashlib
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -51,8 +52,13 @@ class SnortEmitter(SensorMultiplexEmitter):
         ids = event.ids
         net = event.network
 
+        # Add microsecond jitter for realistic Snort timestamps
+        ts = event.timestamp
+        us_seed = int(hashlib.md5(f"{ts.isoformat()}{ids.sid}".encode()).hexdigest()[:6], 16)
+        ts = ts.replace(microsecond=(us_seed % 1000) * 1000)
+
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": ts,
             "sid": ids.sid,
             "message": ids.message,
             "classification": ids.classification,

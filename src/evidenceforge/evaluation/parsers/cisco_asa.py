@@ -38,11 +38,13 @@ ASA_HEADER = re.compile(
     r"(.*)$"  # message body
 )
 
-# Built connection: "Built {inbound/outbound} TCP connection 12345 for inside:10.0.10.50/54321 ..."
+# Built connection: "Built {inbound/outbound} TCP connection 12345 for inside:10.0.10.50/54321 (mapped/port) to ..."
 BUILT_TCP_UDP = re.compile(
     r"Built\s+(?:inbound|outbound)\s+(?:TCP|UDP)\s+connection\s+(\d+)\s+for\s+"
-    r"(\w+):(\S+)/(\d+)\s+\(\S+\)\s+to\s+"
-    r"(\w+):(\S+)/(\d+)"
+    r"(\w+):(\S+)/(\d+)\s+"
+    r"\((\S+)/(\d+)\)\s+to\s+"
+    r"(\w+):(\S+)/(\d+)\s+"
+    r"\((\S+)/(\d+)\)"
 )
 
 # Built ICMP: "Built {inbound/outbound} ICMP connection for faddr iface:ip/type ..."
@@ -71,6 +73,21 @@ DENY = re.compile(
     r"dst\s+(\w+):(\S+?)(?:/(\d+))?\s+"
     r"(?:\(type\s+(\d+),\s*code\s+(\d+)\)\s+)?"
     r'by\s+access-group\s+"([^"]+)"'
+)
+
+# NAT Built 305011: "Built dynamic TCP translation from inside:10.0.10.50/54321 to outside:198.51.100.1/12345"
+NAT_BUILT = re.compile(
+    r"Built\s+(dynamic|static)\s+(\w+)\s+translation\s+from\s+"
+    r"(\w+):(\S+)/(\d+)\s+to\s+"
+    r"(\w+):(\S+)/(\d+)"
+)
+
+# NAT Teardown 305012: "Teardown dynamic TCP translation from inside:10.0.10.50/54321 to ..."
+NAT_TEARDOWN = re.compile(
+    r"Teardown\s+(dynamic|static)\s+(\w+)\s+translation\s+from\s+"
+    r"(\w+):(\S+)/(\d+)\s+to\s+"
+    r"(\w+):(\S+)/(\d+)\s+"
+    r"duration\s+(\S+)"
 )
 
 # Threat detection 733100: "[Scanning] drop rate-1 exceeded. Current burst rate is ..."
@@ -155,9 +172,13 @@ class CiscoAsaParser(LogParser):
                 fields["src_interface"] = match.group(2)
                 fields["src_ip"] = match.group(3)
                 fields["src_port"] = int(match.group(4))
-                fields["dst_interface"] = match.group(5)
-                fields["dst_ip"] = match.group(6)
-                fields["dst_port"] = int(match.group(7))
+                fields["mapped_src_ip"] = match.group(5)
+                fields["mapped_src_port"] = int(match.group(6))
+                fields["dst_interface"] = match.group(7)
+                fields["dst_ip"] = match.group(8)
+                fields["dst_port"] = int(match.group(9))
+                fields["mapped_dst_ip"] = match.group(10)
+                fields["mapped_dst_port"] = int(match.group(11))
         elif msg_id in (302020,):
             match = BUILT_ICMP.search(message)
             if match:
@@ -198,6 +219,29 @@ class CiscoAsaParser(LogParser):
                     fields["icmp_type"] = int(match.group(8))
                     fields["icmp_code"] = int(match.group(9))
                 fields["access_group"] = match.group(10)
+        elif msg_id == 305011:
+            match = NAT_BUILT.search(message)
+            if match:
+                fields["nat_type"] = match.group(1)
+                fields["protocol"] = match.group(2)
+                fields["src_interface"] = match.group(3)
+                fields["real_ip"] = match.group(4)
+                fields["real_port"] = int(match.group(5))
+                fields["dst_interface"] = match.group(6)
+                fields["mapped_ip"] = match.group(7)
+                fields["mapped_port"] = int(match.group(8))
+        elif msg_id == 305012:
+            match = NAT_TEARDOWN.search(message)
+            if match:
+                fields["nat_type"] = match.group(1)
+                fields["protocol"] = match.group(2)
+                fields["src_interface"] = match.group(3)
+                fields["real_ip"] = match.group(4)
+                fields["real_port"] = int(match.group(5))
+                fields["dst_interface"] = match.group(6)
+                fields["mapped_ip"] = match.group(7)
+                fields["mapped_port"] = int(match.group(8))
+                fields["duration"] = match.group(9)
         elif msg_id == 733100:
             match = THREAT_DETECTION.search(message)
             if match:

@@ -172,6 +172,106 @@ class TestParseThreatDetection:
         assert not rec.parse_errors
 
 
+class TestParseNatRecords:
+    def test_parse_305011_dynamic_tcp(self, tmp_path):
+        """305011 Built dynamic TCP translation should parse NAT fields."""
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-305011: Built dynamic TCP translation "
+            "from inside:10.0.10.50/54321 to outside:198.51.100.1/12345\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 305011
+        assert rec.fields["severity"] == 6
+        assert rec.fields["nat_type"] == "dynamic"
+        assert rec.fields["protocol"] == "TCP"
+        assert rec.fields["src_interface"] == "inside"
+        assert rec.fields["real_ip"] == "10.0.10.50"
+        assert rec.fields["real_port"] == 54321
+        assert rec.fields["dst_interface"] == "outside"
+        assert rec.fields["mapped_ip"] == "198.51.100.1"
+        assert rec.fields["mapped_port"] == 12345
+        assert not rec.parse_errors
+
+    def test_parse_305011_static_udp(self, tmp_path):
+        """305011 Built static UDP translation should parse correctly."""
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-305011: Built static UDP translation "
+            "from dmz:172.16.0.5/443 to outside:203.0.113.5/443\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 305011
+        assert rec.fields["nat_type"] == "static"
+        assert rec.fields["protocol"] == "UDP"
+        assert rec.fields["src_interface"] == "dmz"
+        assert rec.fields["real_ip"] == "172.16.0.5"
+        assert rec.fields["real_port"] == 443
+        assert rec.fields["dst_interface"] == "outside"
+        assert rec.fields["mapped_ip"] == "203.0.113.5"
+        assert rec.fields["mapped_port"] == 443
+        assert not rec.parse_errors
+
+    def test_parse_305012_teardown_with_duration(self, tmp_path):
+        """305012 Teardown translation should parse with duration field."""
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:24:28 fw01 %ASA-6-305012: Teardown dynamic TCP translation "
+            "from inside:10.0.10.50/54321 to outside:198.51.100.1/12345 duration 0:01:23\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 305012
+        assert rec.fields["duration"] == "0:01:23"
+        assert rec.fields["real_ip"] == "10.0.10.50"
+        assert rec.fields["mapped_ip"] == "198.51.100.1"
+        assert not rec.parse_errors
+
+    def test_parse_built_with_different_mapped_ips(self, tmp_path):
+        """302013 Built with parenthesized mapped IPs differing from real IPs."""
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection "
+            "100042 for inside:10.0.10.50/54321 (198.51.100.1/12345) to "
+            "outside:203.0.113.50/443 (203.0.113.50/443)\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["src_ip"] == "10.0.10.50"
+        assert rec.fields["mapped_src_ip"] == "198.51.100.1"
+        assert rec.fields["mapped_src_port"] == 12345
+        assert rec.fields["dst_ip"] == "203.0.113.50"
+        assert rec.fields["mapped_dst_ip"] == "203.0.113.50"
+        assert not rec.parse_errors
+
+    def test_parse_built_identity_nat(self, tmp_path):
+        """302013 Built where parens match real (identity NAT) should not crash."""
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection "
+            "100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to "
+            "outside:203.0.113.50/443 (203.0.113.50/443)\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        # Identity NAT: mapped should equal real (or field may not be set)
+        mapped_src = rec.fields.get("mapped_src_ip", rec.fields.get("src_ip"))
+        assert mapped_src == "10.0.10.50"
+        assert not rec.parse_errors
+
+
 class TestMalformedLines:
     def test_garbage_line(self, tmp_path):
         log = tmp_path / "cisco_asa.log"

@@ -53,12 +53,15 @@ logger = logging.getLogger(__name__)
 class _SingleZeekWriter:
     """Writes Zeek NDJSON for one sensor. Thread-safe via lock."""
 
-    def __init__(self, output_path: Path, buffer_size: int = 10000):
+    def __init__(
+        self, output_path: Path, buffer_size: int = 10000, sort_before_flush: bool = False
+    ):
         self.output_path = output_path
         self.buffer: list[str] = []
         self.buffer_size = buffer_size
         self.event_count = 0
         self._lock = Lock()
+        self._sort_before_flush = sort_before_flush
 
     def write(self, rendered: str) -> None:
         with self._lock:
@@ -74,6 +77,8 @@ class _SingleZeekWriter:
     def _flush_unlocked(self) -> None:
         if not self.buffer:
             return
+        if self._sort_before_flush:
+            self.buffer.sort()  # Lexicographic sort works for ASA syslog format
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
@@ -95,6 +100,7 @@ class SensorMultiplexEmitter(LogEmitter):
     _log_filename: str = "output.json"  # Override in subclasses (e.g., "conn.json")
     _flat_filename: str = ""  # Override for backward-compat flat output (e.g., "zeek_conn.json")
     _supported_types: set[str] = set()
+    _sort_before_flush: bool = False
 
     def __init__(
         self,
@@ -132,7 +138,9 @@ class SensorMultiplexEmitter(LogEmitter):
                 # No sensors configured → flat output using format name
                 flat_name = self._flat_filename or self._log_filename
                 path = self._base_dir / flat_name
-            writer = _SingleZeekWriter(path, self._buffer_size)
+            writer = _SingleZeekWriter(
+                path, self._buffer_size, sort_before_flush=self._sort_before_flush
+            )
             self._writers[sensor_hostname] = writer
             logger.debug(f"Created Zeek writer: {path}")
             return writer
@@ -199,22 +207,37 @@ class SensorMultiplexEmitter(LogEmitter):
         filters out non-IDS connection events).
         """
         sensor_hostnames = event_data.pop("_sensor_hostnames", None)
+        nat_swaps = event_data.pop("_nat_swaps_by_sensor", None)
         targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
 
-        if not targets or len(targets) <= 1:
-            # Single sensor or no sensors — render once
+        if not targets or (len(targets) <= 1 and not nat_swaps):
+            # Single sensor or no sensors, no NAT — render once
             rendered = self._render_event(event_data)
             if rendered is None:
                 return
             self.emit_to_sensors(rendered, sensor_hostnames)
         else:
             # Multiple sensors: each gets a deterministic unique UID
+            # and potentially NAT-swapped IPs
             original_uid = event_data.get("uid")
             for i, hostname in enumerate(targets):
+                render_data = event_data
+                # Apply NAT IP swaps for post-NAT sensors
+                if nat_swaps and hostname in nat_swaps:
+                    render_data = dict(event_data)  # shallow copy
+                    swaps = nat_swaps[hostname]
+                    if "src_ip" in swaps:
+                        render_data["id.orig_h"] = swaps["src_ip"]
+                    if "src_port" in swaps:
+                        render_data["id.orig_p"] = swaps["src_port"]
+                    if "dst_ip" in swaps:
+                        render_data["id.resp_h"] = swaps["dst_ip"]
+                    if "dst_port" in swaps:
+                        render_data["id.resp_p"] = swaps["dst_port"]
                 if i > 0 and original_uid:
                     # Derive a deterministic UID for this sensor
-                    event_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
-                rendered = self._render_event(event_data)
+                    render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
+                rendered = self._render_event(render_data)
                 if rendered is None:
                     return
                 self._get_writer(hostname).write(rendered)

@@ -232,6 +232,8 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 | 302020 | 6 (info) | ICMP | Built inbound/outbound ICMP connection |
 | 302021 | 6 (info) | ICMP | Teardown ICMP connection |
 | 106023 | 4 (warn) | any | Deny by access-group |
+| 305011 | 6 (info) | any | Built dynamic/static NAT translation |
+| 305012 | 6 (info) | any | Teardown dynamic/static NAT translation |
 | 733100 | 4 (warn) | — | Threat detection scanning alert (automatic, rate-based) |
 
 **Example records:**
@@ -244,6 +246,8 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 
 **Threat detection (733100):** The ASA emitter automatically tracks per-source-IP deny rates. When both burst rate (default 10 drops/sec over 20s) and average rate (default 5 drops/sec over 60s) are exceeded, a 733100 alert fires. Can re-fire after a 20-second cooldown if rates remain elevated. Configurable via `threat_detection_rate` on the firewall sensor (set to 0 to disable).
 
+**NAT translation (305011/305012):** When `nat_rules` are configured on the firewall sensor, permitted connections that cross the NAT boundary produce 305011 (Built) and 305012 (Teardown) translation records alongside the normal 302013/302014 connection records. Built messages show post-NAT mapped addresses in parentheses. Outside Zeek sensors see post-NAT IPs; inside Zeek sensors see real IPs.
+
 **Baseline deny generation:** When `deny_ratio > 0` on the firewall sensor, the baseline generates denied connection attempts proportional to allowed traffic. Patterns include external scanning (60%), cross-segment blocked (20%), outbound blocked (10%), and ICMP noise (10%).
 
 **Storyline event types:** `port_scan` generates bulk 106023 denies for reconnaissance/scanning. `blocked_c2` generates periodic 106023 denies for blocked malware beaconing. Both produce correlated Zeek conn.log entries on sensors that can see the source-side traffic. Port scans with sufficient rate automatically trigger 733100 threat detection alerts.
@@ -251,7 +255,6 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 **Source-only visibility:** Denied connections are only visible to sensors on the source side of the firewall. Sensors on the destination side do not see blocked traffic.
 
 **Known Limitations:**
-- No NAT translation (305011/305012) — mapped addresses equal real addresses
 - Simplified message format — omits IDFW user, internal port numbers, rx_ring metadata
 
 ---

@@ -5,9 +5,9 @@
 
   Duration: 14 hours, starting 2024-03-18T12:00:00Z. Timezone: America/Chicago.
 
-  Systems (mix of Windows and Linux, ~20 total):
-  - 13 Windows workstations (Windows 10/11) across departments: dev, IT, security, finance, data
-  analytics, executive, PM, HR, sales, legal, marketing, front desk
+  Systems (mix of Windows and Linux, ~20+ total):
+  - One Windows workstation (Windows 10/11) per user, distributed across departments: dev, IT,
+  security, finance, data analytics, executive, PM, HR, sales, legal, marketing, front desk
   - 2 Windows servers: DC-01 (domain controller, Server 2022), FILE-SRV-01 (file server, Server 2019)
   - 5 Linux servers: WEB-EXT-01 (Ubuntu, web server in DMZ with roles: [web_server]), PROXY-01 (Ubuntu,
   roles: [forward_proxy]), APP-INT-01 (Ubuntu, internal app server), DB-PROD-01 (CentOS, MySQL),
@@ -25,7 +25,11 @@
   - snort-perimeter: TAP, monitors dmz, inbound
   - fw-perimeter: firewall, TAP, monitors corporate_lan + server_vlan + dmz, bidirectional,
     log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside, dmz: dmz},
-    default_action: deny, deny_ratio: 5.0, policy:
+    default_action: deny, deny_ratio: 5.0, nat_rules:
+      - type: dynamic_pat
+        src: [corporate_lan, server_vlan]
+        mapped_ip: 45.33.32.1
+    policy:
       - {src: external, dst: dmz, ports: [80, 443]}          # Allow web traffic to DMZ
       - {src: corporate_lan, dst: any}                         # Users can reach anything
       - {src: server_vlan, dst: external, ports: [80, 443, 53]} # Servers: web + DNS out
@@ -33,9 +37,8 @@
       - {src: dmz, dst: server_vlan, ports: [3306]}            # DMZ web → database
 
   Users: 17 users spanning all 15 built-in personas. Realistic diverse names (first.last format). Every
-   user must have a primary_system assigned to one of the workstations (users may share workstations if
-   needed — 17 users across 13 workstations means some sharing). Service accounts: svc_backup,
-   svc_monitor, svc_sqlreader.
+   user must have a dedicated primary_system workstation (1:1 mapping — create one workstation per user).
+   Service accounts: svc_backup, svc_monitor, svc_sqlreader.
 
   Stale accounts (3):
   - jennifer.walsh: last_active 2023-11-15, reason "Transferred to London office"
@@ -58,9 +61,9 @@
   Attack storyline — APT via web app exploit, full kill chain:
   1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
   (dhcp_lease event with explicit MAC address). Actor: attacker on rogue device.
-  2. Initial Access (+1h): External attacker (203.0.113.45) scans and exploits SQL injection on
+  2. Initial Access (+1h): External attacker (185.70.41.45) scans and exploits SQL injection on
   WEB-EXT-01's EHR portal. Actor: root.
-  2. Execution (+1h20m): Web shell upload, reverse shell to C2 at 198.51.100.30:8443. Use real
+  2. Execution (+1h20m): Web shell upload, reverse shell to C2 at 45.33.32.30:8443. Use real
   base64-encoded reverse shell payload.
   3. Discovery (+1h40m–2h): Network enumeration from WEB-EXT-01 — ip addr, /etc/hosts, nmap ping sweep
   and port scan of server_vlan.
@@ -78,21 +81,21 @@
   explicit account_created and group_member_added events).
   12. Persistence (+5h30m): Install service "HealthMonitorSvc" (svchost_helper.exe) and create scheduled
   task "\Microsoft\Windows\Maintenance\SystemHealthCheck" on DC-01.
-  13. C2 (+5h45m): HTTPS beacon from DC-01 to 198.51.100.30:443.
+  13. C2 (+5h45m): HTTPS beacon from DC-01 to 45.33.32.30:443.
   14. Collection (+6h30m): Authenticate to FILE-SRV-01 with backdoor account, stage financial and patient
    data, compress with PowerShell.
-  15. Exfiltration (+7h15m): Upload archive to cdn-assets-update.com (198.51.100.30) over HTTPS.
+  15. Exfiltration (+7h15m): Upload archive to cdn-assets-update.com (45.33.32.30) over HTTPS.
   16. Database Access (+8h): SSH to DB-PROD-01, mysqldump patient/insurance tables, gzip and SCP back to
   APP-INT-01.
   17. Defense Evasion (+9h): Clear bash history on Linux, encoded PowerShell download (real UTF-16LE
   base64), clear Security event log on DC-01 (with explicit log_cleared event).
   18. Ongoing C2 (+10h, +12h): Periodic beacons from WEB-EXT-01 and DC-01.
-  19. Port Scan (+0h30m): External attacker (203.0.113.45) scans the DMZ segment looking for
+  19. Port Scan (+0h30m): External attacker (185.70.41.45) scans the DMZ segment looking for
   services before the initial exploit. Use port_scan event with target_segment: dmz, ports:
   [22, 80, 443, 8080, 8443, 3306], scan_rate: 50. This should produce firewall denies visible
   to the external Zeek/Snort sensors but NOT internal sensors.
   20. Blocked C2 (+6h): After compromising DC-01, attacker malware tries to beacon directly
-  from DC-01 to 198.51.100.30:443 — but the firewall policy doesn't allow servers to reach
+  from DC-01 to 45.33.32.30:443 — but the firewall policy doesn't allow servers to reach
   external IPs on arbitrary ports. Use blocked_c2 event with interval: "30m", duration: "6h".
   The denied outbound attempts should be visible to internal sensors only.
 
@@ -105,7 +108,7 @@
   - Use connection events with HTTP fields (method, uri, status_code, user_agent) for web access log entries showing the SQLi and web shell access — NOT raw events
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
-  - External IPs from RFC 5737 ranges
+  - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
   - Baseline activity: medium intensity, medium variation
 
   eCAR format coverage (verify in generated data):
@@ -153,6 +156,10 @@
   - Deny baseline volume proportional to deny_ratio (~5x allows)
   - Firewall policy enforcement: external → corporate_lan denied, external → dmz:80/443 allowed
   - Storyline connections through the firewall produce ASA allow records correlated with Zeek conn records
+  - 305011 (Built NAT translation) present when nat_rules configured
+  - 305012 (Teardown NAT translation) present
+  - Built messages show mapped IPs in parentheses that differ from real IPs
+  - Outside Zeek sensors show post-NAT source IPs; inside sensors show real IPs
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections in zeek_dns/zeek_conn; Kerberos 4768/4769

@@ -405,6 +405,71 @@ class TestResolveHostname:
         assert len(groups_orig) > 0
 
 
+class TestNatCrossSourceCorrelation:
+    """Tests for NAT-aware cross-source indexing."""
+
+    def test_nat_record_indexed_by_both_real_and_mapped_ip(self):
+        """cisco_asa record with mapped_src_ip should be indexed under both IPs."""
+        asa_rec = _record(
+            "cisco_asa",
+            {
+                "hostname": "fw01",
+                "src_ip": "10.0.10.50",
+                "mapped_src_ip": "198.51.100.1",
+                "dst_ip": "203.0.113.50",
+                "msg_id": 302013,
+            },
+            ts=T0,
+        )
+        records = {"cisco_asa": [asa_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        # Both the real IP and the mapped IP should appear as index keys
+        real_key = f"10.0.10.50|{bucket}"
+        mapped_key = f"198.51.100.1|{bucket}"
+        assert real_key in index, "Real src_ip should be indexed"
+        assert mapped_key in index, "Mapped src_ip should be indexed"
+        assert "cisco_asa" in index[real_key]
+        assert "cisco_asa" in index[mapped_key]
+
+    def test_outside_zeek_correlates_with_asa_via_mapped_ip(self):
+        """Zeek record with orig_h matching ASA mapped_src_ip should share index bucket."""
+        mapped_ip = "198.51.100.1"
+        asa_rec = _record(
+            "cisco_asa",
+            {
+                "hostname": "fw01",
+                "src_ip": "10.0.10.50",
+                "mapped_src_ip": mapped_ip,
+                "dst_ip": "203.0.113.50",
+                "msg_id": 302013,
+            },
+            ts=T0,
+        )
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": mapped_ip,
+                "id.resp_h": "203.0.113.50",
+                "id.orig_p": 12345,
+                "id.resp_p": 443,
+            },
+            ts=T0 + timedelta(seconds=10),
+        )
+        records = {"cisco_asa": [asa_rec], "zeek_conn": [zeek_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        key = f"{mapped_ip}|{bucket}"
+        assert key in index, "Mapped IP should be indexed"
+        formats_in_bucket = set(index[key].keys())
+        assert "cisco_asa" in formats_in_bucket
+        assert "zeek_conn" in formats_in_bucket
+
+
 class TestFQDNSourceCorrectness:
     """Source correctness should handle FQDN records correctly."""
 

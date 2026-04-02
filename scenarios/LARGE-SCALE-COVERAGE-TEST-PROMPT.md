@@ -11,21 +11,12 @@
 
   Scenario name: apt-healthcare-breach-large
 
-  Systems (mix of Windows and Linux, ~50 total):
+  Systems (mix of Windows and Linux, ~75+ total):
 
-  Windows workstations (25, Windows 10/11) across departments:
-  - 4 development: WS-DEV-01 through WS-DEV-04
-  - 3 IT/infrastructure: WS-IT-01 through WS-IT-03
-  - 2 security operations: WS-SEC-01, WS-SEC-02
-  - 3 finance/accounting: WS-FIN-01 through WS-FIN-03
-  - 2 data analytics: WS-DATA-01, WS-DATA-02
-  - 2 executive: WS-EXEC-01, WS-EXEC-02
-  - 2 project management: WS-PM-01, WS-PM-02
-  - 2 HR: WS-HR-01, WS-HR-02
-  - 2 sales: WS-SALES-01, WS-SALES-02
-  - 1 legal: WS-LEGAL-01
-  - 1 marketing: WS-MKT-01
-  - 1 front desk/reception: WS-FRONT-01
+  Windows workstations (Windows 10/11) — one per user (see Users section), with naming convention
+  WS-{DEPT}-{NN} across departments: dev, IT, security, finance, data analytics, executive, PM, HR,
+  sales, legal, marketing, front desk. Exception: IT helpdesk staff (sysadmin persona) share 2-3
+  workstations to represent shift coverage (e.g., WS-IT-HELP-01, WS-IT-HELP-02).
 
   Windows servers (10, Server 2019/2022):
   - DC-01 (domain controller, Server 2022, roles: [domain_controller])
@@ -57,7 +48,7 @@
   - BUILD-01 (Ubuntu, Jenkins CI/CD server)
 
   Network (7 segments):
-  - corporate_lan (10.10.1.0/23) — workstations (larger subnet for 25 hosts)
+  - corporate_lan (10.10.0.0/22) — workstations (larger subnet for ~50 hosts)
   - server_vlan (10.10.2.0/24) — DCs, file servers, Exchange, print, WSUS, SCCM, RDS, NPS
   - app_vlan (10.10.5.0/24) — app servers, build server, internal web, internal DNS
   - dmz (10.10.3.0/24, exposure: both) — external web servers, external DNS, reverse proxy, proxy
@@ -76,7 +67,14 @@
   - fw-external: firewall, TAP, monitors corporate_lan + server_vlan + dmz + app_vlan, bidirectional,
     log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside,
     app_vlan: inside, dmz: dmz, management_vlan: inside, vpn_pool: inside},
-    default_action: deny, deny_ratio: 8.0, policy:
+    default_action: deny, deny_ratio: 8.0, nat_rules:
+      - type: dynamic_pat
+        src: [corporate_lan, server_vlan, app_vlan]
+        mapped_ip: 45.33.32.1
+      - type: static
+        real_ip: 10.10.3.10
+        mapped_ip: 185.70.41.10
+    policy:
       - {src: external, dst: dmz, ports: [80, 443, 53]}       # Allow web + DNS to DMZ
       - {src: corporate_lan, dst: any}                          # Users can reach anything
       - {src: server_vlan, dst: external, ports: [80, 443, 53, 25]} # Servers: web, DNS, SMTP out
@@ -101,10 +99,10 @@
   in the database segment is only visible via host-level logs, not network).
 
   Users: 55 users spanning all 15 built-in personas. Realistic diverse names (first.last format).
-  Every user must have a primary_system assigned. With 55 users and 25 workstations, many users share
-  workstations (realistic for shift workers, shared departmental machines, hot-desking). Ensure at
-  least 5 users are designated as remote/VPN users whose primary_system is a workstation but who
-  also generate VPN logon activity.
+  Each user has a dedicated primary_system workstation (1:1 mapping), except for IT helpdesk staff
+  (sysadmin persona) who share 2-3 workstations to represent shift coverage. Ensure at least 5 users
+  are designated as remote/VPN users whose primary_system is a workstation but who also generate VPN
+  logon activity.
 
   Service accounts (8): svc_backup, svc_monitor, svc_sqlreader, svc_exchange, svc_sccm, svc_wsus,
   svc_jenkins, svc_replication.
@@ -146,7 +144,7 @@
   Phase 1: Initial Access and Fumbling (+2h to +6h, Monday morning)
   1. Rogue Device (+2h): Attacker plugs rogue laptop into corporate_lan, obtains IP via DHCP
      (dhcp_lease event with explicit MAC address).
-  2a. External Port Scan (+2h10m): External attacker (203.0.113.45) scans the DMZ segment for services.
+  2a. External Port Scan (+2h10m): External attacker (185.70.41.45) scans the DMZ segment for services.
      Use port_scan event with target_segment: dmz, ports: [22, 80, 443, 8080, 8443, 3306, 5432],
      scan_rate: 200, target_count: 15. Produces ASA 106023 denies + Zeek S0/REJ conn entries on
      external-facing sensors only.
@@ -157,7 +155,7 @@
   4. Successful SQLi (+3h): Attacker pivots to WEB-EXT-01 EHR portal, finds SQL injection.
      Multiple probing requests before successful exploitation.
   5. Web Shell Upload (+3h20m): Upload web shell, test execution. Reverse shell to C2 at
-     198.51.100.30:8443. Use real base64-encoded payload.
+     45.33.32.30:8443. Use real base64-encoded payload.
   6. Initial Discovery (+3h40m–4h): Network enumeration from WEB-EXT-01 — ip addr, /etc/hosts,
      /etc/resolv.conf, ping sweep of nearby subnets. Attacker discovers DMZ topology.
   7. Dead End (+4h15m): Attacker tries to SSH to PROXY-01 — connection refused (SSH disabled on proxy).
@@ -188,7 +186,7 @@
       password spray to spawn an elevated process (runas /user:DOMAIN\admin_account). Re-runs
       mimikatz as ms-index-service.exe — succeeds: process_access (0x1FFFFF) and
       create_remote_thread targeting lsass.exe. Dumps additional credentials.
-  17. C2 Check-in (+11h): HTTPS beacon from WS-DEV-02 to second C2 at 198.51.100.31:443.
+  17. C2 Check-in (+11h): HTTPS beacon from WS-DEV-02 to second C2 at 45.33.32.31:443.
       Attacker now has two C2 channels (WEB-EXT-01 and WS-DEV-02).
 
   Phase 3: Domain Compromise (+18h to +28h, Tuesday morning)
@@ -209,7 +207,7 @@
       firewall (DC can't reach external IPs). Use connection event with conn_state: REJ and
       firewall context (existing capability). Attacker must find another path.
   23b. Blocked C2 from DC (+20h): Malware installed on DC-01 attempts to beacon to second C2 at
-      198.51.100.31:443 every 45 minutes. Use blocked_c2 with interval: "45m", duration: "24h",
+      45.33.32.31:443 every 45 minutes. Use blocked_c2 with interval: "45m", duration: "24h",
       jitter: 0.15. Denied by fw-external policy (server_vlan can't reach external on 443).
       Visible to internal sensors only.
   24. Pivot Through Proxy (+20h30m): Attacker discovers PROXY-01 can reach external. Attempts to
@@ -230,7 +228,7 @@
   31. Email Access (+35h): Authenticate to EXCH-01, search mailboxes of executives and legal team
       for M&A related keywords. Export selected emails.
   32. Exfiltration — Slow (+36h to +42h): Staged exfiltration over 6 hours via HTTPS through
-      WEB-EXT-01 to cdn-assets-update.com (198.51.100.30). Multiple small uploads to avoid
+      WEB-EXT-01 to cdn-assets-update.com (45.33.32.30). Multiple small uploads to avoid
       bandwidth alerts. Each upload is a separate connection event.
 
   Phase 5: Cleanup and Persistence (+44h to +50h, Wednesday morning)
@@ -256,7 +254,7 @@
     entries showing the SQLi, web shell access, and failed exploit attempts — NOT raw events
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
-  - External IPs from RFC 5737 ranges (203.0.113.0/24, 198.51.100.0/24, 192.0.2.0/24)
+  - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
   - Baseline activity: high intensity, high variation (more users = more noise to hide in)
 
   eCAR format coverage (verify in generated data):
@@ -298,6 +296,10 @@
     DC → external is not in fw-external's policy
   - Attack lateral movement through allowed paths (dmz → app_vlan, app_vlan → database_vlan)
     produces ASA allow records correlated with Zeek conn records
+  - 305011 (Built NAT translation) present when nat_rules configured on fw-external
+  - 305012 (Teardown NAT translation) present
+  - Built messages show mapped IPs in parentheses that differ from real IPs
+  - Outside Zeek sensors show post-NAT source IPs; inside sensors show real IPs
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections; Kerberos precede domain logons;

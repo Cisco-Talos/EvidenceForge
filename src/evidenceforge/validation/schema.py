@@ -1325,6 +1325,20 @@ class ScenarioValidator:
                     )
                 )
 
+            # Non-firewall with NAT rules
+            if sensor.type != "firewall" and sensor.nat_rules:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"{prefix}.nat_rules",
+                        message=(
+                            f"Sensor '{sensor.name}' (type={sensor.type}) has "
+                            f"nat_rules but only firewall-type sensors support NAT"
+                        ),
+                        suggestion="Set type to 'firewall' or remove nat_rules",
+                    )
+                )
+
             # Non-firewall with policy
             if sensor.type != "firewall" and sensor.policy:
                 self.issues.append(
@@ -1387,5 +1401,65 @@ class ScenarioValidator:
                                 f"Use a segment name ({', '.join(sorted(segment_names))}), "
                                 f"'external', 'any', an IP, or CIDR"
                             ),
+                        )
+                    )
+
+            # Validate NAT rules
+            for nat_idx, nat_rule in enumerate(sensor.nat_rules):
+                # Warn if NAT rules on sensor without cisco_asa
+                if "cisco_asa" not in sensor.log_formats:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=f"{prefix}.nat_rules.{nat_idx}",
+                            message=(
+                                f"Sensor '{sensor.name}' has NAT rules but "
+                                f"cisco_asa not in log_formats"
+                            ),
+                            suggestion="Add 'cisco_asa' to log_formats to emit NAT records",
+                        )
+                    )
+                    break  # Only warn once per sensor
+
+                # Validate src segment references
+                for src_entry in nat_rule.src:
+                    if src_entry in segment_names:
+                        continue
+                    try:
+                        ipaddress.ip_address(src_entry)
+                        continue
+                    except ValueError:
+                        pass
+                    try:
+                        ipaddress.ip_network(src_entry, strict=False)
+                        continue
+                    except ValueError:
+                        pass
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=f"{prefix}.nat_rules.{nat_idx}.src",
+                            message=(
+                                f"NAT rule src '{src_entry}' references "
+                                f"nonexistent segment or invalid IP/CIDR"
+                            ),
+                            suggestion=(
+                                f"Use a segment name ({', '.join(sorted(segment_names))}), "
+                                f"an IP, or CIDR"
+                            ),
+                        )
+                    )
+
+                # Static NAT: warn if real_ip is missing
+                if nat_rule.type == "static" and not nat_rule.real_ip:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=f"{prefix}.nat_rules.{nat_idx}.real_ip",
+                            message=(
+                                "Static NAT rule missing real_ip — "
+                                "cannot determine which host to translate"
+                            ),
+                            suggestion="Set real_ip to the internal IP of the server",
                         )
                     )

@@ -31,7 +31,8 @@ If no network config is provided, all connections are visible (backward compat).
 import ipaddress
 import logging
 
-from evidenceforge.models.scenario import NetworkConfig, NetworkSensor, System
+from evidenceforge.events.contexts import NatContext
+from evidenceforge.models.scenario import NatRule, NetworkConfig, NetworkSensor, System
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,8 @@ class NetworkVisibilityEngine:
         self._segment_networks: dict[str, ipaddress.IPv4Network | ipaddress.IPv6Network] = {}
         self._ip_to_segments: dict[str, set[str]] = {}
         self._sensors: list[NetworkSensor] = []
+        # NAT: per-rule PAT port counters keyed by (sensor_name, rule_idx)
+        self._pat_port_counters: dict[tuple[str, int], int] = {}
 
         if self._enabled:
             self._build_topology(network_config, systems)
@@ -97,10 +100,23 @@ class NetworkVisibilityEngine:
 
         self._sensors = list(config.sensors)
 
+        # Build per-sensor PAT port counters for firewalls with NAT rules
+        nat_rule_count = 0
+        for sensor in config.sensors:
+            if sensor.type == "firewall" and sensor.nat_rules:
+                sensor_name = sensor.hostname or sensor.name
+                for rule_idx in range(len(sensor.nat_rules)):
+                    import hashlib as _hl
+
+                    seed = int(_hl.md5(f"{sensor_name}:{rule_idx}".encode()).hexdigest()[:8], 16)
+                    self._pat_port_counters[(sensor_name, rule_idx)] = 1024 + (seed % 50000)
+                    nat_rule_count += 1
+
         logger.info(
             f"Network visibility engine initialized: "
             f"{len(config.segments)} segments, {len(config.sensors)} sensors, "
-            f"{len(self._ip_to_segments)} mapped IPs"
+            f"{len(self._ip_to_segments)} mapped IPs, "
+            f"{nat_rule_count} NAT rules"
         )
 
     def _resolve_ip_segments(self, ip: str) -> set[str]:
@@ -283,3 +299,106 @@ class NetworkVisibilityEngine:
         for sensor in self.get_observing_sensors(src_ip, dst_ip):
             formats.update(sensor.log_formats)
         return expand_formats(formats)
+
+    # ------------------------------------------------------------------
+    # NAT computation
+    # ------------------------------------------------------------------
+
+    def _ip_matches_src(self, ip: str, rule: NatRule) -> bool:
+        """Check if an IP matches any of a NAT rule's src entries."""
+        ip_segments = self._resolve_ip_segments(ip)
+        for src_entry in rule.src:
+            # Check segment name match
+            if src_entry in self._segment_networks and src_entry in ip_segments:
+                return True
+            # Check direct IP match
+            if src_entry == ip:
+                return True
+            # Check CIDR match
+            try:
+                if ipaddress.ip_address(ip) in ipaddress.ip_network(src_entry, strict=False):
+                    return True
+            except ValueError:
+                pass
+        return False
+
+    def compute_nat(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        src_port: int,
+        dst_port: int,
+    ) -> NatContext | None:
+        """Compute NAT translation for a connection.
+
+        Returns NatContext with mapped addresses if a NAT rule matches,
+        or None if no translation applies.
+
+        NAT rules are scoped per-firewall: only rules from firewalls that
+        monitor segments relevant to the connection are considered.
+        Rules are evaluated in order (first match wins). NAT only applies
+        when traffic crosses a segment boundary — same-segment traffic
+        is never NATted.
+        """
+        src_segments = self._resolve_ip_segments(src_ip)
+        dst_segments = self._resolve_ip_segments(dst_ip)
+
+        # Same-segment traffic: no NAT
+        if src_segments and dst_segments and src_segments & dst_segments:
+            return None
+
+        # Iterate firewall sensors with NAT rules, scoped to connection path
+        for sensor in self._sensors:
+            if sensor.type != "firewall" or not sensor.nat_rules:
+                continue
+            sensor_segs = set(sensor.monitoring_segments)
+            # Firewall must monitor a segment relevant to this connection,
+            # OR the dst_ip matches a static NAT mapped_ip on this firewall
+            # (for inbound connections to a public VIP not in any segment)
+            has_static_vip_match = any(
+                r.type == "static" and r.mapped_ip == dst_ip for r in sensor.nat_rules
+            )
+            if not (
+                sensor_segs & src_segments or sensor_segs & dst_segments or has_static_vip_match
+            ):
+                continue
+
+            sensor_name = sensor.hostname or sensor.name
+            for rule_idx, rule in enumerate(sensor.nat_rules):
+                if rule.type == "dynamic_pat":
+                    # Outbound PAT: src matches rule's src segments
+                    if self._ip_matches_src(src_ip, rule) and not dst_segments:
+                        key = (sensor_name, rule_idx)
+                        port = self._pat_port_counters[key]
+                        # Non-sequential gaps (1-3 ports) derived deterministically from current port
+                        gap = 1 + (port % 3)
+                        self._pat_port_counters[key] = port + gap
+                        return NatContext(
+                            nat_type="dynamic_pat",
+                            mapped_src_ip=rule.mapped_ip,
+                            mapped_src_port=port,
+                            mapped_dst_ip=dst_ip,
+                            mapped_dst_port=dst_port,
+                        )
+
+                elif rule.type == "static":
+                    # Outbound static: src_ip is the real_ip
+                    if rule.real_ip and src_ip == rule.real_ip:
+                        return NatContext(
+                            nat_type="static",
+                            mapped_src_ip=rule.mapped_ip,
+                            mapped_src_port=src_port,
+                            mapped_dst_ip=dst_ip,
+                            mapped_dst_port=dst_port,
+                        )
+                    # Inbound static: dst_ip is the mapped_ip (public)
+                    if rule.mapped_ip and dst_ip == rule.mapped_ip and rule.real_ip:
+                        return NatContext(
+                            nat_type="static",
+                            mapped_src_ip=src_ip,
+                            mapped_src_port=src_port,
+                            mapped_dst_ip=rule.real_ip,
+                            mapped_dst_port=dst_port,
+                        )
+
+        return None

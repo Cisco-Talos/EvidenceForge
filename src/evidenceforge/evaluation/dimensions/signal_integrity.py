@@ -311,6 +311,13 @@ class SignalIntegrityScorer(DimensionScorer):
                 asa_dst = rec.fields.get("dst_ip")
                 if asa_dst and asa_dst != asa_src:
                     host_time_index[f"{asa_dst}|{bucket}"][format_name].append(rec)
+                # Also index by NAT-mapped IPs
+                mapped_src = rec.fields.get("mapped_src_ip")
+                if mapped_src and mapped_src != asa_src:
+                    host_time_index[f"{mapped_src}|{bucket}"][format_name].append(rec)
+                mapped_dst = rec.fields.get("mapped_dst_ip")
+                if mapped_dst and mapped_dst != asa_dst:
+                    host_time_index[f"{mapped_dst}|{bucket}"][format_name].append(rec)
 
         for event in resolved:
             for event_type in event.event_types:

@@ -70,6 +70,7 @@ def _make_connection_event(
     orig_bytes=1024,
     resp_bytes=4096,
     firewall=None,
+    nat=None,
     timestamp=None,
 ):
     """Create a connection SecurityEvent for testing."""
@@ -87,6 +88,7 @@ def _make_connection_event(
             resp_bytes=resp_bytes,
         ),
         firewall=firewall,
+        nat=nat,
     )
     event._sensor_hostnames_by_format = {"cisco_asa": ["fw01"]}
     return event
@@ -132,8 +134,8 @@ class TestConnectionIdCounter:
     def test_per_sensor_counters(self, asa_emitter):
         id_fw01 = asa_emitter._next_conn_id("fw01")
         id_fw02 = asa_emitter._next_conn_id("fw02")
-        # Both start from the same base
-        assert id_fw01 == id_fw02
+        # Different sensors get different deterministic starting IDs
+        assert id_fw01 != id_fw02
 
 
 class TestPermitRecords:
@@ -446,3 +448,215 @@ class TestThreatDetection:
         lines = self._get_output_lines(tmp_path)
         threat_lines = [line for line in lines if "733100" in line]
         assert len(threat_lines) == 0
+
+
+class TestNatRecords:
+    """Tests for NAT translation records (305011/305012) emitted alongside connection logs."""
+
+    def _make_nat_event(
+        self,
+        action="permit",
+        nat_type="dynamic_pat",
+        mapped_src_ip="198.51.100.1",
+        mapped_src_port=12345,
+        mapped_dst_ip="203.0.113.50",
+        mapped_dst_port=443,
+        protocol="tcp",
+        include_nat=True,
+    ):
+        from evidenceforge.events.contexts import NatContext
+
+        fw = FirewallContext(
+            action=action,
+            msg_id=302013 if action == "permit" else 106023,
+            connection_id=100,
+            src_interface="inside",
+            dst_interface="outside",
+        )
+        nat = (
+            NatContext(
+                nat_type=nat_type,
+                mapped_src_ip=mapped_src_ip,
+                mapped_src_port=mapped_src_port,
+                mapped_dst_ip=mapped_dst_ip,
+                mapped_dst_port=mapped_dst_port,
+            )
+            if include_nat
+            else None
+        )
+        return _make_connection_event(protocol=protocol, firewall=fw, nat=nat)
+
+    def _get_output_lines(self, tmp_path):
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        return [line for line in output.strip().split("\n") if line]
+
+    def test_built_with_nat_shows_mapped_ips_in_parens(self, asa_emitter, tmp_path):
+        """Built line parenthesized addresses should use NAT-mapped IPs, not real ones."""
+        event = self._make_nat_event()
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        # The Built line should show mapped source in parens
+        assert "(198.51.100.1/12345)" in output
+        # Should NOT show the real pre-NAT source in parens
+        assert "(10.0.10.50/54321)" not in output
+
+    def test_built_without_nat_parens_match_real(self, asa_emitter, tmp_path):
+        """Without NatContext, parenthesized addresses should match the real IPs."""
+        event = _make_connection_event()
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        # Parens should reflect the real IPs since there is no NAT
+        assert "(10.0.10.50/54321)" in output
+        assert "(203.0.113.50/443)" in output
+
+    def test_305011_emitted_for_nat_permit(self, asa_emitter, tmp_path):
+        """A permitted connection with NatContext should emit a 305011 Built translation record."""
+        event = self._make_nat_event()
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        nat_built_lines = [line for line in lines if "305011" in line]
+        assert len(nat_built_lines) >= 1
+        assert (
+            "Built dynamic TCP translation from inside:10.0.10.50/54321 to outside:198.51.100.1/12345"
+            in nat_built_lines[0]
+        )
+
+    def test_305012_emitted_for_nat_teardown(self, asa_emitter, tmp_path):
+        """A permitted connection with NatContext should emit a 305012 Teardown translation record."""
+        event = self._make_nat_event()
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        nat_teardown_lines = [line for line in lines if "305012" in line]
+        assert len(nat_teardown_lines) >= 1
+        assert "Teardown dynamic TCP translation" in nat_teardown_lines[0]
+
+    def test_no_305011_for_deny(self, asa_emitter, tmp_path):
+        """Deny events should not produce 305011 NAT records, even if NatContext is present."""
+        event = self._make_nat_event(action="deny")
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        nat_lines = [line for line in lines if "305011" in line]
+        assert len(nat_lines) == 0
+
+    def test_no_305011_without_nat(self, asa_emitter, tmp_path):
+        """Permit events without NatContext should not produce 305011 records."""
+        event = self._make_nat_event(include_nat=False)
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        nat_lines = [line for line in lines if "305011" in line]
+        assert len(nat_lines) == 0
+
+    def test_305011_dynamic_vs_static_label(self, asa_emitter, tmp_path):
+        """Static NAT should produce 'Built static' instead of 'Built dynamic'."""
+        event = self._make_nat_event(nat_type="static")
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        nat_built_lines = [line for line in lines if "305011" in line]
+        assert len(nat_built_lines) >= 1
+        assert "Built static" in nat_built_lines[0]
+        assert "Built dynamic" not in nat_built_lines[0]
+
+    def test_305011_protocol_variations(self, asa_emitter, tmp_path):
+        """NAT built messages should reflect the correct protocol for UDP and ICMP."""
+        for proto in ("udp", "icmp"):
+            # Use a fresh emitter for each protocol to avoid cross-contamination
+            fmt = load_format("cisco_asa")
+            sub_dir = tmp_path / f"nat_{proto}"
+            sub_dir.mkdir()
+            emitter = CiscoAsaEmitter(
+                format_def=fmt,
+                output_path=sub_dir,
+                sensor_hostnames=["fw01"],
+            )
+            emitter._segment_config = asa_emitter._segment_config
+            emitter._sensor_interfaces = asa_emitter._sensor_interfaces
+
+            event = self._make_nat_event(protocol=proto)
+            emitter.emit(event)
+            emitter.flush()
+
+            output = (sub_dir / "fw01" / "cisco_asa.log").read_text()
+            nat_built_lines = [line for line in output.strip().split("\n") if "305011" in line]
+            assert len(nat_built_lines) >= 1, f"No 305011 line for {proto}"
+            assert f"Built dynamic {proto.upper()} translation" in nat_built_lines[0]
+
+    def test_305011_inbound_static_nat_shows_dst_translation(self, asa_emitter, tmp_path):
+        """Inbound static NAT: 305011 should show destination VIP -> real server."""
+        from evidenceforge.events.contexts import NatContext
+
+        event = _make_connection_event(
+            src_ip="203.0.113.99",
+            src_port=54321,
+            dst_ip="203.0.113.5",  # Public VIP
+            dst_port=443,
+            firewall=FirewallContext(
+                action="permit",
+                msg_id=302013,
+                connection_id=100,
+                src_interface="outside",
+                dst_interface="dmz",
+            ),
+            nat=NatContext(
+                nat_type="static",
+                mapped_src_ip="203.0.113.99",  # unchanged - no source translation
+                mapped_src_port=54321,  # unchanged
+                mapped_dst_ip="172.16.0.5",  # real DMZ server
+                mapped_dst_port=443,
+            ),
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+        lines = self._get_output_lines(tmp_path)
+        nat_built = [line for line in lines if "305011" in line]
+        assert len(nat_built) >= 1
+        # Should show the destination translation: VIP -> real server
+        assert "172.16.0.5" in nat_built[0]
+        assert "203.0.113.5" in nat_built[0]
+        # Should NOT show the untranslated source as the translation target
+        assert "203.0.113.99/54321 to" not in nat_built[0]
+
+    def test_305012_inbound_static_nat_shows_dst_translation(self, asa_emitter, tmp_path):
+        """Inbound static NAT: 305012 should show destination VIP -> real server teardown."""
+        from evidenceforge.events.contexts import NatContext
+
+        event = _make_connection_event(
+            src_ip="203.0.113.99",
+            src_port=54321,
+            dst_ip="203.0.113.5",  # Public VIP
+            dst_port=443,
+            firewall=FirewallContext(
+                action="permit",
+                msg_id=302013,
+                connection_id=100,
+                src_interface="outside",
+                dst_interface="dmz",
+            ),
+            nat=NatContext(
+                nat_type="static",
+                mapped_src_ip="203.0.113.99",
+                mapped_src_port=54321,
+                mapped_dst_ip="172.16.0.5",
+                mapped_dst_port=443,
+            ),
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+        lines = self._get_output_lines(tmp_path)
+        nat_teardown = [line for line in lines if "305012" in line]
+        assert len(nat_teardown) >= 1
+        assert "172.16.0.5" in nat_teardown[0]
+        assert "Teardown static" in nat_teardown[0]

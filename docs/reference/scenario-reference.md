@@ -149,6 +149,13 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
       default_action: deny      # deny (default) | permit
       deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
       threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)
+      nat_rules:
+        - type: dynamic_pat
+          src: [workstations, servers]
+          mapped_ip: 198.51.100.1
+        - type: static
+          real_ip: 172.16.0.5
+          mapped_ip: 203.0.113.5
       policy:                   # Ordered rules — first match wins
         - {src: external, dst: dmz, ports: [80, 443]}
         - {src: workstations, dst: any}
@@ -166,6 +173,14 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
 **Interfaces**: Map segment names to ASA interface names (e.g., `inside`, `outside`, `dmz`). IPs not in any mapped segment resolve to `"outside"`.
 
 **Threat detection**: The ASA emitter automatically tracks per-source-IP deny rates and fires 733100 alerts when both burst (default 10 drops/sec over 20s) and average (default 5 drops/sec over 60s) thresholds are exceeded. Set `threat_detection_rate: 0` to disable.
+
+**NAT rules**: Define Network Address Translation behavior for the firewall. Each rule in the `nat_rules` list supports:
+- `type`: `dynamic_pat` (many:1 with port translation) or `static` (1:1 IP mapping)
+- `src`: segment name(s), IP, or CIDR. Accepts a string or list.
+- `mapped_ip`: the post-NAT IP address
+- `real_ip`: for static NAT, the specific internal IP being mapped
+
+Dynamic PAT: all traffic from matching segments shares one external IP with port translation. Static NAT: bidirectional 1:1 mapping, enables inbound connections to DMZ servers via public IP. NAT only applies to permitted connections that cross segment boundaries; denied connections are not NATted.
 
 ## Personas
 
@@ -293,8 +308,8 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
-| `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `target_count`, `ports`, `protocol`, `scan_rate` |
-| `blocked_c2` | ASA 106023 (periodic denies) | `dst_ip` | `dst_port`, `interval`, `duration`, `jitter` |
+| `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
+| `blocked_c2` | ASA 106023 (periodic denies) | `dst_ip` | `source_ip`, `dst_port`, `interval`, `duration`, `jitter` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
@@ -407,7 +422,7 @@ Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-
       technique: "T1046 - Network Service Discovery"
 ```
 
-Fields: `target_ips` (explicit list) or `target_segment` + `target_count` (sample from CIDR). `ports` (default: [22, 80, 443, 445, 3389]). `protocol` (tcp/udp/icmp). `scan_rate` (connections/second, default: 100).
+Fields: `source_ip` (override scan source; default: uses storyline system IP — useful for external attacker scans). `target_ips` (explicit list) or `target_segment` + `target_count` (sample from CIDR). `ports` (default: [22, 80, 443, 445, 3389]). `protocol` (tcp/udp/icmp). `scan_rate` (connections/second, default: 100).
 
 Denied connections are only visible to sensors on the source side of the firewall. The firewall's `drop_mode` controls whether Zeek sees `S0` (silent drop) or `REJ` (RST response).
 
