@@ -282,6 +282,7 @@ class TestSourceOnlyVisibility:
         config = NetworkConfig(
             segments=[
                 NetworkSegment(name="internal", cidr="10.0.10.0/24"),
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
             ],
             sensors=[
                 NetworkSensor(
@@ -291,13 +292,32 @@ class TestSourceOnlyVisibility:
                     direction="bidirectional",
                     log_formats=["zeek"],
                 ),
+                NetworkSensor(
+                    type="network",
+                    name="dmz-zeek",
+                    monitoring_segments=["dmz"],
+                    direction="inbound",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["cisco_asa"],
+                ),
             ],
         )
         systems = [
             System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
+            System(hostname="WEB-01", ip="172.16.0.5", os="Linux Ubuntu", type="server"),
         ]
         engine = NetworkVisibilityEngine(network_config=config, systems=systems)
 
-        # External IP not in any segment: returns sensors with bidirectional/inbound direction
+        # External IP: boundary segments are internal + dmz (from firewall).
+        # dmz-zeek (inbound on dmz) should see external traffic arriving at boundary.
+        # inside-zeek (bidirectional on internal) should see it too (boundary includes internal).
         sensors = engine.get_source_side_sensors("203.0.113.45")
-        assert len(sensors) >= 1  # inside-zeek is bidirectional
+        sensor_names = [s.name for s in sensors]
+        assert "dmz-zeek" in sensor_names  # inbound on boundary segment
+        assert "fw01" in sensor_names  # firewall on boundary
+        assert "inside-zeek" in sensor_names  # bidirectional on boundary segment

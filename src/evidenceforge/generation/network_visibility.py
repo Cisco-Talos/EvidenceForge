@@ -206,26 +206,40 @@ class NetworkVisibilityEngine:
         ]
 
     def get_source_side_sensors(self, src_ip: str) -> list[NetworkSensor]:
-        """Return sensors that monitor segments containing the source IP.
+        """Return sensors that can observe denied traffic originating from src_ip.
 
-        Used for denied connections where traffic only exists on the source
-        side of the firewall — packets never reach the destination.
+        For denied connections, traffic only exists on the source side of the
+        firewall — packets never reach the destination. Uses _sensor_can_observe()
+        with empty dst_segments to respect direction and placement rules.
         """
         if not self._enabled:
             return []
 
         src_segments = self._resolve_ip_segments(src_ip)
         if not src_segments:
-            # External IP not in any segment — return sensors on external-facing
-            # segments (those that could see inbound traffic from outside)
+            # External IP not in any segment. External traffic arrives at
+            # boundary segments monitored by firewall sensors. Use those as
+            # effective dst_segments (external → boundary = "inbound" from
+            # the boundary segment's perspective).
+            boundary_segments: set[str] = set()
+            for sensor in self._sensors:
+                if sensor.type == "firewall":
+                    boundary_segments.update(sensor.monitoring_segments)
+            if not boundary_segments:
+                return []
             return [
                 sensor
                 for sensor in self._sensors
-                if sensor.direction in ("bidirectional", "inbound")
+                if self._sensor_can_observe(sensor, set(), boundary_segments)
             ]
 
+        # Internal IP: check which sensors can observe traffic FROM this
+        # segment. Empty dst_segments means only bidirectional/outbound
+        # sensors that monitor the source's segment will match.
         return [
-            sensor for sensor in self._sensors if set(sensor.monitoring_segments) & src_segments
+            sensor
+            for sensor in self._sensors
+            if self._sensor_can_observe(sensor, src_segments, set())
         ]
 
     def get_log_formats_for_source_only(self, src_ip: str) -> set[str]:

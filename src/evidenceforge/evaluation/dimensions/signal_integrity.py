@@ -531,6 +531,31 @@ class SignalIntegrityScorer(DimensionScorer):
             if format_name == "zeek_dhcp":
                 return True  # Any DHCP record in the time window is a match
 
+        elif event_type == "port_scan":
+            if format_name == "cisco_asa":
+                return f.get("msg_id") == 106023 and f.get("src_ip") == event.system_ip
+            if format_name == "zeek_conn":
+                return f.get("id.orig_h") == event.system_ip and f.get("conn_state") in (
+                    "S0",
+                    "REJ",
+                )
+
+        elif event_type == "blocked_c2":
+            expected_dst = event.details.get("dst_ip", "")
+            expected_port = event.details.get("dst_port")
+            if format_name == "cisco_asa":
+                return (
+                    f.get("msg_id") == 106023
+                    and f.get("dst_ip") == expected_dst
+                    and f.get("dst_port") == expected_port
+                )
+            if format_name == "zeek_conn":
+                return (
+                    f.get("id.resp_h") == expected_dst
+                    and f.get("id.resp_p") == expected_port
+                    and f.get("conn_state") in ("S0", "REJ")
+                )
+
         return False
 
     def _connection_matches_zeek(self, fields: dict, event: ResolvedEvent) -> bool:

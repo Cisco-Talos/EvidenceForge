@@ -989,6 +989,70 @@ class BaselineMixin:
                         logon_id=logon_id,
                     )
 
+    def _evaluate_firewall_policy(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        sensor,
+        segment_cidrs: dict,
+    ) -> str:
+        """Evaluate a connection against the firewall's policy rules.
+
+        Walks rules in order (first match wins). Returns 'permit' or 'deny'.
+        If no rule matches, returns sensor.default_action.
+        """
+        import ipaddress as _ipaddress
+
+        def _resolve_segment(ip: str) -> str:
+            """Resolve an IP to a segment name, or 'external' if not in any."""
+            for seg_name, cidr in segment_cidrs.items():
+                try:
+                    if _ipaddress.ip_address(ip) in cidr:
+                        return seg_name
+                except (ValueError, KeyError):
+                    continue
+            return "external"
+
+        def _matches_specifier(ip: str, ip_segment: str, spec: str) -> bool:
+            """Check if an IP/segment matches a rule specifier."""
+            if spec == "any":
+                return True
+            if spec == "external":
+                return ip_segment == "external"
+            if spec == ip_segment:
+                return True
+            # Try IP match
+            try:
+                if _ipaddress.ip_address(ip) == _ipaddress.ip_address(spec):
+                    return True
+            except ValueError:
+                pass
+            # Try CIDR match
+            try:
+                if _ipaddress.ip_address(ip) in _ipaddress.ip_network(spec, strict=False):
+                    return True
+            except ValueError:
+                pass
+            return False
+
+        src_seg = _resolve_segment(src_ip)
+        dst_seg = _resolve_segment(dst_ip)
+
+        for rule in sensor.policy:
+            if not _matches_specifier(src_ip, src_seg, rule.src):
+                continue
+            if not _matches_specifier(dst_ip, dst_seg, rule.dst):
+                continue
+            # Check port (empty list = any)
+            if rule.ports:
+                port_list = [int(p) if isinstance(p, int) else p for p in rule.ports]
+                if "any" not in port_list and dst_port not in port_list:
+                    continue
+            return rule.action
+
+        return sensor.default_action
+
     def _generate_firewall_deny_baseline(self, current_hour: datetime) -> None:
         """Generate denied connection events for firewall sensors.
 
@@ -1046,22 +1110,23 @@ class BaselineMixin:
                         continue
                 return _ifaces.get("_default", "outside")
 
-            # Generate deny events distributed across the hour
-            for _deny_idx in range(deny_count):
-                offset_sec = rng.uniform(0, 3600)
-                ts = current_hour + timedelta(seconds=offset_sec)
-                self.state_manager.set_current_time(ts)
+            # Generate deny events — only emit connections the policy would deny
+            generated = 0
+            attempts = 0
+            max_attempts = deny_count * 5
+            while generated < deny_count and attempts < max_attempts:
+                attempts += 1
 
-                # Choose deny pattern
+                # Choose deny pattern candidate
                 roll = rng.random()
                 if roll < 0.60:
-                    # External -> internal: random external IP to random internal IP
+                    # External -> internal
                     src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
                     dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
                     dst_port = rng.choice(_SCAN_PORTS)
                     proto = "tcp"
                 elif roll < 0.80:
-                    # Cross-segment blocked: internal IP to internal IP on blocked port
+                    # Cross-segment blocked
                     if len(internal_ips) >= 2:
                         src_ip, dst_ip = rng.sample(internal_ips, 2)
                     else:
@@ -1070,7 +1135,7 @@ class BaselineMixin:
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"
                 elif roll < 0.90:
-                    # Outbound blocked: internal to external on restricted port
+                    # Outbound blocked
                     src_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
                     dst_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
                     dst_port = rng.choice(_BLOCKED_PORTS)
@@ -1082,10 +1147,19 @@ class BaselineMixin:
                     dst_port = 8  # ICMP echo request type
                     proto = "icmp"
 
+                # Only emit if the policy would actually deny this connection
+                if (
+                    self._evaluate_firewall_policy(src_ip, dst_ip, dst_port, sensor, segment_cidrs)
+                    != "deny"
+                ):
+                    continue
+
+                offset_sec = rng.uniform(0, 3600)
+                ts = current_hour + timedelta(seconds=offset_sec)
+                self.state_manager.set_current_time(ts)
+
                 src_iface = _resolve_iface(src_ip)
                 dst_iface = _resolve_iface(dst_ip)
-
-                # Determine ACL name from interface
                 acl_name = f"{src_iface}_access_in"
 
                 fw_ctx = FirewallContext(
@@ -1106,6 +1180,7 @@ class BaselineMixin:
                     conn_state=deny_conn_state,
                     firewall=fw_ctx,
                 )
+                generated += 1
 
     def _generate_logoffs_for_hour(
         self,
