@@ -181,6 +181,7 @@ class VisibilityModel:
             "zeek_ssl",
             "zeek_dhcp",
             "snort_alert",
+            "cisco_asa",
             "web_access",
             "proxy_access",
         }
