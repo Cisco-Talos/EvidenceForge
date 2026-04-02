@@ -170,7 +170,7 @@ class ProcessAccessAfterRemoteThread(ExpansionRule):
                     "source_image": ctx.source_image,
                     "target_pid": ctx.target_pid,
                     "target_image": ctx.target_image,
-                    "granted_access": "0x1010",
+                    "granted_access": "0x1FFFFF",
                 },
                 timing=TimingSpec(min_ms=1, max_ms=50, position="after"),
                 description="ProcessAccess for lsass credential dumping detection",
