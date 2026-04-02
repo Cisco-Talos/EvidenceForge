@@ -22,6 +22,8 @@ output/
   ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
   syslog.log                               # Linux syslog (BSD format)
   snort_alert.log                          # Snort/Suricata IDS alerts
+  <fw-hostname>/                           # Per-firewall directories
+    cisco_asa.log                          # Cisco ASA firewall syslog
   web_access.log                           # Apache/Nginx access log
   <proxy-hostname.domain>/                 # Per-proxy-host directories
     proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
@@ -211,6 +213,39 @@ Network intrusion detection alerts. Baseline generates false-positive alerts (e.
 
 **Known Limitations:**
 - Limited SID/classification variety
+
+---
+
+## Cisco ASA Firewall Syslog
+
+**File:** `<fw-hostname>/cisco_asa.log`
+**Format:** Cisco ASA syslog (RFC 3164 BSD syslog with ASA message IDs)
+
+Cisco ASA firewall logs for permitted and denied connections. Produced by firewall-type network sensors with `cisco_asa` in their `log_formats`. Each permitted connection generates a Built + Teardown pair; denied connections generate a single Deny record.
+
+| Message ID | Severity | Protocol | Description |
+|------------|----------|----------|-------------|
+| 302013 | 6 (info) | TCP | Built inbound/outbound TCP connection |
+| 302014 | 6 (info) | TCP | Teardown TCP connection (with duration, bytes, reason) |
+| 302015 | 6 (info) | UDP | Built inbound/outbound UDP connection |
+| 302016 | 6 (info) | UDP | Teardown UDP connection |
+| 302020 | 6 (info) | ICMP | Built inbound/outbound ICMP connection |
+| 302021 | 6 (info) | ICMP | Teardown ICMP connection |
+| 106023 | 4 (warn) | any | Deny by access-group |
+
+**Example records:**
+```
+<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to outside:203.0.113.50/443 (203.0.113.50/443)
+<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection 100042 for inside:10.0.10.50/54321 to outside:203.0.113.50/443 duration 0:01:23 bytes 5120 TCP FINs
+<164>Jun 15 14:23:10 fw01 %ASA-4-106023: Deny tcp src outside:198.51.100.1/44231 dst inside:10.0.10.50/445 by access-group "outside_access_in" [0x0, 0x0]
+```
+
+**Baseline deny generation:** When `deny_ratio > 0` on the firewall sensor, the baseline generates denied connection attempts proportional to allowed traffic. Patterns include external scanning (60%), cross-segment blocked (20%), outbound blocked (10%), and ICMP noise (10%).
+
+**Known Limitations:**
+- No NAT translation (305011/305012) — mapped addresses equal real addresses
+- No threat detection alerts (733100) — deferred to port scan storyline event
+- Simplified message format — omits IDFW user, internal port numbers, rx_ring metadata
 
 ---
 

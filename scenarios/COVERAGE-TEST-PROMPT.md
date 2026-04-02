@@ -23,6 +23,14 @@
   - zeek-core: SPAN, monitors corporate_lan + server_vlan, bidirectional
   - zeek-dmz: SPAN, monitors server_vlan + dmz, bidirectional (overlaps with zeek-core on server_vlan)
   - snort-perimeter: TAP, monitors dmz, inbound
+  - fw-perimeter: firewall, TAP, monitors corporate_lan + server_vlan + dmz, bidirectional,
+    log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside, dmz: dmz},
+    default_action: deny, deny_ratio: 5.0, policy:
+      - {src: external, dst: dmz, ports: [80, 443]}          # Allow web traffic to DMZ
+      - {src: corporate_lan, dst: any}                         # Users can reach anything
+      - {src: server_vlan, dst: external, ports: [80, 443, 53]} # Servers: web + DNS out
+      - {src: server_vlan, dst: server_vlan}                   # Inter-server
+      - {src: dmz, dst: server_vlan, ports: [3306]}            # DMZ web → database
 
   Users: 17 users spanning all 15 built-in personas. Realistic diverse names (first.last format). Every
    user must have a primary_system assigned to one of the workstations (users may share workstations if
@@ -45,7 +53,7 @@
   - Service account (svc_backup) authenticating from an unusual host (not its normal server) —
     legitimate scheduled task migration, but looks like lateral movement.
 
-  All 8 log formats: windows, zeek, ecar, syslog, bash_history, snort_alert, web_access, proxy_access.
+  All 9 log formats: windows, zeek, ecar, syslog, bash_history, snort_alert, cisco_asa, web_access, proxy_access.
 
   Attack storyline — APT via web app exploit, full kill chain:
   1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
@@ -127,6 +135,16 @@
   - Event 10 (ProcessAccess): baseline benign pairs (MsMpEng→lsass with 0x1410, services→svchost
     with 0x1000, etc.) plus storyline mimikatz process_access on lsass with 0x1FFFFF
   - Baseline Event 8/10 noise ensures storyline attack events are not instant red flags
+
+  Cisco ASA firewall coverage (verify in generated data):
+  - Built/Teardown pairs (302013/302014) for permitted TCP connections through the firewall
+  - Built/Teardown pairs (302015/302016) for permitted UDP connections (DNS queries, etc.)
+  - Deny records (106023) for blocked external scanning and unauthorized cross-segment traffic
+  - Correct interface resolution: internal IPs → "inside", DMZ IPs → "dmz", external IPs → "outside"
+  - Per-sensor directory output: fw-perimeter/cisco_asa.log
+  - Deny baseline volume proportional to deny_ratio (~5x allows)
+  - Firewall policy enforcement: external → corporate_lan denied, external → dmz:80/443 allowed
+  - Storyline connections through the firewall produce ASA allow records correlated with Zeek conn records
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections in zeek_dns/zeek_conn; Kerberos 4768/4769

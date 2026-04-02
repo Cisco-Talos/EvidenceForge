@@ -232,11 +232,12 @@ LogEmitter (ABC)
 ├── SyslogEmitter                    # Linux syslog (BSD format)
 ├── BashHistoryEmitter               # Per-user bash history
 ├── SnortEmitter                     # Snort IDS alerts
+├── CiscoAsaEmitter                  # Cisco ASA firewall syslog (Built/Teardown/Deny)
 ├── WebEmitter                       # Apache/Nginx access logs
 └── ProxyEmitter                     # HTTP forward proxy access logs (W3C Extended)
 ```
 
-**Sensor multiplexing:** Network emitters (Zeek family) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single ZeekEmitter instance manages output for multiple sensors, each writing to `<sensor_hostname>/conn.json`.
+**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors, each writing to `<sensor_hostname>/<log_file>`. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
 
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 

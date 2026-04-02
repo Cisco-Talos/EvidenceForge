@@ -114,6 +114,56 @@ network:
 
 Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
 
+### Network Sensors
+
+Sensors define monitoring infrastructure. Each sensor type produces different log formats:
+
+```yaml
+network:
+  sensors:
+    - type: network             # network | ids | firewall
+      name: core-tap
+      hostname: zeek01          # Output directory name (falls back to name)
+      monitoring_segments: [corporate_lan, server_vlan]
+      direction: bidirectional  # bidirectional | inbound | outbound
+      placement: span           # span (sees intra-segment) | tap (cross-segment only)
+      log_formats: [zeek]       # Format groups or individual formats
+```
+
+#### Firewall Sensors
+
+Firewall sensors produce Cisco ASA syslog records for permitted and denied connections. They require explicit policy rules to determine what traffic is allowed vs denied.
+
+```yaml
+    - type: firewall
+      name: fw01
+      hostname: fw01
+      monitoring_segments: [workstations, servers, dmz]
+      placement: tap
+      direction: bidirectional
+      log_formats: [cisco_asa]
+      interfaces:               # Map segment names to ASA interface names
+        workstations: inside
+        servers: inside
+        dmz: dmz
+      default_action: deny      # deny (default) | permit
+      deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
+      policy:                   # Ordered rules — first match wins
+        - {src: external, dst: dmz, ports: [80, 443]}
+        - {src: workstations, dst: any}
+        - {src: servers, dst: external, ports: [80, 443, 53]}
+        - {src: servers, dst: servers}
+```
+
+**Policy rules** (`FirewallRule`):
+- `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`
+- `ports`: list of port numbers, or empty list / `"any"` for all ports
+- `action`: `"permit"` (default) or `"deny"`
+- Rules are evaluated in order; first match wins (like real ACLs)
+- Traffic not matching any rule is subject to `default_action`
+
+**Interfaces**: Map segment names to ASA interface names (e.g., `inside`, `outside`, `dmz`). IPs not in any mapped segment resolve to `"outside"`.
+
 ## Personas
 
 Personas define user behavior patterns for activity generation. EvidenceForge includes 15 pre-built personas (developer, analyst, sysadmin, executive, etc.) that are resolved automatically by name — reference them in user definitions without needing to define them inline. Define personas inline only if you need to customize behavior beyond what the pre-built library provides; inline definitions override pre-built ones with the same name.
@@ -490,7 +540,7 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy`.
 
 ## Backward Compatibility
 

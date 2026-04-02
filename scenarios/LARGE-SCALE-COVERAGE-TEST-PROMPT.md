@@ -65,7 +65,7 @@
   - management_vlan (10.10.6.0/24) — LOG-SRV-01, BACKUP-01 (monitoring/backup infrastructure)
   - vpn_pool (10.10.7.0/24) — VPN client address pool for remote users
 
-  Sensors (6 — expanded coverage with overlaps and gaps):
+  Sensors (8 — expanded coverage with overlaps, gaps, and firewall):
   - zeek-core: SPAN, monitors corporate_lan + server_vlan, bidirectional
   - zeek-dmz: SPAN, monitors dmz + app_vlan, bidirectional
   - zeek-mgmt: SPAN, monitors management_vlan + server_vlan, bidirectional (overlaps with zeek-core
@@ -73,6 +73,29 @@
   - snort-perimeter: TAP, monitors dmz, inbound
   - snort-internal: TAP, monitors corporate_lan + server_vlan, bidirectional
   - zeek-vpn: SPAN, monitors vpn_pool + corporate_lan, bidirectional
+  - fw-external: firewall, TAP, monitors corporate_lan + server_vlan + dmz + app_vlan, bidirectional,
+    log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside,
+    app_vlan: inside, dmz: dmz, management_vlan: inside, vpn_pool: inside},
+    default_action: deny, deny_ratio: 8.0, policy:
+      - {src: external, dst: dmz, ports: [80, 443, 53]}       # Allow web + DNS to DMZ
+      - {src: corporate_lan, dst: any}                          # Users can reach anything
+      - {src: server_vlan, dst: external, ports: [80, 443, 53, 25]} # Servers: web, DNS, SMTP out
+      - {src: app_vlan, dst: external, ports: [80, 443]}       # App servers: web out
+      - {src: app_vlan, dst: server_vlan}                       # App → server (AD, file shares)
+      - {src: server_vlan, dst: server_vlan}                    # Inter-server
+      - {src: server_vlan, dst: app_vlan}                       # Server → app
+      - {src: dmz, dst: app_vlan, ports: [8080, 8443]}         # DMZ web → internal app servers
+      - {src: dmz, dst: database_vlan, ports: [3306, 5432]}    # DMZ → database (web app queries)
+      - {src: app_vlan, dst: database_vlan, ports: [3306, 5432]} # App → database
+      - {src: vpn_pool, dst: corporate_lan}                     # VPN users → workstations
+      - {src: vpn_pool, dst: server_vlan}                       # VPN users → servers
+  - fw-internal: firewall, TAP, monitors database_vlan + management_vlan, bidirectional,
+    log_formats: [cisco_asa], interfaces: {database_vlan: db-zone, management_vlan: mgmt-zone},
+    default_action: deny, deny_ratio: 3.0, policy:
+      - {src: app_vlan, dst: database_vlan, ports: [3306, 5432]}
+      - {src: dmz, dst: database_vlan, ports: [3306, 5432]}
+      - {src: management_vlan, dst: any}                        # Mgmt can reach everything
+      - {src: any, dst: management_vlan, ports: [9997, 514]}   # Syslog/Splunk forwarding
 
   Note: database_vlan has NO sensor — intentional blind spot for analyst training (attacker activity
   in the database segment is only visible via host-level logs, not network).
@@ -111,7 +134,7 @@
   - After-hours SSH from APP-INT-01 to DB-PROD-01 — legitimate cron-triggered ETL job that runs at
     odd hours, but looks like lateral movement.
 
-  All 8 log formats: windows, zeek, ecar, syslog, bash_history, snort_alert, web_access, proxy_access.
+  All 9 log formats: windows, zeek, ecar, syslog, bash_history, snort_alert, cisco_asa, web_access, proxy_access.
 
   Attack storyline — Sophisticated APT with false starts, fumbling, and dead ends. Full kill chain
   with realistic attacker mistakes. The attacker is skilled but not omniscient — they make wrong turns,
@@ -246,6 +269,23 @@
   - Event 8 (CreateRemoteThread): baseline benign pairs plus storyline mimikatz
   - Event 10 (ProcessAccess): baseline benign pairs plus storyline mimikatz on lsass
   - Baseline Event 8/10 noise ensures storyline attack events are not instant red flags
+
+  Cisco ASA firewall coverage (verify in generated data):
+  - Two firewall sensors: fw-external (perimeter, high deny_ratio=8.0) and fw-internal (database/mgmt
+    zone, lower deny_ratio=3.0) — exercises multi-firewall scenarios with different policies
+  - Built/Teardown pairs (302013/302014) for permitted TCP connections through both firewalls
+  - Built/Teardown pairs (302015/302016) for permitted UDP connections (DNS, NTP)
+  - Deny records (106023) for blocked traffic: external scanning against internal hosts, blocked
+    cross-zone database access attempts, unauthorized management zone access
+  - Correct interface resolution per firewall: fw-external uses inside/dmz/outside; fw-internal
+    uses db-zone/mgmt-zone/outside
+  - Deny baseline proportional to deny_ratio: ~8x for external firewall, ~3x for internal
+  - Policy enforcement: external → corporate_lan denied, external → dmz:80/443 allowed,
+    app_vlan → database_vlan:3306 allowed, corporate_lan → database_vlan denied
+  - Storyline step 23 (failed exfil from DC-01) should produce a firewall deny record since
+    DC → external is not in fw-external's policy
+  - Attack lateral movement through allowed paths (dmz → app_vlan, app_vlan → database_vlan)
+    produces ASA allow records correlated with Zeek conn records
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections; Kerberos precede domain logons;
