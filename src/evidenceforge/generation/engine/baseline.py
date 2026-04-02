@@ -282,6 +282,7 @@ class BaselineMixin:
             self._generate_stale_account_noise(current_hour)
             self._generate_lateral_movement_noise(current_hour)
             self._generate_suspicious_noise(current_hour)
+            self._generate_firewall_deny_baseline(current_hour)
 
             hour_key = int(current_hour.timestamp())
             for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
@@ -987,6 +988,123 @@ class BaselineMixin:
                         process_name=proc.image,
                         logon_id=logon_id,
                     )
+
+    def _generate_firewall_deny_baseline(self, current_hour: datetime) -> None:
+        """Generate denied connection events for firewall sensors.
+
+        For each firewall-type sensor, generates deny events proportional to
+        the estimated allow traffic (controlled by deny_ratio). Deny targets
+        are connections that violate the sensor's policy rules.
+        """
+        if not self.scenario.environment.network or not self.scenario.environment.network.sensors:
+            return
+
+        rng = _get_rng()
+
+        # Pre-compute segment CIDRs for IP matching
+        import ipaddress
+
+        segments = self.scenario.environment.network.segments
+        segment_cidrs: dict[str, ipaddress.IPv4Network | ipaddress.IPv6Network] = {}
+        for seg in segments:
+            try:
+                segment_cidrs[seg.name] = ipaddress.ip_network(seg.cidr, strict=False)
+            except ValueError:
+                continue
+
+        # Collect internal IPs from scenario systems
+        internal_ips = [s.ip for s in self.scenario.environment.systems if s.ip]
+
+        # Commonly targeted ports for external scanning
+        _SCAN_PORTS = [22, 23, 80, 443, 445, 1433, 3389, 5432, 8080, 8443]
+        # Ports rarely allowed in corporate firewalls
+        _BLOCKED_PORTS = [23, 135, 137, 138, 139, 445, 1433, 3389, 5900, 6379]
+
+        for sensor in self.scenario.environment.network.sensors:
+            if sensor.type != "firewall" or "cisco_asa" not in sensor.log_formats:
+                continue
+            if sensor.deny_ratio <= 0:
+                continue
+
+            # Estimate allow traffic: ~10-20 connections per internal system per hour
+            estimated_allows = len(internal_ips) * rng.randint(10, 20)
+            deny_count = int(estimated_allows * sensor.deny_ratio)
+            if deny_count <= 0:
+                continue
+
+            from evidenceforge.events.contexts import FirewallContext
+
+            sensor_interfaces = sensor.interfaces
+
+            def _resolve_iface(ip: str, _ifaces: dict = sensor_interfaces) -> str:  # noqa: B006
+                for seg_name, cidr in segment_cidrs.items():
+                    try:
+                        if ipaddress.ip_address(ip) in cidr:
+                            return _ifaces.get(seg_name, seg_name)
+                    except ValueError:
+                        continue
+                return _ifaces.get("_default", "outside")
+
+            # Generate deny events distributed across the hour
+            for _deny_idx in range(deny_count):
+                offset_sec = rng.uniform(0, 3600)
+                ts = current_hour + timedelta(seconds=offset_sec)
+                self.state_manager.set_current_time(ts)
+
+                # Choose deny pattern
+                roll = rng.random()
+                if roll < 0.60:
+                    # External -> internal: random external IP to random internal IP
+                    src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_port = rng.choice(_SCAN_PORTS)
+                    proto = "tcp"
+                elif roll < 0.80:
+                    # Cross-segment blocked: internal IP to internal IP on blocked port
+                    if len(internal_ips) >= 2:
+                        src_ip, dst_ip = rng.sample(internal_ips, 2)
+                    else:
+                        src_ip = internal_ips[0] if internal_ips else "10.0.10.1"
+                        dst_ip = "10.0.20.1"
+                    dst_port = rng.choice(_BLOCKED_PORTS)
+                    proto = "tcp"
+                elif roll < 0.90:
+                    # Outbound blocked: internal to external on restricted port
+                    src_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                    dst_port = rng.choice(_BLOCKED_PORTS)
+                    proto = "tcp"
+                else:
+                    # ICMP ping sweep from external
+                    src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_port = 8  # ICMP echo request type
+                    proto = "icmp"
+
+                src_iface = _resolve_iface(src_ip)
+                dst_iface = _resolve_iface(dst_ip)
+
+                # Determine ACL name from interface
+                acl_name = f"{src_iface}_access_in"
+
+                fw_ctx = FirewallContext(
+                    action="deny",
+                    msg_id=106023,
+                    connection_id=0,
+                    src_interface=src_iface,
+                    dst_interface=dst_iface,
+                    access_group=acl_name,
+                )
+
+                self.activity_generator.generate_connection(
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=dst_port,
+                    proto=proto,
+                    conn_state="REJ",
+                    firewall=fw_ctx,
+                )
 
     def _generate_logoffs_for_hour(
         self,

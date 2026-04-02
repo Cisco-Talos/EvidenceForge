@@ -181,6 +181,19 @@ class EmitterSetupMixin:
             self.emitters[format_name] = emitter
             logger.info(f"Initialized {format_name} emitter (threaded)")
 
+        # Configure ASA emitters with network topology for interface resolution
+        if "cisco_asa" in self.emitters:
+            asa_emitter = self.emitters["cisco_asa"]
+            if self.scenario.environment.network:
+                asa_emitter._segment_config = [
+                    {"name": seg.name, "cidr": seg.cidr}
+                    for seg in self.scenario.environment.network.segments
+                ]
+                for sensor in self.scenario.environment.network.sensors:
+                    if sensor.interfaces:
+                        hostname = sensor.hostname or sensor.name
+                        asa_emitter._sensor_interfaces[hostname] = sensor.interfaces
+
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.
 

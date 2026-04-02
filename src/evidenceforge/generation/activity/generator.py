@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     DnsContext,
     EdrContext,
     FileContext,
+    FirewallContext,
     HostContext,
     HttpContext,
     IdsContext,
@@ -1200,6 +1201,7 @@ class ActivityGenerator:
         dns: Optional["DnsContext"] = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
+        firewall: FirewallContext | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1454,6 +1456,8 @@ class ActivityGenerator:
             event.ids = ids
         if http is not None:
             event.http = http
+        if firewall is not None:
+            event.firewall = firewall
 
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
