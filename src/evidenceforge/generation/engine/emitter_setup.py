@@ -38,6 +38,7 @@ from datetime import timedelta
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
+    CiscoAsaEmitter,
     EcarEmitter,
     ProxyEmitter,
     SnortEmitter,
@@ -87,6 +88,7 @@ def _build_emitter_classes() -> dict:
         "syslog": SyslogEmitter,
         "bash_history": BashHistoryEmitter,
         "snort_alert": SnortEmitter,
+        "cisco_asa": CiscoAsaEmitter,
         "web_access": WebEmitter,
         "proxy_access": ProxyEmitter,
     }
@@ -109,7 +111,7 @@ _ZEEK_FORMAT_NAMES = {
 }
 _ZEEK_FORMATS = _ZEEK_FORMAT_NAMES
 # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
-_SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert"}
+_SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert", "cisco_asa"}
 _HOST_FORMATS = {
     "windows_event_security",
     "windows_event_sysmon",
@@ -178,6 +180,22 @@ class EmitterSetupMixin:
 
             self.emitters[format_name] = emitter
             logger.info(f"Initialized {format_name} emitter (threaded)")
+
+        # Configure ASA emitters with network topology for interface resolution
+        if "cisco_asa" in self.emitters:
+            asa_emitter = self.emitters["cisco_asa"]
+            if self.scenario.environment.network:
+                asa_emitter._segment_config = [
+                    {"name": seg.name, "cidr": seg.cidr}
+                    for seg in self.scenario.environment.network.segments
+                ]
+                for sensor in self.scenario.environment.network.sensors:
+                    if sensor.interfaces:
+                        hostname = sensor.hostname or sensor.name
+                        asa_emitter._sensor_interfaces[hostname] = sensor.interfaces
+                    if sensor.type == "firewall":
+                        asa_emitter._td_burst_threshold = sensor.threat_detection_rate
+                        asa_emitter._td_avg_threshold = max(1, sensor.threat_detection_rate // 2)
 
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.

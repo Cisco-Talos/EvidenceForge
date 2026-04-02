@@ -181,6 +181,14 @@ class CrossSourceScorer(DimensionScorer):
                 resp_ip = rec.fields.get("id.resp_h")
                 if resp_ip:
                     index[f"{resp_ip}|{bucket}"][format_name].append(rec)
+
+                # cisco_asa: index by src_ip and dst_ip from parsed message body
+                asa_src = rec.fields.get("src_ip")
+                if asa_src:
+                    index[f"{asa_src}|{bucket}"][format_name].append(rec)
+                asa_dst = rec.fields.get("dst_ip")
+                if asa_dst and asa_dst != asa_src:
+                    index[f"{asa_dst}|{bucket}"][format_name].append(rec)
         return dict(index)
 
     # --- Sub-score 1: Source Correctness ---
@@ -207,7 +215,7 @@ class CrossSourceScorer(DimensionScorer):
                 total += 1
                 host_os = vis.get_os_category(hostname)
 
-                if hostname not in vis.hostnames:
+                if vis.resolve_hostname(hostname) is None:
                     if len(failures) < 10:
                         failures.append(f"[{format_name}] Host '{hostname}' not in scenario")
                 elif host_os == expected_os:
@@ -412,7 +420,7 @@ class CrossSourceScorer(DimensionScorer):
 
         for rec in sample:
             hostname = _extract_hostname(rec)
-            if not hostname or hostname not in vis.hostnames:
+            if not hostname or vis.resolve_hostname(hostname) is None:
                 continue
 
             expected_formats = vis.get_expected_formats(hostname)

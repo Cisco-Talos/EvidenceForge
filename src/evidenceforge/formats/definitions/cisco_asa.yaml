@@ -1,0 +1,147 @@
+name: cisco_asa
+version: "1.0"
+description: "Cisco ASA firewall syslog format"
+category: network
+
+fields:
+  - name: timestamp
+    type: timestamp
+    required: true
+    description: "Event timestamp"
+
+  - name: hostname
+    type: string
+    required: true
+    description: "Firewall hostname"
+
+  - name: severity
+    type: integer
+    required: true
+    description: "Syslog severity level (4=warning, 6=informational)"
+    constraints:
+      min_value: 0
+      max_value: 7
+
+  - name: msg_id
+    type: integer
+    required: true
+    description: "ASA message ID (e.g., 302013, 106023)"
+
+  - name: message
+    type: string
+    required: true
+    description: "ASA message body (varies by msg_id)"
+
+  - name: pri
+    type: integer
+    required: true
+    description: "Syslog priority (facility * 8 + severity)"
+
+  # Fields extracted from message body by the eval parser (conditional on msg_id)
+  - name: connection_id
+    type: integer
+    required: false
+    description: "ASA connection tracking ID (Built/Teardown messages)"
+
+  - name: src_ip
+    type: ip_address
+    required: false
+    description: "Source IP extracted from message body"
+
+  - name: dst_ip
+    type: ip_address
+    required: false
+    description: "Destination IP extracted from message body"
+
+  - name: src_port
+    type: port
+    required: false
+    description: "Source port"
+
+  - name: dst_port
+    type: port
+    required: false
+    description: "Destination port"
+
+  - name: src_interface
+    type: string
+    required: false
+    description: "Source ASA interface name (e.g., outside, inside)"
+
+  - name: dst_interface
+    type: string
+    required: false
+    description: "Destination ASA interface name"
+
+  - name: duration
+    type: string
+    required: false
+    description: "Connection duration from teardown messages (H:MM:SS)"
+
+  - name: bytes
+    type: integer
+    required: false
+    description: "Bytes transferred from teardown messages"
+
+  - name: icmp_type
+    type: integer
+    required: false
+    description: "ICMP type from ICMP messages"
+
+  - name: icmp_code
+    type: integer
+    required: false
+    description: "ICMP code from deny messages"
+
+  - name: protocol
+    type: string
+    required: false
+    description: "Protocol name from deny messages (tcp/udp/icmp)"
+
+  - name: access_group
+    type: string
+    required: false
+    description: "ACL name from deny messages"
+
+  # Fields extracted from 733100 threat detection alerts
+  - name: threat_class
+    type: string
+    required: false
+    description: "Threat classification from 733100 (e.g., Scanning)"
+
+  - name: rate_id
+    type: integer
+    required: false
+    description: "Rate interval ID from 733100"
+
+  - name: burst_rate
+    type: integer
+    required: false
+    description: "Current burst rate (drops/sec) from 733100"
+
+  - name: burst_max
+    type: integer
+    required: false
+    description: "Configured max burst rate from 733100"
+
+  - name: avg_rate
+    type: integer
+    required: false
+    description: "Current average rate (drops/sec) from 733100"
+
+  - name: avg_max
+    type: integer
+    required: false
+    description: "Configured max average rate from 733100"
+
+  - name: cumulative_count
+    type: integer
+    required: false
+    description: "Total deny count from 733100"
+
+output:
+  format: text
+  file_extension: ".log"
+  encoding: utf-8
+  template: |
+    <{{ pri }}>{{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} %ASA-{{ severity }}-{{ msg_id }}: {{ message }}

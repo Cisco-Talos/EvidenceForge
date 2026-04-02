@@ -304,6 +304,13 @@ class SignalIntegrityScorer(DimensionScorer):
                 orig_ip = rec.fields.get("id.orig_h")
                 if orig_ip:
                     host_time_index[f"{orig_ip}|{bucket}"][format_name].append(rec)
+                # cisco_asa: index by src_ip and dst_ip from parsed message body
+                asa_src = rec.fields.get("src_ip")
+                if asa_src:
+                    host_time_index[f"{asa_src}|{bucket}"][format_name].append(rec)
+                asa_dst = rec.fields.get("dst_ip")
+                if asa_dst and asa_dst != asa_src:
+                    host_time_index[f"{asa_dst}|{bucket}"][format_name].append(rec)
 
         for event in resolved:
             for event_type in event.event_types:
@@ -530,6 +537,32 @@ class SignalIntegrityScorer(DimensionScorer):
         elif event_type == "dhcp_lease":
             if format_name == "zeek_dhcp":
                 return True  # Any DHCP record in the time window is a match
+
+        elif event_type == "port_scan":
+            if format_name == "cisco_asa":
+                msg_id = f.get("msg_id")
+                return (msg_id == 106023 and f.get("src_ip") == event.system_ip) or msg_id == 733100
+            if format_name == "zeek_conn":
+                return f.get("id.orig_h") == event.system_ip and f.get("conn_state") in (
+                    "S0",
+                    "REJ",
+                )
+
+        elif event_type == "blocked_c2":
+            expected_dst = event.details.get("dst_ip", "")
+            expected_port = event.details.get("dst_port")
+            if format_name == "cisco_asa":
+                return (
+                    f.get("msg_id") == 106023
+                    and f.get("dst_ip") == expected_dst
+                    and f.get("dst_port") == expected_port
+                )
+            if format_name == "zeek_conn":
+                return (
+                    f.get("id.resp_h") == expected_dst
+                    and f.get("id.resp_p") == expected_port
+                    and f.get("conn_state") in ("S0", "REJ")
+                )
 
         return False
 

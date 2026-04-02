@@ -762,6 +762,8 @@ class StorylineMixin:
                 service_account=spec.service_account,
             )
             malicious_event["service_name"] = spec.service_name
+            if spec.service_file_name:
+                malicious_event["service_file_name"] = spec.service_file_name
 
         elif spec.type == "scheduled_task_created":
             task_content = spec.task_content
@@ -787,6 +789,7 @@ class StorylineMixin:
                 task_content=task_content,
             )
             malicious_event["task_name"] = spec.task_name
+            malicious_event["task_content"] = task_content
 
         elif spec.type == "log_cleared":
             self.activity_generator.generate_log_cleared(user=actor, system=system, time=time)
@@ -843,6 +846,122 @@ class StorylineMixin:
             )
             malicious_event["mac_address"] = mac
 
+        elif spec.type == "port_scan":
+            import ipaddress
+
+            # Resolve target IPs
+            if spec.target_ips:
+                resolved_targets = list(spec.target_ips)
+            elif spec.target_segment and self.scenario.environment.network:
+                seg = next(
+                    (
+                        s
+                        for s in self.scenario.environment.network.segments
+                        if s.name == spec.target_segment
+                    ),
+                    None,
+                )
+                if seg:
+                    net = ipaddress.ip_network(seg.cidr, strict=False)
+                    all_hosts = [str(h) for h in net.hosts()]
+                    count = min(spec.target_count, len(all_hosts))
+                    resolved_targets = rng.sample(all_hosts, count)
+                else:
+                    resolved_targets = []
+            else:
+                resolved_targets = []
+
+            # Determine conn_state from firewall drop_mode
+            conn_state = self._get_firewall_deny_conn_state()
+
+            # Resolve interfaces
+            src_iface = self._resolve_firewall_interface(system.ip)
+
+            # Generate deny connections: targets × ports
+            spacing = 1.0 / spec.scan_rate
+            total_count = 0
+            for target_ip in resolved_targets:
+                dst_iface = self._resolve_firewall_interface(target_ip)
+                for port in spec.ports:
+                    jitter_offset = rng.uniform(-spacing * 0.2, spacing * 0.2)
+                    scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
+                    self.state_manager.set_current_time(scan_time)
+
+                    from evidenceforge.events.contexts import FirewallContext
+
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=target_ip,
+                        time=scan_time,
+                        dst_port=port,
+                        proto=spec.protocol,
+                        conn_state=conn_state,
+                        firewall=FirewallContext(
+                            action="deny",
+                            msg_id=106023,
+                            connection_id=0,
+                            src_interface=src_iface,
+                            dst_interface=dst_iface,
+                            access_group=f"{src_iface}_access_in",
+                        ),
+                        emit_dns=False,
+                    )
+                    total_count += 1
+
+            malicious_event["target_count"] = len(resolved_targets)
+            malicious_event["ports"] = spec.ports
+            malicious_event["total_connections"] = total_count
+            malicious_event["protocol"] = spec.protocol
+
+        elif spec.type == "blocked_c2":
+            interval_td = parse_duration(spec.interval)
+            duration_td = parse_duration(spec.duration)
+            interval_sec = interval_td.total_seconds()
+            duration_sec = duration_td.total_seconds()
+
+            # Determine conn_state from firewall drop_mode
+            conn_state = self._get_firewall_deny_conn_state()
+
+            # Resolve interfaces
+            src_iface = self._resolve_firewall_interface(system.ip)
+            dst_iface = self._resolve_firewall_interface(spec.dst_ip)
+
+            # Generate periodic denied attempts
+            from evidenceforge.events.contexts import FirewallContext
+
+            attempt_count = 0
+            t = 0.0
+            while t <= duration_sec:
+                jitter_offset = rng.uniform(-spec.jitter * interval_sec, spec.jitter * interval_sec)
+                attempt_time = time + timedelta(seconds=max(0.0, t + jitter_offset))
+                self.state_manager.set_current_time(attempt_time)
+
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=spec.dst_ip,
+                    time=attempt_time,
+                    dst_port=spec.dst_port,
+                    proto=spec.protocol,
+                    conn_state=conn_state,
+                    firewall=FirewallContext(
+                        action="deny",
+                        msg_id=106023,
+                        connection_id=0,
+                        src_interface=src_iface,
+                        dst_interface=dst_iface,
+                        access_group=f"{src_iface}_access_in",
+                    ),
+                    emit_dns=False,
+                )
+                attempt_count += 1
+                t += interval_sec
+
+            malicious_event["dst_ip"] = spec.dst_ip
+            malicious_event["dst_port"] = spec.dst_port
+            malicious_event["interval"] = spec.interval
+            malicious_event["duration"] = spec.duration
+            malicious_event["attempt_count"] = attempt_count
+
         elif spec.type == "raw":
             self.activity_generator.generate_raw(
                 time=time,
@@ -853,6 +972,37 @@ class StorylineMixin:
             malicious_event["target_format"] = spec.target_format
 
         return malicious_event
+
+    def _resolve_firewall_interface(self, ip: str) -> str:
+        """Resolve an IP to a firewall interface name using scenario network config."""
+        import ipaddress as _ipaddress
+
+        if not self.scenario.environment.network:
+            return "outside"
+        fw_sensor = next(
+            (s for s in self.scenario.environment.network.sensors if s.type == "firewall"),
+            None,
+        )
+        interfaces = fw_sensor.interfaces if fw_sensor else {}
+        for seg in self.scenario.environment.network.segments:
+            try:
+                if _ipaddress.ip_address(ip) in _ipaddress.ip_network(seg.cidr, strict=False):
+                    return interfaces.get(seg.name, seg.name)
+            except (ValueError, KeyError):
+                continue
+        return interfaces.get("_default", "outside")
+
+    def _get_firewall_deny_conn_state(self) -> str:
+        """Get the conn_state for denied connections based on firewall drop_mode."""
+        if not self.scenario.environment.network:
+            return "S0"
+        fw_sensor = next(
+            (s for s in self.scenario.environment.network.sensors if s.type == "firewall"),
+            None,
+        )
+        if fw_sensor and fw_sensor.drop_mode == "reject":
+            return "REJ"
+        return "S0"
 
     @staticmethod
     def _extract_output_file(command_line: str, os_category: str) -> str | None:

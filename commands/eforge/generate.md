@@ -153,6 +153,7 @@ After reviewing output, you can suggest:
 | syslog | Linux syslog (BSD format) | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
+| cisco_asa | Cisco ASA firewall syslog (Built/Teardown/Deny) | Firewall sensors |
 | web_access | Apache/Nginx combined access logs | Web servers |
 
 See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each format.

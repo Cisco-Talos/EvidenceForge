@@ -16,6 +16,8 @@ You are helping the user create an EvidenceForge scenario YAML file that will dr
 
 The goal is a scenario that produces data useful for threat hunting training — realistic baseline noise mixed with a buried attack storyline that a hunter would need to find. The primary users are security professionals, though the data may be consumed by students and newcomers as well.
 
+The engine now supports up to 9 log formats including Cisco ASA firewall logs (`cisco_asa`) with explicit firewall policy rules for allow/deny decisions.
+
 ## How This Works
 
 EvidenceForge uses a two-phase approach:
@@ -208,6 +210,24 @@ environment:
         direction: bidirectional  # bidirectional | inbound | outbound
         placement: span           # span (sees intra-segment) | tap (cross-segment only)
         log_formats: [zeek]
+      - type: firewall            # Cisco ASA firewall sensor
+        name: fw01
+        hostname: fw01
+        monitoring_segments: [corporate_lan, server_vlan, dmz]
+        placement: tap
+        direction: bidirectional
+        log_formats: [cisco_asa]
+        interfaces:               # Map segments to ASA interface names
+          corporate_lan: inside
+          server_vlan: inside
+          dmz: dmz
+        default_action: deny      # Standard firewall practice
+        deny_ratio: 5.0           # ~5 denies per allow in baseline
+        policy:                   # First-match-wins (like real ACLs)
+          - {src: external, dst: dmz, ports: [80, 443]}
+          - {src: corporate_lan, dst: any}
+          - {src: server_vlan, dst: external, ports: [80, 443, 53]}
+          - {src: server_vlan, dst: server_vlan}
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer
@@ -260,8 +280,8 @@ output:
   logs:
     - format: windows
     - format: zeek
-    # Available: windows, zeek, ecar, syslog,
-    #            bash_history, snort_alert, web_access, proxy_access
+    # Available: windows, zeek, ecar, syslog, bash_history,
+    #            snort_alert, cisco_asa, web_access, proxy_access
   destination: "./output"
   compression: false
 ```
@@ -272,7 +292,8 @@ The `os` field on systems determines which native log formats are generated:
 - **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
 - **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
 - **eCAR** (format) → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
-- **Zeek, Snort** → Network-level, OS-agnostic (driven by network sensor configuration)
+- **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
+- **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
 - **web_access** → Generated for systems with `roles: [web_server]`
 - **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
 
@@ -336,7 +357,11 @@ These are just examples — invent additional realistic variations appropriate t
 
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `raw`
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `blocked_c2`, `raw`
+
+**Firewall event types:**
+- `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
+- `blocked_c2` — Periodic denied outbound for blocked C2 beaconing. Fields: `dst_ip`, `dst_port`, `interval`, `duration`, `jitter`. Produces ASA 106023 denies over the specified time range.
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 

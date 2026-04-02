@@ -282,6 +282,7 @@ class BaselineMixin:
             self._generate_stale_account_noise(current_hour)
             self._generate_lateral_movement_noise(current_hour)
             self._generate_suspicious_noise(current_hour)
+            self._generate_firewall_deny_baseline(current_hour)
 
             hour_key = int(current_hour.timestamp())
             for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
@@ -987,6 +988,199 @@ class BaselineMixin:
                         process_name=proc.image,
                         logon_id=logon_id,
                     )
+
+    def _evaluate_firewall_policy(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        sensor,
+        segment_cidrs: dict,
+    ) -> str:
+        """Evaluate a connection against the firewall's policy rules.
+
+        Walks rules in order (first match wins). Returns 'permit' or 'deny'.
+        If no rule matches, returns sensor.default_action.
+        """
+        import ipaddress as _ipaddress
+
+        def _resolve_segment(ip: str) -> str:
+            """Resolve an IP to a segment name, or 'external' if not in any."""
+            for seg_name, cidr in segment_cidrs.items():
+                try:
+                    if _ipaddress.ip_address(ip) in cidr:
+                        return seg_name
+                except (ValueError, KeyError):
+                    continue
+            return "external"
+
+        def _matches_specifier(ip: str, ip_segment: str, spec: str) -> bool:
+            """Check if an IP/segment matches a rule specifier."""
+            if spec == "any":
+                return True
+            if spec == "external":
+                return ip_segment == "external"
+            if spec == ip_segment:
+                return True
+            # Try IP match
+            try:
+                if _ipaddress.ip_address(ip) == _ipaddress.ip_address(spec):
+                    return True
+            except ValueError:
+                pass
+            # Try CIDR match
+            try:
+                if _ipaddress.ip_address(ip) in _ipaddress.ip_network(spec, strict=False):
+                    return True
+            except ValueError:
+                pass
+            return False
+
+        src_seg = _resolve_segment(src_ip)
+        dst_seg = _resolve_segment(dst_ip)
+
+        for rule in sensor.policy:
+            if not _matches_specifier(src_ip, src_seg, rule.src):
+                continue
+            if not _matches_specifier(dst_ip, dst_seg, rule.dst):
+                continue
+            # Check port (empty list = any)
+            if rule.ports:
+                port_list = [int(p) if isinstance(p, int) else p for p in rule.ports]
+                if "any" not in port_list and dst_port not in port_list:
+                    continue
+            return rule.action
+
+        return sensor.default_action
+
+    def _generate_firewall_deny_baseline(self, current_hour: datetime) -> None:
+        """Generate denied connection events for firewall sensors.
+
+        For each firewall-type sensor, generates deny events proportional to
+        the estimated allow traffic (controlled by deny_ratio). Deny targets
+        are connections that violate the sensor's policy rules.
+        """
+        if not self.scenario.environment.network or not self.scenario.environment.network.sensors:
+            return
+
+        rng = _get_rng()
+
+        # Pre-compute segment CIDRs for IP matching
+        import ipaddress
+
+        segments = self.scenario.environment.network.segments
+        segment_cidrs: dict[str, ipaddress.IPv4Network | ipaddress.IPv6Network] = {}
+        for seg in segments:
+            try:
+                segment_cidrs[seg.name] = ipaddress.ip_network(seg.cidr, strict=False)
+            except ValueError:
+                continue
+
+        # Collect internal IPs from scenario systems
+        internal_ips = [s.ip for s in self.scenario.environment.systems if s.ip]
+
+        # Commonly targeted ports for external scanning
+        _SCAN_PORTS = [22, 23, 80, 443, 445, 1433, 3389, 5432, 8080, 8443]
+        # Ports rarely allowed in corporate firewalls
+        _BLOCKED_PORTS = [23, 135, 137, 138, 139, 445, 1433, 3389, 5900, 6379]
+
+        for sensor in self.scenario.environment.network.sensors:
+            if sensor.type != "firewall" or "cisco_asa" not in sensor.log_formats:
+                continue
+            if sensor.deny_ratio <= 0:
+                continue
+
+            # Estimate allow traffic: ~10-20 connections per internal system per hour
+            estimated_allows = len(internal_ips) * rng.randint(10, 20)
+            deny_count = int(estimated_allows * sensor.deny_ratio)
+            if deny_count <= 0:
+                continue
+
+            from evidenceforge.events.contexts import FirewallContext
+
+            sensor_interfaces = sensor.interfaces
+            deny_conn_state = "REJ" if sensor.drop_mode == "reject" else "S0"
+
+            def _resolve_iface(ip: str, _ifaces: dict = sensor_interfaces) -> str:  # noqa: B006
+                for seg_name, cidr in segment_cidrs.items():
+                    try:
+                        if ipaddress.ip_address(ip) in cidr:
+                            return _ifaces.get(seg_name, seg_name)
+                    except ValueError:
+                        continue
+                return _ifaces.get("_default", "outside")
+
+            # Generate deny events — only emit connections the policy would deny
+            generated = 0
+            attempts = 0
+            max_attempts = deny_count * 5
+            while generated < deny_count and attempts < max_attempts:
+                attempts += 1
+
+                # Choose deny pattern candidate
+                roll = rng.random()
+                if roll < 0.60:
+                    # External -> internal
+                    src_ip = self._generate_external_client_ip(rng)
+                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_port = rng.choice(_SCAN_PORTS)
+                    proto = "tcp"
+                elif roll < 0.80:
+                    # Cross-segment blocked
+                    if len(internal_ips) >= 2:
+                        src_ip, dst_ip = rng.sample(internal_ips, 2)
+                    else:
+                        src_ip = internal_ips[0] if internal_ips else "10.0.10.1"
+                        dst_ip = "10.0.20.1"
+                    dst_port = rng.choice(_BLOCKED_PORTS)
+                    proto = "tcp"
+                elif roll < 0.90:
+                    # Outbound blocked
+                    src_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_ip = self._generate_external_client_ip(rng)
+                    dst_port = rng.choice(_BLOCKED_PORTS)
+                    proto = "tcp"
+                else:
+                    # ICMP ping sweep from external
+                    src_ip = self._generate_external_client_ip(rng)
+                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_port = 8  # ICMP echo request type
+                    proto = "icmp"
+
+                # Only emit if the policy would actually deny this connection
+                if (
+                    self._evaluate_firewall_policy(src_ip, dst_ip, dst_port, sensor, segment_cidrs)
+                    != "deny"
+                ):
+                    continue
+
+                offset_sec = rng.uniform(0, 3600)
+                ts = current_hour + timedelta(seconds=offset_sec)
+                self.state_manager.set_current_time(ts)
+
+                src_iface = _resolve_iface(src_ip)
+                dst_iface = _resolve_iface(dst_ip)
+                acl_name = f"{src_iface}_access_in"
+
+                fw_ctx = FirewallContext(
+                    action="deny",
+                    msg_id=106023,
+                    connection_id=0,
+                    src_interface=src_iface,
+                    dst_interface=dst_iface,
+                    access_group=acl_name,
+                )
+
+                self.activity_generator.generate_connection(
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=dst_port,
+                    proto=proto,
+                    conn_state=deny_conn_state,
+                    firewall=fw_ctx,
+                )
+                generated += 1
 
     def _generate_logoffs_for_hour(
         self,

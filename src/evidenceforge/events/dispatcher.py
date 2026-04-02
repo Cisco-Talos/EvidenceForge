@@ -66,7 +66,7 @@ FORMAT_GROUPS: dict[str, set[str]] = {
 }
 
 # Formats subject to network visibility filtering (expanded emitter names)
-_NETWORK_FORMATS = FORMAT_GROUPS["zeek"] | {"snort_alert"}
+_NETWORK_FORMATS = FORMAT_GROUPS["zeek"] | {"snort_alert", "cisco_asa"}
 
 
 def expand_formats(formats: list[str] | set[str]) -> set[str]:
@@ -128,13 +128,23 @@ class EventDispatcher:
         # and annotate the event with observing sensor hostnames
         visible_formats: set[str] | None = None
         if event.network and self.visibility_engine:
-            visible_formats = self.visibility_engine.get_log_formats_for_connection(
-                event.network.src_ip, event.network.dst_ip
-            )
-            # Annotate event with per-format sensor hostname mapping
-            sensors = self.visibility_engine.get_observing_sensors(
-                event.network.src_ip, event.network.dst_ip
-            )
+            # Denied connections only visible from the source side (packets
+            # never reach the destination — firewall blocks them)
+            is_fw_deny = event.firewall is not None and event.firewall.action == "deny"
+            if is_fw_deny:
+                visible_formats = self.visibility_engine.get_log_formats_for_source_only(
+                    event.network.src_ip, event.network.dst_ip
+                )
+                sensors = self.visibility_engine.get_source_side_sensors(
+                    event.network.src_ip, event.network.dst_ip
+                )
+            else:
+                visible_formats = self.visibility_engine.get_log_formats_for_connection(
+                    event.network.src_ip, event.network.dst_ip
+                )
+                sensors = self.visibility_engine.get_observing_sensors(
+                    event.network.src_ip, event.network.dst_ip
+                )
             format_to_sensors: dict[str, list[str]] = {}
             for sensor in sensors:
                 hostname = sensor.hostname or sensor.name

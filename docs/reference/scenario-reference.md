@@ -114,6 +114,59 @@ network:
 
 Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
 
+### Network Sensors
+
+Sensors define monitoring infrastructure. Each sensor type produces different log formats:
+
+```yaml
+network:
+  sensors:
+    - type: network             # network | ids | firewall
+      name: core-tap
+      hostname: zeek01          # Output directory name (falls back to name)
+      monitoring_segments: [corporate_lan, server_vlan]
+      direction: bidirectional  # bidirectional | inbound | outbound
+      placement: span           # span (sees intra-segment) | tap (cross-segment only)
+      log_formats: [zeek]       # Format groups or individual formats
+```
+
+#### Firewall Sensors
+
+Firewall sensors produce Cisco ASA syslog records for permitted and denied connections. They require explicit policy rules to determine what traffic is allowed vs denied.
+
+```yaml
+    - type: firewall
+      name: fw01
+      hostname: fw01
+      monitoring_segments: [workstations, servers, dmz]
+      placement: tap
+      direction: bidirectional
+      log_formats: [cisco_asa]
+      interfaces:               # Map segment names to ASA interface names
+        workstations: inside
+        servers: inside
+        dmz: dmz
+      default_action: deny      # deny (default) | permit
+      deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
+      threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)
+      policy:                   # Ordered rules — first match wins
+        - {src: external, dst: dmz, ports: [80, 443]}
+        - {src: workstations, dst: any}
+        - {src: servers, dst: external, ports: [80, 443, 53]}
+        - {src: servers, dst: servers}
+```
+
+**Policy rules** (`FirewallRule`):
+- `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`
+- `ports`: list of port numbers, or empty list / `"any"` for all ports
+- `action`: `"permit"` (default) or `"deny"`
+- Rules are evaluated in order; first match wins (like real ACLs)
+- Traffic not matching any rule is subject to `default_action`
+
+**Interfaces**: Map segment names to ASA interface names (e.g., `inside`, `outside`, `dmz`). IPs not in any mapped segment resolve to `"outside"`.
+
+**Threat detection**: The ASA emitter automatically tracks per-source-IP deny rates and fires 733100 alerts when both burst (default 10 drops/sec over 20s) and average (default 5 drops/sec over 60s) thresholds are exceeded. Set `threat_detection_rate: 0` to disable.
+
 ## Personas
 
 Personas define user behavior patterns for activity generation. EvidenceForge includes 15 pre-built personas (developer, analyst, sysadmin, executive, etc.) that are resolved automatically by name — reference them in user definitions without needing to define them inline. Define personas inline only if you need to customize behavior beyond what the pre-built library provides; inline definitions override pre-built ones with the same name.
@@ -240,6 +293,8 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
+| `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `target_count`, `ports`, `protocol`, `scan_rate` |
+| `blocked_c2` | ASA 106023 (periodic denies) | `dst_ip` | `dst_port`, `interval`, `duration`, `jitter` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
@@ -332,6 +387,50 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
 ```
 
 Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC from the system IP and uses the system's configured IP if omitted.
+
+### Port Scan Events
+
+Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-like propagation. Generates many firewall deny records (ASA 106023) from a single storyline step.
+
+```yaml
+- time: "+1h"
+  actor: attacker
+  system: WEB-EXT-01
+  activity: "Port scan of server VLAN from compromised DMZ host"
+  events:
+    - type: port_scan
+      target_segment: server_vlan     # Or target_ips: ["10.0.20.1", "10.0.20.2"]
+      target_count: 20                # Sample 20 IPs from the segment
+      ports: [22, 80, 443, 445, 3389]
+      protocol: tcp
+      scan_rate: 50                   # 50 connections/second
+      technique: "T1046 - Network Service Discovery"
+```
+
+Fields: `target_ips` (explicit list) or `target_segment` + `target_count` (sample from CIDR). `ports` (default: [22, 80, 443, 445, 3389]). `protocol` (tcp/udp/icmp). `scan_rate` (connections/second, default: 100).
+
+Denied connections are only visible to sensors on the source side of the firewall. The firewall's `drop_mode` controls whether Zeek sees `S0` (silent drop) or `REJ` (RST response).
+
+### Blocked C2 Events
+
+Use `blocked_c2` for malware beaconing that the firewall blocks. Generates periodic denied outbound connection attempts over a specified duration.
+
+```yaml
+- time: "+5h"
+  actor: attacker
+  system: DC-01
+  activity: "Blocked C2 beaconing — firewall denies outbound from DC"
+  events:
+    - type: blocked_c2
+      dst_ip: "198.51.100.30"
+      dst_port: 443
+      interval: "30m"                 # Try every 30 minutes
+      duration: "12h"                 # Keep trying for 12 hours
+      jitter: 0.2                     # ±20% variation on interval
+      technique: "T1071.001 - Web Protocols"
+```
+
+Fields: `dst_ip` (C2 server), `dst_port` (default: 443), `interval` (time between attempts), `duration` (total beaconing period), `jitter` (0.0-1.0, default: 0.2).
 
 ### HTTP Connection Events
 
@@ -490,7 +589,7 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy`.
 
 ## Backward Compatibility
 

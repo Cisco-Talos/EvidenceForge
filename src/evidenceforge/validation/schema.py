@@ -195,6 +195,7 @@ class ScenarioValidator:
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
         self._validate_expansion_redundancy()
+        self._validate_firewall_config()
         self._sort_issues()
         return self.issues
 
@@ -419,6 +420,7 @@ class ScenarioValidator:
             "syslog",
             "bash_history",
             "snort_alert",
+            "cisco_asa",
             "web_access",
             "proxy_access",
         }
@@ -491,7 +493,7 @@ class ScenarioValidator:
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
 
         # Valid sensor log_formats: group names + standalone non-group formats
-        known_sensor_formats = set(FORMAT_GROUPS.keys()) | {"snort_alert"}
+        known_sensor_formats = set(FORMAT_GROUPS.keys()) | {"snort_alert", "cisco_asa"}
         # Individual emitter names that must use their group instead
         _group_members = {}
         for group, members in FORMAT_GROUPS.items():
@@ -539,6 +541,7 @@ class ScenarioValidator:
             "syslog",
             "bash_history",
             "snort_alert",
+            "cisco_asa",
             "web_access",
             "proxy_access",
         }
@@ -1293,3 +1296,96 @@ class ScenarioValidator:
             return (0, 0, issue.field_path)
 
         self.issues.sort(key=sort_key)
+
+    def _validate_firewall_config(self) -> None:
+        """Validate firewall-specific configuration on network sensors."""
+        if not self.scenario.environment.network or not self.scenario.environment.network.sensors:
+            return
+
+        import ipaddress
+
+        segment_names = {seg.name for seg in self.scenario.environment.network.segments}
+        # Special keywords accepted in policy src/dst
+        _SPECIAL_KEYWORDS = {"external", "any"}
+
+        for idx, sensor in enumerate(self.scenario.environment.network.sensors):
+            prefix = f"environment.network.sensors.{idx}"
+
+            # Firewall without cisco_asa
+            if sensor.type == "firewall" and "cisco_asa" not in sensor.log_formats:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"{prefix}.log_formats",
+                        message=(
+                            f"Firewall sensor '{sensor.name}' does not include "
+                            f"'cisco_asa' in log_formats"
+                        ),
+                        suggestion="Add 'cisco_asa' to log_formats to generate firewall logs",
+                    )
+                )
+
+            # Non-firewall with policy
+            if sensor.type != "firewall" and sensor.policy:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"{prefix}.policy",
+                        message=(
+                            f"Sensor '{sensor.name}' (type={sensor.type}) has "
+                            f"firewall policy rules but is not type 'firewall'"
+                        ),
+                        suggestion="Set type to 'firewall' or remove the policy",
+                    )
+                )
+
+            # Validate interface mapping keys
+            for iface_key in sensor.interfaces:
+                if iface_key == "_default":
+                    continue
+                if iface_key not in segment_names:
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=f"{prefix}.interfaces.{iface_key}",
+                            message=(
+                                f"Interface mapping key '{iface_key}' does not "
+                                f"match any defined network segment"
+                            ),
+                            suggestion=(f"Use one of: {', '.join(sorted(segment_names))}"),
+                        )
+                    )
+
+            # Validate policy rule src/dst references
+            for rule_idx, rule in enumerate(sensor.policy):
+                for field_name in ("src", "dst"):
+                    value = getattr(rule, field_name)
+                    if value in _SPECIAL_KEYWORDS:
+                        continue
+                    if value in segment_names:
+                        continue
+                    # Check if it's a valid IP or CIDR
+                    try:
+                        ipaddress.ip_address(value)
+                        continue
+                    except ValueError:
+                        pass
+                    try:
+                        ipaddress.ip_network(value, strict=False)
+                        continue
+                    except ValueError:
+                        pass
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="warning",
+                            field_path=(f"{prefix}.policy.{rule_idx}.{field_name}"),
+                            message=(
+                                f"Policy rule {field_name} '{value}' is not a "
+                                f"known segment name, IP, or CIDR"
+                            ),
+                            suggestion=(
+                                f"Use a segment name ({', '.join(sorted(segment_names))}), "
+                                f"'external', 'any', an IP, or CIDR"
+                            ),
+                        )
+                    )

@@ -130,6 +130,7 @@ def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
 
 # Import parsers to trigger registration
 from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.cisco_asa import CiscoAsaParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.ecar import EcarParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
