@@ -28,7 +28,7 @@
     default_action: deny, deny_ratio: 5.0, nat_rules:
       - type: dynamic_pat
         src: [corporate_lan, server_vlan]
-        mapped_ip: 198.51.100.1
+        mapped_ip: 45.33.32.1
     policy:
       - {src: external, dst: dmz, ports: [80, 443]}          # Allow web traffic to DMZ
       - {src: corporate_lan, dst: any}                         # Users can reach anything
@@ -61,9 +61,9 @@
   Attack storyline — APT via web app exploit, full kill chain:
   1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
   (dhcp_lease event with explicit MAC address). Actor: attacker on rogue device.
-  2. Initial Access (+1h): External attacker (203.0.113.45) scans and exploits SQL injection on
+  2. Initial Access (+1h): External attacker (185.70.41.45) scans and exploits SQL injection on
   WEB-EXT-01's EHR portal. Actor: root.
-  2. Execution (+1h20m): Web shell upload, reverse shell to C2 at 198.51.100.30:8443. Use real
+  2. Execution (+1h20m): Web shell upload, reverse shell to C2 at 45.33.32.30:8443. Use real
   base64-encoded reverse shell payload.
   3. Discovery (+1h40m–2h): Network enumeration from WEB-EXT-01 — ip addr, /etc/hosts, nmap ping sweep
   and port scan of server_vlan.
@@ -81,21 +81,21 @@
   explicit account_created and group_member_added events).
   12. Persistence (+5h30m): Install service "HealthMonitorSvc" (svchost_helper.exe) and create scheduled
   task "\Microsoft\Windows\Maintenance\SystemHealthCheck" on DC-01.
-  13. C2 (+5h45m): HTTPS beacon from DC-01 to 198.51.100.30:443.
+  13. C2 (+5h45m): HTTPS beacon from DC-01 to 45.33.32.30:443.
   14. Collection (+6h30m): Authenticate to FILE-SRV-01 with backdoor account, stage financial and patient
    data, compress with PowerShell.
-  15. Exfiltration (+7h15m): Upload archive to cdn-assets-update.com (198.51.100.30) over HTTPS.
+  15. Exfiltration (+7h15m): Upload archive to cdn-assets-update.com (45.33.32.30) over HTTPS.
   16. Database Access (+8h): SSH to DB-PROD-01, mysqldump patient/insurance tables, gzip and SCP back to
   APP-INT-01.
   17. Defense Evasion (+9h): Clear bash history on Linux, encoded PowerShell download (real UTF-16LE
   base64), clear Security event log on DC-01 (with explicit log_cleared event).
   18. Ongoing C2 (+10h, +12h): Periodic beacons from WEB-EXT-01 and DC-01.
-  19. Port Scan (+0h30m): External attacker (203.0.113.45) scans the DMZ segment looking for
+  19. Port Scan (+0h30m): External attacker (185.70.41.45) scans the DMZ segment looking for
   services before the initial exploit. Use port_scan event with target_segment: dmz, ports:
   [22, 80, 443, 8080, 8443, 3306], scan_rate: 50. This should produce firewall denies visible
   to the external Zeek/Snort sensors but NOT internal sensors.
   20. Blocked C2 (+6h): After compromising DC-01, attacker malware tries to beacon directly
-  from DC-01 to 198.51.100.30:443 — but the firewall policy doesn't allow servers to reach
+  from DC-01 to 45.33.32.30:443 — but the firewall policy doesn't allow servers to reach
   external IPs on arbitrary ports. Use blocked_c2 event with interval: "30m", duration: "6h".
   The denied outbound attempts should be visible to internal sensors only.
 
@@ -108,7 +108,7 @@
   - Use connection events with HTTP fields (method, uri, status_code, user_agent) for web access log entries showing the SQLi and web shell access — NOT raw events
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
-  - External IPs from RFC 5737 ranges
+  - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
   - Baseline activity: medium intensity, medium variation
 
   eCAR format coverage (verify in generated data):

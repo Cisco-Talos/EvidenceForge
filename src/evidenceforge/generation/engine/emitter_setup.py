@@ -637,4 +637,11 @@ class EmitterSetupMixin:
                 continue
             if ip.startswith("192.168."):
                 continue
+            # Exclude RFC 5737 documentation/TEST-NET ranges
+            if (
+                ip.startswith("203.0.113.")
+                or ip.startswith("198.51.100.")
+                or ip.startswith("192.0.2.")
+            ):
+                continue
             return ip

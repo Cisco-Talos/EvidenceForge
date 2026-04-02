@@ -106,7 +106,10 @@ class NetworkVisibilityEngine:
             if sensor.type == "firewall" and sensor.nat_rules:
                 sensor_name = sensor.hostname or sensor.name
                 for rule_idx in range(len(sensor.nat_rules)):
-                    self._pat_port_counters[(sensor_name, rule_idx)] = 10000
+                    import hashlib as _hl
+
+                    seed = int(_hl.md5(f"{sensor_name}:{rule_idx}".encode()).hexdigest()[:8], 16)
+                    self._pat_port_counters[(sensor_name, rule_idx)] = 1024 + (seed % 50000)
                     nat_rule_count += 1
 
         logger.info(
@@ -367,7 +370,9 @@ class NetworkVisibilityEngine:
                     if self._ip_matches_src(src_ip, rule) and not dst_segments:
                         key = (sensor_name, rule_idx)
                         port = self._pat_port_counters[key]
-                        self._pat_port_counters[key] = port + 1
+                        # Non-sequential gaps (1-3 ports) derived deterministically from current port
+                        gap = 1 + (port % 3)
+                        self._pat_port_counters[key] = port + gap
                         return NatContext(
                             nat_type="dynamic_pat",
                             mapped_src_ip=rule.mapped_ip,

@@ -134,8 +134,8 @@ class TestConnectionIdCounter:
     def test_per_sensor_counters(self, asa_emitter):
         id_fw01 = asa_emitter._next_conn_id("fw01")
         id_fw02 = asa_emitter._next_conn_id("fw02")
-        # Both start from the same base
-        assert id_fw01 == id_fw02
+        # Different sensors get different deterministic starting IDs
+        assert id_fw01 != id_fw02
 
 
 class TestPermitRecords:

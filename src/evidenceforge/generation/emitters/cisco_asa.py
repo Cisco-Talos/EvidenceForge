@@ -29,6 +29,7 @@ records for blocked connections.
 Per-sensor directory routing: each firewall sensor gets its own cisco_asa.log.
 """
 
+import hashlib
 import ipaddress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -66,6 +67,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     _log_filename = "cisco_asa.log"
     _flat_filename = "cisco_asa.log"
     _supported_types: set[str] = {"connection"}
+    _sort_before_flush = True
 
     def __init__(
         self,
@@ -95,7 +97,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _next_conn_id(self, sensor_hostname: str) -> int:
         """Get next monotonically increasing connection ID for a sensor."""
-        current = self._conn_id_counters.get(sensor_hostname, 100000)
+        current = self._conn_id_counters.get(sensor_hostname)
+        if current is None:
+            # Deterministic but non-round start per sensor
+            seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
+            current = 100000 + (seed % 9900000)
         self._conn_id_counters[sensor_hostname] = current + 1
         return current
 
@@ -279,8 +285,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             msg_id = 302014 if protocol == "tcp" else 302016
             proto_upper = protocol.upper()
             # Pick a realistic teardown reason
-            import hashlib
-
             reason_idx = int(hashlib.md5(f"{conn_id}".encode()).hexdigest()[:4], 16) % len(
                 _TEARDOWN_REASONS
             )
