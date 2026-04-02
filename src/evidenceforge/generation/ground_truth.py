@@ -224,6 +224,19 @@ class GroundTruthGenerator:
             group = event.get("group_name", "N/A")
             return f"Added {member} to group {group}"
 
+        elif event_type == "port_scan":
+            target_count = event.get("target_count", "N/A")
+            ports = event.get("ports", [])
+            total = event.get("total_connections", "N/A")
+            return f"Port scan: {target_count} targets, ports {ports}, {total} denied connections"
+
+        elif event_type == "blocked_c2":
+            dst = event.get("dst_ip", "N/A")
+            port = event.get("dst_port", "N/A")
+            attempts = event.get("attempt_count", "N/A")
+            duration = event.get("duration", "N/A")
+            return f"Blocked C2 to {dst}:{port} ({attempts} attempts over {duration})"
+
         else:
             return event.get("activity", "N/A")
 
@@ -319,6 +332,16 @@ class GroundTruthGenerator:
                     iocs["users"].add(event["member_name"])
                 if "group_name" in event:
                     iocs["users"].add(f"Group: {event['group_name']}")
+
+            elif event["type"] == "port_scan":
+                for port in event.get("ports", []):
+                    iocs["network"].add(f"Port {port} (scan target)")
+
+            elif event["type"] == "blocked_c2":
+                dst_ip = event.get("dst_ip", "")
+                dst_port = event.get("dst_port", "")
+                if dst_ip:
+                    iocs["network"].add(f"{dst_ip}:{dst_port} (Blocked C2 Server)")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

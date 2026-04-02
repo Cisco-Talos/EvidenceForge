@@ -406,6 +406,40 @@ class DhcpLeaseEventSpec(_EventSpecBase):
     model_config = ConfigDict(extra="forbid")
 
 
+class PortScanEventSpec(_EventSpecBase):
+    """Port scan producing firewall deny records (ASA 106023).
+
+    Generates many denied connection attempts from the storyline system to
+    target IPs/segments. Covers external recon scans, host sweeps, lateral
+    scans through internal firewalls, and worm-like propagation.
+    """
+
+    type: Literal["port_scan"] = "port_scan"
+    target_ips: list[str] = Field(default_factory=list)
+    target_segment: str | None = None
+    target_count: int = Field(default=50, ge=1, le=5000)
+    ports: list[int] = Field(default_factory=lambda: [22, 80, 443, 445, 3389])
+    protocol: str = Field(default="tcp", pattern="^(tcp|udp|icmp)$")
+    scan_rate: float = Field(default=100.0, gt=0.0)
+
+
+class BlockedC2EventSpec(_EventSpecBase):
+    """Blocked C2 beaconing -- periodic denied outbound connection attempts.
+
+    Simulates malware on a compromised host periodically trying to reach a C2
+    server that the firewall blocks. Produces regular denied connection attempts
+    over the specified duration.
+    """
+
+    type: Literal["blocked_c2"] = "blocked_c2"
+    dst_ip: str
+    dst_port: int = 443
+    protocol: str = Field(default="tcp", pattern="^(tcp|udp)$")
+    interval: str = "30m"
+    duration: str = "6h"
+    jitter: float = Field(default=0.2, ge=0.0, le=1.0)
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -436,6 +470,8 @@ EventSpec = Annotated[
     | LogClearedEventSpec
     | CreateRemoteThreadEventSpec
     | DhcpLeaseEventSpec
+    | PortScanEventSpec
+    | BlockedC2EventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]
@@ -598,6 +634,7 @@ class NetworkSensor(BaseModel):
     policy: list[FirewallRule] = Field(default_factory=list)
     default_action: str = Field(default="deny", pattern="^(deny|permit)$")
     deny_ratio: float = Field(default=5.0, ge=0.0)
+    drop_mode: str = Field(default="drop", pattern="^(drop|reject)$")
     description: str = ""
 
 

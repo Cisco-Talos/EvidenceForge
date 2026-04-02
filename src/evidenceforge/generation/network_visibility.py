@@ -205,6 +205,44 @@ class NetworkVisibilityEngine:
             if self._sensor_can_observe(sensor, src_segments, dst_segments)
         ]
 
+    def get_source_side_sensors(self, src_ip: str) -> list[NetworkSensor]:
+        """Return sensors that monitor segments containing the source IP.
+
+        Used for denied connections where traffic only exists on the source
+        side of the firewall — packets never reach the destination.
+        """
+        if not self._enabled:
+            return []
+
+        src_segments = self._resolve_ip_segments(src_ip)
+        if not src_segments:
+            # External IP not in any segment — return sensors on external-facing
+            # segments (those that could see inbound traffic from outside)
+            return [
+                sensor
+                for sensor in self._sensors
+                if sensor.direction in ("bidirectional", "inbound")
+            ]
+
+        return [
+            sensor for sensor in self._sensors if set(sensor.monitoring_segments) & src_segments
+        ]
+
+    def get_log_formats_for_source_only(self, src_ip: str) -> set[str]:
+        """Return log formats from sensors that can see traffic FROM this IP.
+
+        Used for denied connections: only sensors on the source side see them.
+        """
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
+
+        if not self._enabled:
+            return set(FORMAT_GROUPS["zeek"])
+
+        formats: set[str] = set()
+        for sensor in self.get_source_side_sensors(src_ip):
+            formats.update(sensor.log_formats)
+        return expand_formats(formats)
+
     def get_log_formats_for_connection(self, src_ip: str, dst_ip: str) -> set[str]:
         """Return the expanded union of log_formats from all observing sensors.
 

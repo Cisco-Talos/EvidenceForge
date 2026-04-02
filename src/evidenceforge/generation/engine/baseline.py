@@ -1035,6 +1035,7 @@ class BaselineMixin:
             from evidenceforge.events.contexts import FirewallContext
 
             sensor_interfaces = sensor.interfaces
+            deny_conn_state = "REJ" if sensor.drop_mode == "reject" else "S0"
 
             def _resolve_iface(ip: str, _ifaces: dict = sensor_interfaces) -> str:  # noqa: B006
                 for seg_name, cidr in segment_cidrs.items():
@@ -1102,7 +1103,7 @@ class BaselineMixin:
                     time=ts,
                     dst_port=dst_port,
                     proto=proto,
-                    conn_state="REJ",
+                    conn_state=deny_conn_state,
                     firewall=fw_ctx,
                 )
 
