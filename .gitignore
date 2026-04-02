@@ -60,6 +60,7 @@ checkpoints/
 # Ignore any scenarios we might produce
 scenarios/
 !scenarios/COVERAGE-TEST-PROMPT.md
+!scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md
 
 
 # Scan / analysis tool output
