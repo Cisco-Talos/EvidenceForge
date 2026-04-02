@@ -231,8 +231,10 @@ class NetworkVisibilityEngine:
             for sensor in self._sensors:
                 if sensor.type == "firewall":
                     fw_segments = set(sensor.monitoring_segments)
-                    if not dst_segments or fw_segments & dst_segments:
+                    if not dst_segments:
                         boundary_segments.update(fw_segments)
+                    elif fw_segments & dst_segments:
+                        boundary_segments.update(fw_segments & dst_segments)
             if not boundary_segments:
                 return []
             return [

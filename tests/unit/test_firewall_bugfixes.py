@@ -309,6 +309,60 @@ class TestMultiFirewallVisibility:
         assert "db-zeek" not in sensor_names  # doesn't monitor DMZ
 
 
+class TestSingleFirewallSegmentScoping:
+    """External deny scoped to destination segment even with single multi-segment firewall."""
+
+    def test_dmz_deny_not_sent_to_internal_sensor(self):
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+        from evidenceforge.models.scenario import (
+            NetworkConfig,
+            NetworkSegment,
+            NetworkSensor,
+            System,
+        )
+
+        config = NetworkConfig(
+            segments=[
+                NetworkSegment(name="internal", cidr="10.0.10.0/24"),
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["cisco_asa"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="inside-zeek",
+                    monitoring_segments=["internal"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="dmz-zeek",
+                    monitoring_segments=["dmz"],
+                    direction="inbound",
+                    log_formats=["zeek"],
+                ),
+            ],
+        )
+        systems = [
+            System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
+            System(hostname="WEB-01", ip="172.16.0.5", os="Linux Ubuntu", type="server"),
+        ]
+        engine = NetworkVisibilityEngine(network_config=config, systems=systems)
+
+        # External deny targeting DMZ: only dmz-segment sensors should see it
+        sensors = engine.get_source_side_sensors("203.0.113.45", "172.16.0.5")
+        sensor_names = {s.name for s in sensors}
+        assert "dmz-zeek" in sensor_names  # inbound on dmz
+        assert "fw01" in sensor_names  # firewall monitors dmz
+        assert "inside-zeek" not in sensor_names  # packet never reached internal
+
+
 class TestEvaluateFirewallPolicy:
     """Fix 4: _evaluate_firewall_policy() should correctly evaluate rules."""
 
