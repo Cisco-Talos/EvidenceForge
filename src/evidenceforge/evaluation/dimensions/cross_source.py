@@ -207,7 +207,7 @@ class CrossSourceScorer(DimensionScorer):
                 total += 1
                 host_os = vis.get_os_category(hostname)
 
-                if hostname not in vis.hostnames:
+                if vis.resolve_hostname(hostname) is None:
                     if len(failures) < 10:
                         failures.append(f"[{format_name}] Host '{hostname}' not in scenario")
                 elif host_os == expected_os:
@@ -412,7 +412,7 @@ class CrossSourceScorer(DimensionScorer):
 
         for rec in sample:
             hostname = _extract_hostname(rec)
-            if not hostname or hostname not in vis.hostnames:
+            if not hostname or vis.resolve_hostname(hostname) is None:
                 continue
 
             expected_formats = vis.get_expected_formats(hostname)

@@ -589,3 +589,151 @@ class TestGroundTruthGenerator:
 
         assert "| Timestamp | Actor | System | Activity | Why It's Benign |" in content
         assert "| 2024-01-15 10:45:00 UTC | admin.jones | SRV-DB-01 |" in content
+
+    # --- Tests for new event type IOC extraction ---
+
+    def test_extract_iocs_service_installed(self, minimal_scenario):
+        """_extract_iocs() should extract file and process IOCs from service_installed."""
+        events = [
+            {
+                "actor": "attacker",
+                "type": "service_installed",
+                "service_name": "EvilSvc",
+                "service_file_name": "C:\\Windows\\Temp\\payload.exe",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "C:\\Windows\\Temp\\payload.exe" in iocs["files"]
+        assert "Service: EvilSvc" in iocs["processes"]
+
+    def test_extract_iocs_scheduled_task_created(self, minimal_scenario):
+        """_extract_iocs() should extract task name and command from scheduled_task_created."""
+        task_xml = (
+            '<?xml version="1.0"?>\n'
+            "<Task><Actions><Exec>"
+            "<Command>C:\\Windows\\System32\\cmd.exe</Command>"
+            "</Exec></Actions></Task>"
+        )
+        events = [
+            {
+                "actor": "attacker",
+                "type": "scheduled_task_created",
+                "task_name": "Updater",
+                "task_content": task_xml,
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "Scheduled Task: Updater" in iocs["processes"]
+        assert "C:\\Windows\\System32\\cmd.exe" in iocs["files"]
+
+    def test_extract_iocs_create_remote_thread(self, minimal_scenario):
+        """_extract_iocs() should extract target process from create_remote_thread."""
+        events = [
+            {
+                "actor": "attacker",
+                "type": "create_remote_thread",
+                "target_process": "C:\\Windows\\System32\\lsass.exe",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "Injection Target: C:\\Windows\\System32\\lsass.exe" in iocs["processes"]
+
+    def test_extract_iocs_account_created(self, minimal_scenario):
+        """_extract_iocs() should extract target username from account_created."""
+        events = [
+            {
+                "actor": "attacker",
+                "type": "account_created",
+                "target_username": "backdoor_admin",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "backdoor_admin" in iocs["users"]
+
+    def test_extract_iocs_account_deleted(self, minimal_scenario):
+        """_extract_iocs() should extract target username from account_deleted."""
+        events = [
+            {
+                "actor": "attacker",
+                "type": "account_deleted",
+                "target_username": "backdoor_admin",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "backdoor_admin" in iocs["users"]
+
+    def test_extract_iocs_group_member_added(self, minimal_scenario):
+        """_extract_iocs() should extract member and group from group_member_added."""
+        events = [
+            {
+                "actor": "attacker",
+                "type": "group_member_added",
+                "member_name": "backdoor_admin",
+                "group_name": "Domain Admins",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "backdoor_admin" in iocs["users"]
+        assert "Group: Domain Admins" in iocs["users"]
+
+    # --- Tests for new event type formatting ---
+
+    def test_format_event_details_service_installed(self, minimal_scenario, malicious_events):
+        """_format_event_details() should format service_installed events."""
+        event = {
+            "type": "service_installed",
+            "service_name": "EvilSvc",
+            "service_file_name": "C:\\Windows\\Temp\\payload.exe",
+        }
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "Service installed: EvilSvc" in details
+        assert "C:\\Windows\\Temp\\payload.exe" in details
+
+    def test_format_event_details_scheduled_task_created(self, minimal_scenario, malicious_events):
+        """_format_event_details() should format scheduled_task_created events."""
+        event = {"type": "scheduled_task_created", "task_name": "Updater"}
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "Scheduled task created: Updater" in details
+
+    def test_format_event_details_create_remote_thread(self, minimal_scenario, malicious_events):
+        """_format_event_details() should format create_remote_thread events."""
+        event = {
+            "type": "create_remote_thread",
+            "target_process": "C:\\Windows\\System32\\lsass.exe",
+        }
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "Remote thread injection into C:\\Windows\\System32\\lsass.exe" in details
+
+    def test_format_event_details_account_created(self, minimal_scenario, malicious_events):
+        """_format_event_details() should format account_created events."""
+        event = {"type": "account_created", "target_username": "backdoor_admin"}
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "Account created: backdoor_admin" in details
+
+    def test_format_event_details_account_deleted(self, minimal_scenario, malicious_events):
+        """_format_event_details() should format account_deleted events."""
+        event = {"type": "account_deleted", "target_username": "backdoor_admin"}
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "Account deleted: backdoor_admin" in details
+
+    def test_format_event_details_group_member_added(self, minimal_scenario, malicious_events):
+        """_format_event_details() should format group_member_added events."""
+        event = {
+            "type": "group_member_added",
+            "member_name": "backdoor_admin",
+            "group_name": "Domain Admins",
+        }
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert "Added backdoor_admin to group Domain Admins" in details

@@ -77,6 +77,11 @@ class VisibilityModel:
         for system in scenario.environment.systems:
             os_cat = _get_os_category(system.os)
             self._os_map[system.hostname] = os_cat
+            # Register lowercased bare hostname for case-insensitive lookups
+            bare_lower = system.hostname.lower()
+            if bare_lower != system.hostname:
+                self._os_map[bare_lower] = os_cat
+                self._fqdn_to_bare[bare_lower] = system.hostname
 
             # Also register FQDN variant
             if domain:
@@ -113,9 +118,28 @@ class VisibilityModel:
             systems=scenario.environment.systems,
         )
 
+    def resolve_hostname(self, hostname: str) -> str | None:
+        """Resolve any hostname variant to the canonical bare hostname.
+
+        Handles FQDN, bare hostname, and case-insensitive matching.
+        Returns None if hostname is not recognized.
+        """
+        # Direct match (bare or FQDN)
+        if hostname in self._systems:
+            return self._fqdn_to_bare.get(hostname, hostname)
+        # Case-insensitive / FQDN-to-bare via pre-built mappings
+        lower = hostname.lower()
+        if lower in self._fqdn_to_bare:
+            return self._fqdn_to_bare[lower]
+        return None
+
     def get_expected_formats(self, hostname: str) -> set[str]:
         """Get expected host-level log formats for a system."""
-        return self._host_formats.get(hostname, set())
+        result = self._host_formats.get(hostname)
+        if result is not None:
+            return result
+        resolved = self.resolve_hostname(hostname)
+        return self._host_formats.get(resolved, set()) if resolved else set()
 
     def get_expected_format_groups(
         self, hostname: str, event_types: list[str]
@@ -136,7 +160,10 @@ class VisibilityModel:
           - ssh_session, rdp_session → host_local only (syslog/windows logs)
           - All other types → host_local only
         """
-        host_formats = self._host_formats.get(hostname, set())
+        host_formats = self._host_formats.get(hostname)
+        if host_formats is None:
+            resolved = self.resolve_hostname(hostname)
+            host_formats = self._host_formats.get(resolved, set()) if resolved else set()
         if not host_formats:
             return []
 

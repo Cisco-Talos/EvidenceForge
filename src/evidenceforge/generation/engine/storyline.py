@@ -762,6 +762,8 @@ class StorylineMixin:
                 service_account=spec.service_account,
             )
             malicious_event["service_name"] = spec.service_name
+            if spec.service_file_name:
+                malicious_event["service_file_name"] = spec.service_file_name
 
         elif spec.type == "scheduled_task_created":
             task_content = spec.task_content
@@ -787,6 +789,7 @@ class StorylineMixin:
                 task_content=task_content,
             )
             malicious_event["task_name"] = spec.task_name
+            malicious_event["task_content"] = task_content
 
         elif spec.type == "log_cleared":
             self.activity_generator.generate_log_cleared(user=actor, system=system, time=time)

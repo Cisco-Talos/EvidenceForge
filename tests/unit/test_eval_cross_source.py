@@ -291,3 +291,138 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         assert result.score is not None
         assert len(result.sub_scores) == 5
+
+
+def _make_scenario_with_domain(domain="example.com"):
+    """Create a scenario with a domain for FQDN testing."""
+    from evidenceforge.models.scenario import (
+        BaselineActivity,
+        Environment,
+        OutputSpec,
+        Scenario,
+        System,
+        TimeWindow,
+        User,
+    )
+
+    return Scenario(
+        name="fqdn-test",
+        description="FQDN Test",
+        environment=Environment(
+            description="Test",
+            domain=domain,
+            users=[
+                User(
+                    username="jsmith",
+                    full_name="J",
+                    email=f"j@{domain}",
+                    persona="",
+                    primary_system="WS-01",
+                ),
+            ],
+            systems=[
+                System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
+                System(hostname="SRV-01", ip="10.0.20.10", os="Linux Ubuntu", type="server"),
+            ],
+        ),
+        time_window=TimeWindow(start=T0, duration="8h"),
+        baseline_activity=BaselineActivity(
+            description="Normal",
+            intensity="low",
+            variation="low",
+        ),
+        storyline=[],
+        output=OutputSpec(
+            logs=[
+                {"format": "windows_event_security"},
+                {"format": "syslog"},
+                {"format": "ecar"},
+            ],
+            destination="./out",
+        ),
+    )
+
+
+class TestResolveHostname:
+    """Tests for VisibilityModel.resolve_hostname() and case-insensitive lookups."""
+
+    def test_resolve_bare_hostname(self):
+        """Bare hostname from scenario should resolve to itself."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        assert vis.resolve_hostname("WS-01") == "WS-01"
+        assert vis.resolve_hostname("SRV-01") == "SRV-01"
+
+    def test_resolve_fqdn(self):
+        """FQDN should resolve to bare hostname."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        assert vis.resolve_hostname("WS-01.example.com") == "WS-01"
+        assert vis.resolve_hostname("SRV-01.example.com") == "SRV-01"
+
+    def test_resolve_case_insensitive(self):
+        """Lowercased bare hostname should resolve to original case."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        assert vis.resolve_hostname("ws-01") == "WS-01"
+        assert vis.resolve_hostname("srv-01") == "SRV-01"
+
+    def test_resolve_fqdn_case_insensitive(self):
+        """Lowercased FQDN should resolve to bare hostname."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        assert vis.resolve_hostname("ws-01.example.com") == "WS-01"
+
+    def test_resolve_unknown(self):
+        """Unknown hostname should return None."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        assert vis.resolve_hostname("ROGUE-HOST") is None
+
+    def test_get_expected_formats_case_insensitive(self):
+        """get_expected_formats should work with lowercased hostname."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        original = vis.get_expected_formats("WS-01")
+        lowered = vis.get_expected_formats("ws-01")
+        assert original == lowered
+        assert "windows_event_security" in lowered
+
+    def test_get_expected_format_groups_case_insensitive(self):
+        """get_expected_format_groups should work with lowercased hostname."""
+        scenario = _make_scenario_with_domain()
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        groups_orig = vis.get_expected_format_groups("WS-01", ["process"])
+        groups_lower = vis.get_expected_format_groups("ws-01", ["process"])
+        assert len(groups_orig) == len(groups_lower)
+        assert len(groups_orig) > 0
+
+
+class TestFQDNSourceCorrectness:
+    """Source correctness should handle FQDN records correctly."""
+
+    def test_fqdn_windows_records_recognized(self):
+        """Windows records with FQDN Computer field should be recognized."""
+        scenario = _make_scenario_with_domain()
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {"Computer": "WS-01.example.com"},
+                    ts=T0,
+                ),
+            ],
+        }
+        enabled = {"windows_event_security", "syslog", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        scorer = CrossSourceScorer()
+        result = scorer._score_source_correctness(records, vis)
+        assert result.score == 100.0
+        assert not any("not in scenario" in f for f in result.sample_failures)

@@ -201,6 +201,29 @@ class GroundTruthGenerator:
             uid = event.get("uid", "N/A")
             return f"SSH session to {dst_ip}:22 (UID: {uid})"
 
+        elif event_type == "service_installed":
+            svc = event.get("service_name", "N/A")
+            path = event.get("service_file_name", "N/A")
+            return f"Service installed: {svc} ({path})"
+
+        elif event_type == "scheduled_task_created":
+            task = event.get("task_name", "N/A")
+            return f"Scheduled task created: {task}"
+
+        elif event_type == "create_remote_thread":
+            target = event.get("target_process", "N/A")
+            return f"Remote thread injection into {target}"
+
+        elif event_type in ("account_created", "account_deleted"):
+            target = event.get("target_username", "N/A")
+            action = "created" if event_type == "account_created" else "deleted"
+            return f"Account {action}: {target}"
+
+        elif event_type == "group_member_added":
+            member = event.get("member_name", "N/A")
+            group = event.get("group_name", "N/A")
+            return f"Added {member} to group {group}"
+
         else:
             return event.get("activity", "N/A")
 
@@ -266,6 +289,36 @@ class GroundTruthGenerator:
                 uid = event.get("uid", "")
                 if uid and uid != "(filtered by sensor placement)":
                     iocs["network"].add(f"Zeek UID: {uid}")
+
+            elif event["type"] == "service_installed":
+                if "service_file_name" in event:
+                    iocs["files"].add(event["service_file_name"])
+                if "service_name" in event:
+                    iocs["processes"].add(f"Service: {event['service_name']}")
+
+            elif event["type"] == "scheduled_task_created":
+                if "task_name" in event:
+                    iocs["processes"].add(f"Scheduled Task: {event['task_name']}")
+                if "task_content" in event:
+                    import re
+
+                    cmd_match = re.search(r"<Command>(.+?)</Command>", event["task_content"])
+                    if cmd_match:
+                        iocs["files"].add(cmd_match.group(1))
+
+            elif event["type"] == "create_remote_thread":
+                if "target_process" in event:
+                    iocs["processes"].add(f"Injection Target: {event['target_process']}")
+
+            elif event["type"] in ("account_created", "account_deleted"):
+                if "target_username" in event:
+                    iocs["users"].add(event["target_username"])
+
+            elif event["type"] == "group_member_added":
+                if "member_name" in event:
+                    iocs["users"].add(event["member_name"])
+                if "group_name" in event:
+                    iocs["users"].add(f"Group: {event['group_name']}")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}
