@@ -133,9 +133,11 @@ class EventDispatcher:
             is_fw_deny = event.firewall is not None and event.firewall.action == "deny"
             if is_fw_deny:
                 visible_formats = self.visibility_engine.get_log_formats_for_source_only(
-                    event.network.src_ip
+                    event.network.src_ip, event.network.dst_ip
                 )
-                sensors = self.visibility_engine.get_source_side_sensors(event.network.src_ip)
+                sensors = self.visibility_engine.get_source_side_sensors(
+                    event.network.src_ip, event.network.dst_ip
+                )
             else:
                 visible_formats = self.visibility_engine.get_log_formats_for_connection(
                     event.network.src_ip, event.network.dst_ip

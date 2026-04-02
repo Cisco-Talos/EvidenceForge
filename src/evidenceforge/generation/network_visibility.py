@@ -205,12 +205,17 @@ class NetworkVisibilityEngine:
             if self._sensor_can_observe(sensor, src_segments, dst_segments)
         ]
 
-    def get_source_side_sensors(self, src_ip: str) -> list[NetworkSensor]:
+    def get_source_side_sensors(self, src_ip: str, dst_ip: str = "") -> list[NetworkSensor]:
         """Return sensors that can observe denied traffic originating from src_ip.
 
         For denied connections, traffic only exists on the source side of the
         firewall — packets never reach the destination. Uses _sensor_can_observe()
         with empty dst_segments to respect direction and placement rules.
+
+        Args:
+            src_ip: Source IP of the denied connection
+            dst_ip: Destination IP (used for external sources to scope which
+                    firewall's boundary segments are relevant)
         """
         if not self._enabled:
             return []
@@ -218,13 +223,16 @@ class NetworkVisibilityEngine:
         src_segments = self._resolve_ip_segments(src_ip)
         if not src_segments:
             # External IP not in any segment. External traffic arrives at
-            # boundary segments monitored by firewall sensors. Use those as
-            # effective dst_segments (external → boundary = "inbound" from
-            # the boundary segment's perspective).
+            # boundary segments monitored by firewall sensors. Only include
+            # firewalls that monitor the destination's segment to avoid
+            # fanning out to unrelated segments.
+            dst_segments = self._resolve_ip_segments(dst_ip) if dst_ip else set()
             boundary_segments: set[str] = set()
             for sensor in self._sensors:
                 if sensor.type == "firewall":
-                    boundary_segments.update(sensor.monitoring_segments)
+                    fw_segments = set(sensor.monitoring_segments)
+                    if not dst_segments or fw_segments & dst_segments:
+                        boundary_segments.update(fw_segments)
             if not boundary_segments:
                 return []
             return [
@@ -242,7 +250,7 @@ class NetworkVisibilityEngine:
             if self._sensor_can_observe(sensor, src_segments, set())
         ]
 
-    def get_log_formats_for_source_only(self, src_ip: str) -> set[str]:
+    def get_log_formats_for_source_only(self, src_ip: str, dst_ip: str = "") -> set[str]:
         """Return log formats from sensors that can see traffic FROM this IP.
 
         Used for denied connections: only sensors on the source side see them.
@@ -253,7 +261,7 @@ class NetworkVisibilityEngine:
             return set(FORMAT_GROUPS["zeek"])
 
         formats: set[str] = set()
-        for sensor in self.get_source_side_sensors(src_ip):
+        for sensor in self.get_source_side_sensors(src_ip, dst_ip):
             formats.update(sensor.log_formats)
         return expand_formats(formats)
 

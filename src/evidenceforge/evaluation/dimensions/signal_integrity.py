@@ -304,6 +304,13 @@ class SignalIntegrityScorer(DimensionScorer):
                 orig_ip = rec.fields.get("id.orig_h")
                 if orig_ip:
                     host_time_index[f"{orig_ip}|{bucket}"][format_name].append(rec)
+                # cisco_asa: index by src_ip and dst_ip from parsed message body
+                asa_src = rec.fields.get("src_ip")
+                if asa_src:
+                    host_time_index[f"{asa_src}|{bucket}"][format_name].append(rec)
+                asa_dst = rec.fields.get("dst_ip")
+                if asa_dst and asa_dst != asa_src:
+                    host_time_index[f"{asa_dst}|{bucket}"][format_name].append(rec)
 
         for event in resolved:
             for event_type in event.event_types:

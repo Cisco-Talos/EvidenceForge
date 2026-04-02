@@ -181,6 +181,14 @@ class CrossSourceScorer(DimensionScorer):
                 resp_ip = rec.fields.get("id.resp_h")
                 if resp_ip:
                     index[f"{resp_ip}|{bucket}"][format_name].append(rec)
+
+                # cisco_asa: index by src_ip and dst_ip from parsed message body
+                asa_src = rec.fields.get("src_ip")
+                if asa_src:
+                    index[f"{asa_src}|{bucket}"][format_name].append(rec)
+                asa_dst = rec.fields.get("dst_ip")
+                if asa_dst and asa_dst != asa_src:
+                    index[f"{asa_dst}|{bucket}"][format_name].append(rec)
         return dict(index)
 
     # --- Sub-score 1: Source Correctness ---

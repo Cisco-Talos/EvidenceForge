@@ -248,6 +248,67 @@ class TestSourceSideVisibilityDirection:
         assert len(sensors) == 0
 
 
+class TestMultiFirewallVisibility:
+    """External deny scoped to destination-relevant firewall segments."""
+
+    def test_dmz_deny_not_sent_to_database_only_sensor(self):
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+        from evidenceforge.models.scenario import (
+            NetworkConfig,
+            NetworkSegment,
+            NetworkSensor,
+            System,
+        )
+
+        config = NetworkConfig(
+            segments=[
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+                NetworkSegment(name="database", cidr="10.0.20.0/24"),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw-external",
+                    monitoring_segments=["dmz"],
+                    log_formats=["cisco_asa"],
+                ),
+                NetworkSensor(
+                    type="firewall",
+                    name="fw-internal",
+                    monitoring_segments=["database"],
+                    log_formats=["cisco_asa"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="dmz-zeek",
+                    monitoring_segments=["dmz"],
+                    direction="inbound",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="db-zeek",
+                    monitoring_segments=["database"],
+                    direction="inbound",
+                    log_formats=["zeek"],
+                ),
+            ],
+        )
+        systems = [
+            System(hostname="WEB-01", ip="172.16.0.5", os="Linux Ubuntu", type="server"),
+            System(hostname="DB-01", ip="10.0.20.5", os="Linux Ubuntu", type="server"),
+        ]
+        engine = NetworkVisibilityEngine(network_config=config, systems=systems)
+
+        # External deny targeting DMZ: only fw-external and dmz-zeek should see it
+        sensors = engine.get_source_side_sensors("203.0.113.45", "172.16.0.5")
+        sensor_names = {s.name for s in sensors}
+        assert "fw-external" in sensor_names
+        assert "dmz-zeek" in sensor_names
+        assert "fw-internal" not in sensor_names  # doesn't monitor DMZ
+        assert "db-zeek" not in sensor_names  # doesn't monitor DMZ
+
+
 class TestEvaluateFirewallPolicy:
     """Fix 4: _evaluate_firewall_policy() should correctly evaluate rules."""
 
