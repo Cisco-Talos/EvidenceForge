@@ -115,6 +115,7 @@ class CiscoAsaParser(LogParser):
         except ValueError:
             errors.append(f"Invalid timestamp: {ts_str}")
 
+        fields["timestamp"] = ts_str
         fields["pri"] = int(pri_str)
         fields["hostname"] = hostname
         fields["severity"] = int(severity_str)

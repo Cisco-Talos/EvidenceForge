@@ -65,7 +65,13 @@ class EcarEmitter(HostMultiplexEmitter):
     }
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        """eCAR handles events regardless of OS (cross-platform EDR)."""
+        """eCAR handles events regardless of OS (cross-platform EDR).
+
+        Firewall deny events are excluded — the firewall blocked the
+        connection before it reached the endpoint, so the EDR wouldn't see it.
+        """
+        if event.firewall is not None and event.firewall.action == "deny":
+            return False
         return event.event_type in self._supported_types
 
     def emit(self, event: SecurityEvent) -> None:
