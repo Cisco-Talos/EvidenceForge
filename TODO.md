@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-03-27
+**Last Updated:** 2026-04-01
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -40,6 +40,21 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Recently Resolved
 
+- [x] Evaluator grace period for causal ordering (logon→process rule skips events within logon_grace_period from scenario start)
+- [x] Evaluator event type detection from typed EventSpec fields (replaces fragile keyword matching) + 9 new record matchers
+- [x] Evaluator per-sub-event indicator accuracy (fixes last-writer-wins IP merge for compound storyline steps) + tighter eCAR FLOW matching
+- [x] Evaluator format group trace coverage (host-local vs network groups instead of checking all formats)
+- [x] Evaluator anomaly rate: red herring events count as anomalies + 2 new suspicious patterns (temp_dir_execution, unusual_powershell) + doubled noise intensity
+- [x] Evaluator burstiness: raised minimum event threshold to 30 for reliable CV estimates + tuned Hawkes alpha/beta ratios
+- [x] Evaluator causal pair tolerance field (DNS→TCP allows 3% direct-IP connections) + expanded eCAR exclude_accounts for Linux daemons
+- [x] ZeekDhcpEmitter missing can_handle() — DHCP events never reached emitter
+- [x] Windows emitter cross-host OS filtering — can_handle() now uses _get_host() for consistent host selection
+- [x] Per-system session check for baseline + suspicious noise — logon emitted on target system, not reused from wrong system
+- [x] Context-aware logon types — interactive (type 2) for workstations, network/RDP (type 3/10) for servers
+- [x] DNS before baseline system traffic — SMB/Kerberos/LDAP/DB connections emit DNS via causal expansion with 2% direct-IP skip
+- [x] System IP→FQDN registration — scenario system hostnames registered in REVERSE_DNS at setup time
+- [x] Red herring typing cadence — compound red herring steps now use typing cadence like storyline events
+- [x] primary_system required for all users — scenario skill, reference, and validation updated; coverage test prompt updated
 - [x] SubjectLogonId hardcoded to SYSTEM (0x3e7) on 4720/4728/4697/4698/1102
 - [x] 4728 MemberSid doesn't match 4720 TargetSid across storyline events
 - [x] 4648 SubjectLogonId is SYSTEM (0x3e7) for domain user
@@ -132,7 +147,6 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] No TXT queries (SPF/DKIM/DMARC checks)
 - [ ] No Windows telemetry noise in query set
 - [ ] TTL distribution too uniform
-- [ ] HTTP connections without preceding DNS queries (no DNS caching model)
 - [ ] Queries default to corp.local instead of scenario domain
 - [ ] MX records for CDN domains that shouldn't have mail exchangers
 
@@ -170,7 +184,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] 4648 targets localhost instead of DC for domain commands
 - [ ] 4728 MemberName is "-" (should be DN of added member)
 - [ ] No 4778/4779 (RDP reconnect/disconnect)
-- [ ] Process creation timestamp can precede its authorizing logon
+- [x] Process creation timestamp can precede its authorizing logon
 - [ ] Missing 4634 logoff events for network logon sessions
 - [ ] Only AES-256 Kerberos encryption; no RC4/AES-128 mix
 - [ ] Only 2 unique TicketOptions values; zero 4771 pre-auth failures
@@ -215,10 +229,47 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ---
 
+## Data Realism — COMPLETE
+
+**Goal:** Address structural realism gaps identified by adversarial review. These are issues where the generated data is technically correct but experienced analysts or ML models would identify it as synthetic due to missing real-world patterns. Prioritized by impact on analyst training, then implementation complexity.
+
+**Completed:** All items except #13 (Cloud/SaaS formats, deferred to post-MVP). Sensor timestamp skew (#10) dropped — tight NTP is best practice.
+
+### Temporal Realism
+
+- [x] **Causal event ordering** — CausalExpansionEngine with 4 composable rules (DnsBeforeConnection, KerberosBeforeLogon, ProcessAccessAfterRemoteThread, SupplementaryAuditEvents). Validator warns on redundant manual prerequisites. Evaluator scores DNS→connection and Kerberos→logon causal pairs.
+- [x] **Hawkes/bursty temporal model** — Replaced cluster model with Hawkes self-exciting process (Lewis-Shedler thinning). Parameters derived from persona risk_profile. Cross-hour state continuity. Storyline multi-event steps use typing cadence. System traffic uses periodic+jitter. Lateral movement uses hash-based periodic offsets.
+- [x] **Day-of-week variation** — Monday 1.15x login storms, Friday 0.85x early departures, Saturday/Sunday 0.05-0.08x near-zero. Non-IT personas skipped on weekends.
+- ~~**Sensor timestamp skew**~~ — Dropped: tight NTP is best practice in production environments.
+
+### Baseline Depth
+
+- [x] **Process → network correlation** — Baseline processes now emit correlated connections via _PROCESS_NETWORK_MAP (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID for eCAR FLOW correlation.
+- [x] **Linux baseline activity** — SSH login/key exchange messages (70% key / 30% password), package management (apt-daily/dnf-automatic), systemd timer execution (fstrim/logrotate/tmpfiles), logrotate file detail, journald runtime statistics. 18 syslog categories total.
+- [x] **Legitimate lateral movement** — 26 patterns: backup agents, monitoring, AD replication, app→DB, config management, DNS zone transfers, NFS, Docker registry, syslog relay, etc. Conditional on environment topology and system roles.
+- [x] **Stale account enrichment** — Kerberos pre-auth failures (4771, 0x12), scheduled task failures (batch logon type 4), service startup failures (type 5, first hour), plus existing failed network logons.
+
+### Red Herring Sophistication
+
+- [x] **Network-level red herrings** — 3 new patterns: suspicious DNS (high-entropy CDN subdomains, DoH providers), unusual outbound (cloud regions, dev tools, large backup sync), scheduled vulnerability scan overlap. 7 total patterns now.
+- [x] **Expand suspicious ambient noise types** — Covered by network-level red herrings above (large outbound transfers, scan overlap).
+
+### Entity Consistency
+
+- [x] **Entity lifecycle validation** — StateManager tracks per-system boot times (register_boot_time at process tree seeding). validate_target_pid() checks PID existence for Sysmon 8/10 events. Warnings logged for impossible sequences.
+
+### Format Expansion
+
+- [x] **Static command pool diversification** — All process template categories parameterized with {placeholder} syntax. New _GENERAL_PARAMS pool (project paths, doc names, build configs, git branches, internal URLs). Per-user affinity via {username} substitution.
+
+---
+
 ## Post-MVP Enhancements (Future)
 
 ### Short-term
-- [ ] **Expand suspicious ambient noise types** — Current suspicious_benign.py has 4 pattern types (after-hours admin, suspicious CLI, failed logon burst, service account anomaly). Add: large outbound transfers (backup/cloud sync), process injection false positives (AV/EDR memory scanning), scheduled vulnerability scan overlap, automated software update bursts.
+- [ ] **Configurable work-week schedules** — Allow scenario authors to shift the typical workday (e.g., Tues–Sunday for retail/healthcare), define shift workers with non-standard hours, or specify per-persona day-of-week overrides
+- [ ] **Storyline cadence field** — `cadence: human|automated|periodic(interval, jitter)` on storyline steps for malware beacons, AI-driven attacks, and automated exfiltration with appropriate timing (currently all steps use human typing cadence by default)
+- [ ] **Cloud/SaaS log formats** — Azure AD sign-in logs, AWS CloudTrail, GCP audit logs, M365 audit logs. Most modern SOCs are hybrid; on-prem-only formats limit training relevance
 - [ ] `snort_alert` typed event spec for IDS signature declarations
 - [ ] HTTP proxy server support (Squid, Blue Coat, Zscaler)
 - [ ] Checkpointing and resume for long-running generation
@@ -227,12 +278,10 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 - [ ] Config file inheritance/templating
 - [ ] Subset sensor format support (e.g., `log_formats: [zeek, -zeek_dns]`)
 - [ ] PyPI package distribution
-- [ ] Additional log formats (CloudTrail, Azure Activity, GCP Audit, database logs)
 - [ ] Network diagram ingestion for auto-inferred sensor placement
 - [ ] Performance optimizations (Rust extensions, better parallelization)
 - [ ] Full user directory export as separate CSV
 - [ ] Separate student/instructor output packages
-- [ ] Poisson/Hawkes process timing model
 
 ### Medium-term
 - [ ] Web UI for scenario creation

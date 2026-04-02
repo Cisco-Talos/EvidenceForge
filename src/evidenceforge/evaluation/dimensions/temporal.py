@@ -165,7 +165,7 @@ class TemporalRealismScorer(DimensionScorer):
         progress("sub_score_done", {"name": "System Process Regularity", "score": s3.score})
 
         progress("sub_score_start", {"name": "Causal Ordering", "step": 4, "total": 5})
-        s4 = self._score_causal_ordering(records)
+        s4 = self._score_causal_ordering(records, scenario)
         progress("sub_score_done", {"name": "Causal Ordering", "score": s4.score})
 
         progress("sub_score_start", {"name": "Timing Plausibility", "step": 5, "total": 5})
@@ -260,7 +260,9 @@ class TemporalRealismScorer(DimensionScorer):
         for username, timestamps in user_events.items():
             if username in system_accounts_lower:
                 continue
-            if len(timestamps) < 10:
+            # Users with few events produce statistically unreliable CV estimates.
+            # Require at least 30 raw events to include in scoring.
+            if len(timestamps) < 30:
                 continue
 
             sorted_ts = sorted(timestamps)
@@ -273,7 +275,7 @@ class TemporalRealismScorer(DimensionScorer):
                 if (ts - deduped[-1]).total_seconds() > 5.0:
                     deduped.append(ts)
 
-            if len(deduped) < 10:
+            if len(deduped) < 20:
                 continue
 
             gaps = [(deduped[i + 1] - deduped[i]).total_seconds() for i in range(len(deduped) - 1)]
@@ -399,7 +401,11 @@ class TemporalRealismScorer(DimensionScorer):
 
     # --- Sub-score 4: Causal Ordering ---
 
-    def _score_causal_ordering(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
+    def _score_causal_ordering(
+        self, records: dict[str, list[ParsedRecord]], scenario: Scenario
+    ) -> SubScore:
+        from evidenceforge.utils.time import parse_duration
+
         causal_rules = load_rules_file("causal_pairs.yaml")
         pairs_list = causal_rules.get("pairs", [])
         if not pairs_list:
@@ -410,6 +416,17 @@ class TemporalRealismScorer(DimensionScorer):
                 score=100.0,
                 details="No causal pair rules defined",
             )
+
+        # Grace period: skip "after" events near scenario start where users
+        # are assumed already logged in (mid-session data collection).
+        scenario_start = scenario.time_window.start
+        if scenario_start.tzinfo is None:
+            scenario_start = scenario_start.replace(tzinfo=UTC)
+        try:
+            grace_td = parse_duration(scenario.logon_grace_period)
+        except (ValueError, TypeError):
+            grace_td = timedelta(minutes=30)
+        grace_end = scenario_start + grace_td
 
         total_pairs = 0
         correct_pairs = 0
@@ -434,6 +451,11 @@ class TemporalRealismScorer(DimensionScorer):
             if not before_records or not after_records:
                 continue
 
+            # match_mode: "exact" (default) or "list_contains" (before field is a list,
+            # any element matching the after field value counts)
+            match_mode = rule.get("match_mode", "exact")
+            exclude_ports = rule.get("exclude_ports", [])
+
             # Build index of "before" records by match field value
             before_index: dict[str, list[ParsedRecord]] = defaultdict(list)
             for rec in before_records:
@@ -447,15 +469,31 @@ class TemporalRealismScorer(DimensionScorer):
                 if before_field:
                     key_val = rec.fields.get(before_field)
                     if key_val:
-                        idx_key = str(key_val)
-                        if extra_match:
-                            extra_val = rec.fields.get(extra_match, "")
-                            idx_key = f"{idx_key}|{extra_val}"
-                        before_index[idx_key].append(rec)
+                        if match_mode == "list_contains" and isinstance(key_val, list):
+                            # Index each element of the list separately
+                            for item in key_val:
+                                idx_key = str(item)
+                                if extra_match:
+                                    extra_val = rec.fields.get(extra_match, "")
+                                    idx_key = f"{idx_key}|{extra_val}"
+                                before_index[idx_key].append(rec)
+                        else:
+                            idx_key = str(key_val)
+                            if extra_match:
+                                extra_val = rec.fields.get(extra_match, "")
+                                idx_key = f"{idx_key}|{extra_val}"
+                            before_index[idx_key].append(rec)
 
             # Accounts that are always active (SYSTEM, machine accounts) don't need
             # a preceding logon — they run from boot, not via interactive logon.
             exclude_accounts = rule.get("exclude_accounts", [])
+
+            # Per-rule tolerance: allow a fraction of failures without penalty
+            # (e.g., DNS→TCP allows ~3% direct-IP connections)
+            tolerance = rule.get("tolerance", 0.0)
+
+            rule_total = 0
+            rule_correct = 0
 
             # Check each "after" record for a matching "before"
             for rec in after_records:
@@ -463,6 +501,20 @@ class TemporalRealismScorer(DimensionScorer):
                     continue
                 if not self._condition_matches(after_cond, rec.fields):
                     continue
+
+                # Grace period: skip "after" events near scenario start where
+                # preceding events (e.g., logons) predate the collection window.
+                rec_ts = rec.timestamp
+                if rec_ts.tzinfo is None:
+                    rec_ts = rec_ts.replace(tzinfo=UTC)
+                if rec_ts <= grace_end:
+                    continue
+
+                # Skip connections on excluded ports (e.g., DNS port 53)
+                if exclude_ports:
+                    resp_p = rec.fields.get("id.resp_p")
+                    if resp_p is not None and int(resp_p) in exclude_ports:
+                        continue
 
                 # Skip built-in/machine accounts from causal checks
                 if exclude_accounts:
@@ -487,7 +539,7 @@ class TemporalRealismScorer(DimensionScorer):
                     if not matching_befores:
                         continue  # No matching before — not a countable pair
 
-                    total_pairs += 1
+                    rule_total += 1
                     # Check that at least one before is earlier
                     any_before_earlier = any(
                         b.timestamp <= rec.timestamp
@@ -495,12 +547,22 @@ class TemporalRealismScorer(DimensionScorer):
                         if b.timestamp is not None
                     )
                     if any_before_earlier:
-                        correct_pairs += 1
+                        rule_correct += 1
                     elif len(failures) < 10:
                         failures.append(
                             f"Rule '{rule['name']}': after event at line {rec.line_number} "
                             f"precedes all matching before events"
                         )
+
+            # Apply per-rule tolerance: if failure rate is within tolerance,
+            # treat all pairs as correct for this rule
+            if rule_total > 0 and tolerance > 0:
+                failure_rate = 1.0 - (rule_correct / rule_total)
+                if failure_rate <= tolerance:
+                    rule_correct = rule_total  # Within tolerance — no penalty
+
+            total_pairs += rule_total
+            correct_pairs += rule_correct
 
         score = (100.0 * correct_pairs / total_pairs) if total_pairs > 0 else 100.0
         return SubScore(

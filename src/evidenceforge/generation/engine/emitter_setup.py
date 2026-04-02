@@ -422,8 +422,21 @@ class EmitterSetupMixin:
 
             self._system_pids[system.hostname] = pids
 
+            # Register boot time for entity lifecycle validation
+            if self.start_time:
+                self.state_manager.register_boot_time(system.hostname, self.start_time)
+
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
+
+        # Register system IP→FQDN mappings so DNS queries use correct hostnames
+        # (e.g., DC-01.meridian-healthcare.com instead of host-10.corp.local)
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
+        ad_domain = self._resolve_ad_domain()
+        for system in self.scenario.environment.systems:
+            fqdn = f"{system.hostname}.{ad_domain}"
+            REVERSE_DNS[system.ip] = fqdn
 
         # Share system PIDs with activity generator for dynamic ParentProcessName
         self.activity_generator._system_pids = self._system_pids
@@ -433,6 +446,9 @@ class EmitterSetupMixin:
         self.activity_generator._exchange_ip = self._infra_ips.get("exchange")
         self.activity_generator._dc_hostnames = self._infra_ips.get("dc_hostnames", [])
         self.activity_generator._dc_ips = self._infra_ips.get("dc", [])
+        self.activity_generator._dc_systems = [
+            s for s in self.scenario.environment.systems if s.type == "domain_controller"
+        ]
 
     def _seed_windows_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Windows system process tree in StateManager."""

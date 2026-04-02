@@ -49,14 +49,20 @@ This separation means scenario creation benefits from LLM reasoning about attack
           ┌────────────▼────────────────┐
           │     GenerationEngine        │
           │  Hour-by-hour time loop     │
-          │  Persona-based activity     │
-          │  Storyline event execution  │
+          │  Hawkes timing (user)       │
+          │  Periodic timing (system)   │
+          │  Day-of-week variation      │
+          │  Storyline typing cadence   │
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
           │    ActivityGenerator         │
           │  Builds SecurityEvents      │
           │  with composable contexts   │
+          │                              │
+          │  CausalExpansionEngine       │
+          │  auto-emits prerequisites   │
+          │  (DNS, Kerberos, audit, etc)│
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
@@ -187,6 +193,7 @@ StateManager
 ├── Open Connections   {conn_id → OpenConnection}
 │   └── src/dst IP/port, protocol, zeek_uid, bytes, state
 ├── DNS Cache          {hostname → IP}
+├── Boot Times         {system → datetime} (entity lifecycle validation)
 └── Current Time       datetime (advances during generation)
 ```
 
@@ -290,7 +297,13 @@ EvaluationEngine
     └── flags: list[str]
 ```
 
-Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`.
+Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
+
+- **Grace period:** Events within the scenario's `logon_grace_period` (default 30m) from scenario start are exempt from causal ordering checks, since data collection begins mid-session with pre-existing user sessions.
+- **Per-rule tolerance:** Rules can specify a `tolerance` fraction (e.g., 0.03 for DNS→TCP) allowing a percentage of failures without penalty. Used for intentional direct-IP baseline connections.
+- **Account exclusions:** Rules list system accounts (SYSTEM, root, www-data, etc.) exempt from logon-before-process checks, since daemons run from boot without interactive logins.
+- **Format groups:** Trace coverage uses format groups (host-local vs network) instead of checking all formats. Connection events expect traces in both groups; process/logon events only expect host-local traces.
+- **Typed event detection:** Signal integrity uses typed EventSpec fields to identify event types instead of keyword-matching activity descriptions, with 15 record matchers covering all event types.
 
 ### Scenario Models
 
@@ -330,6 +343,76 @@ Three layers of validation (`src/evidenceforge/validation/schema.py`):
 3. **Generation-time checks** — OS compatibility, builtin account validation
 
 Builtin accounts (SYSTEM, root, NT AUTHORITY\SYSTEM, etc.) are always valid as storyline actors without being defined in the users list.
+
+### Causal Expansion Engine
+
+The `CausalExpansionEngine` (`src/evidenceforge/generation/causal/`) centralizes the logic for auto-generating prerequisite and consequent events. Instead of scattering DNS-before-connection checks, Kerberos TGT/TGS emission, and command-line pattern inference across ActivityGenerator and StorylineMixin, all causal relationships are defined as composable `ExpansionRule` dataclasses in a flat registry.
+
+```
+ActivityGenerator.generate_connection()
+    │
+    ├──▶ _expand_and_emit("connection", ...)
+    │        │
+    │        ├──▶ CausalExpansionEngine.expand()
+    │        │        │
+    │        │        ├── DnsBeforeConnection        (priority 10)
+    │        │        ├── KerberosBeforeLogon         (priority 20)
+    │        │        ├── ProcessAccessAfterRemoteThread (priority 40)
+    │        │        └── SupplementaryAuditEvents    (priority 60)
+    │        │
+    │        └──▶ For each ExpandedEvent:
+    │             compute timing offset → call generate_*()
+    │             (recursion guard: _expanding flag prevents re-expansion)
+    │
+    └──▶ Build SecurityEvent → dispatch
+```
+
+**Key components:**
+- `ExpansionRule` (ABC) — `matches(event_type, ctx) → bool` + `expand(event_type, ctx) → list[ExpandedEvent]`
+- `ExpansionContext` — carries event params + engine state (DNS cache, Kerberos cache, SID registry, skip_types)
+- `TimingSpec` — `(min_ms, max_ms, position: "before"|"after")` for realistic inter-event timing
+- `CausalExpansionEngine` — evaluates all matching rules, sorts by timing (before-events first), returns ordered list
+
+**Currently registered rules:**
+
+| Rule | Trigger | Emits | Timing |
+|------|---------|-------|--------|
+| `DnsBeforeConnection` | TCP connection (not port 53) | DNS query (UDP/53) | 5-80ms before |
+| `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) + optional 4672 | TGT 50-200ms before, TGS 20-100ms after TGT |
+| `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) | 1-50ms after |
+| `SupplementaryAuditEvents` | Process creation with admin commands | 4720/4726/4728/4697/4698/1102 | 100-500ms after |
+
+**Adding a new rule:** Create a new `ExpansionRule` subclass in `rules.py`, implement `matches()` and `expand()`, and add it to `default_rules()` in `registry.py`. The engine auto-creates with defaults — no wiring needed in ActivityGenerator or GenerationEngine.
+
+**Recursion prevention:** The `_expanding` flag on ActivityGenerator prevents expansion-generated events from re-expanding (e.g., DNS query → connection → DNS query → ∞).
+
+### Baseline Realism
+
+The baseline generation engine includes several layers of realism beyond simple random event emission:
+
+**Hawkes self-exciting temporal model:** User baseline events are distributed using a Hawkes process (`src/evidenceforge/utils/timing.py:hawkes_timestamps()`) — a self-exciting point process where each event temporarily increases the probability of more events nearby. Parameters are derived from persona `risk_profile` (not hardcoded per persona name), so new personas work automatically. Cross-hour state continuity prevents artificial gaps at hour boundaries. System/service traffic uses `periodic_timestamps()` with deterministic phase + jitter instead.
+
+**Storyline typing cadence:** Multi-event storyline steps space events with human typing rhythm (`typing_cadence()`) — Gaussian inter-action delays (~1.5s mean) with 15% chance of thinking pauses (3-12s). Single-event steps are unaffected.
+
+**Day-of-week variation:** Activity multipliers scale by weekday (Monday 1.15x login storms → Friday 0.85x early departures → Saturday/Sunday 0.05-0.08x near-zero). Non-IT personas are skipped entirely on weekends; only sysadmin, security_analyst, and help_desk remain active.
+
+**Stale account enrichment:** Disabled accounts generate four types of evidence: failed network logons (15%/hour), Kerberos pre-auth failures on DC (5%/hour, status 0x12 KDC_ERR_CLIENT_REVOKED), scheduled task failures with batch logon (3%/hour), and service startup failures at scenario start (2%, first hour only).
+
+**Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on environment topology — backup agents, monitoring, AD replication, app-to-database connections, config management, etc. Patterns are conditional on the infrastructure (file servers, DCs, Linux hosts) and gated by time-of-day (app traffic peaks during business hours, backup traffic peaks overnight).
+
+**Network-level red herrings:** Three suspicious-but-benign network patterns supplement the existing host-level red herrings: high-entropy DNS queries to CDNs/DoH providers, unusual outbound connections to dev tools/cloud regions/backup sync, and scheduled vulnerability scan bursts.
+
+**Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
+
+**DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames.
+
+**Per-system session management:** The baseline engine checks for active sessions on the specific target system before generating processes. If no session exists, a context-aware logon is emitted (type 2 interactive for workstations, type 3/10 network/RDP for servers). This prevents processes appearing on systems where the user has no logon event.
+
+**Process→network correlation:** Baseline process creation triggers correlated network connections when the executable normally generates traffic (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID carried for eCAR FLOW correlation.
+
+**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages including SSH login/key exchange (70% key / 30% password), package management (apt-daily / dnf-automatic), systemd timer execution, logrotate file detail, and journald statistics — alongside existing systemd lifecycle, cron, UFW, logind, snapd, NTP, and other daemon messages.
+
+**Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
 ### Key Patterns
 

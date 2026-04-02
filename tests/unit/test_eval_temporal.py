@@ -185,11 +185,13 @@ class TestWorkHourDistribution:
 class TestHumanBurstiness:
     def test_bursty_events(self):
         """Events with varied inter-event gaps should score well."""
-        # Create bursts: cluster of events, then long gap, then cluster
+        # Create bursts: clusters of events with long gaps between
         timestamps = (
-            [T0 + timedelta(seconds=i * 2) for i in range(5)]  # burst 1: 5 events in 10s
-            + [T0 + timedelta(minutes=30, seconds=i * 3) for i in range(5)]  # burst 2 after 30m
-            + [T0 + timedelta(hours=2, seconds=i * 1) for i in range(5)]  # burst 3 after 2h
+            [T0 + timedelta(seconds=i * 2) for i in range(8)]  # burst 1
+            + [T0 + timedelta(minutes=20, seconds=i * 3) for i in range(8)]  # burst 2
+            + [T0 + timedelta(hours=1, seconds=i * 2) for i in range(8)]  # burst 3
+            + [T0 + timedelta(hours=2, seconds=i * 1) for i in range(8)]  # burst 4
+            + [T0 + timedelta(hours=3, seconds=i * 4) for i in range(8)]  # burst 5
         )
         records = {
             "windows_event_security": [
@@ -205,7 +207,7 @@ class TestHumanBurstiness:
 
     def test_metronomic_events(self):
         """Exactly evenly-spaced events should score poorly (CV near 0)."""
-        timestamps = [T0 + timedelta(minutes=i * 5) for i in range(20)]
+        timestamps = [T0 + timedelta(minutes=i * 5) for i in range(40)]
         records = {
             "windows_event_security": [
                 _record("windows_event_security", {"TargetUserName": "jsmith"}, ts=t)
@@ -252,8 +254,13 @@ class TestSystemRegularity:
 
 
 class TestCausalOrdering:
+    # Events must be after grace period (default 30m) to be checked.
+    # T0 is scenario start, so use T0+1h for test events.
+    _AFTER_GRACE = timedelta(hours=1)
+
     def test_logon_before_process(self):
         """Logon (4624) before process creation (4688) with matching LogonId → correct."""
+        base = T0 + self._AFTER_GRACE
         records = {
             "windows_event_security": [
                 _record(
@@ -262,7 +269,7 @@ class TestCausalOrdering:
                         "EventID": 4624,
                         "TargetLogonId": "0x1a2b3c",
                     },
-                    ts=T0,
+                    ts=base,
                 ),
                 _record(
                     "windows_event_security",
@@ -270,16 +277,18 @@ class TestCausalOrdering:
                         "EventID": 4688,
                         "SubjectLogonId": "0x1a2b3c",
                     },
-                    ts=T0 + timedelta(minutes=5),
+                    ts=base + timedelta(minutes=5),
                 ),
             ]
         }
+        scenario = _make_scenario()
         scorer = TemporalRealismScorer()
-        result = scorer._score_causal_ordering(records)
+        result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
     def test_process_before_logon(self):
         """Process creation before logon with matching LogonId → violation."""
+        base = T0 + self._AFTER_GRACE
         records = {
             "windows_event_security": [
                 _record(
@@ -288,7 +297,7 @@ class TestCausalOrdering:
                         "EventID": 4688,
                         "SubjectLogonId": "0x1a2b3c",
                     },
-                    ts=T0,
+                    ts=base,
                 ),
                 _record(
                     "windows_event_security",
@@ -296,13 +305,35 @@ class TestCausalOrdering:
                         "EventID": 4624,
                         "TargetLogonId": "0x1a2b3c",
                     },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ]
+        }
+        scenario = _make_scenario()
+        scorer = TemporalRealismScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score < 100.0
+
+    def test_grace_period_skips_early_events(self):
+        """Events within grace period are not checked for causal ordering."""
+        records = {
+            "windows_event_security": [
+                # Process at T0+5m with no preceding logon — within grace period
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "SubjectLogonId": "0x1a2b3c",
+                    },
                     ts=T0 + timedelta(minutes=5),
                 ),
             ]
         }
+        scenario = _make_scenario()
         scorer = TemporalRealismScorer()
-        result = scorer._score_causal_ordering(records)
-        assert result.score < 100.0
+        result = scorer._score_causal_ordering(records, scenario)
+        # Within grace period → skipped → no pairs → perfect score
+        assert result.score == 100.0
 
 
 class TestTimingPlausibility:

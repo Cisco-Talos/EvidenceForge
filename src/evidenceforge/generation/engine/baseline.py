@@ -35,11 +35,17 @@ import logging
 import math
 from datetime import UTC, datetime, timedelta
 
+from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
+    generate_scheduled_scan_overlap,
     generate_service_account_anomaly,
     generate_suspicious_cli,
+    generate_suspicious_dns,
+    generate_temp_dir_execution,
+    generate_unusual_outbound,
+    generate_unusual_powershell,
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
@@ -48,7 +54,23 @@ from evidenceforge.utils.rng import _get_rng
 
 logger = logging.getLogger(__name__)
 
-# Per-persona cluster configuration
+# Day-of-week intensity multipliers (0=Monday, 6=Sunday).
+# Models weekly rhythm: Monday login storms, Friday early departures,
+# weekend near-zero (only sysadmin/oncall personas active).
+_DAY_OF_WEEK_MULTIPLIERS = {
+    0: 1.15,  # Monday: login storms, catching up
+    1: 1.05,  # Tuesday: peak productivity
+    2: 1.05,  # Wednesday: peak productivity
+    3: 1.00,  # Thursday: normal
+    4: 0.85,  # Friday: early departures, lighter load
+    5: 0.08,  # Saturday: near-zero
+    6: 0.05,  # Sunday: near-zero
+}
+
+# Personas that are active on weekends (IT operations, oncall)
+_WEEKEND_ACTIVE_PERSONAS = {"sysadmin", "security_analyst", "help_desk"}
+
+# Per-persona cluster configuration (legacy — used as fallback only)
 PERSONA_CLUSTER_CONFIG = {
     "developer": {"cluster_size": (5, 15), "inter_gap_mean": 600},
     "executive": {"cluster_size": (2, 6), "inter_gap_mean": 300},
@@ -56,6 +78,26 @@ PERSONA_CLUSTER_CONFIG = {
     "sysadmin": {"cluster_size": (3, 8), "inter_gap_mean": 360},
     "default": {"cluster_size": (3, 10), "inter_gap_mean": 420},
 }
+
+# Hawkes process parameters derived from risk_profile.
+# No hardcoded persona names — new personas work automatically.
+# Ratios tuned to produce CV > 1.0 for users with 30+ events.
+_HAWKES_RISK_PARAMS = {
+    "high": {"alpha_beta_ratio": 0.80, "beta": 0.04},  # strong bursts, slow decay (~25s)
+    "medium": {"alpha_beta_ratio": 0.65, "beta": 0.05},  # moderate bursts (~20s decay)
+    "low": {"alpha_beta_ratio": 0.45, "beta": 0.08},  # mild bursts, faster decay (~12s)
+}
+
+
+def _hawkes_params_from_persona(persona: Persona | None) -> dict:
+    """Derive Hawkes kernel parameters from persona risk_profile.
+
+    Returns dict with alpha_beta_ratio and beta. Caller computes:
+        alpha = alpha_beta_ratio * beta
+        mu = num_events / duration * (1 - alpha/beta)
+    """
+    risk = persona.risk_profile if persona and persona.risk_profile else "medium"
+    return _HAWKES_RISK_PARAMS.get(risk, _HAWKES_RISK_PARAMS["medium"])
 
 
 # Benign CreateRemoteThread pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image)
@@ -193,19 +235,31 @@ class BaselineMixin:
                 {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
             )
 
+            # Compute local weekday for day-of-week variation
+            if hasattr(self, "_scenario_tz") and self._scenario_tz:
+                local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+            else:
+                local_dt = current_hour
+            local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
+            is_weekend = local_weekday >= 5
+
             for user in enabled_users:
                 persona = self._get_user_persona(user)
                 user_offsets = self._user_time_offsets.get(user.username)
 
-                local_hour = current_hour.hour
-                if hasattr(self, "_scenario_tz") and self._scenario_tz:
-                    utc_dt = current_hour.replace(tzinfo=UTC)
-                    local_hour = utc_dt.astimezone(self._scenario_tz).hour
+                # Weekend filtering: skip non-IT personas on weekends
+                if is_weekend and persona:
+                    persona_key = (persona.name or "").lower()
+                    if persona_key not in _WEEKEND_ACTIVE_PERSONAS:
+                        continue
+
+                local_hour = local_dt.hour
                 num_events = self._calculate_events_for_hour(
                     user,
                     current_hour=local_hour,
                     persona=persona,
                     user_offsets=user_offsets,
+                    weekday=local_weekday,
                 )
 
                 if num_events > 0:
@@ -226,6 +280,7 @@ class BaselineMixin:
 
             self._generate_system_traffic(current_hour)
             self._generate_stale_account_noise(current_hour)
+            self._generate_lateral_movement_noise(current_hour)
             self._generate_suspicious_noise(current_hour)
 
             hour_key = int(current_hour.timestamp())
@@ -249,11 +304,14 @@ class BaselineMixin:
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
 
     def _generate_stale_account_noise(self, current_hour: datetime) -> None:
-        """Generate failed logon events for stale/inactive accounts.
+        """Generate noise events for stale/inactive accounts.
 
-        Simulates automated systems (monitoring, backup, scheduled tasks) trying
-        cached credentials that no longer work. Each stale account has a ~15%
-        chance per hour of generating a failed logon attempt.
+        Simulates multiple traces left by accounts that are disabled but still
+        referenced by automated systems:
+        - Failed network logons (~15%/hour): monitoring, backup trying cached creds
+        - Kerberos pre-auth failures (~5%/hour): cached TGT renewal attempts on DC
+        - Scheduled task failures (~3%/hour): lingering tasks configured with stale creds
+        - Service startup failures (~2%/hour, first hour only): services using stale creds
         """
         stale_accounts = self.scenario.environment.stale_accounts
         if not stale_accounts:
@@ -261,25 +319,15 @@ class BaselineMixin:
 
         rng = _get_rng()
         systems = self.scenario.environment.systems
-        # Prefer servers as source systems (monitoring/backup systems try cached creds)
         servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        windows_servers = [s for s in servers if "windows" in s.os.lower()]
         target_systems = servers if servers else systems
 
+        # Check if this is the first hour of the scenario (for service startup failures)
+        is_first_hour = current_hour == self.start_time
+
         for stale in stale_accounts:
-            # ~15% chance per hour per stale account
-            if rng.random() > 0.15:
-                continue
-
-            # Pick a random target system and time within the hour
-            target_system = rng.choice(target_systems)
-            offset_seconds = rng.randint(0, 3599)
-            event_time = current_hour + timedelta(seconds=offset_seconds)
-
-            # Pick a source IP from a server (cached credential source)
-            source_system = rng.choice(target_systems)
-            source_ip = source_system.ip
-
-            # Create a synthetic User object for the stale account
             stale_user = User(
                 username=stale.username,
                 full_name=stale.username,
@@ -287,13 +335,374 @@ class BaselineMixin:
                 enabled=False,
             )
 
-            self.activity_generator.generate_failed_logon(
-                user=stale_user,
-                system=target_system,
-                time=event_time,
-                logon_type=3,  # Network logon (automated system)
-                source_ip=source_ip,
+            # Pattern 1: Failed network logon (~15%/hour)
+            if rng.random() < 0.15:
+                target_system = rng.choice(target_systems)
+                source_system = rng.choice(target_systems)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                self.state_manager.set_current_time(event_time)
+                self.activity_generator.generate_failed_logon(
+                    user=stale_user,
+                    system=target_system,
+                    time=event_time,
+                    logon_type=3,
+                    source_ip=source_system.ip,
+                )
+
+            # Pattern 2: Kerberos pre-auth failure on DC (~5%/hour)
+            if rng.random() < 0.05 and dcs:
+                dc = rng.choice(dcs)
+                source_system = rng.choice(target_systems)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                self.state_manager.set_current_time(event_time)
+                self.activity_generator.generate_kerberos_preauth_failed(
+                    username=stale.username,
+                    source_ip=source_system.ip,
+                    dc_hostname=dc.hostname,
+                    time=event_time,
+                    status="0x12",  # KDC_ERR_CLIENT_REVOKED (disabled account)
+                )
+
+            # Pattern 3: Scheduled task failure (~3%/hour)
+            if rng.random() < 0.03 and windows_servers:
+                task_host = rng.choice(windows_servers)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                self.state_manager.set_current_time(event_time)
+                # Failed batch logon for the scheduled task
+                self.activity_generator.generate_failed_logon(
+                    user=stale_user,
+                    system=task_host,
+                    time=event_time,
+                    logon_type=4,  # Batch logon (scheduled task)
+                    source_ip=task_host.ip,
+                )
+
+            # Pattern 4: Service startup failure (first hour only, ~2%)
+            if is_first_hour and rng.random() < 0.02 and windows_servers:
+                svc_host = rng.choice(windows_servers)
+                event_time = current_hour + timedelta(seconds=rng.randint(0, 300))
+                self.state_manager.set_current_time(event_time)
+                # Failed service logon
+                self.activity_generator.generate_failed_logon(
+                    user=stale_user,
+                    system=svc_host,
+                    time=event_time,
+                    logon_type=5,  # Service logon
+                    source_ip=svc_host.ip,
+                )
+
+    def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
+        """Generate legitimate service account lateral movement between servers.
+
+        Produces realistic inter-server traffic that analysts must distinguish
+        from malicious lateral movement: backup agents, monitoring, patching,
+        AD replication, application-to-database connections, etc.
+
+        Each pattern is conditional on the environment having the required
+        infrastructure (file servers, DB servers, DCs, Linux hosts, etc.).
+        """
+        rng = _get_rng()
+        systems = self.scenario.environment.systems
+        if len(systems) < 2:
+            return
+
+        # Classify systems by role and OS for pattern matching
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        workstations = [s for s in systems if s.type == "workstation"]
+        windows_sys = [s for s in systems if "windows" in s.os.lower()]
+        linux_sys = [s for s in systems if _get_os_category(s.os) == "linux"]
+
+        # Role-based classification
+        file_servers = [s for s in servers if "file_server" in s.roles]
+        db_servers = [s for s in servers if "database" in s.roles or "db_server" in s.roles]
+        web_servers = [s for s in servers if "web_server" in s.roles]
+        mail_servers = [s for s in servers if "mail_server" in s.roles]
+        print_servers = [s for s in servers if "print_server" in s.roles]
+        dns_servers = [s for s in servers if "dns_server" in s.roles]
+        nfs_servers = [s for s in linux_sys if "nfs_server" in s.roles]
+
+        # Compute local hour for time-of-day gating
+        if hasattr(self, "_scenario_tz") and self._scenario_tz:
+            local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+        else:
+            local_dt = current_hour
+        local_hour = local_dt.hour
+        is_business_hours = 8 <= local_hour <= 18
+
+        def _emit_conn(src_sys, dst_sys, port, service=None, proto="tcp", pattern_key=""):
+            """Helper: emit a connection with hash-based periodic offset."""
+            # Deterministic phase per (pattern, src, dst) triple for reproducibility
+            phase_seed = f"lat_{pattern_key}_{src_sys.hostname}_{dst_sys.hostname}_{port}"
+            phase = hash(phase_seed) % 3600
+            jitter = rng.gauss(0, 60)  # ~1min jitter
+            offset = max(0, min(3599, phase + jitter))
+            ts = current_hour + timedelta(seconds=offset)
+            self.state_manager.set_current_time(ts)
+            self.activity_generator.generate_connection(
+                src_ip=src_sys.ip,
+                dst_ip=dst_sys.ip,
+                time=ts,
+                dst_port=port,
+                proto=proto,
+                service=service,
+                duration=rng.uniform(0.1, 30.0),
+                orig_bytes=rng.randint(200, 5000),
+                resp_bytes=rng.randint(500, 50000),
+                emit_dns=True,
+                source_system=src_sys,
             )
+
+        # === Windows Server Patterns ===
+
+        # 1. Backup agent → file servers (SMB 445)
+        if file_servers and servers:
+            for fs in file_servers:
+                if rng.random() < 0.40:  # 1-3/hour → ~40% per check
+                    src = rng.choice([s for s in servers if s != fs] or servers)
+                    _emit_conn(src, fs, 445, "smb")
+
+        # 2. Backup agent → database servers (SQL 1433)
+        if db_servers and servers:
+            for db in db_servers:
+                if rng.random() < 0.30:
+                    src = rng.choice([s for s in servers if s != db] or servers)
+                    _emit_conn(src, db, 1433, "sql")
+
+        # 3. Monitoring agent → managed Windows hosts (WMI 135)
+        if windows_sys and len(windows_sys) > 1:
+            monitored = rng.sample(windows_sys, min(rng.randint(1, 3), len(windows_sys)))
+            for target in monitored:
+                if rng.random() < 0.50:
+                    src = rng.choice([s for s in servers if s != target] or windows_sys)
+                    _emit_conn(src, target, 135)
+
+        # 4. Deployment/patching → app servers (WinRM 5985)
+        if servers and len(servers) > 1:
+            if rng.random() < 0.20:
+                src = rng.choice(servers)
+                dst = rng.choice([s for s in servers if s != src] or servers)
+                _emit_conn(src, dst, 5985)
+
+        # 5. Vulnerability scanner → hosts (multi-port, bursty)
+        if rng.random() < 0.05 and len(systems) > 1:  # Rare — scan window
+            targets = rng.sample(systems, min(rng.randint(2, 5), len(systems)))
+            scanner = rng.choice(servers or systems)
+            for target in targets:
+                if target != scanner:
+                    port = rng.choice([22, 80, 135, 443, 445, 3389, 8080])
+                    _emit_conn(scanner, target, port)
+
+        # 6. Log collector → hosts (TCP 9997)
+        if servers and len(systems) > 1:
+            if rng.random() < 0.30:
+                collector = rng.choice(servers)
+                target = rng.choice([s for s in systems if s != collector] or systems)
+                _emit_conn(collector, target, 9997)
+
+        # 7. AD replication between DCs (LDAP 389)
+        if len(dcs) >= 2:
+            for _ in range(rng.randint(2, 4)):
+                src_dc, dst_dc = rng.sample(dcs, 2)
+                _emit_conn(src_dc, dst_dc, 389, "ldap")
+
+        # 8. Print server → workstations (SMB 445)
+        if print_servers and workstations:
+            if rng.random() < 0.25:
+                ps = rng.choice(print_servers)
+                ws = rng.choice(workstations)
+                _emit_conn(ps, ws, 445, "smb")
+
+        # 9. WSUS → Windows clients (HTTP 8530)
+        if servers and workstations:
+            if rng.random() < 0.10:
+                wsus = rng.choice(servers)
+                client = rng.choice(workstations)
+                _emit_conn(wsus, client, 8530, "http")
+
+        # 10. Certificate authority → servers (HTTPS 443)
+        if servers and len(servers) > 1:
+            if rng.random() < 0.05:
+                ca = rng.choice(servers)
+                target = rng.choice([s for s in servers if s != ca] or servers)
+                _emit_conn(ca, target, 443, "ssl")
+
+        # 11. DFS replication → file servers (RPC 135)
+        if len(file_servers) >= 2:
+            for _ in range(rng.randint(1, 3)):
+                src_fs, dst_fs = rng.sample(file_servers, 2)
+                _emit_conn(src_fs, dst_fs, 135)
+
+        # 12. Exchange → DCs (LDAP 389)
+        if mail_servers and dcs:
+            for _ in range(rng.randint(3, 6)):
+                ms = rng.choice(mail_servers)
+                dc = rng.choice(dcs)
+                _emit_conn(ms, dc, 389, "ldap")
+
+        # === Application Patterns ===
+
+        # 13. HR app → database (SQL 1433, business hours)
+        if db_servers and servers and is_business_hours:
+            if rng.random() < 0.50:
+                app_srv = rng.choice([s for s in servers if s not in db_servers] or servers)
+                db = rng.choice(db_servers)
+                for _ in range(rng.randint(2, 5)):
+                    _emit_conn(app_srv, db, 1433, "sql")
+
+        # 14. Web app → database (various ports)
+        if web_servers and db_servers:
+            for ws in web_servers:
+                num_queries = rng.randint(5, 15) if is_business_hours else rng.randint(1, 3)
+                db = rng.choice(db_servers)
+                port = rng.choice([1433, 3306, 5432])
+                svc = {1433: "sql", 3306: "mysql", 5432: "postgresql"}.get(port, "sql")
+                for _ in range(num_queries):
+                    _emit_conn(ws, db, port, svc)
+
+        # 15. CI/CD → build targets (SSH 22, business hours)
+        if linux_sys and len(linux_sys) > 1 and is_business_hours:
+            if rng.random() < 0.20:
+                ci = rng.choice(linux_sys)
+                target = rng.choice([s for s in linux_sys if s != ci] or linux_sys)
+                _emit_conn(ci, target, 22, "ssh")
+
+        # === Security Infrastructure ===
+
+        # 16. EDR management → endpoints (HTTPS 443)
+        if servers and len(systems) > 1:
+            if rng.random() < 0.10:
+                mgmt = rng.choice(servers)
+                endpoint = rng.choice([s for s in systems if s != mgmt] or systems)
+                _emit_conn(mgmt, endpoint, 443, "ssl")
+
+        # 17. DNS zone transfers (TCP 53)
+        if len(dns_servers) >= 2:
+            if rng.random() < 0.30:
+                primary, secondary = rng.sample(dns_servers, 2)
+                _emit_conn(secondary, primary, 53, "dns")
+        elif dcs and len(dcs) >= 2:
+            if rng.random() < 0.30:
+                primary, secondary = rng.sample(dcs, 2)
+                _emit_conn(secondary, primary, 53, "dns")
+
+        # 18. RADIUS auth (UDP 1812)
+        if dcs and workstations:
+            if rng.random() < 0.15:
+                ws = rng.choice(workstations)
+                dc = rng.choice(dcs)
+                offset = rng.randint(0, 3599) + rng.random()
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=ws.ip,
+                    dst_ip=dc.ip,
+                    time=ts,
+                    dst_port=1812,
+                    proto="udp",
+                    duration=rng.uniform(0.01, 0.1),
+                    orig_bytes=rng.randint(100, 300),
+                    resp_bytes=rng.randint(100, 300),
+                    source_system=ws,
+                )
+
+        # 19. VPN concentrator → internal (matches remote user activity)
+        # Modeled as external-to-internal connections through a server
+        if servers and rng.random() < 0.10:
+            vpn_gw = rng.choice(servers)
+            internal = rng.choice([s for s in systems if s != vpn_gw] or systems)
+            _emit_conn(vpn_gw, internal, rng.choice([443, 445, 3389]))
+
+        # === Linux Patterns ===
+
+        # 20. NFS mounts (TCP 2049)
+        if nfs_servers and linux_sys:
+            clients = [s for s in linux_sys if s not in nfs_servers]
+            if clients:
+                for client in rng.sample(clients, min(2, len(clients))):
+                    if rng.random() < 0.40:
+                        _emit_conn(client, rng.choice(nfs_servers), 2049, "nfs")
+
+        # 21. Config management → Linux hosts (SSH 22)
+        if linux_sys and len(linux_sys) > 1:
+            if rng.random() < 0.20:
+                mgmt = rng.choice(linux_sys)
+                target = rng.choice([s for s in linux_sys if s != mgmt] or linux_sys)
+                _emit_conn(mgmt, target, 22, "ssh")
+
+        # 22. rsync backup between Linux servers (SSH 22)
+        linux_servers = [s for s in linux_sys if s.type in ("server", "domain_controller")]
+        if len(linux_servers) >= 2:
+            if rng.random() < 0.20:
+                src, dst = rng.sample(linux_servers, 2)
+                _emit_conn(src, dst, 22, "ssh")
+
+        # 23. Docker registry pull (HTTPS 443 or 5000)
+        if linux_sys and len(linux_sys) > 1:
+            if rng.random() < 0.15:
+                puller = rng.choice(linux_sys)
+                registry = rng.choice([s for s in linux_sys if s != puller] or linux_sys)
+                _emit_conn(puller, registry, rng.choice([443, 5000]), "ssl")
+
+        # 24. Cron SCP/SFTP transfers (SSH 22)
+        if len(linux_sys) >= 2:
+            if rng.random() < 0.15:
+                src, dst = rng.sample(linux_sys, 2)
+                _emit_conn(src, dst, 22, "ssh")
+
+        # 25. Centralized syslog relay (TCP 514)
+        if linux_sys and len(linux_sys) > 1:
+            if rng.random() < 0.30:
+                sender = rng.choice(linux_sys)
+                collector = rng.choice([s for s in linux_sys if s != sender] or linux_sys)
+                offset = rng.randint(0, 3599) + rng.random()
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=sender.ip,
+                    dst_ip=collector.ip,
+                    time=ts,
+                    dst_port=514,
+                    proto="tcp",
+                    duration=rng.uniform(1.0, 60.0),
+                    orig_bytes=rng.randint(500, 10000),
+                    resp_bytes=rng.randint(50, 200),
+                    source_system=sender,
+                )
+
+        # 26. LDAP client → directory server (389/636)
+        if linux_sys and dcs:
+            for lx in rng.sample(linux_sys, min(2, len(linux_sys))):
+                if rng.random() < 0.25:
+                    dc = rng.choice(dcs)
+                    port = rng.choice([389, 636])
+                    svc = "ldap" if port == 389 else "ssl"
+                    _emit_conn(lx, dc, port, svc)
+
+    def _ensure_session_on_system(self, user: User, system, time, rng) -> str:
+        """Ensure the user has an active session on the target system.
+
+        Returns the logon_id for the session. If no session exists on
+        this specific system, creates a logon with an appropriate type
+        (interactive for workstations, network/RDP for servers).
+        """
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        session_on_system = next((s for s in sessions if s.system == system.hostname), None)
+        if session_on_system:
+            return session_on_system.logon_id
+
+        logon_time = time - timedelta(seconds=rng.randint(1, 5))
+        self.state_manager.set_current_time(logon_time)
+
+        sys_type = (system.type or "workstation").lower()
+        if sys_type in ("server", "domain_controller"):
+            logon_type = rng.choices([3, 10], weights=[70, 30], k=1)[0]
+        else:
+            logon_type = 2  # Interactive
+
+        return self.activity_generator.generate_logon(
+            user=user, system=system, time=logon_time, logon_type=logon_type
+        )
 
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
         """Generate suspicious-but-benign ambient noise events.
@@ -335,18 +744,9 @@ class BaselineMixin:
             elif pattern_type == "suspicious_cli":
                 result = generate_suspicious_cli(rng, enabled_users, systems, current_hour)
                 if result:
-                    # Need an active session for the process — reuse existing or create one
-                    sessions = self.state_manager.get_sessions_for_user(result["user"].username)
-                    if sessions:
-                        logon_id = sessions[0].logon_id
-                    else:
-                        logon_time = result["time"] - timedelta(seconds=rng.randint(1, 5))
-                        logon_id = self.activity_generator.generate_logon(
-                            user=result["user"],
-                            system=result["system"],
-                            time=logon_time,
-                            logon_type=2,
-                        )
+                    logon_id = self._ensure_session_on_system(
+                        result["user"], result["system"], result["time"], rng
+                    )
                     self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
@@ -390,6 +790,106 @@ class BaselineMixin:
                         system=result["system"],
                         time=result["time"],
                         logon_type=result["logon_type"],
+                    )
+
+            elif pattern_type == "suspicious_dns":
+                result = generate_suspicious_dns(rng, enabled_users, systems, current_hour)
+                if result:
+                    # Emit DNS query via a UDP/53 connection with DnsContext
+                    from evidenceforge.events.contexts import DnsContext
+
+                    dns_ctx = DnsContext(
+                        query=result["hostname"],
+                        trans_id=rng.randint(1, 65535),
+                        qtype=1,
+                        query_type="A",
+                        rcode="NOERROR",
+                        rcode_num=0,
+                        answers=[f"198.51.100.{rng.randint(1, 254)}"],
+                        TTLs=[float(rng.randint(30, 300))],
+                        rtt=rng.uniform(0.005, 0.1),
+                    )
+                    dns_server_ips = getattr(
+                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                    )
+                    self.state_manager.set_current_time(result["time"])
+                    self.activity_generator.generate_connection(
+                        src_ip=result["system"].ip,
+                        dst_ip=rng.choice(dns_server_ips),
+                        time=result["time"],
+                        dst_port=53,
+                        proto="udp",
+                        service="dns",
+                        duration=rng.uniform(0.001, 0.05),
+                        orig_bytes=rng.randint(40, 100),
+                        resp_bytes=rng.randint(80, 400),
+                        dns=dns_ctx,
+                    )
+
+            elif pattern_type == "unusual_outbound":
+                result = generate_unusual_outbound(rng, enabled_users, systems, current_hour)
+                if result:
+                    self.state_manager.set_current_time(result["time"])
+                    # Large transfers get bigger byte counts
+                    if result.get("large_transfer"):
+                        orig_bytes = rng.randint(500000, 5000000)
+                        resp_bytes = rng.randint(1000, 50000)
+                        duration = rng.uniform(10.0, 120.0)
+                    else:
+                        orig_bytes = rng.randint(500, 5000)
+                        resp_bytes = rng.randint(1000, 50000)
+                        duration = rng.uniform(0.5, 10.0)
+                    self.activity_generator.generate_connection(
+                        src_ip=result["system"].ip,
+                        dst_ip=result["dst_ip"],
+                        time=result["time"],
+                        dst_port=result["dst_port"],
+                        service=result["service"],
+                        duration=duration,
+                        orig_bytes=orig_bytes,
+                        resp_bytes=resp_bytes,
+                        emit_dns=True,
+                    )
+
+            elif pattern_type == "scheduled_scan_overlap":
+                result = generate_scheduled_scan_overlap(rng, enabled_users, systems, current_hour)
+                if result:
+                    scanner = result["scanner"]
+                    scan_ports = [22, 80, 135, 443, 445, 3389, 8080, 8443]
+                    for target in result["targets"]:
+                        for port in rng.sample(scan_ports, rng.randint(2, 4)):
+                            scan_time = result["time"] + timedelta(seconds=rng.uniform(0, 30))
+                            self.state_manager.set_current_time(scan_time)
+                            self.activity_generator.generate_connection(
+                                src_ip=scanner.ip,
+                                dst_ip=target.ip,
+                                time=scan_time,
+                                dst_port=port,
+                                proto="tcp",
+                                duration=rng.uniform(0.01, 0.5),
+                                orig_bytes=rng.randint(50, 200),
+                                resp_bytes=rng.randint(50, 500),
+                            )
+
+            elif pattern_type in ("temp_dir_execution", "unusual_powershell"):
+                gen_fn = (
+                    generate_temp_dir_execution
+                    if pattern_type == "temp_dir_execution"
+                    else generate_unusual_powershell
+                )
+                result = gen_fn(rng, enabled_users, systems, current_hour)
+                if result:
+                    self.state_manager.set_current_time(result["time"])
+                    logon_id = self._ensure_session_on_system(
+                        result["user"], result["system"], result["time"], rng
+                    )
+                    self.activity_generator.generate_process(
+                        user=result["user"],
+                        system=result["system"],
+                        time=result["time"],
+                        logon_id=logon_id,
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
                     )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
@@ -522,7 +1022,14 @@ class BaselineMixin:
                 system = assigned[0] if assigned else self.scenario.environment.systems[0]
 
             for session in list(sessions):
-                session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
+                # Normalize timezone awareness for subtraction
+                sess_start = session.start_time
+                hour_ts = current_hour
+                if sess_start.tzinfo is not None and hour_ts.tzinfo is None:
+                    hour_ts = hour_ts.replace(tzinfo=UTC)
+                elif sess_start.tzinfo is None and hour_ts.tzinfo is not None:
+                    sess_start = sess_start.replace(tzinfo=UTC)
+                session_age_hours = (hour_ts - sess_start).total_seconds() / 3600
                 if session_age_hours < 0.5:
                     continue
 
@@ -572,11 +1079,14 @@ class BaselineMixin:
         hour: int,
         whp: dict,
         user_offsets: dict | None = None,
+        weekday: int | None = None,
     ) -> float:
         """Calculate activity multiplier based on work hours with smooth transitions.
 
-        Returns 0.0-1.5 multiplier. Uses sigmoid ramps for gradual transitions
-        at work start/end and lunch, instead of binary on/off.
+        Returns 0.0-1.5 multiplier (before day-of-week scaling). Uses sigmoid
+        ramps for gradual transitions at work start/end and lunch, instead of
+        binary on/off. When weekday is provided (0=Monday..6=Sunday), the result
+        is further scaled by _DAY_OF_WEEK_MULTIPLIERS.
         """
         start = whp["start"]
         end = whp["end"]
@@ -594,34 +1104,42 @@ class BaselineMixin:
 
         h = float(hour) + 0.5
 
+        # Compute intra-day multiplier from work-hour sigmoid model
         if h < start - 1.5:
-            return 0.05
-        if h < start + 0.5:
+            base = 0.05
+        elif h < start + 0.5:
             t = (h - (start - 1.0)) / 1.5
-            return 0.05 + 0.95 * self._sigmoid(t * 2 - 1)
-
-        if h > end + 1.5:
-            return 0.05
-        if h > end - 0.5:
+            base = 0.05 + 0.95 * self._sigmoid(t * 2 - 1)
+        elif h > end + 1.5:
+            base = 0.05
+        elif h > end - 0.5:
             t = (h - (end - 0.5)) / 1.5
-            return 0.05 + 0.95 * (1.0 - self._sigmoid(t * 2 - 1))
-
-        if lunch:
+            base = 0.05 + 0.95 * (1.0 - self._sigmoid(t * 2 - 1))
+        elif lunch:
             lunch_start, lunch_end = lunch
             lunch_mid = (lunch_start + lunch_end) / 2.0
             lunch_half = (lunch_end - lunch_start) / 2.0
             if lunch_start - 0.5 < h < lunch_end + 0.5:
                 dist_from_mid = abs(h - lunch_mid)
                 if dist_from_mid < lunch_half:
-                    return 0.5
+                    base = 0.5
                 else:
                     t = (dist_from_mid - lunch_half) / 0.5
-                    return 0.5 + 0.5 * min(1.0, t)
+                    base = 0.5 + 0.5 * min(1.0, t)
+            elif hour in peak_hours:
+                base = 1.5
+            else:
+                base = 1.0
+        elif hour in peak_hours:
+            base = 1.5
+        else:
+            base = 1.0
 
-        if hour in peak_hours:
-            return 1.5
+        # Apply day-of-week scaling (Monday login storms, weekend near-zero)
+        if weekday is not None:
+            base *= _DAY_OF_WEEK_MULTIPLIERS.get(weekday, 1.0)
 
-        return 1.0
+        return base
 
     def _calculate_events_for_hour(
         self,
@@ -629,6 +1147,7 @@ class BaselineMixin:
         current_hour: int | None = None,
         persona: Persona | None = None,
         user_offsets: dict | None = None,
+        weekday: int | None = None,
     ) -> int:
         """Calculate number of events for user this hour."""
         intensity_map = {"low": 5, "medium": 15, "high": 40}
@@ -640,7 +1159,7 @@ class BaselineMixin:
 
         if persona and persona.work_hours_parsed and current_hour is not None:
             multiplier = self._work_hour_multiplier(
-                current_hour, persona.work_hours_parsed, user_offsets
+                current_hour, persona.work_hours_parsed, user_offsets, weekday=weekday
             )
             base_events = int(base_events * multiplier)
 
@@ -677,51 +1196,81 @@ class BaselineMixin:
         persona_name: str | None = None,
         username: str | None = None,
     ) -> list[datetime]:
-        """Distribute events in activity clusters within an hour.
+        """Distribute events using a Hawkes self-exciting process.
 
-        Phase 5.5: Replaces uniform spacing with realistic bursty clusters.
-        Events within a cluster are spaced 0.5-3 seconds apart.
-        Inter-cluster gaps follow exponential distribution.
+        Replaces the Phase 5.5 cluster model with a Hawkes process that
+        produces self-exciting bursts with exponential decay. Parameters
+        are derived from persona risk_profile, so new personas work
+        automatically without code changes.
+
+        Cross-hour continuity: intensity state carries across hours via
+        _hawkes_states dict, so a burst at 9:55 naturally continues into 10:00.
         """
         if num_events == 0:
             return []
 
-        config = self.PERSONA_CLUSTER_CONFIG.get(
-            (persona_name or "").lower(), self.PERSONA_CLUSTER_CONFIG["default"]
-        )
-        cluster_min, cluster_max = config["cluster_size"]
-        inter_gap_mean = config["inter_gap_mean"]
+        from evidenceforge.utils.timing import hawkes_timestamps
 
+        # Derive Hawkes parameters from persona
+        persona = None
+        if persona_name:
+            for p in self.scenario.personas:
+                if p.name == persona_name:
+                    persona = p
+                    break
+        params = _hawkes_params_from_persona(persona)
+        alpha_beta_ratio = params["alpha_beta_ratio"]
+        beta = params["beta"]
+
+        # Apply per-user biases
         if username and hasattr(self, "_user_time_offsets"):
-            offsets = self._user_time_offsets.get(username, {})
-            size_bias = 1.0 + offsets.get("cluster_size_bias", 0)
-            cluster_min = max(2, int(cluster_min * size_bias))
-            cluster_max = max(cluster_min + 1, int(cluster_max * size_bias))
-            gap_bias = 1.0 + offsets.get("inter_gap_bias", 0)
-            inter_gap_mean = max(60, inter_gap_mean * gap_bias)
+            user_offsets = self._user_time_offsets.get(username, {})
+            size_bias = 1.0 + user_offsets.get("cluster_size_bias", 0)
+            alpha_beta_ratio = min(0.95, alpha_beta_ratio * size_bias)
+            gap_bias = 1.0 + user_offsets.get("inter_gap_bias", 0)
+            beta = max(0.01, beta * gap_bias)
+
+        alpha = alpha_beta_ratio * beta
+        # Adaptive mu: calibrate base rate so expected count ≈ num_events
+        mu = num_events / 3600.0 * (1.0 - alpha_beta_ratio)
+        mu = max(0.0001, mu)
 
         rng = _get_rng()
-        times: list[datetime] = []
-        remaining = num_events
-        t = rng.expovariate(1.0 / 60)
 
-        while remaining > 0:
-            cluster_size = min(remaining, rng.randint(max(1, cluster_min - 1), cluster_max))
-            for i in range(cluster_size):
-                if i > 0:
-                    t += rng.uniform(0.3, 2.0)
-                if t < 3600:
-                    times.append(hour_start + timedelta(seconds=t))
-            remaining -= cluster_size
-            t += rng.expovariate(1.0 / inter_gap_mean) + rng.expovariate(1.0 / inter_gap_mean)
+        # Retrieve cross-hour state
+        state = None
+        elapsed = 0.0
+        state_key = username or "_default"
+        if hasattr(self, "_hawkes_states"):
+            prev_state = self._hawkes_states.get(state_key)
+            if prev_state is not None:
+                state = prev_state
+                elapsed = 3600.0  # one full hour since last window
 
-        if not times:
+        offsets, new_state = hawkes_timestamps(
+            num_events=num_events,
+            duration=3600.0,
+            mu=mu,
+            alpha=alpha,
+            beta=beta,
+            rng=rng,
+            state=state,
+            elapsed_since_last=elapsed,
+        )
+
+        # Store state for next hour
+        if hasattr(self, "_hawkes_states"):
+            self._hawkes_states[state_key] = new_state
+
+        if not offsets:
             return []
 
-        sorted_times = sorted(times)
+        # Convert offsets to datetimes
+        times = [hour_start + timedelta(seconds=t) for t in offsets]
 
-        final: list[datetime] = [sorted_times[0]]
-        for ts in sorted_times[1:]:
+        # Dedup: max 5 events within 5 seconds (prevent multi-format collisions)
+        final: list[datetime] = [times[0]]
+        for ts in times[1:]:
             recent = sum(1 for prev in final[-5:] if (ts - prev).total_seconds() <= 5.0)
             if recent < 5:
                 final.append(ts)
@@ -766,11 +1315,26 @@ class BaselineMixin:
                     activities.append(activity_type)
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        if not sessions and activities:
+        has_session_on_system = any(s.system == system.hostname for s in sessions)
+        if not has_session_on_system and activities:
             logon_time = event_time - timedelta(seconds=rng.uniform(1.0, 5.0))
             self.state_manager.set_current_time(logon_time)
-            self.activity_generator.execute_baseline_activity(
-                user=user, system=system, time=logon_time, activity_type="logon"
+
+            # Pick logon type based on context: primary system → interactive,
+            # server → network/RDP, non-primary workstation → interactive
+            sys_type = (system.type or "workstation").lower()
+            if system.hostname == user.primary_system:
+                logon_type = 2  # Interactive — user at their own desk
+            elif sys_type in ("server", "domain_controller"):
+                logon_type = rng.choices([3, 10], weights=[70, 30], k=1)[0]
+            else:
+                logon_type = 2  # Interactive — walked up to another workstation
+
+            self.activity_generator.generate_logon(
+                user=user,
+                system=system,
+                time=logon_time,
+                logon_type=logon_type,
             )
 
         for activity_type in activities:
@@ -903,6 +1467,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.1, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=rng.randint(500, 5000),
+                        emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=4,  # SMB: kernel System process
                     )
@@ -927,6 +1492,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.001, 0.05),
                         orig_bytes=rng.randint(200, 1500),
                         resp_bytes=rng.randint(200, 2000),
+                        emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=_svc_pid("lsass"),
                     )
@@ -950,6 +1516,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.01, 0.5),
                         orig_bytes=rng.randint(100, 2000),
                         resp_bytes=rng.randint(500, 10000),
+                        emit_dns=rng.random() > 0.02,
                         source_system=system,
                         pid=_svc_pid("lsass"),
                     )
@@ -1030,6 +1597,7 @@ class BaselineMixin:
                             duration=rng.uniform(0.01, 2.0),
                             orig_bytes=rng.randint(200, 5000),
                             resp_bytes=rng.randint(500, 50000),
+                            emit_dns=rng.random() > 0.02,
                             source_system=system,
                         )
 
@@ -1607,19 +2175,52 @@ class BaselineMixin:
                         pid=sys_pids.get("sshd", -1),
                         source_system=src_sys_obj,
                     )
-                    msgs = [
-                        f"Received disconnect from {ip} port {port}:11: disconnected by user",
-                        f"Disconnected from user admin {ip} port {port}",
-                        "pam_unix(sshd:session): session closed for user admin",
-                    ]
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name="sshd",
-                        message=rng.choice(msgs),
-                        pid=rng.randint(5000, 60000),
-                        facility=10,
+                    sshd_pid = rng.randint(5000, 60000)
+                    ssh_user = rng.choice(
+                        ["admin", "root", "ubuntu"] if not is_rhel_like else ["admin", "root"]
                     )
+                    # Generate login + disconnect sequence (realistic sshd log)
+                    if rng.random() < 0.5:
+                        # Login sequence: connection → auth → session open
+                        key_type = rng.choice(["RSA", "ED25519", "ECDSA"])
+                        key_hash = f"SHA256:{''.join(rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
+                        if rng.random() < 0.7:
+                            # Key-based auth (70%)
+                            auth_msg = f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: {key_type} {key_hash}"
+                        else:
+                            # Password auth (30%)
+                            auth_msg = (
+                                f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
+                            )
+                        login_msgs = [
+                            f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
+                            auth_msg,
+                            f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                        ]
+                        for lm in login_msgs:
+                            self.activity_generator.generate_syslog_event(
+                                system=system,
+                                time=ts + timedelta(milliseconds=rng.randint(10, 200)),
+                                app_name="sshd",
+                                message=lm,
+                                pid=sshd_pid,
+                                facility=10,
+                            )
+                    else:
+                        # Disconnect sequence
+                        msgs = [
+                            f"Received disconnect from {ip} port {port}:11: disconnected by user",
+                            f"Disconnected from user {ssh_user} {ip} port {port}",
+                            f"pam_unix(sshd:session): session closed for user {ssh_user}",
+                        ]
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts,
+                            app_name="sshd",
+                            message=rng.choice(msgs),
+                            pid=sshd_pid,
+                            facility=10,
+                        )
                 elif source_roll < 0.90:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
@@ -1659,6 +2260,104 @@ class BaselineMixin:
                         app_name="systemd-timesyncd",
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
+                    )
+                elif source_roll < 0.95:
+                    # Package management (apt-daily / dnf-automatic)
+                    pkg_pid = rng.randint(10000, 60000)
+                    if is_rhel_like:
+                        pkg_msgs = [
+                            "Starting dnf-automatic...",
+                            "No security updates needed.",
+                            "dnf-automatic.service: Deactivated successfully.",
+                        ]
+                        pkg_app = "dnf-automatic"
+                    else:
+                        pkg_msgs = [
+                            "Starting daily apt download activities",
+                            "Checking for package updates...",
+                            "All packages are up to date.",
+                            "apt-daily.service: Deactivated successfully.",
+                        ]
+                        pkg_app = "apt-daily"
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name=pkg_app,
+                        message=rng.choice(pkg_msgs),
+                        pid=pkg_pid,
+                    )
+                elif source_roll < 0.97:
+                    # Systemd timer execution
+                    timer_services = [
+                        ("fstrim.timer", "fstrim.service", "Discard unused blocks on filesystems"),
+                        ("logrotate.timer", "logrotate.service", "Rotate log files"),
+                        (
+                            "systemd-tmpfiles-clean.timer",
+                            "systemd-tmpfiles-clean.service",
+                            "Cleanup of Temporary Directories",
+                        ),
+                    ]
+                    timer_name, svc_name, svc_desc = rng.choice(timer_services)
+                    timer_msgs = [
+                        f"{timer_name}: Triggering {svc_name}...",
+                        f"Started {svc_name} - {svc_desc}.",
+                        f"{svc_name}: Deactivated successfully.",
+                    ]
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name="systemd",
+                        message=rng.choice(timer_msgs),
+                        pid=1,
+                    )
+                elif source_roll < 0.98:
+                    # Logrotate detail messages
+                    log_files = [
+                        "/var/log/syslog",
+                        "/var/log/auth.log",
+                        "/var/log/kern.log",
+                        "/var/log/dpkg.log",
+                        "/var/log/daemon.log",
+                    ]
+                    if is_rhel_like:
+                        log_files = [
+                            "/var/log/messages",
+                            "/var/log/secure",
+                            "/var/log/cron",
+                            "/var/log/maillog",
+                            "/var/log/boot.log",
+                        ]
+                    log_file = rng.choice(log_files)
+                    rotate_msgs = [
+                        f"rotating {log_file}",
+                        f"compressing {log_file}.1 to {log_file}.1.gz",
+                        f"removing old {log_file}.7.gz",
+                    ]
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name="logrotate",
+                        message=rng.choice(rotate_msgs),
+                        pid=rng.randint(10000, 60000),
+                    )
+                elif source_roll < 0.99:
+                    # Journald runtime statistics
+                    machine_id = f"{''.join(rng.choices('0123456789abcdef', k=32))}"
+                    size = rng.randint(4, 128)
+                    max_size = rng.choice([256, 512, 1024, 2048, 4096])
+                    free = max_size - size
+                    journal_type = rng.choice(["Runtime", "System"])
+                    path = (
+                        f"/run/log/journal/{machine_id}"
+                        if journal_type == "Runtime"
+                        else f"/var/log/journal/{machine_id}"
+                    )
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts,
+                        app_name="systemd-journald",
+                        message=f"{journal_type} Journal ({path}) is {size:.1f}M, max {max_size}M, {free:.1f}M free.",
+                        pid=sys_pids.get("journald", rng.randint(200, 500)),
                     )
                 else:
                     # Additional diverse syslog programs for realism.

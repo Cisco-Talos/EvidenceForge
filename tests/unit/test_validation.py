@@ -75,6 +75,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="nonexistent_persona",  # Invalid reference
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -528,6 +529,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="invalid",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -638,6 +640,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -680,6 +683,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -725,6 +729,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -769,6 +774,7 @@ class TestScenarioValidator:
                         full_name="Test User",
                         email="test@example.com",
                         persona="dev",
+                        primary_system="TEST-01",
                     )
                 ],
                 systems=[
@@ -2637,3 +2643,101 @@ class TestLinkabilityTimeGap:
         issues = validator.validate()
         rh_issues = [i for i in issues if "red_herrings" in i.field_path]
         assert len(rh_issues) == 0
+
+    def test_expansion_redundancy_dns_with_connection(self):
+        """Warn when storyline has manual DNS (port 53) + TCP connection in same step."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="attacker", full_name="Attacker", email="a@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.5", os="Windows 10", type="workstation"),
+                ],
+            ),
+            personas=[
+                Persona(
+                    name="developer",
+                    description="Dev",
+                    typical_activities=["coding"],
+                    work_hours="9-5",
+                    application_usage=["vscode"],
+                    risk_profile="low",
+                )
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}], destination="./output", compression=False
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="step1",
+                    time="+1h",
+                    actor="attacker",
+                    system="WS-01",
+                    activity="C2 callback",
+                    events=[
+                        {"type": "connection", "dst_ip": "10.0.0.1", "dst_port": 53},
+                        {"type": "connection", "dst_ip": "203.0.113.50", "dst_port": 443},
+                    ],
+                ),
+            ],
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        expansion_warnings = [i for i in issues if "causal expansion" in i.message.lower()]
+        assert len(expansion_warnings) == 1
+        assert expansion_warnings[0].severity == "warning"
+
+    def test_expansion_redundancy_no_warning_for_standalone(self):
+        """No warning when storyline has only a TCP connection (no manual DNS)."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                users=[User(username="attacker", full_name="Attacker", email="a@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.5", os="Windows 10", type="workstation"),
+                ],
+            ),
+            personas=[
+                Persona(
+                    name="developer",
+                    description="Dev",
+                    typical_activities=["coding"],
+                    work_hours="9-5",
+                    application_usage=["vscode"],
+                    risk_profile="low",
+                )
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="low", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}], destination="./output", compression=False
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="step1",
+                    time="+1h",
+                    actor="attacker",
+                    system="WS-01",
+                    activity="C2 callback",
+                    events=[
+                        {"type": "connection", "dst_ip": "203.0.113.50", "dst_port": 443},
+                    ],
+                ),
+            ],
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        expansion_warnings = [i for i in issues if "causal expansion" in i.message.lower()]
+        assert len(expansion_warnings) == 0

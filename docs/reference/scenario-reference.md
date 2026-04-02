@@ -19,6 +19,7 @@ time_window: ...
 baseline_activity: ...
 logon_grace_period: "30m"    # Optional (default: "30m") — suppresses "no prior logon" warnings within this duration of time_window.start
 storyline: [...]              # Optional
+red_herrings: [...]          # Optional: suspicious-but-benign events for analyst training
 output: ...
 ```
 
@@ -35,8 +36,20 @@ environment:
   users: [...]
   systems: [...]
   service_accounts: [...]      # Optional: extra account names valid as storyline actors
+  stale_accounts:              # Optional: inactive accounts that generate background noise
+    - username: former.employee
+      last_active: "2023-11-15"
+      reason: "Transferred to another office"
+    - username: svc_old_crm
+      last_active: "2024-01-02"
+      reason: "CRM system decommissioned"
   groups: [...]               # Optional
 ```
+
+Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Each field:
+- `username`: Account name (must not collide with active users or service_accounts)
+- `last_active`: ISO date when the account was last active (context only, not used by engine)
+- `reason`: Why the account is stale (context only, for ground truth documentation)
 
 ### Timezone Configuration
 
@@ -59,7 +72,7 @@ users:
     groups: ["developers"]     # Optional
     enabled: true              # Optional (default: true)
     persona: developer         # Optional: reference to persona name
-    primary_system: WS-01      # Optional: reference to system hostname
+    primary_system: WS-01      # Required: reference to system hostname
 ```
 
 ### Systems
@@ -230,6 +243,77 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+### Red Herrings
+
+Red herrings are suspicious-but-benign events that create false leads for analysts. They use the same event types as the storyline but are documented in a separate "Red Herrings" section of `GROUND_TRUTH.md` with their benign explanations.
+
+```yaml
+red_herrings:
+  - id: rh-afterhours-admin
+    time: "+3h"
+    actor: sarah.oconnell        # Must be in users list
+    system: DC-01
+    activity: "After-hours server maintenance"
+    explanation: "Routine sysadmin maintenance performed outside business hours to avoid user impact"
+    events:
+      - type: logon
+        logon_type: 10
+        source_ip: "10.10.1.15"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -Command Get-EventLog -LogName System -Newest 50"
+```
+
+Each red herring requires:
+- `id`: Unique event identifier (must not collide with storyline IDs)
+- `time`: Same format as storyline (ISO 8601, relative offset, or seconds)
+- `actor`: Username (must be in users list, service_accounts, or a builtin account)
+- `system`: Target system hostname
+- `activity`: Human-readable description (appears in Red Herrings section of GROUND_TRUTH.md)
+- `explanation`: Why this activity is benign (instructor-only context in GROUND_TRUTH.md)
+- `events`: Same typed event list as storyline (all event types supported)
+
+Red herrings are separate from `baseline_activity.suspicious_noise`, which auto-generates ambient suspicious patterns (after-hours logins, suspicious CLI, failed logon bursts, etc.) without explicit scenario configuration.
+
+### Causal Expansion
+
+The generation engine automatically emits prerequisite events for certain event types. You do **not** need to manually specify these — they are generated with realistic timing offsets:
+
+| Trigger Event | Auto-Generated Prerequisites | Timing |
+|---|---|---|
+| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | 5-80ms before |
+| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC, optional 4672 for elevated users | TGT 50-200ms before, TGS 20-100ms after TGT |
+| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
+| `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
+| `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | 100-500ms after |
+| `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | 1-50ms after |
+
+**When to manually specify these events:** Only when they are part of the attack narrative itself (e.g., DNS tunneling exfiltration, Kerberos golden ticket forging, explicit credential dumping via process access). The validator will warn if it detects potentially redundant manual specifications.
+
+### Baseline Realism Features
+
+The generation engine automatically provides several layers of realism in baseline activity:
+
+**Hawkes temporal model:** User baseline events use a self-exciting Hawkes process — activity naturally clusters into bursts that taper off, producing realistic human work patterns. Parameters are derived from persona `risk_profile` (high = intense bursts, low = gentle clusters). System/service traffic uses periodic intervals with small jitter instead.
+
+**Storyline typing cadence:** Events within a multi-event storyline step are spaced with human typing rhythm (~1.5s between actions, occasional 3-12s thinking pauses) instead of sharing a single timestamp.
+
+**Day-of-week variation:** Scenarios spanning multiple days show weekly rhythm — Monday login storms, Friday early departures, near-zero weekend activity (only sysadmin/security_analyst/help_desk personas active on Saturday/Sunday).
+
+**Stale account evidence:** Stale accounts defined in `environment.stale_accounts` generate not just failed logons but also Kerberos pre-auth failures (4771, status 0x12) on DCs, scheduled task failures (batch logon type 4), and service startup failures (service logon type 5, first hour only).
+
+**Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
+
+**Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
+
+**Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
+
+**Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.
+
+**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
+
+**Command diversification:** Baseline process commands are parameterized with varied project paths, document names, build configurations, and per-user file references instead of fixed strings.
 
 ### DHCP Lease Events
 

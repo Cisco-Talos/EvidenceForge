@@ -75,14 +75,14 @@ Present a clear summary of the evaluation results. For each dimension, explain w
 
 **Dimension 3: Background Noise Realism (weight 0.25)**
 - Volume Adequacy: Is there enough background noise relative to the attack signal?
-- User Diversity: Do different users behave differently, or are they cookie-cutter?
-- Activity Plausibility: Are activities appropriate for the system/OS/persona?
+- User Diversity: Do different users behave differently, or are they cookie-cutter? (Command pool diversification gives each user unique project paths and document names.)
+- Activity Plausibility: Are activities appropriate for the system/OS/persona? Includes 26 lateral movement patterns (backup, monitoring, AD replication, app→DB, etc.) auto-generated from environment topology.
 - Anomaly Rate: Is there a realistic 1-5% rate of anomalous-but-benign events?
 
 **Dimension 4: Temporal Realism (weight 0.15)**
-- Work Hours: Do user events cluster in persona-defined work hours?
-- Burstiness: Are inter-event times bursty (realistic) or metronomic (robotic)?
-- Causal Ordering: Are logon→process→logoff sequences correctly ordered?
+- Work Hours: Do user events cluster in persona-defined work hours? Day-of-week variation is now modeled (Monday login storms, Friday departures, weekend near-zero).
+- Burstiness: Are inter-event times bursty (realistic) or metronomic (robotic)? The Hawkes self-exciting temporal model produces natural burst-and-idle patterns; scores should be 80+ with the current engine.
+- Causal Ordering: Are logon→process→logoff sequences correctly ordered? Are DNS queries before TCP connections? Are Kerberos TGT/TGS before domain logons? (Expanded by the causal expansion engine — these should score near 100% when the engine is active.)
 - Timing Plausibility: No impossible timing (50 commands in 3 seconds)?
 
 **Dimension 5: Signal Integrity (weight 0.20)**

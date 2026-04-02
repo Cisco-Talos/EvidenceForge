@@ -155,23 +155,32 @@ class CrossSourceScorer(DimensionScorer):
     def _build_host_time_index(
         records: dict[str, list[ParsedRecord]],
     ) -> dict[str, dict[str, list[ParsedRecord]]]:
-        """Build index: (hostname_lower|minute_bucket) -> format -> records.
+        """Build index: (key|minute_bucket) -> format -> records.
 
-        Enables O(1) lookups for finding records near a given host+time,
-        replacing O(n) linear scans.
+        Keys are hostnames for host-level formats and IPs (orig + resp)
+        for Zeek network formats. Enables O(1) lookups for finding records
+        near a given host+time, replacing O(n) linear scans.
         """
         index: dict[str, dict[str, list[ParsedRecord]]] = defaultdict(lambda: defaultdict(list))
         for format_name, record_list in records.items():
             for rec in record_list:
                 if rec.timestamp is None:
                     continue
-                hostname = _extract_hostname(rec)
-                if not hostname:
-                    continue
                 ts = _normalize_ts(rec.timestamp)
                 bucket = int(ts.timestamp()) // 60
-                key = f"{hostname.lower()}|{bucket}"
-                index[key][format_name].append(rec)
+
+                # Host-level formats: index by hostname
+                hostname = _extract_hostname(rec)
+                if hostname:
+                    index[f"{hostname.lower()}|{bucket}"][format_name].append(rec)
+
+                # Zeek network formats: index by originator AND responder IP
+                orig_ip = rec.fields.get("id.orig_h")
+                if orig_ip:
+                    index[f"{orig_ip}|{bucket}"][format_name].append(rec)
+                resp_ip = rec.fields.get("id.resp_h")
+                if resp_ip:
+                    index[f"{resp_ip}|{bucket}"][format_name].append(rec)
         return dict(index)
 
     # --- Sub-score 1: Source Correctness ---
@@ -251,28 +260,46 @@ class CrossSourceScorer(DimensionScorer):
         failures: list[str] = []
 
         for event in resolved:
-            # Determine expected formats for this event's system
-            expected_formats = vis.get_expected_formats(event.system)
+            # Determine expected format groups for this event's types
+            groups = vis.get_expected_format_groups(event.system, event.event_types)
             evt_time = _normalize_ts(event.time)
             evt_bucket = int(evt_time.timestamp()) // 60
 
-            for fmt in expected_formats:
-                if fmt not in records:
-                    continue
+            # Build lookup keys: hostname + system IP + declared source/dst IPs
+            # (Zeek records are indexed by IP, host-level by hostname)
+            lookup_keys: list[str] = [event.system.lower()]
+            if event.system_ip:
+                lookup_keys.append(event.system_ip)
+            for sd in event.sub_details:
+                for k in ("source_ip", "dst_ip"):
+                    val = sd.get(k)
+                    if val and val not in lookup_keys:
+                        lookup_keys.append(val)
+
+            for group_name, group_formats in groups:
                 total_expected += 1
 
-                # Index lookup: check ±2 minute buckets for traces
-                has_trace = False
-                for b in range(evt_bucket - 2, evt_bucket + 3):
-                    key = f"{event.system.lower()}|{b}"
-                    if key in host_time_index and fmt in host_time_index[key]:
-                        has_trace = True
+                # Check if at least one format in this group has a trace
+                group_found = False
+                for fmt in group_formats:
+                    if fmt not in records:
+                        continue
+                    for b in range(evt_bucket - 2, evt_bucket + 3):
+                        for lk in lookup_keys:
+                            key = f"{lk}|{b}"
+                            if key in host_time_index and fmt in host_time_index[key]:
+                                group_found = True
+                                break
+                        if group_found:
+                            break
+                    if group_found:
                         break
-                if has_trace:
+                if group_found:
                     found += 1
                 elif len(failures) < 10:
                     failures.append(
-                        f"Event {event.index}: no trace in {fmt} for {event.actor}@{event.system}"
+                        f"Event {event.index}: no trace in {group_name} group "
+                        f"for {event.actor}@{event.system}"
                     )
 
         score = (100.0 * found / total_expected) if total_expected > 0 else 100.0

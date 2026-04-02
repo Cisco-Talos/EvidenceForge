@@ -55,6 +55,76 @@ def _get_os_category(os_string: str) -> str:
         return "unknown"
 
 
+# General parameterization pools for command-line diversification.
+# Used across all process template categories, not just queries.
+_GENERAL_PARAMS = {
+    "project_path": [
+        "C:\\Users\\{username}\\source\\repos\\webapp",
+        "C:\\Users\\{username}\\source\\repos\\api-service",
+        "C:\\Users\\{username}\\source\\repos\\internal-tools",
+        "C:\\dev\\frontend",
+        "C:\\dev\\microservices",
+        "C:\\Users\\{username}\\projects\\analytics-dashboard",
+    ],
+    "source_file": [
+        "Program.cs",
+        "app.config",
+        "index.ts",
+        "main.py",
+        "README.md",
+        "Dockerfile",
+        "appsettings.json",
+        "webpack.config.js",
+    ],
+    "solution_name": [
+        "WebApp.sln",
+        "API.sln",
+        "InternalTools.sln",
+        "CoreServices.sln",
+        "DataPipeline.sln",
+    ],
+    "build_config": ["Debug", "Release", "Staging"],
+    "npm_script": ["build", "test", "lint", "start", "dev", "format", "ci"],
+    "doc_path": [
+        "Q4 Budget Review.docx",
+        "Project Status Update.docx",
+        "Meeting Notes - {username}.docx",
+        "Architecture Decision Record.docx",
+        "Sprint Retrospective.docx",
+        "Vendor Proposal.docx",
+    ],
+    "spreadsheet_path": [
+        "FY2024 Forecast.xlsx",
+        "Resource Allocation.xlsx",
+        "Inventory Report.xlsx",
+        "KPI Dashboard.xlsx",
+        "Budget vs Actuals.xlsx",
+    ],
+    "linux_project": [
+        "/home/{username}/projects/api-server",
+        "/home/{username}/projects/data-pipeline",
+        "/home/{username}/src/monitoring",
+        "/opt/company/webapp",
+        "/home/{username}/repos/infra-config",
+    ],
+    "linux_source_file": [
+        "main.py",
+        "config.yaml",
+        "server.go",
+        "index.js",
+        "Makefile",
+        "deploy.sh",
+        "requirements.txt",
+    ],
+    "git_branch": ["main", "develop", "feature/auth-refactor", "fix/memory-leak", "release/v2.4"],
+    "internal_url": [
+        "https://jira.corp.local/browse/PROJ-1234",
+        "https://wiki.corp.local/display/ENG/Architecture",
+        "https://gitlab.corp.local/team/project/-/pipelines",
+        "https://grafana.corp.local/d/system-overview",
+    ],
+}
+
 # Parameterized command-line value pools for process_query variety
 _QUERY_PARAMS = {
     "db_server": ["localhost", "DB-SRV-01", "sqlprod01", "10.0.2.50", "SQLEXPRESS"],
@@ -119,18 +189,31 @@ _QUERY_PARAMS_LINUX = {
 }
 
 
-def _parameterize_command(rng, command_line: str) -> str:
+def _parameterize_command(rng, command_line: str, username: str = "") -> str:
     """Replace {placeholders} in command lines with random realistic values.
 
     Runs multiple passes since expanding one placeholder (e.g., {sql_query})
     may introduce new placeholders (e.g., {db_name} inside the query text).
+
+    When username is provided, {username} is substituted first for per-user
+    path customization. Per-user affinity is achieved by the caller seeding
+    the rng appropriately.
     """
+    # Substitute {username} first (literal, not random)
+    if username and "{username}" in command_line:
+        command_line = command_line.replace("{username}", username)
+
+    all_params = {**_GENERAL_PARAMS, **_QUERY_PARAMS}
     for _pass in range(3):  # Max 3 passes to resolve nested placeholders
         changed = False
-        for key, values in _QUERY_PARAMS.items():
+        for key, values in all_params.items():
             placeholder = "{" + key + "}"
             while placeholder in command_line:
-                command_line = command_line.replace(placeholder, rng.choice(values), 1)
+                value = rng.choice(values)
+                # Resolve {username} in chosen values too
+                if username and "{username}" in value:
+                    value = value.replace("{username}", username)
+                command_line = command_line.replace(placeholder, value, 1)
                 changed = True
         if not changed:
             break

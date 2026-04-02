@@ -62,7 +62,13 @@ def create_test_scenario(users: int = 2, hours: int = 3) -> Scenario:
     start_time = datetime(2024, 1, 1, 9, 0, 0)
     end_time = start_time + timedelta(hours=hours)
 
-    # Create users
+    # Create systems
+    system_list = [
+        System(hostname="TEST-WS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
+        System(hostname="TEST-WS-02", ip="10.0.10.2", os="Windows 10", type="workstation"),
+    ]
+
+    # Create users (assign primary_system round-robin across workstations)
     user_list = []
     for i in range(users):
         user_list.append(
@@ -72,14 +78,9 @@ def create_test_scenario(users: int = 2, hours: int = 3) -> Scenario:
                 email=f"user{i}@test.com",
                 persona=None,
                 enabled=True,
+                primary_system=system_list[i % len(system_list)].hostname,
             )
         )
-
-    # Create systems
-    system_list = [
-        System(hostname="TEST-WS-01", ip="10.0.10.1", os="Windows 10", type="workstation"),
-        System(hostname="TEST-WS-02", ip="10.0.10.2", os="Windows 10", type="workstation"),
-    ]
 
     environment = Environment(
         description="Test environment for parallel generation", users=user_list, systems=system_list

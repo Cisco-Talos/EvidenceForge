@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Intensity mapping: level -> (mean events per hour)
 SUSPICIOUS_NOISE_INTENSITY = {
-    "low": 1.0,
-    "medium": 2.0,
-    "high": 3.0,
-    "ludicrous": 5.0,
+    "low": 2.0,
+    "medium": 4.0,
+    "high": 6.0,
+    "ludicrous": 10.0,
 }
 
 # PowerShell commands that look suspicious but are benign admin/dev tasks
@@ -128,6 +128,15 @@ def pick_suspicious_pattern(
 
     # Service account anomaly (weight higher if service_accounts exist)
     patterns.append(("service_account_anomaly", 2))
+
+    # Network-level red herrings
+    patterns.append(("suspicious_dns", 2))
+    patterns.append(("unusual_outbound", 2))
+    patterns.append(("scheduled_scan_overlap", 1))
+
+    # Process-based anomalies
+    patterns.append(("temp_dir_execution", 2))
+    patterns.append(("unusual_powershell", 2 if has_sysadmins else 1))
 
     pattern_names = [p[0] for p in patterns]
     pattern_weights = [p[1] for p in patterns]
@@ -270,6 +279,233 @@ def generate_service_account_anomaly(
         "system": system,
         "time": event_time,
         "logon_type": 3,
+    }
+
+
+# Suspicious-looking but legitimate DNS query patterns
+_BENIGN_SUSPICIOUS_DNS_HOSTS = [
+    # High-entropy CDN/analytics subdomains (look like DGA but are legitimate)
+    "a1b2c3d4e5.cloudfront.net",
+    "x7k9m2.akamaized.net",
+    "cdn-b4f8a2.azureedge.net",
+    "f3d7e1a9b2c4.fastly.net",
+    "tr-8a2f4b.doubleclick.net",
+    # DNS-over-HTTPS / privacy services (look like tunneling)
+    "dns.google",
+    "cloudflare-dns.com",
+    "mozilla.cloudflare-dns.com",
+    "doh.opendns.com",
+    # Rare TLDs that look suspicious but are legitimate
+    "corp-updates.io",
+    "developer-portal.dev",
+    "status-monitor.app",
+    "internal-metrics.cloud",
+    # Long subdomains (look like encoding/tunneling)
+    "session-f8a2b4c6d8e0-tracking.analytics.example.com",
+    "pixel-7f3a9b2e1d4c.marketing-cdn.com",
+    "telemetry-x9k2m4.windows.com",
+]
+
+# Unusual but legitimate outbound connection targets
+_BENIGN_UNUSUAL_CONNECTIONS = [
+    # Cloud regions the org doesn't normally use
+    {
+        "dst_ip": "13.236.8.128",
+        "dst_port": 443,
+        "service": "ssl",
+        "desc": "AWS ap-southeast-2 (dev testing)",
+    },
+    {
+        "dst_ip": "20.205.243.166",
+        "dst_port": 443,
+        "service": "ssl",
+        "desc": "GitHub Copilot endpoint",
+    },
+    {"dst_ip": "104.16.0.35", "dst_port": 443, "service": "ssl", "desc": "Cloudflare API"},
+    # Package registries and dev tools
+    {"dst_ip": "151.101.0.63", "dst_port": 443, "service": "ssl", "desc": "PyPI package download"},
+    {"dst_ip": "185.125.190.39", "dst_port": 443, "service": "ssl", "desc": "Ubuntu snap store"},
+    {
+        "dst_ip": "34.104.35.123",
+        "dst_port": 443,
+        "service": "ssl",
+        "desc": "Google Container Registry",
+    },
+    # Large outbound transfers (look like exfil but are backup/sync)
+    {"dst_ip": "52.216.84.0", "dst_port": 443, "service": "ssl", "desc": "AWS S3 backup sync"},
+    {"dst_ip": "13.107.42.14", "dst_port": 443, "service": "ssl", "desc": "OneDrive sync"},
+    {"dst_ip": "142.250.80.46", "dst_port": 443, "service": "ssl", "desc": "Google Drive upload"},
+]
+
+
+def generate_suspicious_dns(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate suspicious-looking but benign DNS query.
+
+    Produces queries to high-entropy CDN subdomains, DNS-over-HTTPS
+    providers, or rare TLDs that might trigger DGA detection rules
+    but are actually legitimate.
+    """
+    system = rng.choice(systems)
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+    hostname = rng.choice(_BENIGN_SUSPICIOUS_DNS_HOSTS)
+
+    return {
+        "pattern": "suspicious_dns",
+        "system": system,
+        "time": event_time,
+        "hostname": hostname,
+    }
+
+
+def generate_unusual_outbound(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate unusual but legitimate outbound connection.
+
+    Connections to unfamiliar cloud regions, dev tool endpoints, or
+    large outbound transfers that are actually backup/sync operations.
+    """
+    # Prefer workstations as source (dev testing, cloud sync)
+    workstations = [s for s in systems if s.type == "workstation"]
+    system = rng.choice(workstations) if workstations else rng.choice(systems)
+
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+    conn_info = rng.choice(_BENIGN_UNUSUAL_CONNECTIONS)
+
+    return {
+        "pattern": "unusual_outbound",
+        "system": system,
+        "time": event_time,
+        "dst_ip": conn_info["dst_ip"],
+        "dst_port": conn_info["dst_port"],
+        "service": conn_info["service"],
+        "large_transfer": "backup" in conn_info["desc"].lower()
+        or "sync" in conn_info["desc"].lower(),
+    }
+
+
+def generate_scheduled_scan_overlap(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate vulnerability scan traffic that overlaps with attack window.
+
+    Multi-port connection burst from a server that looks like network
+    scanning but is actually a scheduled Nessus/Qualys scan.
+    """
+    servers = [s for s in systems if s.type in ("server", "domain_controller")]
+    if not servers or len(systems) < 3:
+        return None
+
+    scanner = rng.choice(servers)
+    targets = rng.sample(
+        [s for s in systems if s != scanner],
+        min(rng.randint(3, 6), len(systems) - 1),
+    )
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+
+    return {
+        "pattern": "scheduled_scan_overlap",
+        "scanner": scanner,
+        "targets": targets,
+        "time": event_time,
+    }
+
+
+def generate_temp_dir_execution(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate a process execution from a temp directory (benign installer/update)."""
+    user = rng.choice(users)
+    system_candidates = [s for s in systems if s.assigned_user == user.username]
+    system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
+
+    os_cat = _get_os_category(system)
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+
+    if os_cat == "windows":
+        temp_exes = [
+            (r"C:\Users\{user}\AppData\Local\Temp\vs_installer.exe", "vs_installer.exe /quiet"),
+            (r"C:\Users\{user}\AppData\Local\Temp\ChromeSetup.exe", "ChromeSetup.exe --silent"),
+            (r"C:\Users\{user}\AppData\Local\Temp\msi_update.exe", "msi_update.exe /norestart"),
+            (
+                r"C:\Users\{user}\AppData\Local\Temp\dotnet-sdk-installer.exe",
+                "dotnet-sdk-installer.exe /install /quiet",
+            ),
+            (r"C:\Windows\Temp\KB5034441_update.exe", "KB5034441_update.exe /quiet"),
+        ]
+        exe_path, cmd = rng.choice(temp_exes)
+        exe_path = exe_path.replace("{user}", user.username)
+    else:
+        temp_exes = [
+            ("/tmp/pip-install-cache/setup.py", "python3 /tmp/pip-install-cache/setup.py install"),
+            ("/tmp/go-build-cache/main", "/tmp/go-build-cache/main --test"),
+            ("/tmp/npm-postinstall.sh", "bash /tmp/npm-postinstall.sh"),
+        ]
+        exe_path, cmd = rng.choice(temp_exes)
+
+    return {
+        "pattern": "temp_dir_execution",
+        "user": user,
+        "system": system,
+        "time": event_time,
+        "process_name": exe_path,
+        "command_line": cmd,
+    }
+
+
+def generate_unusual_powershell(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    current_hour: datetime,
+) -> dict | None:
+    """Generate PowerShell with suspicious-looking flags (benign admin scripts)."""
+    # Only Windows systems
+    windows_systems = [s for s in systems if "windows" in s.os.lower()]
+    if not windows_systems:
+        return None
+
+    user = rng.choice(users)
+    system_candidates = [s for s in windows_systems if s.assigned_user == user.username]
+    system = rng.choice(system_candidates) if system_candidates else rng.choice(windows_systems)
+
+    offset = timedelta(seconds=rng.randint(0, 3599))
+    event_time = current_hour + offset
+
+    suspicious_ps = [
+        r'powershell.exe -WindowStyle Hidden -Command "Get-WinEvent -LogName Security -MaxEvents 100 | Export-Csv C:\Reports\audit.csv"',
+        r"powershell.exe -EncodedCommand RwBlAHQALQBTAGUAcgB2AGkAYwBlAA==",  # Get-Service
+        r"powershell.exe -Exec Bypass -File C:\Scripts\deploy-monitoring.ps1",
+        r'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://internal-api.corp.local/health"',
+        r'powershell.exe -WindowStyle Hidden -Command "Compress-Archive -Path C:\Logs\*.log -DestinationPath C:\Backups\logs.zip"',
+    ]
+
+    cmd = rng.choice(suspicious_ps)
+    return {
+        "pattern": "unusual_powershell",
+        "user": user,
+        "system": system,
+        "time": event_time,
+        "process_name": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        "command_line": cmd,
     }
 
 

@@ -45,7 +45,7 @@ pairs:
       before: principal
       after: principal
     extra_match: hostname
-    exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "root"]
+    exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "root", "www-data", "nobody", "daemon", "mysql", "postgres", "syslog"]
 
   - name: "Process creation before process termination"
     before:
@@ -101,3 +101,50 @@ pairs:
     match_fields:
       before: hostname
       after: hostname
+
+  # Causal expansion engine rules — verify auto-generated prerequisites
+
+  - name: "DNS resolution before TCP connection"
+    before:
+      format: zeek_dns
+      condition:
+        rcode_name: NOERROR
+    after:
+      format: zeek_conn
+      condition:
+        proto: tcp
+    match_fields:
+      before: "answers"
+      after: "id.resp_h"
+    match_mode: list_contains
+    exclude_ports: [53]
+    # Allow up to 3% of TCP connections without preceding DNS (hardcoded IPs,
+    # static hosts entries, infrastructure services configured by IP).
+    tolerance: 0.03
+
+  - name: "Kerberos TGT before service ticket"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4768
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4769
+    match_fields:
+      before: TargetUserName
+      after: TargetUserName
+    extra_match: Computer
+
+  - name: "Kerberos TGT before domain logon"
+    before:
+      format: windows_event_security
+      condition:
+        EventID: 4768
+    after:
+      format: windows_event_security
+      condition:
+        EventID: 4624
+    match_fields:
+      before: TargetUserName
+      after: TargetUserName

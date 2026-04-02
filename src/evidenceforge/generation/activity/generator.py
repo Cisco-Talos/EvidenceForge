@@ -47,6 +47,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
@@ -114,15 +115,27 @@ BASELINE_PATTERNS = {
 # Process names and command lines for baseline activities (Windows)
 PROCESS_TEMPLATES = {
     "process_code": [
-        ("C:\\Program Files\\Microsoft VS Code\\Code.exe", "Code.exe --no-sandbox"),
-        ("C:\\Program Files (x86)\\Notepad++\\notepad++.exe", "notepad++ document.txt"),
+        ("C:\\Program Files\\Microsoft VS Code\\Code.exe", "Code.exe --folder-uri {project_path}"),
+        (
+            "C:\\Program Files (x86)\\Notepad++\\notepad++.exe",
+            "notepad++ {source_file}",
+        ),
         ("C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe", "idea64.exe"),
-        ("C:\\Program Files\\Sublime Text\\sublime_text.exe", "sublime_text.exe project.py"),
+        (
+            "C:\\Program Files\\Sublime Text\\sublime_text.exe",
+            "sublime_text.exe {source_file}",
+        ),
     ],
     "process_build": [
-        ("C:\\Windows\\System32\\msbuild.exe", "msbuild.exe solution.sln /t:Build"),
-        ("C:\\Windows\\System32\\cmd.exe", "cmd.exe /c npm run build"),
-        ("C:\\Program Files\\dotnet\\dotnet.exe", "dotnet.exe build -c Release"),
+        (
+            "C:\\Windows\\System32\\msbuild.exe",
+            "msbuild.exe {solution_name} /t:Build /p:Configuration={build_config}",
+        ),
+        ("C:\\Windows\\System32\\cmd.exe", "cmd.exe /c npm run {npm_script}"),
+        (
+            "C:\\Program Files\\dotnet\\dotnet.exe",
+            "dotnet.exe build -c {build_config}",
+        ),
         ("C:\\Program Files\\nodejs\\node.exe", "node.exe scripts/build.js"),
     ],
     "process_query": [
@@ -155,8 +168,14 @@ PROCESS_TEMPLATES = {
         ),
         ("C:\\Program Files\\Mozilla Firefox\\firefox.exe", "firefox.exe -contentproc -childID 3"),
         ("C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE", "OUTLOOK.EXE"),
-        ("C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "WINWORD.EXE /n"),
-        ("C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE", "EXCEL.EXE"),
+        (
+            "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+            'WINWORD.EXE /n "{doc_path}"',
+        ),
+        (
+            "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
+            'EXCEL.EXE "{spreadsheet_path}"',
+        ),
         (
             "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
             "msedge.exe --type=renderer",
@@ -201,30 +220,30 @@ PROCESS_TEMPLATES = {
 # Process names and command lines for baseline activities (Linux) - Phase 2.10
 PROCESS_TEMPLATES_LINUX = {
     "process_code": [
-        ("/usr/bin/vim", "vim /home/user/script.py"),
-        ("/usr/bin/nano", "nano /etc/config.conf"),
-        ("/usr/bin/code", "code --no-sandbox /home/user/project"),
-        ("/usr/bin/emacs", "emacs -nw /home/user/main.go"),
+        ("/usr/bin/vim", "vim {linux_project}/{linux_source_file}"),
+        ("/usr/bin/nano", "nano {linux_project}/{linux_source_file}"),
+        ("/usr/bin/code", "code --no-sandbox {linux_project}"),
+        ("/usr/bin/emacs", "emacs -nw {linux_project}/{linux_source_file}"),
     ],
     "process_build": [
-        ("/usr/bin/make", "make -j4"),
-        ("/usr/bin/gcc", "gcc -o output source.c"),
-        ("/usr/bin/npm", "npm run build"),
+        ("/usr/bin/make", "make -j4 -C {linux_project}"),
+        ("/usr/bin/gcc", "gcc -o output {linux_source_file}"),
+        ("/usr/bin/npm", "npm run {npm_script}"),
         ("/usr/bin/cargo", "cargo build --release"),
-        ("/usr/bin/python3", "python3 setup.py install"),
+        ("/usr/bin/python3", "python3 -m pip install -e {linux_project}"),
     ],
     "process_query": [
-        ("/usr/bin/mysql", "mysql -u root -p database"),
-        ("/usr/bin/psql", "psql -U postgres -d mydb"),
-        ("/usr/bin/redis-cli", "redis-cli GET session:abc123"),
+        ("/usr/bin/mysql", "mysql -u root -p {mysql_db}"),
+        ("/usr/bin/psql", "psql -U postgres -d {psql_db}"),
+        ("/usr/bin/redis-cli", "{redis_cmd}"),
     ],
     "process_user_apps": [
-        ("/usr/bin/firefox", "firefox --new-tab"),
+        ("/usr/bin/firefox", "firefox --new-tab {internal_url}"),
         ("/usr/bin/thunderbird", "thunderbird"),
-        ("/usr/bin/git", "git pull origin main"),
+        ("/usr/bin/git", "git pull origin {git_branch}"),
         ("/usr/bin/docker", "docker ps"),
         ("/usr/bin/python3", "python3 -m pytest tests/"),
-        ("/usr/bin/ssh", "ssh user@remote-host"),
+        ("/usr/bin/ssh", "ssh {username}@remote-host"),
         ("/usr/bin/curl", "curl -s https://api.example.com/status"),
         ("/usr/bin/kubectl", "kubectl get pods -n production"),
     ],
@@ -382,6 +401,7 @@ class ActivityGenerator:
         network_visibility=None,
         sid_registry: dict[str, str] | None = None,
         dispatcher: EventDispatcher | None = None,
+        causal_engine: CausalExpansionEngine | None = None,
     ):
         """Initialize activity generator.
 
@@ -392,6 +412,9 @@ class ActivityGenerator:
             network_visibility: Optional NetworkVisibilityEngine for sensor-based filtering
             sid_registry: Optional dict mapping usernames to Windows SIDs
             dispatcher: Optional EventDispatcher for canonical event model (Phase 7)
+            causal_engine: Optional CausalExpansionEngine for auto-generating
+                prerequisite events (DNS before connections, Kerberos before
+                logons, etc.)
         """
         self.state_manager = state_manager
         if dispatcher is None and emitters:
@@ -414,6 +437,10 @@ class ActivityGenerator:
 
         # Network visibility stored on dispatcher; keep local ref for fast-path check
         self._network_visibility = network_visibility
+
+        # Causal expansion engine (auto-created if not provided) and recursion guard
+        self._causal_engine = causal_engine or CausalExpansionEngine()
+        self._expanding: bool = False
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build a HostContext from a System model object.
@@ -450,6 +477,96 @@ class ActivityGenerator:
             fqdn=f"{dc_hostname}.{ad_domain}" if ad_domain else dc_hostname,
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
         )
+
+    def _build_expansion_context(
+        self,
+        event_type: str,
+        timestamp: datetime,
+        **kwargs: Any,
+    ) -> ExpansionContext:
+        """Build an ExpansionContext from event parameters and engine state."""
+        dns_server_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
+        dc_hostnames = getattr(self, "_dc_hostnames", [])
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        if not hasattr(self, "_dns_cache"):
+            self._dns_cache: dict[tuple[str, str], float] = {}
+        if not hasattr(self, "_kerberos_cache"):
+            self._kerberos_cache: dict[str, float] = {}
+
+        dc_systems = getattr(self, "_dc_systems", [])
+        if not hasattr(self, "_created_account_sids"):
+            self._created_account_sids: dict[str, str] = {}
+
+        return ExpansionContext(
+            event_type=event_type,
+            timestamp=timestamp,
+            src_ip=kwargs.get("src_ip"),
+            dst_ip=kwargs.get("dst_ip"),
+            dst_port=kwargs.get("dst_port"),
+            protocol=kwargs.get("protocol") or kwargs.get("proto"),
+            service=kwargs.get("service"),
+            logon_type=kwargs.get("logon_type"),
+            auth_package=kwargs.get("auth_package"),
+            command_line=kwargs.get("command_line"),
+            process_name=kwargs.get("process_name"),
+            os_category=kwargs.get("os_category"),
+            source_system=kwargs.get("source_system"),
+            target_system=kwargs.get("target_system"),
+            actor=kwargs.get("actor"),
+            source_pid=kwargs.get("source_pid"),
+            source_image=kwargs.get("source_image"),
+            target_pid=kwargs.get("target_pid"),
+            target_image=kwargs.get("target_image"),
+            skip_types=kwargs.get("skip_types", set()),
+            dns_cache=self._dns_cache,
+            kerberos_cache=self._kerberos_cache,
+            dns_server_ips=dns_server_ips,
+            dc_hostnames=dc_hostnames,
+            dc_systems=dc_systems,
+            ad_domain=ad_domain,
+            sid_registry=self.sid_registry,
+            created_account_sids=self._created_account_sids,
+        )
+
+    def _expand_and_emit(
+        self,
+        event_type: str,
+        timestamp: datetime,
+        **kwargs: Any,
+    ) -> None:
+        """Run causal expansion and emit all expanded prerequisite/consequent events.
+
+        This is a no-op if:
+        - No causal engine is configured.
+        - We are already inside an expansion (recursion guard).
+
+        For each expanded event, computes a randomized timestamp offset from the
+        trigger event's timestamp, then calls the corresponding generate_* method
+        on this ActivityGenerator instance.
+        """
+        if self._expanding:
+            return
+
+        ctx = self._build_expansion_context(event_type, timestamp, **kwargs)
+        expanded = self._causal_engine.expand(event_type, ctx)
+        if not expanded:
+            return
+
+        rng = _get_rng()
+        self._expanding = True
+        try:
+            for ev in expanded:
+                offset_ms = rng.randint(ev.timing.min_ms, ev.timing.max_ms)
+                offset = timedelta(milliseconds=offset_ms)
+                if ev.timing.position == "before":
+                    ev.kwargs["time"] = timestamp - offset
+                else:
+                    ev.kwargs["time"] = timestamp + offset
+
+                method = getattr(self, ev.method)
+                method(**ev.kwargs)
+        finally:
+            self._expanding = False
 
     def generate_logon(
         self,
@@ -538,16 +655,18 @@ class ActivityGenerator:
                 ),
             )
 
-        # Phase 2.5: Emit DC-side Kerberos events for domain logons
-        # When a user authenticates via Kerberos to a Windows domain system,
-        # the DC sees a TGT request (4768) then a service ticket request (4769)
-        # before the target system logs the 4624.
-        self._emit_dc_kerberos_for_logon(
-            user=user,
-            system=system,
-            time=time,
-            auth_package=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
-            source_ip=source_ip,
+        # Emit DC-side Kerberos events for domain logons via causal expansion.
+        # The KerberosBeforeLogon rule handles TGT (4768), TGS (4769), and
+        # optional 4672 for elevated users.
+        auth_package_name = auth_pkg.get("AuthenticationPackageName", "Negotiate")
+        self._expand_and_emit(
+            "logon",
+            time,
+            actor=user,
+            target_system=system,
+            auth_package=auth_package_name,
+            src_ip=source_ip,
+            os_category=_get_os_category(system.os),
         )
 
         # Phase 3: Dispatch to matching emitters
@@ -1112,9 +1231,18 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
-        # Emit DNS lookup before connection if requested (ensures DNS evidence exists)
+        # Emit DNS lookup before connection via causal expansion.
+        # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         if emit_dns and proto == "tcp" and dst_port not in (53,):
-            self._emit_dns_lookup(src_ip, dst_ip, time)
+            self._expand_and_emit(
+                "connection",
+                time,
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                proto=proto,
+                service=service,
+            )
 
         # Same-host connections are valid for host-based logs (eCAR FLOW)
         # but invisible to network sensors (Zeek/Snort)
@@ -1124,7 +1252,14 @@ class ActivityGenerator:
         is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
             logger.warning(
-                f"Skipping invalid network connection: {src_ip} -> {dst_ip}. Reason: {reason}."
+                "Skipping invalid network connection: %s:%s -> %s:%s proto=%s. "
+                "Reason: %s. Check that all systems have routable IPs in the scenario.",
+                src_ip,
+                src_port or "?",
+                dst_ip,
+                dst_port,
+                proto,
+                reason,
             )
             return ""
 
@@ -2292,6 +2427,96 @@ class ActivityGenerator:
 
         return pattern
 
+    # Process→network correlation: maps executable names to connection parameters.
+    # When a baseline process is generated, the engine checks if the executable
+    # normally generates network traffic and emits corresponding connections.
+    _PROCESS_NETWORK_MAP = {
+        # Browsers → HTTPS to external
+        "chrome.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "msedge.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "firefox.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "firefox": {"dst_port": 443, "service": "ssl", "external": True},
+        # Office → HTTPS to O365/cloud
+        "OUTLOOK.EXE": {"dst_port": 443, "service": "ssl", "external": True},
+        "Teams.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        "OneDrive.exe": {"dst_port": 443, "service": "ssl", "external": True},
+        # Dev tools → external endpoints
+        "Code.exe": {"dst_port": 443, "service": "ssl", "external": True},  # extensions, telemetry
+        "git": {"dst_port": 443, "service": "ssl", "external": True},
+        "npm": {"dst_port": 443, "service": "ssl", "external": True},
+        "cargo": {"dst_port": 443, "service": "ssl", "external": True},
+        "docker": {"dst_port": 443, "service": "ssl", "external": True},
+        "kubectl": {"dst_port": 443, "service": "ssl", "external": True},
+        # DB clients → internal database
+        "sqlcmd.exe": {"dst_port": 1433, "service": "mssql", "external": False},
+        "mysql": {"dst_port": 3306, "service": "mysql", "external": False},
+        "psql": {"dst_port": 5432, "service": "postgresql", "external": False},
+        # SSH clients
+        "ssh": {"dst_port": 22, "service": "ssh", "external": False},
+        # curl/wget → external
+        "curl": {"dst_port": 443, "service": "ssl", "external": True},
+    }
+
+    def _emit_process_network_correlation(
+        self,
+        system: Any,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+        pid: int,
+        rng: random.Random,
+    ) -> None:
+        """Emit network connections correlated with a process creation.
+
+        When a baseline process is one that normally generates network
+        traffic (browsers, Office apps, dev tools, DB clients), emit
+        a corresponding connection shortly after process creation.
+        """
+        # Extract executable basename
+        exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        # Strip .exe for Linux lookups
+        exe_base = exe.replace(".exe", "") if exe.endswith(".exe") else exe
+
+        conn_info = self._PROCESS_NETWORK_MAP.get(exe) or self._PROCESS_NETWORK_MAP.get(exe_base)
+        if conn_info is None:
+            return
+
+        # Only emit ~60% of the time (not every process invocation connects)
+        if rng.random() > 0.60:
+            return
+
+        conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
+
+        if conn_info["external"]:
+            # External connection: pick a random external IP
+            dst_ip = _generate_random_external_ip(rng)
+        else:
+            # Internal connection: use DB server or any internal server
+            db_servers = getattr(self, "_db_servers", [])
+            all_ips = getattr(self, "_all_system_ips", [])
+            if conn_info["service"] in ("mssql", "mysql", "postgresql") and db_servers:
+                db_entry = rng.choice(db_servers)
+                # _db_servers entries are dicts with "ip", "port", "service"
+                dst_ip = db_entry["ip"] if isinstance(db_entry, dict) else db_entry
+            elif all_ips:
+                dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
+            else:
+                return  # No internal targets available
+
+        self.generate_connection(
+            src_ip=system.ip,
+            dst_ip=dst_ip,
+            time=conn_time,
+            dst_port=conn_info["dst_port"],
+            proto="tcp",
+            service=conn_info["service"],
+            duration=rng.uniform(0.3, 15.0),
+            orig_bytes=rng.randint(200, 5000),
+            resp_bytes=rng.randint(500, 50000),
+            emit_dns=conn_info["external"],
+            pid=pid,
+        )
+
     def execute_baseline_activity(
         self, user: User, system: System, time: datetime, activity_type: str
     ) -> None:
@@ -2420,44 +2645,18 @@ class ActivityGenerator:
                 process_name, command_line = rng.choice(pool)
                 # Phase 5.1: Substitute username placeholder in paths
                 process_name = process_name.replace("{username}", user.username)
-                command_line = command_line.replace("{username}", user.username)
-                # Parameterize command templates (process_query variety)
-                command_line = _parameterize_command(rng, command_line)
+                # Parameterize command templates (all categories — queries, paths, docs)
+                command_line = _parameterize_command(rng, command_line, username=user.username)
                 parent_pid = self._select_parent_pid(system, user, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
                 self._record_user_process(system, user, pid, process_name)
 
-                # Generate network connections for processes that connect to remote services
-                exe_lower = process_name.rsplit("\\", 1)[-1].lower()
-                if exe_lower == "sqlcmd.exe" and activity_type == "process_query":
-                    # Extract server from command line (-S flag)
-                    db_port = 1433
-                    db_ip = "127.0.0.1"  # Default localhost
-                    if "-S " in command_line:
-                        server = command_line.split("-S ")[1].split()[0]
-                        # Resolve server name to IP if possible
-                        db_ip = REVERSE_DNS.get(server) or next(
-                            (
-                                ip
-                                for name, ip in REVERSE_DNS.items()
-                                if server.lower() in name.lower()
-                            ),
-                            "10.0.2.50",  # Default DB server IP
-                        )
-                    conn_time = time + timedelta(milliseconds=rng.randint(50, 200))
-                    self.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=db_ip,
-                        time=conn_time,
-                        dst_port=db_port,
-                        proto="tcp",
-                        service="mssql",
-                        duration=rng.uniform(0.5, 5.0),
-                        orig_bytes=rng.randint(200, 2000),
-                        resp_bytes=rng.randint(500, 50000),
-                    )
+                # Generate correlated network connections for processes
+                self._emit_process_network_correlation(
+                    system, process_name, command_line, time, pid, rng
+                )
 
             elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
                 # Phase 5.6: Per-persona app pool for Linux user diversity
@@ -2468,12 +2667,19 @@ class ActivityGenerator:
                         persona_key, PERSONA_APP_INDICES_LINUX["default"]
                     )
                     pool = [pool[i] for i in indices if i < len(pool)]
-                process_name, command_line = _get_rng().choice(pool)
+                rng = _get_rng()
+                process_name, command_line = rng.choice(pool)
+                command_line = _parameterize_command(rng, command_line, username=user.username)
                 parent_pid = self._select_parent_pid(system, user, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
                 self._record_user_process(system, user, pid, process_name)
+
+                # Generate correlated network connections for processes
+                self._emit_process_network_correlation(
+                    system, process_name, command_line, time, pid, rng
+                )
 
                 # Also generate bash history for Linux
                 self.generate_bash_command(user, system, time, activity_type)
@@ -2819,6 +3025,9 @@ class ActivityGenerator:
         rng = _get_rng()
 
         # 1. Network connection (Zeek conn.log port 3389)
+        # emit_dns=True so the causal engine generates DNS evidence for the
+        # RDP destination, matching real-world behavior where the client
+        # resolves the target hostname before connecting.
         uid = self.generate_connection(
             src_ip=source_ip,
             dst_ip=target_system.ip,
@@ -2828,7 +3037,7 @@ class ActivityGenerator:
             duration=rng.uniform(60.0, 3600.0),
             orig_bytes=rng.randint(50000, 500000),
             resp_bytes=rng.randint(100000, 2000000),
-            emit_dns=False,
+            emit_dns=True,
             source_system=source_system,
         )
 
@@ -3221,6 +3430,9 @@ class ActivityGenerator:
         target_image: str,
     ) -> None:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        # Entity lifecycle: validate target PID exists
+        self.state_manager.validate_target_pid(system.hostname, target_pid)
+
         from evidenceforge.events.contexts import ProcessContext
 
         event = SecurityEvent(
@@ -3268,6 +3480,9 @@ class ActivityGenerator:
             target_image: Full path of the target process image
             granted_access: Access mask (0x1010=VM_READ, 0x1FFFFF=ALL_ACCESS)
         """
+        # Entity lifecycle: validate target PID exists
+        self.state_manager.validate_target_pid(system.hostname, target_pid)
+
         from evidenceforge.events.contexts import ProcessContext
 
         event = SecurityEvent(

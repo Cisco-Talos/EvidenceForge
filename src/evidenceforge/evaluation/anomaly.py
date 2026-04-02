@@ -109,9 +109,16 @@ def detect_anomalies(
 ) -> tuple[int, int]:
     """Detect anomalous events in background noise.
 
+    Red herring events (explicitly declared in the scenario) are counted as
+    anomalies since they represent analyst-visible suspicious-but-benign
+    activity that contributes to realistic anomaly rates.
+
     Returns:
         (anomalous_count, total_checked) — both ints.
     """
+    # Count red herring events — each sub-event counts as one anomaly
+    red_herring_count = sum(len(rh.events) for rh in (scenario.red_herrings or []))
+
     # Build context
     persona_hours = _build_persona_hours(scenario)
     service_ports = _build_service_ports(scenario)
@@ -153,6 +160,10 @@ def detect_anomalies(
         )
         if is_anomalous:
             anomalous += 1
+
+    # Add red herring events to both counts (they're real records in the data)
+    anomalous += red_herring_count
+    total += red_herring_count
 
     return anomalous, total
 

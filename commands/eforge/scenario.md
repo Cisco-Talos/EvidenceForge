@@ -45,11 +45,17 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Log boundary** — Only include systems and logs that the victim organization would actually have access to. See the "Log Realism: What You'd Actually Have" section below for details. This is especially important for scenarios involving third parties, cloud services, or SaaS vendors.
 
-**Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call.
+**Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call. Every user must have a `primary_system` assigned — ensure there are enough workstations for all users (users can share systems, but each user needs a designated primary).
 
 **Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
+**System roles** — Assign `roles` to systems in the environment to enable automatic lateral movement patterns in the baseline. Roles like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` trigger corresponding service account traffic (backup agents, monitoring, AD replication, app→DB connections, etc.). These patterns create realistic background lateral movement that analysts must distinguish from malicious activity.
+
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
+
+**Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
+
+**Stale accounts** — Does the organization have any disabled or inactive accounts that haven't been fully cleaned up? Former employees, decommissioned service accounts, or un-revoked contractor access are common in real environments. Add 2-4 stale accounts to `environment.stale_accounts` with `username`, `last_active` (ISO date), and `reason`. The engine automatically generates background noise from these: failed logons, Kerberos pre-auth failures on DCs, scheduled task failures, and service startup failures — creating realistic "why is this disabled account still here?" ambiguity for analysts.
 
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
 
@@ -165,7 +171,7 @@ environment:
       full_name: "Marcus Chen"
       email: marcus.chen@example.com
       persona: developer          # Must reference a persona name
-      primary_system: WS-DEV-01   # Optional, must reference a system hostname
+      primary_system: WS-DEV-01   # Required — must reference a system hostname
       enabled: true               # Default: true
       groups: ["engineering"]     # Optional
 
@@ -178,6 +184,11 @@ environment:
       services: []               # Optional
 
   service_accounts: []             # Optional: custom service/system accounts valid as storyline actors
+
+  stale_accounts:                  # Optional: inactive accounts for background noise
+    - username: former.employee
+      last_active: "2023-11-15"
+      reason: "Left the company"
 
   groups:                         # Optional
     - name: engineering
@@ -233,12 +244,23 @@ storyline:                        # The attack events to bury in the data
         command_line: "whoami"
         technique: "T1033 - System Owner/User Discovery"
 
+red_herrings:                     # Optional: suspicious-but-benign events
+  - id: rh-afterhours
+    time: "+3h"
+    actor: sarah.admin
+    system: DC-01
+    activity: "After-hours server check"
+    explanation: "Routine sysadmin maintenance outside business hours"
+    events:
+      - type: logon
+        logon_type: 10
+
 output:
   logs:
     - format: windows
     - format: zeek
     # Available: windows, zeek, ecar, syslog,
-    #            bash_history, snort_alert, web_access
+    #            bash_history, snort_alert, web_access, proxy_access
   destination: "./output"
   compression: false
 ```
@@ -259,7 +281,7 @@ See `references/evidence-formats.md` for detailed field documentation, output pa
 
 The scenario is validated before generation. Common issues to avoid:
 - Every `user.persona` must match a persona name (from inline personas or pre-built library)
-- Every `user.primary_system` must match a system hostname
+- Every user must have a `primary_system` assigned, and it must match a system hostname
 - Every `system.assigned_user` must match a username
 - Every storyline `actor` must be a username defined in the users list, a well-known built-in account (e.g., `SYSTEM`, `root`), or listed in `environment.service_accounts`
 - Every storyline `system` must match a system hostname
@@ -309,9 +331,11 @@ These are just examples — invent additional realistic variations appropriate t
 
 **Placement:** Fumbles work best right before a successful action (failed logon → successful logon) or as abandoned branches between kill chain phases. Don't cluster them all at the beginning — distribute them throughout the storyline.
 
+**Storyline timing:** Events within a multi-event storyline step are automatically spaced with human typing rhythm (1-2 second gaps with occasional thinking pauses). You don't need to create separate storyline steps for sequential commands — put them in the same step's `events` list and the engine will space them realistically.
+
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `process_access`, `raw`
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `raw`
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 
@@ -393,13 +417,20 @@ events:
     technique: "T1087.001 - Account Discovery: Local Account"
 ```
 
-**Correlated events for process commands:** When a storyline step runs a command that would produce additional audit events (account creation, service installation, scheduled task creation, log clearing, process injection, etc.), explicitly declare those as separate events in the same step's `events` list alongside the `process` event. Think about what audit trail the command would leave in a real environment and declare each distinct event. For example:
-- `net user backdoor P@ss /add` → declare both `process` and `account_created` (with `target_username`)
-- `sc create evilsvc binPath=...` → declare both `process` and `service_installed` (with `service_name` and `service_file_name`)
-- `wevtutil cl Security` → declare both `process` and `log_cleared`
-- mimikatz credential dumping → declare `process`, `create_remote_thread` (with `target_process: lsass.exe`), and optionally `process_access` (with `target_process: lsass.exe`, `granted_access: "0x1010"`)
+**Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets. You do NOT need to manually specify these as prerequisites:
 
-The engine auto-infers 6 common Windows command patterns as a safety net, but do not rely on this -- always declare correlated events explicitly.
+- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions
+- **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC, plus 4672 for elevated users
+- **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
+- **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
+- **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events
+
+**When to manually specify these event types:** Only when they are part of the attack narrative itself — not as prerequisites for another event. For example:
+- DNS tunneling exfiltration → manually declare the DNS `connection` events (they ARE the attack, not a prerequisite)
+- Kerberos golden ticket forging → manually declare the Kerberos events
+- Explicit credential dumping via process access → use `create_remote_thread` with `target_process: lsass.exe`; the engine auto-generates the corresponding ProcessAccess (Sysmon Event 10)
+
+The validator warns if it detects potentially redundant manual specifications alongside events that would auto-generate them.
 
 Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
 
