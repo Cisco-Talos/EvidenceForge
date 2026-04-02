@@ -1476,7 +1476,14 @@ class ActivityGenerator:
                 ad_domain = getattr(self, "_ad_domain", "")
                 if ad_domain and "." not in proxy_fqdn:
                     proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
-                hostname = REVERSE_DNS.get(dst_ip)
+                # Prefer DNS query domain (from causal expansion) over reverse-DNS
+                # PTR records. Proxy logs should show the domain the user browsed
+                # (e.g., "slack.com"), not the CDN edge hostname.
+                hostname = None
+                if dns is not None and dns.query:
+                    hostname = dns.query
+                if not hostname:
+                    hostname = REVERSE_DNS.get(dst_ip)
                 if not hostname:
                     hostname = _generate_random_hostname(_get_rng(), dst_ip)
                 schema = "https" if dst_port == 443 else "http"
@@ -1516,9 +1523,14 @@ class ActivityGenerator:
         if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
             from evidenceforge.events.contexts import SslContext
 
-            server_name = REVERSE_DNS.get(dst_ip)
+            # Prefer DNS query domain over reverse-DNS PTR records for SNI.
+            # Real browsers send the domain they're visiting, not CDN edge hostnames.
+            server_name = None
+            if dns is not None and dns.query:
+                server_name = dns.query
             if not server_name:
-                # Generate a plausible hostname for IPs not in REVERSE_DNS
+                server_name = REVERSE_DNS.get(dst_ip)
+            if not server_name:
                 server_name = _generate_random_hostname(rng, dst_ip)
             _TLS12_CIPHERS = [
                 "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
