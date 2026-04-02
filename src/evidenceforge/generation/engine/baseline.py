@@ -186,6 +186,27 @@ _BENIGN_PA_PAIRS = [
         r"C:\Windows\System32\lsass.exe",
         "0x1000",
     ),
+    (
+        "csrss_s0",
+        r"C:\Windows\System32\csrss.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
+    (
+        "svchost_netsvcs",
+        r"C:\Windows\System32\svchost.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
+    (
+        "services",
+        r"C:\Windows\System32\services.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
 ]
 
 # Synthetic SYSTEM user for baseline Event 8/10 generation
@@ -2965,7 +2986,7 @@ class BaselineMixin:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
                 if not monitored_systems:
                     continue
-                num_alerts = rng.randint(1, 3)
+                num_alerts = rng.randint(5, 15)
                 # For IDS sensors (typically perimeter), generate alerts with
                 # external source IPs targeting monitored systems.
                 _EXTERNAL_SCAN_IPS = [
