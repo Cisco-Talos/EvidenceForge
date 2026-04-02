@@ -1,5 +1,6 @@
 ---
 name: eforge-evaluate
+license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
   Run EvidenceForge data quality evaluation on generated log output, interpret results, review records
   for realism, and suggest improvements. Use this skill whenever the user wants to evaluate generated

@@ -1,5 +1,6 @@
 ---
 name: eforge-validate
+license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
   Validate an EvidenceForge scenario YAML file for schema correctness and cross-reference integrity.
   Use this skill whenever the user wants to check, validate, verify, or lint a scenario file before

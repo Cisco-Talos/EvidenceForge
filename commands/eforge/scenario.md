@@ -1,5 +1,6 @@
 ---
 name: eforge-scenario
+license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
   Create EvidenceForge scenario YAML files for generating realistic synthetic security log datasets.
   Use this skill whenever the user wants to create a new scenario, build a threat hunting exercise,

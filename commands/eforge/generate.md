@@ -1,5 +1,6 @@
 ---
 name: eforge-generate
+license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
   Run EvidenceForge log generation from a scenario file, monitor output, diagnose errors, and suggest fixes.
   Use this skill whenever the user wants to generate logs, run a scenario, produce security training data,
