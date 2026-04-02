@@ -11,21 +11,12 @@
 
   Scenario name: apt-healthcare-breach-large
 
-  Systems (mix of Windows and Linux, ~50 total):
+  Systems (mix of Windows and Linux, ~75+ total):
 
-  Windows workstations (25, Windows 10/11) across departments:
-  - 4 development: WS-DEV-01 through WS-DEV-04
-  - 3 IT/infrastructure: WS-IT-01 through WS-IT-03
-  - 2 security operations: WS-SEC-01, WS-SEC-02
-  - 3 finance/accounting: WS-FIN-01 through WS-FIN-03
-  - 2 data analytics: WS-DATA-01, WS-DATA-02
-  - 2 executive: WS-EXEC-01, WS-EXEC-02
-  - 2 project management: WS-PM-01, WS-PM-02
-  - 2 HR: WS-HR-01, WS-HR-02
-  - 2 sales: WS-SALES-01, WS-SALES-02
-  - 1 legal: WS-LEGAL-01
-  - 1 marketing: WS-MKT-01
-  - 1 front desk/reception: WS-FRONT-01
+  Windows workstations (Windows 10/11) — one per user (see Users section), with naming convention
+  WS-{DEPT}-{NN} across departments: dev, IT, security, finance, data analytics, executive, PM, HR,
+  sales, legal, marketing, front desk. Exception: IT helpdesk staff (sysadmin persona) share 2-3
+  workstations to represent shift coverage (e.g., WS-IT-HELP-01, WS-IT-HELP-02).
 
   Windows servers (10, Server 2019/2022):
   - DC-01 (domain controller, Server 2022, roles: [domain_controller])
@@ -57,7 +48,7 @@
   - BUILD-01 (Ubuntu, Jenkins CI/CD server)
 
   Network (7 segments):
-  - corporate_lan (10.10.1.0/23) — workstations (larger subnet for 25 hosts)
+  - corporate_lan (10.10.0.0/22) — workstations (larger subnet for ~50 hosts)
   - server_vlan (10.10.2.0/24) — DCs, file servers, Exchange, print, WSUS, SCCM, RDS, NPS
   - app_vlan (10.10.5.0/24) — app servers, build server, internal web, internal DNS
   - dmz (10.10.3.0/24, exposure: both) — external web servers, external DNS, reverse proxy, proxy
@@ -108,10 +99,10 @@
   in the database segment is only visible via host-level logs, not network).
 
   Users: 55 users spanning all 15 built-in personas. Realistic diverse names (first.last format).
-  Every user must have a primary_system assigned. With 55 users and 25 workstations, many users share
-  workstations (realistic for shift workers, shared departmental machines, hot-desking). Ensure at
-  least 5 users are designated as remote/VPN users whose primary_system is a workstation but who
-  also generate VPN logon activity.
+  Each user has a dedicated primary_system workstation (1:1 mapping), except for IT helpdesk staff
+  (sysadmin persona) who share 2-3 workstations to represent shift coverage. Ensure at least 5 users
+  are designated as remote/VPN users whose primary_system is a workstation but who also generate VPN
+  logon activity.
 
   Service accounts (8): svc_backup, svc_monitor, svc_sqlreader, svc_exchange, svc_sccm, svc_wsus,
   svc_jenkins, svc_replication.
