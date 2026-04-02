@@ -1,0 +1,45 @@
+name: cisco_asa
+version: "1.0"
+description: "Cisco ASA firewall syslog format"
+category: network
+
+fields:
+  - name: timestamp
+    type: timestamp
+    required: true
+    description: "Event timestamp"
+
+  - name: hostname
+    type: string
+    required: true
+    description: "Firewall hostname"
+
+  - name: severity
+    type: integer
+    required: true
+    description: "Syslog severity level (4=warning, 6=informational)"
+    constraints:
+      min_value: 0
+      max_value: 7
+
+  - name: msg_id
+    type: integer
+    required: true
+    description: "ASA message ID (e.g., 302013, 106023)"
+
+  - name: message
+    type: string
+    required: true
+    description: "ASA message body (varies by msg_id)"
+
+  - name: pri
+    type: integer
+    required: true
+    description: "Syslog priority (facility * 8 + severity)"
+
+output:
+  format: text
+  file_extension: ".log"
+  encoding: utf-8
+  template: |
+    <{{ pri }}>{{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} %ASA-{{ severity }}-{{ msg_id }}: {{ message }}

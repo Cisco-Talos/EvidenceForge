@@ -38,6 +38,7 @@ from datetime import timedelta
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
+    CiscoAsaEmitter,
     EcarEmitter,
     ProxyEmitter,
     SnortEmitter,
@@ -87,6 +88,7 @@ def _build_emitter_classes() -> dict:
         "syslog": SyslogEmitter,
         "bash_history": BashHistoryEmitter,
         "snort_alert": SnortEmitter,
+        "cisco_asa": CiscoAsaEmitter,
         "web_access": WebEmitter,
         "proxy_access": ProxyEmitter,
     }
@@ -109,7 +111,7 @@ _ZEEK_FORMAT_NAMES = {
 }
 _ZEEK_FORMATS = _ZEEK_FORMAT_NAMES
 # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
-_SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert"}
+_SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert", "cisco_asa"}
 _HOST_FORMATS = {
     "windows_event_security",
     "windows_event_sysmon",

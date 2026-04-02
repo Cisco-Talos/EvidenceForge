@@ -66,7 +66,7 @@ FORMAT_GROUPS: dict[str, set[str]] = {
 }
 
 # Formats subject to network visibility filtering (expanded emitter names)
-_NETWORK_FORMATS = FORMAT_GROUPS["zeek"] | {"snort_alert"}
+_NETWORK_FORMATS = FORMAT_GROUPS["zeek"] | {"snort_alert", "cisco_asa"}
 
 
 def expand_formats(formats: list[str] | set[str]) -> set[str]:

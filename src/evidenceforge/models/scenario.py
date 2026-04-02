@@ -545,6 +545,24 @@ class NetworkSegment(BaseModel):
         return v
 
 
+class FirewallRule(BaseModel):
+    """Firewall rule. Evaluated in order; first match wins.
+
+    Default action (from NetworkSensor.default_action) applies if no rule matches.
+
+    Attributes:
+        src: Source -- segment name, "external", IP, CIDR, or "any"
+        dst: Destination -- segment name, "external", IP, CIDR, or "any"
+        ports: Port numbers, or empty list / "any" for all ports
+        action: "permit" or "deny"
+    """
+
+    src: str
+    dst: str
+    ports: list[int | str] = Field(default_factory=list)
+    action: str = Field(default="permit", pattern="^(permit|deny)$")
+
+
 class NetworkSensor(BaseModel):
     """Network sensor definition.
 
@@ -559,6 +577,13 @@ class NetworkSensor(BaseModel):
                    span: sees all traffic including intra-segment (e.g., SPAN port on switch)
                    tap: only sees traffic crossing segment boundaries (e.g., inline TAP on uplink)
         log_formats: Which log formats this sensor generates
+        interfaces: Mapping of segment names to ASA interface names (e.g., {"dmz": "dmz",
+                    "workstations": "inside"}). IPs not in any mapped segment resolve to "outside".
+        policy: Ordered list of firewall rules (first match wins). Only used for firewall-type
+                sensors. Default action applies if no rule matches.
+        default_action: Default firewall action when no rule matches ("deny" or "permit").
+        deny_ratio: For firewall sensors, ratio of deny events to generate per allow event
+                    in the baseline. Default 5.0 (5 denies per allow).
         description: Optional description
     """
 
@@ -569,6 +594,10 @@ class NetworkSensor(BaseModel):
     direction: str = Field(default="bidirectional", pattern="^(inbound|outbound|bidirectional)$")
     placement: str = Field(default="span", pattern="^(span|tap)$")
     log_formats: list[str] = Field(default_factory=lambda: ["zeek"])
+    interfaces: dict[str, str] = Field(default_factory=dict)
+    policy: list[FirewallRule] = Field(default_factory=list)
+    default_action: str = Field(default="deny", pattern="^(deny|permit)$")
+    deny_ratio: float = Field(default=5.0, ge=0.0)
     description: str = ""
 
 

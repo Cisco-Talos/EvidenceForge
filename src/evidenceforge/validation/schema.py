@@ -419,6 +419,7 @@ class ScenarioValidator:
             "syslog",
             "bash_history",
             "snort_alert",
+            "cisco_asa",
             "web_access",
             "proxy_access",
         }
@@ -491,7 +492,7 @@ class ScenarioValidator:
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
 
         # Valid sensor log_formats: group names + standalone non-group formats
-        known_sensor_formats = set(FORMAT_GROUPS.keys()) | {"snort_alert"}
+        known_sensor_formats = set(FORMAT_GROUPS.keys()) | {"snort_alert", "cisco_asa"}
         # Individual emitter names that must use their group instead
         _group_members = {}
         for group, members in FORMAT_GROUPS.items():

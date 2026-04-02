@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
     EdrContext,
     FileContext,
     FileTransferContext,
+    FirewallContext,
     GroupMembershipContext,
     HostContext,
     HttpContext,
@@ -112,6 +113,9 @@ class SecurityEvent:
 
     # EDR entity tracking (eCAR object/actor graph)
     edr: EdrContext | None = None
+
+    # Firewall decision context (Cisco ASA)
+    firewall: FirewallContext | None = None
 
     # Raw event: carries arbitrary fields for a single target emitter.
     # Goes through pipeline (state mgmt, visibility, local_only) unlike dispatch_raw().

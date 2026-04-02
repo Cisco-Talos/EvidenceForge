@@ -462,6 +462,24 @@ class EdrContext:
 
 
 @dataclass(slots=True)
+class FirewallContext:
+    """Cisco ASA firewall decision context.
+
+    Carries the firewall action (permit/deny), ASA message ID, connection
+    counter, and interface names for rendering ASA syslog records.
+    """
+
+    action: str  # "permit" | "deny"
+    msg_id: int  # ASA message ID (302013, 106023, etc.)
+    connection_id: int  # ASA connection counter
+    src_interface: str  # "inside", "outside", "dmz"
+    dst_interface: str
+    access_group: str = ""  # ACL name for deny logs
+    bytes_sent: int = 0  # For teardown records
+    duration: str = ""  # "H:MM:SS" for teardown
+
+
+@dataclass(slots=True)
 class RawContext:
     """Carries arbitrary fields destined for one specific emitter.
 
