@@ -154,6 +154,9 @@ After reviewing output, you can suggest:
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
 | cisco_asa | Cisco ASA firewall syslog (Built/Teardown/Deny) | Firewall sensors |
+
+When `nat_rules` are configured on the firewall sensor, cisco_asa.log also includes 305011/305012 NAT translation records alongside the normal Built/Teardown connection records.
+
 | web_access | Apache/Nginx combined access logs | Web servers |
 
 See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each format.

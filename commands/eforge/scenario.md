@@ -228,6 +228,9 @@ environment:
           - {src: corporate_lan, dst: any}
           - {src: server_vlan, dst: external, ports: [80, 443, 53]}
           - {src: server_vlan, dst: server_vlan}
+        nat_rules:                # NAT translation rules
+          - {type: dynamic_pat, src: corporate_lan, mapped_ip: "203.0.113.1"}
+          - {type: static, real_ip: "10.10.20.10", mapped_ip: "203.0.113.10"}
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer
@@ -285,6 +288,18 @@ output:
   destination: "./output"
   compression: false
 ```
+
+### Firewall NAT Rules
+
+- `nat_rules`: NAT translation rules. Each rule specifies how traffic crossing the firewall boundary gets address-translated.
+  - `type`: `"dynamic_pat"` (many:1 with port translation) or `"static"` (1:1 IP mapping)
+  - `src`: Source segment name(s), IP, or CIDR. Accepts a string or list (e.g., `[workstations, servers]`)
+  - `mapped_ip`: The post-NAT IP address
+  - `real_ip`: (static only) The specific internal IP being mapped
+  - Dynamic PAT: all traffic from matching segments shares one external IP with port translation. Common for outbound user traffic.
+  - Static NAT: bidirectional 1:1 mapping for DMZ servers. Enables inbound connections via public IP.
+  - NAT only applies to permitted connections that cross segment boundaries. Denied connections are not NATted.
+  - ASA logs both real and mapped IPs in Built messages. Outside Zeek sensors see post-NAT IPs; inside sensors see real IPs.
 
 ### OS-Aware Log Routing
 

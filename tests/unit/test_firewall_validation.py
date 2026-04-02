@@ -26,6 +26,7 @@ from evidenceforge.models.scenario import (
     BaselineActivity,
     Environment,
     FirewallRule,
+    NatRule,
     NetworkConfig,
     NetworkSegment,
     NetworkSensor,
@@ -224,3 +225,167 @@ class TestFirewallValidation:
         issues = validator.validate()
         iface_issues = [issue for issue in issues if "_default" in issue.message]
         assert len(iface_issues) == 0
+
+
+class TestNatRuleValidation:
+    """Tests for NAT rule validation in firewall config."""
+
+    def test_nat_rule_valid_segment_ref(self):
+        """NAT rule referencing an existing segment should produce no warnings."""
+        scenario = _make_scenario(
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["cisco_asa"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src="internal",
+                            mapped_ip="198.51.100.1",
+                        ),
+                    ],
+                )
+            ]
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        nat_issues = [
+            issue
+            for issue in issues
+            if "nat" in issue.message.lower() or "nat_rule" in issue.field_path
+        ]
+        assert len(nat_issues) == 0
+
+    def test_nat_rule_invalid_segment_warns(self):
+        """NAT rule referencing a nonexistent segment should warn."""
+        scenario = _make_scenario(
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["cisco_asa"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src="nonexistent",
+                            mapped_ip="198.51.100.1",
+                        ),
+                    ],
+                )
+            ]
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        nat_issues = [issue for issue in issues if "nonexistent" in issue.message]
+        assert len(nat_issues) >= 1
+
+    def test_nat_rule_static_missing_real_ip_warns(self):
+        """Static NAT rule without real_ip should warn."""
+        scenario = _make_scenario(
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["cisco_asa"],
+                    nat_rules=[
+                        NatRule(
+                            type="static",
+                            src="dmz",
+                            mapped_ip="203.0.113.5",
+                        ),
+                    ],
+                )
+            ]
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        nat_issues = [
+            issue
+            for issue in issues
+            if "real_ip" in issue.message.lower() or "static" in issue.message.lower()
+        ]
+        assert len(nat_issues) >= 1
+
+    def test_nat_rule_valid_mapped_ip(self):
+        """NAT rule with a valid mapped_ip should not raise issues."""
+        scenario = _make_scenario(
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["cisco_asa"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src="internal",
+                            mapped_ip="198.51.100.1",
+                        ),
+                    ],
+                )
+            ]
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        nat_issues = [issue for issue in issues if "mapped_ip" in issue.message.lower()]
+        assert len(nat_issues) == 0
+
+    def test_nat_rules_without_cisco_asa_warns(self):
+        """Firewall with nat_rules but no cisco_asa log format should warn."""
+        scenario = _make_scenario(
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw01",
+                    monitoring_segments=["internal", "dmz"],
+                    log_formats=["zeek"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src="internal",
+                            mapped_ip="198.51.100.1",
+                        ),
+                    ],
+                )
+            ]
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        nat_issues = [
+            issue
+            for issue in issues
+            if "nat" in issue.message.lower() and "cisco_asa" in issue.message.lower()
+        ]
+        assert len(nat_issues) >= 1
+
+    def test_nat_rules_on_non_firewall_warns(self):
+        """NAT rules on a non-firewall sensor should produce a validation warning."""
+        scenario = _make_scenario(
+            sensors=[
+                NetworkSensor(
+                    type="network",
+                    name="zeek-sensor",
+                    monitoring_segments=["internal"],
+                    log_formats=["zeek"],
+                    nat_rules=[
+                        NatRule(
+                            type="dynamic_pat",
+                            src="internal",
+                            mapped_ip="198.51.100.1",
+                        ),
+                    ],
+                )
+            ]
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+        nat_issues = [
+            issue
+            for issue in issues
+            if "nat" in issue.message.lower() and "firewall" in issue.message.lower()
+        ]
+        assert len(nat_issues) >= 1

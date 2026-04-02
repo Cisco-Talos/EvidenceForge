@@ -25,7 +25,11 @@
   - snort-perimeter: TAP, monitors dmz, inbound
   - fw-perimeter: firewall, TAP, monitors corporate_lan + server_vlan + dmz, bidirectional,
     log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside, dmz: dmz},
-    default_action: deny, deny_ratio: 5.0, policy:
+    default_action: deny, deny_ratio: 5.0, nat_rules:
+      - type: dynamic_pat
+        src: [corporate_lan, server_vlan]
+        mapped_ip: 198.51.100.1
+    policy:
       - {src: external, dst: dmz, ports: [80, 443]}          # Allow web traffic to DMZ
       - {src: corporate_lan, dst: any}                         # Users can reach anything
       - {src: server_vlan, dst: external, ports: [80, 443, 53]} # Servers: web + DNS out
@@ -153,6 +157,10 @@
   - Deny baseline volume proportional to deny_ratio (~5x allows)
   - Firewall policy enforcement: external → corporate_lan denied, external → dmz:80/443 allowed
   - Storyline connections through the firewall produce ASA allow records correlated with Zeek conn records
+  - 305011 (Built NAT translation) present when nat_rules configured
+  - 305012 (Teardown NAT translation) present
+  - Built messages show mapped IPs in parentheses that differ from real IPs
+  - Outside Zeek sensors show post-NAT source IPs; inside sensors show real IPs
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections in zeek_dns/zeek_conn; Kerberos 4768/4769

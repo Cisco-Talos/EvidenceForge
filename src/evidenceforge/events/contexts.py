@@ -480,6 +480,23 @@ class FirewallContext:
 
 
 @dataclass(slots=True)
+class NatContext:
+    """NAT translation applied to a connection by a firewall.
+
+    Carries the mapped (post-NAT) addresses for rendering by emitters.
+    For dynamic PAT, the source port is translated. For static NAT,
+    ports are preserved. Emitters use these to render different IPs
+    depending on which side of the NAT boundary they sit.
+    """
+
+    nat_type: str  # "dynamic_pat" | "static"
+    mapped_src_ip: str  # post-NAT source IP
+    mapped_src_port: int  # post-NAT source port (PAT changes this; static keeps it)
+    mapped_dst_ip: str  # post-NAT dest IP (for inbound static NAT)
+    mapped_dst_port: int  # post-NAT dest port
+
+
+@dataclass(slots=True)
 class RawContext:
     """Carries arbitrary fields destined for one specific emitter.
 

@@ -415,6 +415,7 @@ class PortScanEventSpec(_EventSpecBase):
     """
 
     type: Literal["port_scan"] = "port_scan"
+    source_ip: str = ""  # Override scan source IP (default: uses storyline system IP)
     target_ips: list[str] = Field(default_factory=list)
     target_segment: str | None = None
     target_count: int = Field(default=50, ge=1, le=5000)
@@ -432,6 +433,7 @@ class BlockedC2EventSpec(_EventSpecBase):
     """
 
     type: Literal["blocked_c2"] = "blocked_c2"
+    source_ip: str = ""  # Override beacon source IP (default: uses storyline system IP)
     dst_ip: str
     dst_port: int = 443
     protocol: str = Field(default="tcp", pattern="^(tcp|udp)$")
@@ -599,6 +601,32 @@ class FirewallRule(BaseModel):
     action: str = Field(default="permit", pattern="^(permit|deny)$")
 
 
+class NatRule(BaseModel):
+    """NAT translation rule for firewall sensors.
+
+    Attributes:
+        type: NAT type -- "dynamic_pat" (many:1 with port translation) or "static" (1:1)
+        src: Source segment name(s), IP, or CIDR. Accepts string or list for multiple segments.
+        mapped_ip: Post-NAT IP address
+        real_ip: For static NAT, the specific internal IP being mapped
+        interface_pair: Optional [inside_iface, outside_iface] for explicit interface binding
+    """
+
+    type: str = Field(..., pattern="^(dynamic_pat|static)$")
+    src: list[str] = Field(default_factory=list)
+    mapped_ip: str
+    real_ip: str = ""
+    interface_pair: list[str] = Field(default_factory=list)
+
+    @field_validator("src", mode="before")
+    @classmethod
+    def normalize_src_to_list(cls, v: str | list[str]) -> list[str]:
+        """Accept a single string or a list; always store as list."""
+        if isinstance(v, str):
+            return [v]
+        return v
+
+
 class NetworkSensor(BaseModel):
     """Network sensor definition.
 
@@ -643,6 +671,7 @@ class NetworkSensor(BaseModel):
             "Set to 0 to disable."
         ),
     )
+    nat_rules: list[NatRule] = Field(default_factory=list)
     description: str = ""
 
 

@@ -103,6 +103,52 @@ fields:
     required: false
     description: "ACL name from deny messages"
 
+  # NAT-mapped addresses from Built messages and 305011/305012
+  - name: mapped_src_ip
+    type: ip_address
+    required: false
+    description: "Post-NAT source IP from Built message parentheses"
+
+  - name: mapped_src_port
+    type: port
+    required: false
+    description: "Post-NAT source port from Built message parentheses"
+
+  - name: mapped_dst_ip
+    type: ip_address
+    required: false
+    description: "Post-NAT destination IP from Built message parentheses"
+
+  - name: mapped_dst_port
+    type: port
+    required: false
+    description: "Post-NAT destination port from Built message parentheses"
+
+  - name: nat_type
+    type: string
+    required: false
+    description: "NAT type from 305011/305012 (dynamic or static)"
+
+  - name: real_ip
+    type: ip_address
+    required: false
+    description: "Pre-NAT real IP from 305011/305012"
+
+  - name: real_port
+    type: port
+    required: false
+    description: "Pre-NAT real port from 305011/305012"
+
+  - name: mapped_ip
+    type: ip_address
+    required: false
+    description: "Post-NAT mapped IP from 305011/305012"
+
+  - name: mapped_port
+    type: port
+    required: false
+    description: "Post-NAT mapped port from 305011/305012"
+
   # Fields extracted from 733100 threat detection alerts
   - name: threat_class
     type: string

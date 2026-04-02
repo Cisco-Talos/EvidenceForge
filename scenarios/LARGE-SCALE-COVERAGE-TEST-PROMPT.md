@@ -76,7 +76,14 @@
   - fw-external: firewall, TAP, monitors corporate_lan + server_vlan + dmz + app_vlan, bidirectional,
     log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside,
     app_vlan: inside, dmz: dmz, management_vlan: inside, vpn_pool: inside},
-    default_action: deny, deny_ratio: 8.0, policy:
+    default_action: deny, deny_ratio: 8.0, nat_rules:
+      - type: dynamic_pat
+        src: [corporate_lan, server_vlan, app_vlan]
+        mapped_ip: 198.51.100.1
+      - type: static
+        real_ip: 10.10.3.10
+        mapped_ip: 203.0.113.10
+    policy:
       - {src: external, dst: dmz, ports: [80, 443, 53]}       # Allow web + DNS to DMZ
       - {src: corporate_lan, dst: any}                          # Users can reach anything
       - {src: server_vlan, dst: external, ports: [80, 443, 53, 25]} # Servers: web, DNS, SMTP out
@@ -298,6 +305,10 @@
     DC → external is not in fw-external's policy
   - Attack lateral movement through allowed paths (dmz → app_vlan, app_vlan → database_vlan)
     produces ASA allow records correlated with Zeek conn records
+  - 305011 (Built NAT translation) present when nat_rules configured on fw-external
+  - 305012 (Teardown NAT translation) present
+  - Built messages show mapped IPs in parentheses that differ from real IPs
+  - Outside Zeek sensors show post-NAT source IPs; inside sensors show real IPs
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections; Kerberos precede domain logons;

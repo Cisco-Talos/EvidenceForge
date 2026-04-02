@@ -46,6 +46,7 @@ from evidenceforge.events.contexts import (
     HttpContext,
     IdsContext,
     KerberosContext,
+    NatContext,
     NetworkContext,
     NtpContext,
     OcspContext,
@@ -117,6 +118,9 @@ class SecurityEvent:
     # Firewall decision context (Cisco ASA)
     firewall: FirewallContext | None = None
 
+    # NAT translation context (Cisco ASA)
+    nat: NatContext | None = None
+
     # Raw event: carries arbitrary fields for a single target emitter.
     # Goes through pipeline (state mgmt, visibility, local_only) unlike dispatch_raw().
     raw: RawContext | None = None
@@ -128,6 +132,8 @@ class SecurityEvent:
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format
     _sensor_hostnames_by_format: dict[str, list[str]] = field(default_factory=dict)
+    # NAT swap metadata: maps sensor hostname → dict of IP/port swaps for post-NAT sensors
+    _nat_swaps_by_sensor: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

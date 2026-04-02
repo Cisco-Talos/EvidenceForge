@@ -322,3 +322,27 @@ class TestSourceOnlyVisibility:
         assert "dmz-zeek" in sensor_names  # inbound on destination segment
         assert "fw01" in sensor_names  # firewall monitors dmz
         assert "inside-zeek" not in sensor_names  # packet didn't reach internal
+
+
+class TestSourceIpOverride:
+    """TDD tests for source_ip field on firewall storyline event specs."""
+
+    def test_port_scan_source_ip_field(self):
+        """PortScanEventSpec should accept source_ip field."""
+        spec = PortScanEventSpec(target_ips=["10.0.10.1"], source_ip="203.0.113.45")
+        assert spec.source_ip == "203.0.113.45"
+
+    def test_port_scan_default_source_ip_empty(self):
+        """PortScanEventSpec without source_ip should default to empty string."""
+        spec = PortScanEventSpec(target_ips=["10.0.10.1"])
+        assert spec.source_ip == ""
+
+    def test_blocked_c2_source_ip_field(self):
+        """BlockedC2EventSpec should accept source_ip field."""
+        spec = BlockedC2EventSpec(dst_ip="198.51.100.30", source_ip="10.0.10.50")
+        assert spec.source_ip == "10.0.10.50"
+
+    def test_blocked_c2_default_source_ip_empty(self):
+        """BlockedC2EventSpec without source_ip should default to empty string."""
+        spec = BlockedC2EventSpec(dst_ip="198.51.100.30")
+        assert spec.source_ip == ""

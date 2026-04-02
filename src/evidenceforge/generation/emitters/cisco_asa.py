@@ -177,6 +177,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                 )
+                if event.nat:
+                    self._emit_nat_built(
+                        event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
+                    )
                 self._emit_teardown(
                     event,
                     net,
@@ -187,6 +191,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                 )
+                if event.nat:
+                    self._emit_nat_teardown(
+                        event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
+                    )
 
     def _emit_built(
         self,
@@ -215,12 +223,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         else:
             msg_id = 302013 if protocol == "tcp" else 302015
             proto_upper = protocol.upper()
+            # Use NAT-mapped IPs in parentheses if available
+            nat = event.nat
+            m_src_ip = nat.mapped_src_ip if nat else net.src_ip
+            m_src_port = nat.mapped_src_port if nat else net.src_port
+            m_dst_ip = nat.mapped_dst_ip if nat else net.dst_ip
+            m_dst_port = nat.mapped_dst_port if nat else net.dst_port
             message = (
                 f"Built {direction} {proto_upper} connection {conn_id} for "
                 f"{src_iface}:{net.src_ip}/{net.src_port} "
-                f"({net.src_ip}/{net.src_port}) to "
+                f"({m_src_ip}/{m_src_port}) to "
                 f"{dst_iface}:{net.dst_ip}/{net.dst_port} "
-                f"({net.dst_ip}/{net.dst_port})"
+                f"({m_dst_ip}/{m_dst_port})"
             )
 
         event_data = {
@@ -333,6 +347,93 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._dispatch(event_data)
         # Check threat detection thresholds after each deny
         self._check_threat_detection(net.src_ip, event.timestamp, sensor_hostname, fw_hostname)
+
+    def _emit_nat_built(
+        self,
+        event: SecurityEvent,
+        net: Any,
+        protocol: str,
+        src_iface: str,
+        dst_iface: str,
+        sensor_hostname: str,
+        fw_hostname: str,
+    ) -> None:
+        """Emit a NAT translation Built record (305011)."""
+        nat = event.nat
+        if nat is None:
+            return
+        nat_label = "dynamic" if nat.nat_type == "dynamic_pat" else "static"
+        proto_upper = protocol.upper()
+        # Determine if source or destination was translated
+        is_src_nat = nat.mapped_src_ip != net.src_ip
+        if is_src_nat:
+            message = (
+                f"Built {nat_label} {proto_upper} translation from "
+                f"{src_iface}:{net.src_ip}/{net.src_port} to "
+                f"{dst_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port}"
+            )
+        else:
+            message = (
+                f"Built {nat_label} {proto_upper} translation from "
+                f"{dst_iface}:{net.dst_ip}/{net.dst_port} to "
+                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port}"
+            )
+        event_data = {
+            "timestamp": event.timestamp,
+            "hostname": fw_hostname,
+            "severity": 6,
+            "msg_id": 305011,
+            "message": message,
+            "pri": self._pri(6),
+            "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,
+        }
+        self._dispatch(event_data)
+
+    def _emit_nat_teardown(
+        self,
+        event: SecurityEvent,
+        net: Any,
+        protocol: str,
+        src_iface: str,
+        dst_iface: str,
+        sensor_hostname: str,
+        fw_hostname: str,
+    ) -> None:
+        """Emit a NAT translation Teardown record (305012)."""
+        nat = event.nat
+        if nat is None:
+            return
+        nat_label = "dynamic" if nat.nat_type == "dynamic_pat" else "static"
+        proto_upper = protocol.upper()
+        duration = self._format_duration(net.duration)
+        teardown_ts = event.timestamp
+        if net.duration and net.duration > 0:
+            teardown_ts = event.timestamp + timedelta(seconds=net.duration)
+        is_src_nat = nat.mapped_src_ip != net.src_ip
+        if is_src_nat:
+            message = (
+                f"Teardown {nat_label} {proto_upper} translation from "
+                f"{src_iface}:{net.src_ip}/{net.src_port} to "
+                f"{dst_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port} "
+                f"duration {duration}"
+            )
+        else:
+            message = (
+                f"Teardown {nat_label} {proto_upper} translation from "
+                f"{dst_iface}:{net.dst_ip}/{net.dst_port} to "
+                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} "
+                f"duration {duration}"
+            )
+        event_data = {
+            "timestamp": teardown_ts,
+            "hostname": fw_hostname,
+            "severity": 6,
+            "msg_id": 305012,
+            "message": message,
+            "pri": self._pri(6),
+            "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,
+        }
+        self._dispatch(event_data)
 
     def _check_threat_detection(
         self,

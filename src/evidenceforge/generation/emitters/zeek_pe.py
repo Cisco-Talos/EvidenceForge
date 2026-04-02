@@ -66,6 +66,8 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
                 self.format_def.name if self.format_def else "zeek_pe", []
             ),
         }
+        if event._nat_swaps_by_sensor:
+            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

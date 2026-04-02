@@ -153,6 +153,39 @@ class EventDispatcher:
                     format_to_sensors.setdefault(fmt, []).append(hostname)
             event._sensor_hostnames_by_format = format_to_sensors
 
+            # NAT computation: translate addresses for permitted connections
+            if not is_fw_deny and event.nat is None:
+                nat_ctx = self.visibility_engine.compute_nat(
+                    event.network.src_ip,
+                    event.network.dst_ip,
+                    event.network.src_port,
+                    event.network.dst_port,
+                )
+                if nat_ctx:
+                    event.nat = nat_ctx
+                    # Build per-sensor NAT swaps: sensors on the outside/egress
+                    # segment see post-NAT IPs; inside sensors see real IPs
+                    src_segments = self.visibility_engine._resolve_ip_segments(event.network.src_ip)
+                    nat_swaps: dict[str, dict[str, str | int]] = {}
+                    for sensor in sensors:
+                        if sensor.type == "firewall":
+                            continue  # ASA handles NAT via NatContext directly
+                        sensor_segs = set(sensor.monitoring_segments)
+                        # Post-NAT sensor: monitors segments NOT containing the source
+                        if not (sensor_segs & src_segments):
+                            hostname = sensor.hostname or sensor.name
+                            swaps: dict[str, str | int] = {}
+                            if nat_ctx.mapped_src_ip != event.network.src_ip:
+                                swaps["src_ip"] = nat_ctx.mapped_src_ip
+                                swaps["src_port"] = nat_ctx.mapped_src_port
+                            if nat_ctx.mapped_dst_ip != event.network.dst_ip:
+                                swaps["dst_ip"] = nat_ctx.mapped_dst_ip
+                                swaps["dst_port"] = nat_ctx.mapped_dst_port
+                            if swaps:
+                                nat_swaps[hostname] = swaps
+                    if nat_swaps:
+                        event._nat_swaps_by_sensor = nat_swaps
+
         matched = []
         for format_name, emitter in self.emitters.items():
             if not emitter.can_handle(event):
