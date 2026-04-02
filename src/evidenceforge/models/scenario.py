@@ -635,6 +635,14 @@ class NetworkSensor(BaseModel):
     default_action: str = Field(default="deny", pattern="^(deny|permit)$")
     deny_ratio: float = Field(default=5.0, ge=0.0)
     drop_mode: str = Field(default="drop", pattern="^(drop|reject)$")
+    threat_detection_rate: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            "Deny rate (drops/sec) that triggers 733100 threat detection alerts. "
+            "Set to 0 to disable."
+        ),
+    )
     description: str = ""
 
 

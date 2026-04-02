@@ -1121,7 +1121,7 @@ class BaselineMixin:
                 roll = rng.random()
                 if roll < 0.60:
                     # External -> internal
-                    src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                    src_ip = self._generate_external_client_ip(rng)
                     dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
                     dst_port = rng.choice(_SCAN_PORTS)
                     proto = "tcp"
@@ -1137,12 +1137,12 @@ class BaselineMixin:
                 elif roll < 0.90:
                     # Outbound blocked
                     src_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
-                    dst_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                    dst_ip = self._generate_external_client_ip(rng)
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"
                 else:
                     # ICMP ping sweep from external
-                    src_ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
+                    src_ip = self._generate_external_client_ip(rng)
                     dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
                     dst_port = 8  # ICMP echo request type
                     proto = "icmp"

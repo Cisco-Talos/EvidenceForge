@@ -103,6 +103,42 @@ fields:
     required: false
     description: "ACL name from deny messages"
 
+  # Fields extracted from 733100 threat detection alerts
+  - name: threat_class
+    type: string
+    required: false
+    description: "Threat classification from 733100 (e.g., Scanning)"
+
+  - name: rate_id
+    type: integer
+    required: false
+    description: "Rate interval ID from 733100"
+
+  - name: burst_rate
+    type: integer
+    required: false
+    description: "Current burst rate (drops/sec) from 733100"
+
+  - name: burst_max
+    type: integer
+    required: false
+    description: "Configured max burst rate from 733100"
+
+  - name: avg_rate
+    type: integer
+    required: false
+    description: "Current average rate (drops/sec) from 733100"
+
+  - name: avg_max
+    type: integer
+    required: false
+    description: "Configured max average rate from 733100"
+
+  - name: cumulative_count
+    type: integer
+    required: false
+    description: "Total deny count from 733100"
+
 output:
   format: text
   file_extension: ".log"

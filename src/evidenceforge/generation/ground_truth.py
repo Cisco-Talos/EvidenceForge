@@ -228,7 +228,10 @@ class GroundTruthGenerator:
             target_count = event.get("target_count", "N/A")
             ports = event.get("ports", [])
             total = event.get("total_connections", "N/A")
-            return f"Port scan: {target_count} targets, ports {ports}, {total} denied connections"
+            return (
+                f"Port scan: {target_count} targets, ports {ports}, "
+                f"{total} denied connections + ASA threat detection alert (733100)"
+            )
 
         elif event_type == "blocked_c2":
             dst = event.get("dst_ip", "N/A")

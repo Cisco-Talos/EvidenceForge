@@ -299,3 +299,150 @@ class TestFormatDefinition:
         assert "severity" in field_names
         assert "msg_id" in field_names
         assert "message" in field_names
+
+
+class TestThreatDetection:
+    """Tests for automatic 733100 threat detection alerts."""
+
+    def _make_deny_event(self, src_ip, dst_ip, dst_port, timestamp):
+        return _make_connection_event(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            timestamp=timestamp,
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106023,
+                connection_id=0,
+                src_interface="outside",
+                dst_interface="inside",
+                access_group="outside_access_in",
+            ),
+        )
+
+    def _get_output_lines(self, tmp_path):
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        return [line for line in output.strip().split("\n") if line]
+
+    def test_threat_detection_fires_on_burst(self, asa_emitter, tmp_path):
+        """Rapid deny burst exceeding both thresholds should produce a 733100."""
+        from datetime import timedelta
+
+        # Lower thresholds for testing
+        asa_emitter._td_burst_threshold = 5
+        asa_emitter._td_avg_threshold = 3
+        asa_emitter._td_burst_window = 10
+        asa_emitter._td_avg_window = 30
+
+        # Generate 100 denies in 10 seconds (10/sec burst, 10/sec avg >> thresholds)
+        for i in range(100):
+            event = self._make_deny_event(
+                "198.51.100.1",
+                "10.0.10.50",
+                445,
+                T0 + timedelta(seconds=i * 0.1),
+            )
+            asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        threat_lines = [line for line in lines if "733100" in line]
+        assert len(threat_lines) >= 1
+        assert "[Scanning] drop rate-1 exceeded" in threat_lines[0]
+        assert "Cumulative total count is" in threat_lines[0]
+
+    def test_threat_detection_requires_both_rates(self, asa_emitter, tmp_path):
+        """If burst is high but average is below threshold, no 733100 should fire."""
+        from datetime import timedelta
+
+        asa_emitter._td_burst_threshold = 5
+        asa_emitter._td_avg_threshold = 50  # Very high average threshold
+        asa_emitter._td_burst_window = 10
+        asa_emitter._td_avg_window = 60
+
+        # 20 denies in 2 seconds (burst = 10/sec, avg over 60s = 0.33/sec)
+        for i in range(20):
+            event = self._make_deny_event(
+                "198.51.100.1",
+                "10.0.10.50",
+                445,
+                T0 + timedelta(seconds=i * 0.1),
+            )
+            asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        threat_lines = [line for line in lines if "733100" in line]
+        assert len(threat_lines) == 0
+
+    def test_threat_detection_refires_after_cooldown(self, asa_emitter, tmp_path):
+        """Sustained burst should produce multiple 733100 alerts after cooldown."""
+        from datetime import timedelta
+
+        asa_emitter._td_burst_threshold = 5
+        asa_emitter._td_avg_threshold = 3
+        asa_emitter._td_burst_window = 10
+        asa_emitter._td_avg_window = 30
+        asa_emitter._td_cooldown = 10  # Short cooldown for testing
+
+        # Generate 500 denies over 30 seconds (16.7/sec)
+        for i in range(500):
+            event = self._make_deny_event(
+                "198.51.100.1",
+                "10.0.10.50",
+                445,
+                T0 + timedelta(seconds=i * 0.06),
+            )
+            asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        threat_lines = [line for line in lines if "733100" in line]
+        assert len(threat_lines) >= 2  # Should re-fire after cooldown
+
+    def test_threat_detection_separate_per_source_ip(self, asa_emitter, tmp_path):
+        """Different source IPs should each get their own 733100 alerts."""
+        from datetime import timedelta
+
+        asa_emitter._td_burst_threshold = 5
+        asa_emitter._td_avg_threshold = 3
+        asa_emitter._td_burst_window = 10
+        asa_emitter._td_avg_window = 30
+
+        # 100 denies from IP A, 100 from IP B, interleaved
+        for i in range(100):
+            for src_ip in ["198.51.100.1", "198.51.100.2"]:
+                event = self._make_deny_event(
+                    src_ip,
+                    "10.0.10.50",
+                    445,
+                    T0 + timedelta(seconds=i * 0.1),
+                )
+                asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        threat_lines = [line for line in lines if "733100" in line]
+        # Both source IPs should trigger their own alerts
+        assert len(threat_lines) >= 2
+
+    def test_threat_detection_disabled_when_rate_zero(self, asa_emitter, tmp_path):
+        """Setting threshold to 0 should disable threat detection entirely."""
+        from datetime import timedelta
+
+        asa_emitter._td_burst_threshold = 0  # Disabled
+
+        # Massive burst that would normally trigger
+        for i in range(200):
+            event = self._make_deny_event(
+                "198.51.100.1",
+                "10.0.10.50",
+                445,
+                T0 + timedelta(seconds=i * 0.05),
+            )
+            asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        threat_lines = [line for line in lines if "733100" in line]
+        assert len(threat_lines) == 0

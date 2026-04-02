@@ -100,6 +100,25 @@ class TestEvalScorerFirewallEvents:
         )
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
 
+    def test_port_scan_matches_733100_threat_detection(self):
+        from evidenceforge.evaluation.dimensions.signal_integrity import (
+            SignalIntegrityScorer,
+        )
+
+        scorer = SignalIntegrityScorer()
+        event = self._make_resolved_event("port_scan", "10.0.10.50")
+        record = ParsedRecord(
+            source_format="cisco_asa",
+            raw="test",
+            fields={
+                "msg_id": 733100,
+                "threat_class": "Scanning",
+                "burst_rate": 87,
+                "cumulative_count": 2340,
+            },
+        )
+        assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
+
     def test_port_scan_matches_zeek_rej(self):
         from evidenceforge.evaluation.dimensions.signal_integrity import (
             SignalIntegrityScorer,

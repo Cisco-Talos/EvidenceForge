@@ -540,7 +540,8 @@ class SignalIntegrityScorer(DimensionScorer):
 
         elif event_type == "port_scan":
             if format_name == "cisco_asa":
-                return f.get("msg_id") == 106023 and f.get("src_ip") == event.system_ip
+                msg_id = f.get("msg_id")
+                return (msg_id == 106023 and f.get("src_ip") == event.system_ip) or msg_id == 733100
             if format_name == "zeek_conn":
                 return f.get("id.orig_h") == event.system_ip and f.get("conn_state") in (
                     "S0",

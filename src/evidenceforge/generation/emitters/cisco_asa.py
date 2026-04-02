@@ -30,7 +30,7 @@ Per-sensor directory routing: each firewall sensor gets its own cisco_asa.log.
 """
 
 import ipaddress
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +82,16 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
         self._sensor_interfaces: dict[str, dict[str, str]] = {}
+
+        # Threat detection: per-(sensor, src_ip) deny rate tracking
+        self._deny_timestamps: dict[tuple[str, str], list[datetime]] = {}
+        self._last_alert_time: dict[tuple[str, str], datetime | None] = {}
+        # Configurable thresholds (ASA defaults for scanning detection)
+        self._td_burst_threshold: int = 10  # drops/sec to trigger burst alert
+        self._td_avg_threshold: int = 5  # drops/sec to trigger average alert
+        self._td_burst_window: int = 20  # seconds for burst rate calculation
+        self._td_avg_window: int = 60  # seconds for average rate calculation
+        self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
     def _next_conn_id(self, sensor_hostname: str) -> int:
         """Get next monotonically increasing connection ID for a sensor."""
@@ -316,6 +326,73 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             "hostname": fw_hostname,
             "severity": 4,
             "msg_id": 106023,
+            "message": message,
+            "pri": self._pri(4),
+            "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,
+        }
+        self._dispatch(event_data)
+        # Check threat detection thresholds after each deny
+        self._check_threat_detection(net.src_ip, event.timestamp, sensor_hostname, fw_hostname)
+
+    def _check_threat_detection(
+        self,
+        src_ip: str,
+        timestamp: datetime,
+        sensor_hostname: str,
+        fw_hostname: str,
+    ) -> None:
+        """Check deny rates against threat detection thresholds; emit 733100 if exceeded.
+
+        Models ASA basic threat detection for scanning. Both burst and average
+        rates must exceed their thresholds before an alert fires. After firing,
+        a cooldown period (= ASA burst period) prevents duplicate alerts.
+        """
+        if self._td_burst_threshold <= 0:
+            return  # Threat detection disabled
+
+        key = (sensor_hostname, src_ip)
+
+        # Track this deny
+        self._deny_timestamps.setdefault(key, []).append(timestamp)
+
+        # Cooldown check: don't fire more than once per burst period
+        last_alert = self._last_alert_time.get(key)
+        if last_alert and (timestamp - last_alert).total_seconds() < self._td_cooldown:
+            return
+
+        timestamps = self._deny_timestamps[key]
+
+        # Calculate burst rate (drops in last burst_window seconds)
+        burst_cutoff = timestamp - timedelta(seconds=self._td_burst_window)
+        burst_count = sum(1 for t in timestamps if t >= burst_cutoff)
+        burst_rate = burst_count / self._td_burst_window
+
+        # Calculate average rate (drops in last avg_window seconds)
+        avg_cutoff = timestamp - timedelta(seconds=self._td_avg_window)
+        avg_count = sum(1 for t in timestamps if t >= avg_cutoff)
+        avg_rate = avg_count / self._td_avg_window
+
+        # Both rates must exceed thresholds (matching real ASA behavior)
+        if burst_rate < self._td_burst_threshold or avg_rate < self._td_avg_threshold:
+            return
+
+        # Fire 733100
+        self._last_alert_time[key] = timestamp
+        total_count = len(timestamps)
+
+        message = (
+            f"[Scanning] drop rate-1 exceeded. "
+            f"Current burst rate is {int(burst_rate)} per second, "
+            f"max configured rate is {self._td_burst_threshold}; "
+            f"Current average rate is {int(avg_rate)} per second, "
+            f"max configured rate is {self._td_avg_threshold}; "
+            f"Cumulative total count is {total_count}"
+        )
+        event_data = {
+            "timestamp": timestamp,
+            "hostname": fw_hostname,
+            "severity": 4,
+            "msg_id": 733100,
             "message": message,
             "pri": self._pri(4),
             "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,

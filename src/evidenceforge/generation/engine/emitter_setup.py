@@ -193,6 +193,9 @@ class EmitterSetupMixin:
                     if sensor.interfaces:
                         hostname = sensor.hostname or sensor.name
                         asa_emitter._sensor_interfaces[hostname] = sensor.interfaces
+                    if sensor.type == "firewall":
+                        asa_emitter._td_burst_threshold = sensor.threat_detection_rate
+                        asa_emitter._td_avg_threshold = max(1, sensor.threat_detection_rate // 2)
 
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.

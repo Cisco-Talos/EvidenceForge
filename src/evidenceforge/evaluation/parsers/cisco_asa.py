@@ -73,6 +73,16 @@ DENY = re.compile(
     r'by\s+access-group\s+"([^"]+)"'
 )
 
+# Threat detection 733100: "[Scanning] drop rate-1 exceeded. Current burst rate is ..."
+THREAT_DETECTION = re.compile(
+    r"\[(\w+)\]\s+drop\s+rate-(\d+)\s+exceeded\.\s+"
+    r"Current\s+burst\s+rate\s+is\s+(\d+)\s+per\s+second,\s+"
+    r"max\s+configured\s+rate\s+is\s+(\d+);\s+"
+    r"Current\s+average\s+rate\s+is\s+(\d+)\s+per\s+second,\s+"
+    r"max\s+configured\s+rate\s+is\s+(\d+);\s+"
+    r"Cumulative\s+total\s+count\s+is\s+(\d+)"
+)
+
 
 @register_parser
 class CiscoAsaParser(LogParser):
@@ -188,3 +198,13 @@ class CiscoAsaParser(LogParser):
                     fields["icmp_type"] = int(match.group(8))
                     fields["icmp_code"] = int(match.group(9))
                 fields["access_group"] = match.group(10)
+        elif msg_id == 733100:
+            match = THREAT_DETECTION.search(message)
+            if match:
+                fields["threat_class"] = match.group(1)
+                fields["rate_id"] = int(match.group(2))
+                fields["burst_rate"] = int(match.group(3))
+                fields["burst_max"] = int(match.group(4))
+                fields["avg_rate"] = int(match.group(5))
+                fields["avg_max"] = int(match.group(6))
+                fields["cumulative_count"] = int(match.group(7))

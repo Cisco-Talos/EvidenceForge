@@ -148,6 +148,7 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
         dmz: dmz
       default_action: deny      # deny (default) | permit
       deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
+      threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)
       policy:                   # Ordered rules — first match wins
         - {src: external, dst: dmz, ports: [80, 443]}
         - {src: workstations, dst: any}
@@ -163,6 +164,8 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
 - Traffic not matching any rule is subject to `default_action`
 
 **Interfaces**: Map segment names to ASA interface names (e.g., `inside`, `outside`, `dmz`). IPs not in any mapped segment resolve to `"outside"`.
+
+**Threat detection**: The ASA emitter automatically tracks per-source-IP deny rates and fires 733100 alerts when both burst (default 10 drops/sec over 20s) and average (default 5 drops/sec over 60s) thresholds are exceeded. Set `threat_detection_rate: 0` to disable.
 
 ## Personas
 

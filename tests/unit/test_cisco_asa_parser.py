@@ -147,6 +147,31 @@ class TestParseDenyRecords:
         assert "src_port" not in rec.fields
 
 
+class TestParseThreatDetection:
+    def test_parse_733100_threat_detection(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<164>Jun 15 14:35:00 fw01 %ASA-4-733100: [Scanning] drop rate-1 exceeded. "
+            "Current burst rate is 87 per second, max configured rate is 10; "
+            "Current average rate is 45 per second, max configured rate is 5; "
+            "Cumulative total count is 2340\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 733100
+        assert rec.fields["severity"] == 4
+        assert rec.fields["threat_class"] == "Scanning"
+        assert rec.fields["rate_id"] == 1
+        assert rec.fields["burst_rate"] == 87
+        assert rec.fields["burst_max"] == 10
+        assert rec.fields["avg_rate"] == 45
+        assert rec.fields["avg_max"] == 5
+        assert rec.fields["cumulative_count"] == 2340
+        assert not rec.parse_errors
+
+
 class TestMalformedLines:
     def test_garbage_line(self, tmp_path):
         log = tmp_path / "cisco_asa.log"
