@@ -149,7 +149,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] SMB volume too low for Windows file server environments
 - [ ] DNS UIDs missing from conn.log (~7%)
 - [ ] UFW BLOCK entries don't appear in conn.log
-- [ ] weird.json TCP-specific types attributed to UDP sources
+- [x] weird.json TCP-specific types attributed to UDP sources — split into protocol-specific pools; UDP gets DNS/checksum/length anomalies at 0.5% rate vs TCP's 3%
 - [ ] Exfiltration connections show 0 bytes transferred
 - [ ] No port 135 (RPC/EPMAP) traffic
 - [ ] Inconsistent sensor coverage for SSH pivot

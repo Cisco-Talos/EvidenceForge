@@ -924,6 +924,7 @@ class BaselineMixin:
                         orig_bytes=orig_bytes,
                         resp_bytes=resp_bytes,
                         emit_dns=True,
+                        hostname=result.get("hostname"),
                     )
 
             elif pattern_type == "scheduled_scan_overlap":
@@ -1876,24 +1877,21 @@ class BaselineMixin:
                         pid=_svc_pid("lsass"),
                     )
 
-            # HTTPS background traffic
+            # HTTPS background traffic — domain-first from dns_registry
+            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
             if os_cat == "windows":
-                _bg_https_ips = [
-                    "23.196.25.38",
-                    "13.107.4.50",
-                    "93.184.220.29",
-                    "23.45.101.50",
-                    "52.114.128.40",
-                    "204.79.197.200",
-                ]
                 num_https = rng.randint(8, 20)
                 for _i in range(num_https):
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    bg_domain, bg_ip = pick_domain_and_ip(
+                        rng, "background", "windows", src_host=system.hostname
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(_bg_https_ips),
+                        dst_ip=bg_ip,
                         time=ts,
                         dst_port=443,
                         proto="tcp",
@@ -1904,17 +1902,20 @@ class BaselineMixin:
                         emit_dns=True,
                         source_system=system,
                         pid=_svc_pid("svchost_netsvcs"),
+                        hostname=bg_domain,
                     )
             elif os_cat == "linux":
-                _linux_https_ips = ["91.189.91.39", "185.125.190.39", "151.101.0.204"]
                 num_https = rng.randint(3, 10)
                 for _i in range(num_https):
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    bg_domain, bg_ip = pick_domain_and_ip(
+                        rng, "background", "linux", src_host=system.hostname
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(_linux_https_ips),
+                        dst_ip=bg_ip,
                         time=ts,
                         dst_port=443,
                         proto="tcp",
@@ -1925,6 +1926,7 @@ class BaselineMixin:
                         emit_dns=True,
                         source_system=system,
                         pid=_svc_pid("snapd") if not is_rhel_like else -1,
+                        hostname=bg_domain,
                     )
 
             # Database traffic

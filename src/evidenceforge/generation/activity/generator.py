@@ -63,7 +63,6 @@ from .network import (
     EXTERNAL_IPS,
     REVERSE_DNS,
     _generate_internal_hostname,
-    _generate_random_external_ip,
     _generate_random_hostname,
     _generate_rdns_name,
     _get_http_status,
@@ -1789,11 +1788,13 @@ class ActivityGenerator:
                 xmt_ts=round(ntp_epoch + ntp_jitter + 0.0001, 6),
             )
 
-        # Zeek weird.log: probabilistic network anomalies (~3% of connections)
-        if not local_only and rng.random() < 0.03:
+        # Zeek weird.log: probabilistic network anomalies
+        # TCP: ~3% of connections; UDP: ~0.5% (much rarer in real Zeek deployments)
+        weird_prob = 0.03 if proto == "tcp" else 0.005 if proto == "udp" else 0
+        if not local_only and weird_prob > 0 and rng.random() < weird_prob:
             from evidenceforge.events.contexts import WeirdContext
 
-            _WEIRD_NAMES = [
+            _TCP_WEIRD_NAMES = [
                 "window_recision",
                 "possible_split_routing",
                 "above_hole_data_without_any_acks",
@@ -1803,8 +1804,15 @@ class ActivityGenerator:
                 "inappropriate_FIN",
                 "bad_TCP_checksum",
             ]
+            _UDP_WEIRD_NAMES = [
+                "DNS_truncated_len_lt_hdr_len",
+                "bad_UDP_checksum",
+                "UDP_datagram_length_mismatch",
+                "DNS_RR_unknown_type",
+            ]
+            weird_pool = _TCP_WEIRD_NAMES if proto == "tcp" else _UDP_WEIRD_NAMES
             event.weird = WeirdContext(
-                name=rng.choice(_WEIRD_NAMES),
+                name=rng.choice(weird_pool),
                 source="TCP" if proto == "tcp" else "UDP",
             )
 
@@ -2580,8 +2588,16 @@ class ActivityGenerator:
         conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
 
         if conn_info["external"]:
-            # External connection: pick a random external IP
-            dst_ip = _generate_random_external_ip(rng)
+            # External connection: domain-first selection
+            from evidenceforge.generation.activity.dns_registry import (
+                _domain_to_ip as _d2ip,
+            )
+            from evidenceforge.generation.activity.dns_registry import (
+                generate_long_tail_domain as _gen_lt_domain,
+            )
+
+            ext_hostname = _gen_lt_domain(rng)
+            dst_ip = _d2ip(ext_hostname)
         else:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])
@@ -2607,6 +2623,7 @@ class ActivityGenerator:
             resp_bytes=rng.randint(500, 50000),
             emit_dns=conn_info["external"],
             pid=pid,
+            hostname=ext_hostname if conn_info["external"] else None,
         )
 
     def execute_baseline_activity(
