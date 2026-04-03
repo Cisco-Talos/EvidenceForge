@@ -1523,6 +1523,23 @@ class ActivityGenerator:
                 ]
                 path = _get_rng().choice(_PROXY_PATHS)
                 url = f"{schema}://{proxy_hostname}{path}"
+                # Map URI extension to MIME type
+                _EXT_MIME = {
+                    ".html": "text/html",
+                    ".css": "text/css",
+                    ".js": "application/javascript",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".gif": "image/gif",
+                    ".ico": "image/x-icon",
+                    ".json": "application/json",
+                    ".xml": "text/xml",
+                    ".svg": "image/svg+xml",
+                    ".woff2": "font/woff2",
+                    ".txt": "text/plain",
+                }
+                _ext = f".{path.rsplit('.', 1)[-1]}" if "." in path.split("?")[0] else ""
+                proxy_content_type = _EXT_MIME.get(_ext, "text/html")
                 # Pick a random user from the scenario (if available)
                 _PROXY_UAS = [
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1552,7 +1569,7 @@ class ActivityGenerator:
                     cs_bytes=orig_bytes or 0,
                     time_taken=int((duration or 0) * 1000),
                     user_agent=user_agent,
-                    content_type="text/html",
+                    content_type=proxy_content_type,
                     cache_result=cache_result,
                     proxy_fqdn=proxy_fqdn,
                 )
@@ -1815,6 +1832,14 @@ class ActivityGenerator:
                 name=rng.choice(weird_pool),
                 source="TCP" if proto == "tcp" else "UDP",
             )
+
+        # Enforce conn_state/HTTP consistency: if HTTP context exists,
+        # the connection must have completed successfully (SF). A connection
+        # with S0/REJ cannot have served an HTTP response.
+        if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
+            event.network.conn_state = "SF"
+            if event.network.resp_bytes == 0:
+                event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
