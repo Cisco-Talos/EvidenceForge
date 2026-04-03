@@ -13,10 +13,12 @@
 
   Systems (mix of Windows and Linux, ~75+ total):
 
-  Windows workstations (Windows 10/11) — one per user (see Users section), with naming convention
-  WS-{DEPT}-{NN} across departments: dev, IT, security, finance, data analytics, executive, PM, HR,
-  sales, legal, marketing, front desk. Exception: IT helpdesk staff (sysadmin persona) share 2-3
-  workstations to represent shift coverage (e.g., WS-IT-HELP-01, WS-IT-HELP-02).
+  Workstations — one per user (see Users section), with naming convention WS-{DEPT}-{NN} across
+  departments: dev, IT, security, finance, data analytics, executive, PM, HR, sales, legal,
+  marketing, front desk. Most are Windows 10/11, but at least 4 users have Linux desktops
+  (Ubuntu 22.04, type: workstation) — typically developers and data analysts who prefer Linux for
+  daily work. Exception: IT helpdesk staff (sysadmin persona) share 2-3 workstations to represent
+  shift coverage (e.g., WS-IT-HELP-01, WS-IT-HELP-02).
 
   Windows servers (10, Server 2019/2022):
   - DC-01 (domain controller, Server 2022, roles: [domain_controller])

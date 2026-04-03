@@ -6,8 +6,10 @@
   Duration: 14 hours, starting 2024-03-18T12:00:00Z. Timezone: America/Chicago.
 
   Systems (mix of Windows and Linux, ~20+ total):
-  - One Windows workstation (Windows 10/11) per user, distributed across departments: dev, IT,
+  - One workstation per user, distributed across departments: dev, IT,
   security, finance, data analytics, executive, PM, HR, sales, legal, marketing, front desk
+  - Most workstations are Windows 10/11, but at least 3 users have Linux desktops (Ubuntu 22.04,
+  type: workstation): typically developers and data analysts who prefer Linux for their daily work
   - 2 Windows servers: DC-01 (domain controller, Server 2022), FILE-SRV-01 (file server, Server 2019)
   - 5 Linux servers: WEB-EXT-01 (Ubuntu, web server in DMZ with roles: [web_server]), PROXY-01 (Ubuntu,
   roles: [forward_proxy]), APP-INT-01 (Ubuntu, internal app server), DB-PROD-01 (CentOS, MySQL),
