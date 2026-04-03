@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-01
+**Last Updated:** 2026-04-02
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -111,12 +111,18 @@ Data is structurally correct but the hunt doesn't work — key attack steps are 
 
 ### Tier 3: Realism Polish
 
-Data works but experienced analysts spot tells. Grouped by format for efficient fix passes. Items marked with ✓ were fixed in the blind expert panel improvement loop (2026-03-27).
+Data works but experienced analysts spot tells. Grouped by format for efficient fix passes. Items marked with ✓ were fixed in the blind expert panel improvement loop (2026-03-27). Items marked with ✓² were fixed in the improve/apt-healthcare-coverage loop (2026-04-02, 5 iterations, 4-expert blind panel: network forensics, host/EDR, detection engineer, threat hunter; all at 92% SYNTHETIC confidence).
 
 **Snort/IDS:**
 - [x] ✓ Snort protocol field randomly assigned (no binding to SID/rule) — restructured `_FP_SIGS` to protocol-keyed dict with per-signature port and direction
 - [x] ✓ Snort flow directions inverted for outbound rules — signatures tagged "in"/"out", src/dst swapped for outbound alerts
 - [x] ✓ ICMP connections carry TCP/UDP ports — force src_port=0, dst_port=0 for ICMP in generate_connection()
+- [x] ✓² Snort baseline volume too low (1-3/hour) — increased to 5-15/hour per sensor; experts still consider 73/day low vs thousands in real environments
+- [x] ✓² Snort alert timestamps not chronologically sorted — enabled _sort_before_flush on SnortEmitter
+- [ ] Snort SID revisions all `:1:1` — should vary to match real ET ruleset update patterns
+- [ ] Snort baseline scan IPs absent from Zeek conn — visibility engine filters external→internal connections out of non-firewall sensors; need to emit Zeek conn records for IDS-observed scans
+- [ ] Snort alert volume still 10-100x too low for real perimeter IDS (experts expect thousands/day)
+- [ ] No ET POLICY, ET INFO, ET DNS categories in baseline — only attack-relevant signatures
 
 **Sysmon:**
 - [x] ✓ Sysmon Execution ProcessID rotates every event — stable per-host PID via hostname hash
@@ -124,14 +130,22 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ Sysmon TargetImage bare "lsass.exe" — resolve bare filenames to full System32 paths in Events 8/10
 - [x] ✓ Sysmon ProcessGuid inconsistent for same PID — truncate timestamp to second precision for stable GUIDs
 - [x] ✓ Sysmon Event 5 (ProcessTerminate), Event 8 baseline noise, Event 10 baseline noise — added to baseline + eCAR THREAD/REMOTE_CREATE and PROCESS/OPEN correlation
+- [x] ✓² Lsass ProcessAccess GrantedAccess hardcoded to 0x1010 for Mimikatz — changed to 0x1FFFFF (PROCESS_ALL_ACCESS) in causal expansion rule
+- [x] ✓² Benign lsass accessors limited to MsMpEng + svchost — added csrss.exe, svchost (netsvcs), services.exe as additional baseline lsass accessors
 - [ ] Sysmon Event 3 (NetworkConnect), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) not yet implemented
 - [ ] ParentCommandLine always "-"
+- [ ] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — real environments show 10-20+ distinct masks from AV, EDR, WMI, etc.
+- [ ] CallTrace offsets limited to 2 patterns — need diverse ntdll/KERNELBASE offsets per call path
+- [ ] Sysmon EventRecordIDs perfectly sequential (no gaps) — real systems drop events under load
+- [ ] Event 8 StartModule/StartFunction always empty for benign pairs
 
 **Zeek:**
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
 - [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
 - [ ] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states
+- [ ] SSL ssl_history limited to 2 values (CsiI, CsijI) — need 10-20+ patterns including resumed sessions, failed handshakes
+- [ ] Zeek conn history too uniform (ShADadfF dominant) — need RST-based terminations, retransmissions, partial closes
 - [ ] SMB volume too low for Windows file server environments
 - [ ] DNS UIDs missing from conn.log (~7%)
 - [ ] UFW BLOCK entries don't appear in conn.log
@@ -192,16 +206,32 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY"
 
 **Process Trees:**
+- [ ] explorer.exe parent for everything — developers spawn from cmd/powershell/terminal, not explorer; services.exe/svchost parent tree not modeled for services
 - [ ] explorer.exe parent for RDP sessions (should be per-session userinit→explorer)
 - [ ] All Linux user processes share same ppid
-- [ ] Human Burstiness at 65/100 — events too uniformly distributed, need more clustering/idle
+- [ ] PID allocation monotonic with uniform stride (~4) — real Windows shows larger gaps, reuse, non-monotonic assignment
+- [ ] Human Burstiness at 56/100 — events too uniformly distributed, need more clustering/idle
+- [ ] Mimikatz at Medium integrity would succeed in scenario but fail in reality — generator doesn't model integrity levels
 
 **HTTP/Proxy:**
+- [x] ✓² Proxy user-agent pool limited to 2 agents — expanded to 8 diverse agents (Chrome/Firefox/Edge/Opera/IE11)
+- [x] ✓² Proxy/SSL hostname uses CDN reverse-DNS PTR records instead of domain names — now prefers dns.query from DnsContext; partial fix (first connections per host still use PTR when no DNS context exists)
+- [x] ✓² Proxy URL paths all root "/" only — added pool of 18 realistic URI paths
 - [ ] User-Agent OS mismatch with source hosts
-- [ ] 100% HTTP 200 status codes (need 301/302/404/500 mix)
+- [ ] 100% HTTP 200 status codes (need 301/302/404/500 mix); HTTP to HSTS sites (facebook.com) returns 200 on port 80
 - [ ] HTTP MIME type mismatches with URI
 - [ ] Proxy format doesn't match standard Squid or Bluecoat output
+- [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
+- [ ] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — paths need hostname-aware selection
+- [ ] Proxy lacks session depth — 1 request per site, no cascading subresource loads (CSS/JS/images/API)
 - [ ] DHCP shows full discovery instead of renewals in mid-scenario windows
+
+**Cisco ASA:**
+- [ ] ASA Built/Teardown counts perfectly balanced — real logs have orphans from log rotation boundaries
+- [ ] ASA message type diversity limited to 106023/302013-16/305011-12 — missing 111008, 113004, 733100, 106001, 725001, 304001
+- [ ] ASA deny baseline uniformly spaced (3-7s) — real scans arrive in bursty patterns
+- [ ] ASA deny events use `[0x0, 0x0]` hash values uniformly
+- [ ] NAT mapped_ip 45.33.32.1 is scanme.nmap.org — recognizable IP used as scenario PAT address
 
 **eCAR:**
 - [x] Limited object diversity on Linux — expanded _EDR_FILE_PATHS_LINUX from 5 to 20 entries (logs, caches, config files, /proc, package manager)
@@ -209,8 +239,17 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] No USER_SESSION events for server-side RDP lateral movement — generate_rdp_session() calls generate_logon() on target, which dispatches USER_SESSION/LOGIN to eCAR with EdrContext
 - [x] Vary filenames in file operations — expanded _EDR_FILE_PATHS_WIN from 7 to 21 entries, _EDR_FILE_PATHS_LINUX from 5 to 20 entries
 
+**Cross-Source / General:**
+- [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
+- [ ] Cross-sensor timestamp precision identical to 15+ decimal places — real multi-sensor captures have microsecond jitter
+- [ ] Encoded PowerShell baseline noise identical across hosts (same Get-Service blob) — needs per-host variation
+- [ ] Workstation connection counts suspiciously uniform (808-1068 range) — Hawkes process variance too narrow
+- [ ] Uniform log file sets across all hosts (every workstation has identical format coverage)
+- [ ] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.)
+- [ ] AWS region mismatch between DNS PTR and SSL SNI for same IP
+
 **Other:**
-- [ ] Bash history too sparse for SSH session duration
+- [ ] Bash history too sparse/clean for SSH session duration — no typos, no repeated commands, no tab-completion artifacts despite added organic commands
 - [ ] Baseline generates IPs outside defined network segments
 - [ ] Parsability at ~95% (5% records fail structure validation)
 
