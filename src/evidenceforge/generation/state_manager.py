@@ -262,16 +262,32 @@ class StateManager:
             import random as _rng
 
             if self._pid_os.get(system) == "windows":
-                # Windows: multiples of 4 with irregular gaps
-                self._pid_counters[system] += 4 * _rng.choice([1, 1, 1, 1, 2, 3, 5, 8])
+                # Windows: multiples of 4 with lognormal gap distribution.
+                # Lognormal produces mostly small gaps (4-20) with a heavy tail
+                # (occasionally 100-800+) simulating background process churn
+                # that consumes PIDs between our emitted events.
+                gap = max(1, int(_rng.lognormvariate(1.2, 0.8)))
+                self._pid_counters[system] += 4 * gap
             else:
-                # Linux: sequential with occasional small gaps
-                self._pid_counters[system] += _rng.choice([1, 1, 1, 1, 2, 3])
+                # Linux: lognormal with smaller parameters — mostly +1 with
+                # occasional larger jumps from background daemon activity.
+                gap = max(1, int(_rng.lognormvariate(0.5, 0.6)))
+                self._pid_counters[system] += gap
 
-            # Check for PID exhaustion
-            if pid > 65536:
-                # Wrap around to simulate PID reuse
-                self._pid_counters[system] = pid % 30000 + 4000
+            # Check for PID exhaustion — wrap around to a safe range,
+            # skipping any PIDs still in use by running processes.
+            if self._pid_counters[system] > 65536:
+                base = 4000 if self._pid_os.get(system) == "windows" else 500
+                self._pid_counters[system] = base
+                # Skip past any PIDs still held by running processes
+                running = {
+                    p.pid for (s, _), p in self.state.running_processes.items() if s == system
+                }
+                while self._pid_counters[system] in running:
+                    if self._pid_os.get(system) == "windows":
+                        self._pid_counters[system] += 4
+                    else:
+                        self._pid_counters[system] += 1
 
             # Create process
             process = RunningProcess(
