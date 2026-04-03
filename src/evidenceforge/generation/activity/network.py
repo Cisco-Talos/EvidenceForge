@@ -387,6 +387,129 @@ def _detect_ip_provider(ip: str) -> str:
     return "generic"
 
 
+# Long-tail domain templates for realistic web browsing diversity.
+# Used when generating connections beyond the curated REVERSE_DNS pool.
+_LONG_TAIL_PREFIXES = [
+    "cdn",
+    "static",
+    "assets",
+    "media",
+    "images",
+    "api",
+    "app",
+    "www",
+    "analytics",
+    "tracking",
+    "metrics",
+    "widget",
+    "embed",
+    "sdk",
+    "js",
+    "fonts",
+    "styles",
+    "content",
+    "data",
+    "edge",
+    "cache",
+    "proxy",
+]
+_LONG_TAIL_BRANDS = [
+    "acmehealth",
+    "medflow",
+    "carepoint",
+    "healthnexus",
+    "rxportal",
+    "docusync",
+    "patientiq",
+    "wellbridge",
+    "vitalsource",
+    "mediquant",
+    "clearstream",
+    "dataforge",
+    "cloudmetrics",
+    "fastreach",
+    "signalwire",
+    "pixeltrack",
+    "growthkit",
+    "eventpulse",
+    "renderbase",
+    "snapwidget",
+    "formstack",
+    "pollfish",
+    "typekit",
+    "loadbalance",
+    "netscaler",
+    "appdynamic",
+    "sentry",
+    "bugsnag",
+    "rollbar",
+    "newrelic",
+    "pagerduty",
+    "opsgenie",
+    "statuspage",
+    "pingdom",
+    "uptime",
+    "segment",
+    "mixpanel",
+    "amplitude",
+    "hotjar",
+    "fullstory",
+]
+_LONG_TAIL_TLDS = [
+    "com",
+    "com",
+    "com",
+    "com",  # Weighted toward .com
+    "io",
+    "io",
+    "net",
+    "org",
+    "co",
+    "dev",
+    "app",
+]
+
+
+def _generate_long_tail_domain(rng) -> str:
+    """Generate a plausible SaaS/CDN/analytics domain for long-tail web traffic.
+
+    Produces domains like 'cdn.medflow.com', 'analytics.growthkit.io',
+    'static.carepoint.net' — realistic but not real services.
+    """
+    prefix = rng.choice(_LONG_TAIL_PREFIXES)
+    brand = rng.choice(_LONG_TAIL_BRANDS)
+    tld = rng.choice(_LONG_TAIL_TLDS)
+    return f"{prefix}.{brand}.{tld}"
+
+
+def _domain_to_ip(domain: str) -> str:
+    """Derive a deterministic external IP from a domain name.
+
+    Uses a hash to map the domain to an IP in a realistic CDN range.
+    Same domain always produces the same IP.
+    """
+    import hashlib
+
+    h = int(hashlib.sha256(domain.encode()).hexdigest()[:8], 16)
+    # Map to realistic CDN ranges
+    ranges = [
+        (104, 16),  # Cloudflare
+        (104, 18),  # Cloudflare
+        (151, 101),  # Fastly
+        (23, 45),  # Akamai
+        (23, 72),  # Akamai
+        (52, 84),  # AWS CloudFront
+        (54, 230),  # AWS CloudFront
+        (13, 107),  # Microsoft/Azure
+        (142, 250),  # Google
+        (172, 217),  # Google
+    ]
+    prefix = ranges[h % len(ranges)]
+    octet3 = (h >> 8) & 0xFF
+    octet4 = max(1, (h >> 16) & 0xFE)  # Avoid .0 and .255
+    return f"{prefix[0]}.{prefix[1]}.{octet3}.{octet4}"
+
+
 def _generate_random_hostname(rng, ip: str) -> str:
     """Generate a provider-aware hostname matching the IP's cloud/CDN provider.
 

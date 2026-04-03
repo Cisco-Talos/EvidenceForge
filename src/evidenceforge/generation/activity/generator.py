@@ -2785,8 +2785,14 @@ class ActivityGenerator:
             # This matches real-world flow (user visits domain → DNS → connection)
             # and ensures DNS query, SNI, and proxy hostname are all consistent.
             if activity_type in ("connection_web", "connection_saas") and rng.random() < 0.30:
-                # 30% chance: random CDN/cloud IP for long-tail diversity
-                dst_ip = _generate_random_external_ip(rng)
+                # 30% chance: long-tail domain for CDN/SaaS/analytics diversity
+                from evidenceforge.generation.activity.network import (
+                    _domain_to_ip,
+                    _generate_long_tail_domain,
+                )
+
+                conn_hostname = _generate_long_tail_domain(rng)
+                dst_ip = _domain_to_ip(conn_hostname)
             elif activity_type in ("connection_web", "connection_saas"):
                 # 70%: pick a known domain, resolve to its IP
                 from evidenceforge.generation.activity.network import FORWARD_DNS

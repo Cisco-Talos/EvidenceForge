@@ -1009,6 +1009,10 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
+                # Add microsecond jitter if timestamp has zero microseconds
+                # (prevents .000000Z tell that reveals generation pipeline seams)
+                if ts.microsecond == 0:
+                    ts = ts.replace(microsecond=random.randint(100000, 999999))
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():

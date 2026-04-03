@@ -249,9 +249,13 @@ class SysmonEventEmitter(LogEmitter):
 
     @staticmethod
     def _generate_hashes(image: str, hostname: str) -> str:
-        """Generate deterministic fake file hashes from image+hostname."""
-        seed = f"{image}:{hostname}"
-        random.Random(seed)
+        """Generate deterministic fake file hashes from image path.
+
+        Hashes are keyed on image path only (not hostname) so the same
+        binary produces identical hashes across all hosts — matching
+        real Windows behavior for identical OS builds.
+        """
+        seed = image
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
         md5 = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest().upper()
         sha256 = hashlib.sha256(seed.encode(), usedforsecurity=False).hexdigest().upper()

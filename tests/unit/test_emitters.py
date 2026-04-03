@@ -122,7 +122,7 @@ class TestWindowsEventEmitter:
         # Read and verify content
         content = temp_output.read_text()
         assert "<EventID>4634</EventID>" in content
-        assert "2024-01-15T18:15:30.000000Z" in content
+        assert "2024-01-15T18:15:30." in content  # Microseconds are jittered
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
         print(f"\n{'=' * 80}")
