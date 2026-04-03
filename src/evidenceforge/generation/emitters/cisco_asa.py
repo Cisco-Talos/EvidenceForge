@@ -54,6 +54,19 @@ _TEARDOWN_REASONS = [
 ]
 
 
+def _asa_timestamp_sort_key(line: str) -> str:
+    """Extract timestamp from ASA syslog line for chronological sorting.
+
+    Format: <NNN>Mon DD HH:MM:SS hostname ...
+    Returns the timestamp portion so entries sort chronologically
+    regardless of message ID.
+    """
+    gt = line.find(">")
+    if gt >= 0:
+        return line[gt + 1 : gt + 16]
+    return line
+
+
 class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
@@ -68,6 +81,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     _flat_filename = "cisco_asa.log"
     _supported_types: set[str] = {"connection"}
     _sort_before_flush = True
+    _sort_key_func = staticmethod(_asa_timestamp_sort_key)
 
     def __init__(
         self,

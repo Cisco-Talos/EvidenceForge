@@ -306,7 +306,9 @@ class SysmonEventEmitter(LogEmitter):
             "CommandLine": proc.command_line,
             "User": user,
             "LogonGuid": self._generate_process_guid(
-                host.hostname, 0, datetime(event.timestamp.year, 1, 1)
+                host.hostname,
+                int(logon_id, 16) if logon_id.startswith("0x") else hash(logon_id) & 0xFFFFFFFF,
+                event.timestamp,
             ),
             "LogonId": logon_id,
             "IntegrityLevel": integrity,

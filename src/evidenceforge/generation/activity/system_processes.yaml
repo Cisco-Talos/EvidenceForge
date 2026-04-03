@@ -1,0 +1,131 @@
+# Per-role baseline system processes for Windows hosts.
+# Generates diverse process creation events independently of user activity.
+# {placeholder} tokens resolved at generation time from the params section.
+
+scheduled_tasks:
+  - image: "C:\\Windows\\System32\\svchost.exe"
+    command_templates:
+      - "svchost.exe -k netsvcs -p -s {service}"
+    params:
+      service: [Schedule, BITS, wuauserv, Winmgmt, LanmanServer, CryptSvc, AppXSvc]
+    parent: services
+  - image: "C:\\Windows\\System32\\taskhostw.exe"
+    command_templates:
+      - "taskhostw.exe /Run"
+      - "taskhostw.exe"
+    parent: svchost_local_system
+  - image: "C:\\Windows\\System32\\usoclient.exe"
+    command_templates:
+      - "usoclient.exe StartScan"
+      - "usoclient.exe StartInteractiveScan"
+      - "usoclient.exe ResumeUpdate"
+    parent: svchost_wusvcs
+  - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_\\TiWorker.exe"
+    command_templates:
+      - "TiWorker.exe -Embedding"
+    parent: svchost_netsvcs
+  - image: "C:\\Windows\\System32\\MpCmdRun.exe"
+    command_templates:
+      - "MpCmdRun.exe -Scan -ScanType 1"
+      - "MpCmdRun.exe -SignatureUpdate"
+    parent: services
+  - image: "C:\\Windows\\System32\\cleanmgr.exe"
+    command_templates:
+      - "cleanmgr.exe /autoclean /d C:"
+    parent: svchost_local_system
+  - image: "C:\\Windows\\System32\\wsqmcons.exe"
+    command_templates:
+      - "wsqmcons.exe"
+    parent: svchost_local_system
+
+system_services:
+  all:
+    - image: "C:\\Windows\\System32\\WmiPrvSE.exe"
+      command_templates:
+        - "WmiPrvSE.exe -Embedding"
+        - "WmiPrvSE.exe -secured -Embedding"
+      parent: svchost_dcom
+    - image: "C:\\Windows\\System32\\dllhost.exe"
+      command_templates:
+        - "dllhost.exe /Processid:{guid}"
+      params:
+        guid:
+          - "{3EB3C877-1F16-487C-9050-104DBCD66683}"
+          - "{73E709EA-5D93-4B2E-BBB0-99B7938DA9E4}"
+          - "{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}"
+      parent: svchost_dcom
+    - image: "C:\\Windows\\System32\\conhost.exe"
+      command_templates:
+        - "conhost.exe 0x4"
+        - "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1"
+      parent: csrss_s0
+    - image: "C:\\Windows\\System32\\RuntimeBroker.exe"
+      command_templates:
+        - "RuntimeBroker.exe -Embedding"
+      parent: svchost_dcom
+    - image: "C:\\Windows\\System32\\spoolsv.exe"
+      command_templates:
+        - "spoolsv.exe"
+      parent: services
+    - image: "C:\\Windows\\System32\\sihost.exe"
+      command_templates:
+        - "sihost.exe"
+      parent: svchost_netsvcs
+    - image: "C:\\Windows\\System32\\backgroundTaskHost.exe"
+      command_templates:
+        - "backgroundTaskHost.exe"
+      parent: svchost_local_system
+
+  domain_controller:
+    - image: "C:\\Windows\\System32\\lsass.exe"
+      command_templates:
+        - "C:\\Windows\\system32\\lsass.exe"
+      parent: wininit
+    - image: "C:\\Windows\\System32\\dfsr.exe"
+      command_templates:
+        - "dfsr.exe"
+      parent: services
+    - image: "C:\\Windows\\System32\\dns.exe"
+      command_templates:
+        - "dns.exe"
+      parent: services
+    - image: "C:\\Windows\\System32\\ntdsutil.exe"
+      command_templates:
+        - "ntdsutil.exe"
+      parent: services
+    - image: "C:\\Windows\\System32\\ismserv.exe"
+      command_templates:
+        - "ismserv.exe"
+      parent: services
+
+  server:
+    - image: "C:\\Windows\\System32\\WmiPrvSE.exe"
+      command_templates:
+        - "WmiPrvSE.exe -secured -Embedding"
+      parent: svchost_dcom
+    - image: "C:\\Windows\\System32\\msdtc.exe"
+      command_templates:
+        - "msdtc.exe"
+      parent: services
+
+  workstation:
+    - image: "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe"
+      command_templates:
+        - "SearchHost.exe"
+      parent: svchost_netsvcs
+    - image: "C:\\Windows\\System32\\SearchProtocolHost.exe"
+      command_templates:
+        - "SearchProtocolHost.exe Global\\UsGthrFltPipeMssGthrPipe_S-1-5-21 1 {search_filter}"
+      params:
+        search_filter: ["Search", "Indexer", "Protocol"]
+      parent: svchost_netsvcs
+    - image: "C:\\Windows\\System32\\SearchFilterHost.exe"
+      command_templates:
+        - "SearchFilterHost.exe 0 {filter_id} 0 0 0"
+      params:
+        filter_id: ["804", "812", "820", "828"]
+      parent: svchost_netsvcs
+    - image: "C:\\Windows\\System32\\CompatTelRunner.exe"
+      command_templates:
+        - "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun"
+      parent: svchost_local_system

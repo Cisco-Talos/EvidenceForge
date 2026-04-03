@@ -2170,6 +2170,7 @@ class ActivityGenerator:
                 integrity_level="System",
                 logon_id=logon_id,
                 parent_image=self._lookup_parent_image(system.hostname, parent_pid),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1936",
                 mandatory_label="S-1-16-16384",
             ),
@@ -2803,12 +2804,12 @@ class ActivityGenerator:
             # and ensures DNS query, SNI, and proxy hostname are all consistent.
             if activity_type in ("connection_web", "connection_saas") and rng.random() < 0.30:
                 # 30% chance: long-tail domain for CDN/SaaS/analytics diversity
-                from evidenceforge.generation.activity.network import (
+                from evidenceforge.generation.activity.dns_registry import (
                     _domain_to_ip,
-                    _generate_long_tail_domain,
+                    generate_long_tail_domain,
                 )
 
-                conn_hostname = _generate_long_tail_domain(rng)
+                conn_hostname = generate_long_tail_domain(rng)
                 dst_ip = _domain_to_ip(conn_hostname)
             elif activity_type in ("connection_web", "connection_saas"):
                 # 70%: pick a known domain, resolve to its IP

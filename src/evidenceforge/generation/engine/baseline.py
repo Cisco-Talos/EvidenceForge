@@ -50,7 +50,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     pick_suspicious_pattern,
 )
 from evidenceforge.models.scenario import Persona, User
-from evidenceforge.utils.rng import _get_rng
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -1958,15 +1958,38 @@ class BaselineMixin:
                             source_system=system,
                         )
 
-            # Scheduled tasks
-            host_seed = hash(system.hostname) % 900
+            # Independent system service processes (not tied to user activity)
+            # Windows hosts spawn 3-8 service processes per hour
             if os_cat == "windows":
-                win_tasks = [
-                    (r"C:\Windows\System32\svchost.exe", "svchost.exe -k netsvcs -p -s Schedule"),
-                    (r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe /Run"),
-                    (r"C:\Windows\System32\usoclient.exe", "usoclient.exe StartScan"),
-                ]
-                task_name, task_cmd = win_tasks[hash(system.hostname) % len(win_tasks)]
+                from evidenceforge.generation.activity.system_processes import (
+                    pick_system_service_process as _pick_svc,
+                )
+
+                sys_type_str = (system.type or "workstation").lower()
+                num_svc = rng.randint(3, 8)
+                for _si in range(num_svc):
+                    svc_offset = rng.randint(0, 3599) + rng.random()
+                    svc_ts = current_hour + timedelta(seconds=svc_offset)
+                    self.state_manager.set_current_time(svc_ts)
+                    svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
+                    svc_parent = sys_pids.get(svc_parent_key, sys_pids.get("services", 4))
+                    self.activity_generator.generate_system_process(
+                        system=system,
+                        time=svc_ts,
+                        process_name=svc_image,
+                        command_line=svc_cmd,
+                        parent_pid=svc_parent,
+                        username="SYSTEM",
+                    )
+
+            # Scheduled tasks — diverse per-hour selection from YAML
+            from evidenceforge.generation.activity.system_processes import (
+                pick_scheduled_task,
+            )
+
+            host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
+            if os_cat == "windows":
+                pass  # Tasks selected per-iteration below
             else:
                 os_str = (system.os or "").lower()
                 is_rhel_task = any(
@@ -1999,7 +2022,9 @@ class BaselineMixin:
                 self.state_manager.set_current_time(ts)
 
                 if os_cat == "windows":
-                    parent_pid = sys_pids.get("svchost_local_system", sys_pids.get("services", 4))
+                    # Pick a diverse task each iteration (not deterministic per host)
+                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
+                    parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
                     # 4648 explicit credentials for scheduled task execution
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
@@ -2014,7 +2039,7 @@ class BaselineMixin:
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
-                        process_name=task_name,
+                        process_name=task_image,
                         command_line=task_cmd,
                         parent_pid=parent_pid,
                         username="SYSTEM",

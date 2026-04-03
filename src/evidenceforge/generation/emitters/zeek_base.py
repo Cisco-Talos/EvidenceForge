@@ -54,7 +54,11 @@ class _SingleZeekWriter:
     """Writes Zeek NDJSON for one sensor. Thread-safe via lock."""
 
     def __init__(
-        self, output_path: Path, buffer_size: int = 10000, sort_before_flush: bool = False
+        self,
+        output_path: Path,
+        buffer_size: int = 10000,
+        sort_before_flush: bool = False,
+        sort_key: Any = None,
     ):
         self.output_path = output_path
         self.buffer: list[str] = []
@@ -62,6 +66,7 @@ class _SingleZeekWriter:
         self.event_count = 0
         self._lock = Lock()
         self._sort_before_flush = sort_before_flush
+        self._sort_key = sort_key
 
     def write(self, rendered: str) -> None:
         with self._lock:
@@ -78,7 +83,10 @@ class _SingleZeekWriter:
         if not self.buffer:
             return
         if self._sort_before_flush:
-            self.buffer.sort()  # Lexicographic sort works for ASA syslog format
+            if self._sort_key:
+                self.buffer.sort(key=self._sort_key)
+            else:
+                self.buffer.sort()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
@@ -139,7 +147,10 @@ class SensorMultiplexEmitter(LogEmitter):
                 flat_name = self._flat_filename or self._log_filename
                 path = self._base_dir / flat_name
             writer = _SingleZeekWriter(
-                path, self._buffer_size, sort_before_flush=self._sort_before_flush
+                path,
+                self._buffer_size,
+                sort_before_flush=self._sort_before_flush,
+                sort_key=getattr(self, "_sort_key_func", None),
             )
             self._writers[sensor_hostname] = writer
             logger.debug(f"Created Zeek writer: {path}")
