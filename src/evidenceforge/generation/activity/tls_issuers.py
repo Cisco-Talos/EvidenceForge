@@ -28,15 +28,43 @@ def load_tls_issuers() -> dict[str, Any]:
     return _CACHED_ISSUERS
 
 
-def pick_issuer(rng: random.Random) -> dict[str, Any]:
-    """Pick a TLS certificate issuer using weighted selection.
+def pick_issuer(rng: random.Random, server_name: str = "") -> dict[str, Any]:
+    """Pick a TLS certificate issuer, respecting domain-to-CA overrides.
+
+    Well-known domains (Google, Microsoft, etc.) always get their real CA.
+    Other domains use weighted random selection.
 
     Returns a dict with keys: name, validity_days, not_before_max_days, key_types.
     """
+    import fnmatch
+
     data = load_tls_issuers()
     issuers = data["issuers"]
-    weights = [i["weight"] for i in issuers]
-    return rng.choices(issuers, weights=weights, k=1)[0]
+
+    # Check domain-to-CA overrides first
+    if server_name:
+        overrides = data.get("domain_ca_overrides", {})
+        for pattern, ca_name in overrides.items():
+            if fnmatch.fnmatch(server_name, pattern) or fnmatch.fnmatch(
+                f"*.{server_name}", pattern
+            ):
+                # Find the matching issuer config
+                for issuer in issuers:
+                    if issuer["name"] == ca_name:
+                        return issuer
+                # CA name in overrides but not in issuers list — return minimal config
+                return {
+                    "name": ca_name,
+                    "weight": 0,
+                    "validity_days": 397,
+                    "not_before_max_days": 300,
+                    "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+                }
+
+    # No override — weighted random selection (exclude weight=0 override-only CAs)
+    active_issuers = [i for i in issuers if i.get("weight", 0) > 0]
+    weights = [i["weight"] for i in active_issuers]
+    return rng.choices(active_issuers, weights=weights, k=1)[0]
 
 
 def pick_key_type(rng: random.Random, issuer: dict[str, Any]) -> tuple[str, int]:

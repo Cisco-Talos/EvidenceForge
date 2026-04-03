@@ -1602,7 +1602,7 @@ class ActivityGenerator:
             # Issuer-aware certificate generation from YAML config
             from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
 
-            issuer_cfg = pick_issuer(rng)
+            issuer_cfg = pick_issuer(rng, server_name=server_name)
             key_type, key_length = pick_key_type(rng, issuer_cfg)
             is_ecdsa = key_type == "ecdsa"
             now_epoch = int(event.timestamp.timestamp())
@@ -2964,7 +2964,8 @@ class ActivityGenerator:
         """Generate Kerberos TGT request event (4768) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
-        domain = domain or getattr(self, "_netbios_domain", "CORP")
+        # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
+        domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
 
         event = SecurityEvent(
@@ -2998,7 +2999,7 @@ class ActivityGenerator:
         """Generate Kerberos TGT renewal event (4770) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
-        domain = domain or getattr(self, "_netbios_domain", "CORP")
+        domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
 
         event = SecurityEvent(
@@ -3032,7 +3033,7 @@ class ActivityGenerator:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
-        domain = domain or getattr(self, "_netbios_domain", "CORP")
+        domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
 
         event = SecurityEvent(
@@ -3274,7 +3275,7 @@ class ActivityGenerator:
             dst_host=dc_host,
             kerberos=KerberosContext(
                 target_username=username,
-                target_domain=dc_host.netbios_domain,
+                target_domain=getattr(self, "_ad_domain", "corp.local").upper(),
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 ticket_options="0x40810010",
@@ -4185,8 +4186,14 @@ class ActivityGenerator:
                 else process_name.lower()
             )
 
-        # Special override: SYSTEM user or network logon → services/svchost
+        # Special override: SYSTEM user or network logon → svchost (not services.exe directly)
+        # Real Windows: services.exe → svchost.exe → cmd.exe (never services.exe → cmd.exe)
+        _SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"}
+        is_shell = exe_name in _SHELLS
         if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
+            if is_shell:
+                # Shells get svchost as parent (realistic: service host spawns shell)
+                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
             return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
@@ -4206,6 +4213,8 @@ class ActivityGenerator:
             )
         is_network_logon = active_session and active_session.logon_type == 3
         if is_network_logon:
+            if is_shell:
+                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
             return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
 
         # Look up valid parents from spawn rules
