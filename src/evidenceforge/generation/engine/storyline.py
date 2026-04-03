@@ -521,7 +521,9 @@ class StorylineMixin:
                     self._generate_encoded_powershell(hash(f"{time}_{actor.username}")),
                 )
 
-            parent_pid = self.activity_generator._select_parent_pid(system, actor, process_name)
+            parent_pid = self.activity_generator._resolve_parent(
+                system, actor, time, logon_id, process_name
+            )
             pid = self.activity_generator.generate_process(
                 user=actor,
                 system=system,

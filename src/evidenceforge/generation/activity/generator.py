@@ -1051,6 +1051,7 @@ class ActivityGenerator:
                 integrity_level="Medium",
                 logon_id=logon_id,
                 parent_image=self._lookup_process_name(system.hostname, parent_pid),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
             ),
@@ -2690,7 +2691,7 @@ class ActivityGenerator:
                 process_name = process_name.replace("{username}", user.username)
                 # Parameterize command templates (all categories — queries, paths, docs)
                 command_line = _parameterize_command(rng, command_line, username=user.username)
-                parent_pid = self._select_parent_pid(system, user, process_name)
+                parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
@@ -2713,7 +2714,7 @@ class ActivityGenerator:
                 rng = _get_rng()
                 process_name, command_line = rng.choice(pool)
                 command_line = _parameterize_command(rng, command_line, username=user.username)
-                parent_pid = self._select_parent_pid(system, user, process_name)
+                parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
@@ -3920,6 +3921,13 @@ class ActivityGenerator:
             return proc.image
         return "-"
 
+    def _lookup_parent_command_line(self, hostname: str, parent_pid: int) -> str:
+        """Look up parent process command line from StateManager."""
+        proc = self.state_manager.get_process(hostname, parent_pid)
+        if proc:
+            return proc.command_line
+        return "-"
+
     def _get_session_explorer_pid(self, system: System, user: User) -> int | None:
         """Get the explorer.exe PID for the user's active interactive session.
 
@@ -4019,6 +4027,244 @@ class ActivityGenerator:
             if shells:
                 return shells[-1][0]
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
+
+    def _resolve_parent(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+    ) -> int:
+        """Resolve the parent PID for a process using spawn rules.
+
+        Transparently finds an existing valid parent or auto-creates the
+        parent chain (with realistic timing) using the spawn rules YAML.
+        Falls back to the legacy _select_parent_pid() for unknown processes.
+        """
+        from evidenceforge.generation.activity.spawn_rules import (
+            get_reverse_index_linux,
+            get_reverse_index_windows,
+        )
+
+        rng = _get_rng()
+        os_cat = _get_os_category(system.os)
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+
+        # Extract basename for rule lookup
+        if os_cat == "windows":
+            exe_name = (
+                process_name.rsplit("\\", 1)[-1].lower()
+                if "\\" in process_name
+                else process_name.lower()
+            )
+        else:
+            exe_name = (
+                process_name.rsplit("/", 1)[-1].lower()
+                if "/" in process_name
+                else process_name.lower()
+            )
+
+        # Special override: SYSTEM user or network logon → services/svchost
+        if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
+            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        active_session = (
+            next((s for s in sessions if s.system == system.hostname), None) if sessions else None
+        )
+        is_network_logon = active_session and active_session.logon_type == 3
+        if is_network_logon:
+            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+
+        # Look up valid parents from spawn rules
+        if os_cat == "windows":
+            reverse = get_reverse_index_windows()
+        else:
+            reverse = get_reverse_index_linux()
+
+        possible_parents = reverse.get(exe_name, [])
+
+        if not possible_parents:
+            # No rules for this exe — fall back to legacy logic
+            return self._select_parent_pid(system, user, process_name)
+
+        # Check alive_history for a matching parent
+        key = (system.hostname, user.username)
+        history = self._user_process_history.get(key, [])
+        alive_parents = []
+        for pid, name in history:
+            if not self._is_pid_alive(system, pid):
+                continue
+            hist_exe = (
+                name.rsplit("\\", 1)[-1].lower()
+                if "\\" in name
+                else name.rsplit("/", 1)[-1].lower()
+            )
+            if hist_exe in possible_parents:
+                alive_parents.append((pid, name))
+
+        # Also check seeded system processes as potential parents
+        for _role, pid in sys_pids.items():
+            proc = self.state_manager.get_process(system.hostname, pid)
+            if proc:
+                proc_exe = (
+                    proc.image.rsplit("\\", 1)[-1].lower()
+                    if "\\" in proc.image
+                    else proc.image.rsplit("/", 1)[-1].lower()
+                )
+                if proc_exe in possible_parents:
+                    alive_parents.append((pid, proc.image))
+
+        if alive_parents:
+            # Deduplicate by PID
+            seen = set()
+            unique = []
+            for pid, name in alive_parents:
+                if pid not in seen:
+                    seen.add(pid)
+                    unique.append((pid, name))
+            return rng.choice(unique)[0]
+
+        # No valid parent alive — auto-create the chain
+        return self._ensure_parent_chain(system, user, time, logon_id, exe_name, os_cat, depth=0)
+
+    def _ensure_parent_chain(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        child_exe: str,
+        os_cat: str,
+        depth: int = 0,
+    ) -> int:
+        """Recursively create parent processes needed for child_exe.
+
+        Builds the chain up to the nearest seeded system process (explorer,
+        services, sshd, systemd). Depth-limited to 3 to prevent infinite
+        recursion.
+        """
+        from evidenceforge.generation.activity.spawn_rules import (
+            get_parent_config,
+            get_reverse_index_linux,
+            get_reverse_index_windows,
+        )
+
+        rng = _get_rng()
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+
+        if os_cat == "windows":
+            reverse = get_reverse_index_windows()
+        else:
+            reverse = get_reverse_index_linux()
+
+        # Safety limit
+        if depth > 3:
+            if os_cat == "windows":
+                return sys_pids.get("explorer", 4)
+            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+
+        # Pick a parent for child_exe from the rules
+        possible_parents = reverse.get(child_exe, [])
+        if not possible_parents:
+            if os_cat == "windows":
+                return sys_pids.get("explorer", 4)
+            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+
+        # Prefer shells for CLI tools on Windows, sshd→bash for Linux
+        chosen_parent = rng.choice(possible_parents)
+
+        # Check if chosen parent is already a seeded system process
+        for _role, pid in sys_pids.items():
+            proc = self.state_manager.get_process(system.hostname, pid)
+            if proc:
+                proc_exe = (
+                    proc.image.rsplit("\\", 1)[-1].lower()
+                    if "\\" in proc.image
+                    else proc.image.rsplit("/", 1)[-1].lower()
+                )
+                if proc_exe == chosen_parent:
+                    return pid
+
+        # Not a seeded process — need to create it, but first ensure ITS parent
+        grandparent_pid = self._ensure_parent_chain(
+            system, user, time, logon_id, chosen_parent, os_cat, depth=depth + 1
+        )
+
+        # Get command template for the parent we're creating
+        config = get_parent_config(os_cat, chosen_parent)
+        cmd_templates = config.get("command_templates", [chosen_parent])
+        cmd_line = rng.choice(cmd_templates)
+
+        # Determine image path
+        if os_cat == "windows":
+            image = f"C:\\Windows\\System32\\{chosen_parent}"
+        else:
+            image = f"/usr/bin/{chosen_parent}"
+            if chosen_parent in ("bash", "sh", "zsh"):
+                image = f"/bin/{chosen_parent}"
+
+        # Timing: parent is created before child
+        spawn_delay = config.get("spawn_delay", [0.5, 3.0])
+        delay_sec = rng.uniform(spawn_delay[0], spawn_delay[1])
+        parent_time = time - timedelta(seconds=delay_sec * (depth + 1))
+
+        # Create the parent process
+        parent_pid = self.state_manager.create_process(
+            system=system.hostname,
+            parent_pid=grandparent_pid,
+            image=image,
+            command_line=cmd_line,
+            username=user.username,
+            integrity_level="System" if user.username == "SYSTEM" else "Medium",
+        )
+
+        # Determine if this is a pre-existing process (no creation event)
+        # Long-lived parents early in the scenario were "already running"
+        lifetime = config.get("lifetime", "long")
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        is_pre_existing = False
+        if lifetime == "long" and scenario_start:
+            elapsed = (time - scenario_start).total_seconds()
+            if elapsed < 1800 and rng.random() < 0.7:  # First 30 min, 70% chance
+                is_pre_existing = True
+
+        if not is_pre_existing:
+            # Emit a process creation event
+            from evidenceforge.events.base import SecurityEvent
+            from evidenceforge.events.contexts import AuthContext, ProcessContext
+
+            event = SecurityEvent(
+                timestamp=parent_time,
+                event_type="process_create",
+                src_host=self._build_host_context(system),
+                auth=AuthContext(
+                    username=user.username,
+                    user_sid=self._get_sid(user.username),
+                    logon_id=logon_id,
+                ),
+                process=ProcessContext(
+                    pid=parent_pid,
+                    parent_pid=grandparent_pid,
+                    image=image,
+                    command_line=cmd_line,
+                    username=user.username,
+                    integrity_level="Medium",
+                    logon_id=logon_id,
+                    parent_image=self._lookup_process_name(system.hostname, grandparent_pid),
+                    parent_command_line=self._lookup_parent_command_line(
+                        system.hostname, grandparent_pid
+                    ),
+                    token_elevation="%%1938",
+                    mandatory_label="S-1-16-8192",
+                ),
+            )
+            self.dispatcher.dispatch(event)
+
+        # Record in user process history
+        self._record_user_process(system, user, parent_pid, image)
+        return parent_pid
 
     def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
         """Record a user process in history for future parent selection."""

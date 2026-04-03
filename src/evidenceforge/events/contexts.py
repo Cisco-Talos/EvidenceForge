@@ -88,6 +88,7 @@ class ProcessContext:
     integrity_level: str = "Medium"
     logon_id: str = ""  # For 4688/4689 SubjectLogonId + TargetLogonId
     parent_image: str = ""  # ParentProcessName (4688)
+    parent_command_line: str = ""  # ParentCommandLine (Sysmon Event 1)
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
 
