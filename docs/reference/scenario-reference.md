@@ -252,14 +252,14 @@ time_window:
   start: "2024-01-15T10:00:00Z"  # Required: ISO 8601 UTC
   end: "2024-01-15T18:00:00Z"    # Either end OR duration required
   duration: "8h"                   # Supports: "10h", "3d", "2h30m", "5m30s", "500ms"
-  warmup: "8h"                     # Optional (default "8h"). Set "0s" to disable.
+  warmup: "8h"                     # Optional (default "8h"). Minimum 1 hour.
 ```
 
 The `warmup` field controls a pre-generation phase that runs *before* `start` to pre-populate
 internal state (DNS cache, process trees, active sessions, Kerberos tickets, Hawkes timing kernels).
 Events generated during warm-up update state but are **not** written to output files. This makes
-the first minutes of output look like a running system rather than a cold start. Set to `"0s"` for
-fastest generation at the cost of less realistic early-window events.
+the first minutes of output look like a running system rather than a cold start. Minimum 1 hour;
+default 8 hours covers a full day/night transition for maximum realism.
 
 ## Baseline Activity
 

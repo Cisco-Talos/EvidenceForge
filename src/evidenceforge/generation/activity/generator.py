@@ -115,34 +115,6 @@ BASELINE_PATTERNS = {
 
 # Organic bash commands for noise injection between storyline events
 # and baseline Linux user activity. Common admin/orientation commands.
-_ORGANIC_BASH_COMMANDS = [
-    "pwd",
-    "ls",
-    "ls -la",
-    "ls /tmp",
-    "id",
-    "w",
-    "whoami",
-    "uname -a",
-    "uptime",
-    "df -h",
-    "free -m",
-    "ps aux",
-    "clear",
-    "cd /var/log",
-    "cd /tmp",
-    "hostname",
-    "hostname -f",
-    "ss -tulnp",
-    "systemctl status sshd",
-    "tail -50 /var/log/auth.log",
-    "grep -i error /var/log/syslog | tail -10",
-    "date",
-    "cat /etc/hostname",
-    "history",
-    "ll",
-]
-
 # Process names and command lines for baseline activities (Windows)
 PROCESS_TEMPLATES = {
     "process_code": [
@@ -1080,7 +1052,9 @@ class ActivityGenerator:
                 username=user.username,
                 integrity_level="Medium",
                 logon_id=logon_id,
-                parent_image=self._lookup_process_name(system.hostname, parent_pid),
+                parent_image=self._lookup_process_name(
+                    system.hostname, parent_pid, _get_os_category(system.os)
+                ),
                 parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
@@ -1624,7 +1598,9 @@ class ActivityGenerator:
                 "CN=E1, O=Let's Encrypt, C=US",
                 "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
             ]
-            now_epoch = event.timestamp.timestamp()
+            now_epoch = int(
+                event.timestamp.timestamp()
+            )  # Whole seconds — real x509 certs have no fractional component
             event.x509 = X509Context(
                 fingerprint=cert_hash,
                 certificate_version=3,
@@ -2004,71 +1980,72 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ShellContext
 
-        # If the argument looks like a direct command (contains / or spaces), use it directly
-        if "/" in activity_type_or_command or " " in activity_type_or_command:
-            command = activity_type_or_command
-        else:
-            # Select command based on activity type
-            commands = {
-                "process_code": [
-                    "vim script.py",
-                    "nano config.conf",
-                    "code .",
-                    "git status",
-                    "git diff",
-                    "python3 -m pytest",
-                    "cat README.md",
-                ],
-                "process_build": [
-                    "make",
-                    "gcc -o output source.c",
-                    "npm run build",
-                    "docker build -t app .",
-                    "cargo build --release",
-                ],
-                "connection_web": [
-                    "curl https://example.com",
-                    "wget https://github.com/repo/file.tar.gz",
-                    "curl -I https://api.example.com/health",
-                ],
-                "process_user_apps": [
-                    "ls -la",
-                    "cd /var/www/html",
-                    "tail -f /var/log/syslog",
-                    'grep -r "error" /var/log/',
-                    "systemctl status apache2",
-                    "free -m",
-                    "uptime",
-                    "cat /etc/hostname",
-                    "netstat -tlnp",
-                    "du -sh /var/log/*",
-                    "w",
-                    'journalctl -u apache2 --since "1 hour ago"',
-                    "htop",
-                    "ss -tulnp",
-                    "ip addr show",
-                ],
-                "default": [
-                    "ls -la",
-                    "ps aux",
-                    "top",
-                    "df -h",
-                    "whoami",
-                    "pwd",
-                    "cat /etc/os-release",
-                    "uptime",
-                    "free -m",
-                    "w",
-                    "tail -20 /var/log/syslog",
-                    "history",
-                    "date",
-                    "ls /tmp",
-                    "mount | grep -v tmpfs",
-                ],
-            }
+        # Activity type pools: if the arg matches a known key, pick from pool.
+        # Otherwise treat as a literal command (supports typos, direct strings, etc.)
+        _activity_type_commands = {
+            "process_code": [
+                "vim script.py",
+                "nano config.conf",
+                "code .",
+                "git status",
+                "git diff",
+                "python3 -m pytest",
+                "cat README.md",
+            ],
+            "process_build": [
+                "make",
+                "gcc -o output source.c",
+                "npm run build",
+                "docker build -t app .",
+                "cargo build --release",
+            ],
+            "connection_web": [
+                "curl https://example.com",
+                "wget https://github.com/repo/file.tar.gz",
+                "curl -I https://api.example.com/health",
+            ],
+            "process_user_apps": [
+                "ls -la",
+                "cd /var/www/html",
+                "tail -f /var/log/syslog",
+                'grep -r "error" /var/log/',
+                "systemctl status apache2",
+                "free -m",
+                "uptime",
+                "cat /etc/hostname",
+                "netstat -tlnp",
+                "du -sh /var/log/*",
+                "w",
+                'journalctl -u apache2 --since "1 hour ago"',
+                "htop",
+                "ss -tulnp",
+                "ip addr show",
+            ],
+            "default": [
+                "ls -la",
+                "ps aux",
+                "top",
+                "df -h",
+                "whoami",
+                "pwd",
+                "cat /etc/os-release",
+                "uptime",
+                "free -m",
+                "w",
+                "tail -20 /var/log/syslog",
+                "history",
+                "date",
+                "ls /tmp",
+                "mount | grep -v tmpfs",
+            ],
+        }
 
-            command_list = commands.get(activity_type_or_command, commands["default"])
+        if activity_type_or_command in _activity_type_commands:
+            command_list = _activity_type_commands[activity_type_or_command]
             command = _get_rng().choice(command_list)
+        else:
+            # Literal command string (direct commands, typos, etc.)
+            command = activity_type_or_command
 
         event = SecurityEvent(
             timestamp=time,
@@ -2097,13 +2074,15 @@ class ActivityGenerator:
         # Emit the primary command
         self.generate_bash_command(user, system, time, command)
 
-        # Probabilistically emit 0-3 noise commands
+        # Probabilistically emit 0-3 noise commands (role-aware)
+        from evidenceforge.generation.activity.bash_commands import pick_bash_command
+
         rng = _get_rng()
         n_noise = rng.choices([0, 1, 1, 2, 2, 3], k=1)[0]
         for _ in range(n_noise):
             offset_sec = rng.uniform(-5.0, 15.0)
             noise_time = time + timedelta(seconds=offset_sec)
-            noise_cmd = rng.choice(_ORGANIC_BASH_COMMANDS)
+            noise_cmd = pick_bash_command(rng, user.persona or "", system.hostname, system.services)
             self.generate_bash_command(user, system, noise_time, noise_cmd)
 
     def generate_system_process(
@@ -2787,9 +2766,24 @@ class ActivityGenerator:
         elif activity_type in EXTERNAL_IPS:
             rng = _get_rng()
 
-            # Phase 5.3: 30% chance of random CDN/cloud IP for destination diversity
+            # Domain-first selection for web/SaaS: pick a domain, resolve to IP.
+            # This matches real-world flow (user visits domain → DNS → connection)
+            # and ensures DNS query, SNI, and proxy hostname are all consistent.
             if activity_type in ("connection_web", "connection_saas") and rng.random() < 0.30:
+                # 30% chance: random CDN/cloud IP for long-tail diversity
                 dst_ip = _generate_random_external_ip(rng)
+            elif activity_type in ("connection_web", "connection_saas"):
+                # 70%: pick a known domain, resolve to its IP
+                from evidenceforge.generation.activity.network import FORWARD_DNS
+
+                # Filter to domains whose IPs are in the activity type's pool
+                web_ips = set(EXTERNAL_IPS[activity_type])
+                web_domains = [d for d, ip in FORWARD_DNS.items() if ip in web_ips]
+                if web_domains:
+                    domain = rng.choice(web_domains)
+                    dst_ip = FORWARD_DNS[domain]
+                else:
+                    dst_ip = rng.choice(EXTERNAL_IPS[activity_type])
             else:
                 available_destinations = [
                     ip for ip in EXTERNAL_IPS[activity_type] if ip != system.ip
@@ -3646,9 +3640,13 @@ class ActivityGenerator:
         server_addr: str = "10.0.0.1",
         lease_time: float = 3600.0,
         uid: str = "",
+        msg_types: list[str] | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         from evidenceforge.events.contexts import DhcpContext
+
+        if msg_types is None:
+            msg_types = ["DISCOVER", "OFFER", "REQUEST", "ACK"]
 
         event = SecurityEvent(
             timestamp=time,
@@ -3662,7 +3660,7 @@ class ActivityGenerator:
                 assigned_addr=system.ip,
                 lease_time=lease_time,
                 uids=[uid] if uid else [],
-                msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+                msg_types=msg_types,
                 duration=_get_rng().uniform(0.01, 0.5),
             ),
         )
@@ -3920,15 +3918,17 @@ class ActivityGenerator:
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
 
-    def _lookup_process_name(self, hostname: str, pid: int) -> str:
+    def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.
 
-        Falls back to explorer.exe for user processes if PID not tracked.
+        Falls back to an OS-appropriate shell if PID not tracked.
         """
         key = (hostname, pid)
         proc = self.state_manager.state.running_processes.get(key)
         if proc:
             return proc.image
+        if os_category == "linux":
+            return "/usr/bin/bash"
         return r"C:\Windows\explorer.exe"
 
     # Process names that can spawn child processes
@@ -4322,7 +4322,9 @@ class ActivityGenerator:
                     username=user.username,
                     integrity_level="Medium",
                     logon_id=logon_id,
-                    parent_image=self._lookup_process_name(system.hostname, grandparent_pid),
+                    parent_image=self._lookup_process_name(
+                        system.hostname, grandparent_pid, _get_os_category(system.os)
+                    ),
                     parent_command_line=self._lookup_parent_command_line(
                         system.hostname, grandparent_pid
                     ),

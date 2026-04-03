@@ -1,0 +1,181 @@
+# Per-role bash command vocabularies for realistic bash_history generation.
+# The generator picks commands based on user persona + server role.
+# {placeholder} tokens are resolved at generation time from the params section.
+#
+# Follows the same data-driven pattern as spawn_rules.yaml.
+
+common:
+  - "pwd"
+  - "ls"
+  - "ls -la"
+  - "ls -lh"
+  - "ls /tmp"
+  - "ls /var/log"
+  - "cd /var/log"
+  - "cd /tmp"
+  - "cd ~"
+  - "cd -"
+  - "id"
+  - "w"
+  - "whoami"
+  - "uname -a"
+  - "uptime"
+  - "df -h"
+  - "free -m"
+  - "ps aux"
+  - "ps aux | grep {service}"
+  - "clear"
+  - "hostname -f"
+  - "hostname"
+  - "date"
+  - "history"
+  - "cat /etc/hostname"
+  - "cat /etc/os-release"
+  - "ll"
+  - "exit"
+
+sysadmin:
+  - "systemctl status sshd"
+  - "systemctl status {service}"
+  - "systemctl restart {service}"
+  - "systemctl list-units --failed"
+  - "journalctl -u sshd --since '1 hour ago'"
+  - "journalctl -u {service} -n {n}"
+  - "tail -{n} /var/log/auth.log"
+  - "tail -{n} /var/log/syslog"
+  - "tail -f /var/log/syslog"
+  - "grep -i error /var/log/syslog | tail -{n}"
+  - "grep -i 'failed password' /var/log/auth.log | wc -l"
+  - "ss -tulnp"
+  - "netstat -an | grep ESTABLISHED | wc -l"
+  - "top -bn1 | head -20"
+  - "htop"
+  - "iostat -x 1 3"
+  - "vmstat 1 5"
+  - "du -sh /var/log/*"
+  - "du -sh /tmp/*"
+  - "last -20"
+  - "who"
+  - "iptables -L -n"
+  - "cat /etc/fstab"
+  - "mount | column -t"
+  - "dmesg | tail -30"
+  - "apt list --upgradable 2>/dev/null"
+  - "yum check-update 2>/dev/null"
+  - "cat /proc/meminfo | head -5"
+  - "lsblk"
+  - "ip addr show"
+  - "ip route"
+
+dba:
+  - "mysql -u root -p -e 'SHOW DATABASES'"
+  - "mysql -u root -p -e 'SHOW PROCESSLIST'"
+  - "mysql -u root -p -e 'SHOW SLAVE STATUS\\G'"
+  - "mysql -u root -p -e 'SELECT COUNT(*) FROM {db}.users'"
+  - "mysqldump --single-transaction --routines {db} > /tmp/{db}_backup.sql"
+  - "mytop"
+  - "pt-query-digest /var/log/mysql/slow.log | head -50"
+  - "tail -{n} /var/log/mysql/error.log"
+  - "tail -f /var/log/mysql/error.log"
+  - "ls -la /var/lib/mysql/"
+  - "du -sh /var/lib/mysql/*"
+  - "psql -c '\\l'"
+  - "psql -c 'SELECT pg_size_pretty(pg_database_size(current_database()))'"
+  - "pg_isready"
+  - "cat /etc/mysql/my.cnf | grep -v '^#'"
+  - "mysql -u root -p -e 'SHOW VARIABLES LIKE \"max_connections\"'"
+  - "mysql -u root -p -e 'SHOW GLOBAL STATUS LIKE \"Threads_connected\"'"
+
+webadmin:
+  - "tail -f /var/log/apache2/access.log"
+  - "tail -{n} /var/log/nginx/error.log"
+  - "tail -{n} /var/log/nginx/access.log"
+  - "tail -f /var/log/apache2/error.log"
+  - "curl -s -o /dev/null -w '%{http_code}' http://localhost"
+  - "curl -sI https://localhost"
+  - "curl -s http://localhost/health"
+  - "certbot certificates"
+  - "certbot renew --dry-run"
+  - "apachectl configtest"
+  - "nginx -t"
+  - "systemctl reload nginx"
+  - "systemctl reload apache2"
+  - "ls -la /var/www/html/"
+  - "cat /etc/nginx/sites-enabled/default"
+  - "cat /etc/apache2/sites-enabled/000-default.conf"
+  - "openssl s_client -connect localhost:443 </dev/null 2>/dev/null | openssl x509 -noout -dates"
+  - "ab -n 100 -c 10 http://localhost/"
+  - "wc -l /var/log/apache2/access.log"
+
+developer:
+  - "git status"
+  - "git log --oneline -10"
+  - "git pull origin main"
+  - "git diff --stat"
+  - "git branch -a"
+  - "git stash list"
+  - "docker ps"
+  - "docker ps -a"
+  - "docker logs --tail 50 {container}"
+  - "docker compose up -d"
+  - "docker compose logs -f --tail 20"
+  - "docker images"
+  - "npm run build"
+  - "npm test"
+  - "npm install"
+  - "make clean && make"
+  - "make test"
+  - "python3 -m pytest -v"
+  - "pip install -r requirements.txt"
+  - "pip freeze | grep {package}"
+  - "vim {config_file}"
+  - "nano {config_file}"
+  - "grep -r 'TODO' src/"
+  - "grep -rn 'FIXME' ."
+  - "tail -f /var/log/app/application.log"
+  - "cat {config_file}"
+  - "env | grep -i path"
+
+security:
+  - "tail -500 /var/log/auth.log | grep 'Failed'"
+  - "tail -{n} /var/log/auth.log | grep 'Accepted'"
+  - "journalctl -u auditd --since '4 hours ago'"
+  - "ausearch -m avc --start today"
+  - "aureport --summary"
+  - "aureport --auth --summary"
+  - "grep -i 'accepted publickey' /var/log/auth.log | tail -20"
+  - "last -20"
+  - "lastb -20"
+  - "lastlog | grep -v 'Never'"
+  - "fail2ban-client status sshd"
+  - "fail2ban-client status"
+  - "ss -tulnp"
+  - "netstat -an | grep -c ESTABLISHED"
+  - "find /tmp -type f -newer /etc/passwd -ls"
+  - "find / -perm -4000 -ls 2>/dev/null"
+  - "rpm -Va 2>/dev/null | head -20"
+  - "cat /var/log/fail2ban.log | tail -30"
+  - "awk '{print $1}' /var/log/auth.log | sort | uniq -c | sort -rn | head -10"
+
+typos:
+  - ["ls", "sl"]
+  - ["cd ..", "cd.."]
+  - ["cat", "cta"]
+  - ["grep", "grpe"]
+  - ["systemctl", "systemclt"]
+  - ["docker", "docekr"]
+  - ["git", "gti"]
+  - ["history", "histroy"]
+  - ["clear", "claer"]
+  - ["tail", "tial"]
+  - ["vim", "vmi"]
+  - ["sudo", "suod"]
+
+# Placeholder pools for template resolution
+params:
+  service: ["cron", "nginx", "apache2", "mysql", "docker", "redis", "postgresql", "sshd", "postfix"]
+  n: ["20", "50", "100", "200"]
+  db: ["mydb", "production", "appdb", "analytics", "wordpress"]
+  container: ["app", "web", "api", "worker", "redis", "postgres", "nginx"]
+  config_file: ["config.yaml", "docker-compose.yml", ".env", "nginx.conf", "settings.py", "Makefile"]
+  package: ["django", "flask", "requests", "numpy", "pandas", "sqlalchemy"]

@@ -155,18 +155,26 @@ class TestBaselineLinuxBashHistory:
             "ActivityGenerator should have generate_bash_command"
         )
 
-    def test_organic_bash_commands_are_realistic(self):
-        """The organic command pool should contain common admin commands."""
-        from evidenceforge.generation.activity.generator import _ORGANIC_BASH_COMMANDS
+    def test_bash_command_pools_are_realistic(self):
+        """The bash command YAML should contain common admin commands per role."""
+        from evidenceforge.generation.activity.bash_commands import load_bash_commands
 
-        assert len(_ORGANIC_BASH_COMMANDS) >= 10, (
-            f"Organic command pool has only {len(_ORGANIC_BASH_COMMANDS)} commands"
-        )
-        # Should include common admin commands
-        pool_str = " ".join(_ORGANIC_BASH_COMMANDS)
+        commands = load_bash_commands()
+        common = commands.get("common", [])
+        assert len(common) >= 10, f"Common command pool has only {len(common)} commands"
+        pool_str = " ".join(common)
         assert "ls" in pool_str
         assert "df" in pool_str
         assert "ps" in pool_str
+
+        # Role-specific pools should exist and be non-empty
+        for role in ("sysadmin", "dba", "webadmin", "developer", "security"):
+            pool = commands.get(role, [])
+            assert len(pool) >= 5, f"{role} command pool has only {len(pool)} commands"
+
+        # Typos should exist
+        typos = commands.get("typos", [])
+        assert len(typos) >= 5, f"Typo pool has only {len(typos)} entries"
 
 
 class TestBashHistoryChronological:

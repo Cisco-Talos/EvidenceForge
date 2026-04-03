@@ -317,6 +317,10 @@ class BaselineMixin:
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
         logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
 
+        # Emit initial DHCP leases (during warm-up they're suppressed from output
+        # but establish lease state for periodic renewals)
+        self._emit_dhcp_leases()
+
         # --- Warm-up phase: pre-populate state without emitting ---
         warmup_hours = math.ceil(self.warmup_duration.total_seconds() / 3600)
         if warmup_hours > 0:
@@ -355,7 +359,6 @@ class BaselineMixin:
 
         # --- Real baseline: emit sensor startup and begin output ---
         self._emit_sensor_startup()
-        self._emit_dhcp_leases()
 
         total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
         current_hour = self.start_time
@@ -1610,6 +1613,69 @@ class BaselineMixin:
                 user=user, system=system, time=t, activity_type=activity_type
             )
 
+    def _get_server_ssh_users(self, system) -> list:
+        """Return the subset of admin users who would SSH into this server.
+
+        Sysadmins access all servers. Other personas are added based on
+        server role (determined from services and hostname). Workstations
+        return only their assigned user. Results are cached per hostname.
+        """
+        if not hasattr(self, "_ssh_user_roster_cache"):
+            self._ssh_user_roster_cache: dict[str, list] = {}
+        if system.hostname in self._ssh_user_roster_cache:
+            return self._ssh_user_roster_cache[system.hostname]
+
+        from evidenceforge.generation.activity.bash_commands import _resolve_server_role
+
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+
+        # Workstations: only the assigned user
+        if system.type == "workstation" and system.assigned_user:
+            roster = [u for u in enabled_users if u.username == system.assigned_user]
+            self._ssh_user_roster_cache[system.hostname] = roster
+            return roster
+
+        # Servers: sysadmins always, plus role-specific personas
+        admin_personas = {"sysadmin", "help_desk"}
+        sysadmins = [u for u in enabled_users if (u.persona or "").lower() in admin_personas]
+
+        server_role = _resolve_server_role(system.hostname, system.services)
+        role_personas: set[str] = set()
+        if server_role == "db":
+            role_personas = {"developer", "data_analyst", "analyst"}
+        elif server_role == "web":
+            role_personas = {"developer"}
+        elif server_role == "log":
+            role_personas = {"security_analyst"}
+
+        role_users = [u for u in enabled_users if (u.persona or "").lower() in role_personas]
+
+        # Deduplicate by username, preserving order
+        seen = set()
+        roster = []
+        for u in sysadmins + role_users:
+            if u.username not in seen:
+                seen.add(u.username)
+                roster.append(u)
+
+        # Fallback: at least 2 admin users
+        if len(roster) < 2:
+            all_admins = [
+                u
+                for u in enabled_users
+                if (u.persona or "").lower()
+                in ("sysadmin", "help_desk", "developer", "security_analyst")
+            ]
+            for u in all_admins:
+                if u.username not in seen:
+                    seen.add(u.username)
+                    roster.append(u)
+                if len(roster) >= 2:
+                    break
+
+        self._ssh_user_roster_cache[system.hostname] = roster
+        return roster
+
     def _generate_system_traffic(self, current_hour: datetime) -> None:
         """Generate system-initiated background traffic for all systems.
 
@@ -1703,6 +1769,30 @@ class BaselineMixin:
                     source_system=system,
                     pid=ntp_pid,
                 )
+
+            # DHCP lease renewal at T/2 of lease duration
+            dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
+            if dhcp_state and "zeek_dhcp" in self.emitters:
+                lease_time = dhcp_state["lease_time"]
+                renewal_interval = lease_time / 2  # Renew at T/2
+                last_renewal = dhcp_state["last_renewal"]
+                hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
+                # Check if a renewal falls within this hour
+                next_renewal = last_renewal + renewal_interval
+                if next_renewal < hour_end_epoch:
+                    from evidenceforge.utils.ids import generate_zeek_uid
+
+                    renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
+                    self.state_manager.set_current_time(renewal_ts)
+                    self.activity_generator.generate_dhcp_lease(
+                        system=dhcp_state["system"],
+                        time=renewal_ts,
+                        mac=dhcp_state["mac"],
+                        lease_time=lease_time,
+                        uid=generate_zeek_uid("C"),
+                        msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
+                    )
+                    dhcp_state["last_renewal"] = next_renewal
 
             # SMB browsing: Windows workstations only
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
@@ -2037,28 +2127,32 @@ class BaselineMixin:
                         )
 
                         # Generate bash history for the admin who SSH'd in.
-                        # Pick a realistic admin user (sysadmin/help_desk persona,
-                        # or root if no admin users found).
-                        from evidenceforge.generation.activity.generator import (
-                            _ORGANIC_BASH_COMMANDS,
+                        # User roster is role-based: sysadmins on all servers,
+                        # role-specific users on matching servers.
+                        from evidenceforge.generation.activity.bash_commands import (
+                            pick_bash_command,
                         )
 
-                        _users = [u for u in self.scenario.environment.users if u.enabled]
-                        admin_candidates = [
-                            u
-                            for u in _users
-                            if (u.persona or "").lower()
-                            in ("sysadmin", "help_desk", "developer", "security_analyst")
-                        ]
-                        if not admin_candidates:
-                            admin_candidates = _users[:1]
-                        if admin_candidates:
-                            ssh_user = rng.choice(admin_candidates)
-                            n_cmds = rng.randint(2, 6)
+                        roster = self._get_server_ssh_users(system)
+                        if roster:
+                            ssh_user = rng.choice(roster)
+                            # Vary command count by persona
+                            persona_lower = (ssh_user.persona or "").lower()
+                            if persona_lower == "sysadmin":
+                                n_cmds = rng.randint(3, 8)
+                            elif persona_lower == "developer":
+                                n_cmds = rng.randint(2, 6)
+                            else:
+                                n_cmds = rng.randint(1, 4)
                             for cmd_i in range(n_cmds):
                                 cmd_offset = rng.randint(30, 600)
                                 cmd_time = ts + timedelta(seconds=cmd_offset + cmd_i * 5)
-                                cmd = rng.choice(_ORGANIC_BASH_COMMANDS)
+                                cmd = pick_bash_command(
+                                    rng,
+                                    ssh_user.persona or "",
+                                    system.hostname,
+                                    system.services,
+                                )
                                 self.activity_generator.generate_bash_command(
                                     ssh_user, system, cmd_time, cmd
                                 )

@@ -187,7 +187,7 @@ REVERSE_DNS: dict[str, str] = {
     "204.79.197.200": "www.bing.com",
     "13.107.246.40": "teams.microsoft.com",
     # Other
-    "93.184.216.34": "www.reuters.com",
+    "93.184.216.34": "www.example.com",
     "31.13.65.36": "www.facebook.com",
     "44.238.149.75": "stackoverflow.com",
     "199.232.64.133": "registry.npmjs.org",
@@ -239,6 +239,10 @@ REVERSE_DNS: dict[str, str] = {
     "10.0.100.11": "db-replica.corp.local",
     "10.0.100.12": "db-analytics.corp.local",
 }
+
+# Forward DNS: domain → IP (inverse of REVERSE_DNS, for domain-first connection selection)
+# Used by baseline web/SaaS activity to pick a domain first, then resolve to an IP.
+FORWARD_DNS: dict[str, str] = {v: k for k, v in REVERSE_DNS.items()}
 
 # Cloud/CDN IP ranges for random long-tail destination generation
 _CDN_RANGES = [

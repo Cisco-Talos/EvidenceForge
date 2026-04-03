@@ -60,8 +60,7 @@ class TimeWindow(BaseModel):
         duration: Duration string like "10h", "3d", "2h30m" (mutually exclusive with end)
         warmup: Warm-up duration before start for state pre-population (default "8h").
             Events generated during warm-up populate DNS cache, process trees, sessions,
-            and other internal state but are NOT written to output files. Set to "0s"
-            to disable.
+            and other internal state but are NOT written to output files. Minimum 1 hour.
     """
 
     start: datetime = Field(..., description="Start time (ISO 8601 UTC)")
@@ -69,8 +68,8 @@ class TimeWindow(BaseModel):
     duration: str | None = Field(None, description="Duration string (e.g., '10h', '3d')")
     warmup: str | None = Field(
         default="8h",
-        description="Warm-up duration before start for state pre-population (e.g., '8h', '30m'). "
-        "Set to '0s' to disable.",
+        description="Warm-up duration before start for state pre-population (e.g., '8h', '2h'). "
+        "Minimum 1 hour.",
     )
 
     @field_validator("duration")
@@ -94,13 +93,23 @@ class TimeWindow(BaseModel):
     @field_validator("warmup")
     @classmethod
     def validate_warmup_format(cls, v: str | None) -> str | None:
-        """Validate warmup format matches same pattern as duration."""
+        """Validate warmup format and enforce minimum 1 hour."""
         if v is None:
             return None
         if not re.match(r"^(\d+(ms|[hdms]))+$", v):
             raise ValueError(
-                "warmup must match pattern like '8h', '30m', '1h30m' "
+                "warmup must match pattern like '8h', '2h', '1h30m' "
                 "(digits followed by d/h/m/s/ms units)"
+            )
+        # Enforce minimum 1 hour — warm-up is essential for realistic output
+        from evidenceforge.utils.time import parse_duration
+
+        duration = parse_duration(v)
+        if duration.total_seconds() < 3600:
+            raise ValueError(
+                f"warmup must be at least 1 hour (got '{v}'). "
+                "Warm-up pre-populates DNS cache, process trees, and sessions "
+                "needed for realistic output."
             )
         return v
 

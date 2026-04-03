@@ -218,10 +218,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         warmup_str = self.scenario.time_window.warmup
         if warmup_str:
             raw_duration = parse_duration(warmup_str)
-            warmup_hours = math.ceil(raw_duration.total_seconds() / 3600)
+            warmup_hours = max(1, math.ceil(raw_duration.total_seconds() / 3600))
             self.warmup_duration = timedelta(hours=warmup_hours)
         else:
-            self.warmup_duration = timedelta(0)
+            # Default: 8 hours if not specified (warmup is always on)
+            self.warmup_duration = timedelta(hours=8)
         self.warmup_start_time = self.start_time - self.warmup_duration
         # Epoch for periodic schedules (DNS, SMB) — covers warm-up + real window
         self._generation_epoch = self.warmup_start_time

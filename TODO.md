@@ -155,7 +155,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Inconsistent sensor coverage for SSH pivot
 
 **DNS:**
-- [ ] DNS IP pool reuse: 15+ unrelated SaaS domains resolve to same IP (need per-domain IP assignment)
+- [x] DNS IP pool reuse: 15+ unrelated SaaS domains resolve to same IP — switched to domain-first selection for baseline web/SaaS; FORWARD_DNS maps domain→IP; fixed 93.184.216.34 mapping (was Reuters, now example.com)
 - [ ] DNS AAAA records: unrelated services share IPv6 prefix (cross-provider)
 - [ ] CloudFront distributions resolve to Microsoft IP ranges (cross-provider)
 - [ ] No TXT queries (SPF/DKIM/DMARC checks)
@@ -224,7 +224,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
 - [ ] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — paths need hostname-aware selection
 - [ ] Proxy lacks session depth — 1 request per site, no cascading subresource loads (CSS/JS/images/API)
-- [ ] DHCP shows full discovery instead of renewals in mid-scenario windows
+- [x] DHCP shows full discovery instead of renewals in mid-scenario windows — initial leases emitted during warm-up (suppressed); periodic REQUEST/ACK renewals at T/2 in _generate_system_traffic()
 
 **Cisco ASA:**
 - [ ] ASA Built/Teardown counts perfectly balanced — real logs have orphans from log rotation boundaries
@@ -245,12 +245,12 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Encoded PowerShell baseline noise identical across hosts (same Get-Service blob) — needs per-host variation
 - [ ] Workstation connection counts suspiciously uniform (808-1068 range) — Hawkes process variance too narrow
 - [ ] Uniform log file sets across all hosts (every workstation has identical format coverage)
-- [ ] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.)
+- [x] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.) — domain-first selection ensures consistent domain→IP mapping via FORWARD_DNS
 - [ ] AWS region mismatch between DNS PTR and SSL SNI for same IP
 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()
-- [ ] Bash history still lacks typos, repeated commands, tab-completion artifacts
+- [x] Bash history still lacks typos, repeated commands, tab-completion artifacts — bash_commands.yaml with per-role command vocabularies (sysadmin/dba/webadmin/developer/security), template parameterization, 5% typo rate; per-server RBAC user rosters via _get_server_ssh_users()
 - [ ] Baseline generates IPs outside defined network segments
 - [ ] Parsability at ~95% (5% records fail structure validation)
 

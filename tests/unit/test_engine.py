@@ -416,7 +416,7 @@ class TestGenerationEngine:
                     System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
                 ],
             ),
-            time_window=TimeWindow(start="2024-01-15T10:00:00Z", duration="2h", warmup="30m"),
+            time_window=TimeWindow(start="2024-01-15T10:00:00Z", duration="2h", warmup="1h30m"),
             baseline_activity=BaselineActivity(
                 description="Test baseline", intensity="medium", variation="low"
             ),
@@ -431,9 +431,9 @@ class TestGenerationEngine:
         engine = GenerationEngine(scenario, tmp_path)
         engine._initialize()
 
-        # 30m snaps up to 1h: warmup_start = 10:00 - 1h = 09:00
-        assert engine.warmup_start_time == datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
-        assert engine.warmup_duration == timedelta(hours=1)
+        # 1h30m snaps up to 2h: warmup_start = 10:00 - 2h = 08:00
+        assert engine.warmup_start_time == datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        assert engine.warmup_duration == timedelta(hours=2)
         # generation_epoch matches warmup_start_time
         assert engine._generation_epoch == engine.warmup_start_time
 
