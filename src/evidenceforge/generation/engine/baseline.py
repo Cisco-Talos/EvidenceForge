@@ -1986,6 +1986,33 @@ class BaselineMixin:
                             source_system=src_sys_obj,
                         )
 
+                        # Generate bash history for the admin who SSH'd in.
+                        # Pick a realistic admin user (sysadmin/help_desk persona,
+                        # or root if no admin users found).
+                        from evidenceforge.generation.activity.generator import (
+                            _ORGANIC_BASH_COMMANDS,
+                        )
+
+                        _users = [u for u in self.scenario.environment.users if u.enabled]
+                        admin_candidates = [
+                            u
+                            for u in _users
+                            if (u.persona or "").lower()
+                            in ("sysadmin", "help_desk", "developer", "security_analyst")
+                        ]
+                        if not admin_candidates:
+                            admin_candidates = _users[:1]
+                        if admin_candidates:
+                            ssh_user = rng.choice(admin_candidates)
+                            n_cmds = rng.randint(2, 6)
+                            for cmd_i in range(n_cmds):
+                                cmd_offset = rng.randint(30, 600)
+                                cmd_time = ts + timedelta(seconds=cmd_offset + cmd_i * 5)
+                                cmd = rng.choice(_ORGANIC_BASH_COMMANDS)
+                                self.activity_generator.generate_bash_command(
+                                    ssh_user, system, cmd_time, cmd
+                                )
+
         # RDP: IT admin connections to Windows servers/DCs
         for system in self.scenario.environment.systems:
             os_cat_rdp = _get_os_category(system.os)

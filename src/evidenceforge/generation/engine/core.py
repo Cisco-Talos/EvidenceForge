@@ -260,6 +260,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         # Build IP->System lookup for HostContext resolution on connection events
         self.activity_generator._ip_to_system = {s.ip: s for s in self.scenario.environment.systems}
+        # Set scenario start time for pre-existing process chain logic
+        self.activity_generator._scenario_start_time = self.start_time
         logger.info("Initialized activity generator")
 
         # Set initial state manager time
