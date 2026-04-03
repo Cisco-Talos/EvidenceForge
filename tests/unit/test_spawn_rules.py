@@ -345,3 +345,87 @@ class TestChainDepthLimit:
             f"Process chain depth is {depth}, expected ≤ 10 "
             f"(seeded system tree + up to 3 auto-created levels)"
         )
+
+
+class TestDualSessionParentSelection:
+    """When a user has both interactive and network sessions, parent selection
+    must use the correct session's logon type."""
+
+    def test_network_logon_gets_services_parent_when_interactive_exists(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """With both type 2 and type 3 sessions, type 3 processes should parent
+        from services.exe, not explorer.exe.
+
+        Bug: _resolve_parent() grabbed the first session for (user, system)
+        regardless of logon_id, so type 3 processes used the interactive
+        session and got explorer as parent.
+        """
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        # Create type 2 (interactive) session first — must exist to trigger the bug
+        ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 10, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+
+        # Create type 3 (network) session for same user on same system
+        network_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=3,
+        )
+
+        # Resolve parent for a process under the NETWORK logon
+        parent_pid = ag._resolve_parent(
+            win_system,
+            user,
+            datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC),
+            network_logon_id,
+            r"C:\Windows\System32\cmd.exe",
+        )
+        parent_proc = state_manager.get_process(win_system.hostname, parent_pid)
+
+        assert parent_proc is not None
+        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].lower()
+        assert parent_exe in ("services.exe", "svchost.exe"), (
+            f"Network logon (type 3) process should parent from services/svchost, "
+            f"got {parent_proc.image}. The interactive session's explorer was "
+            f"incorrectly selected."
+        )
+
+    def test_interactive_logon_still_gets_explorer_when_network_exists(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """With both sessions, type 2 processes should still parent from explorer."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        interactive_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 10, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        _network_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=3,
+        )
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            user,
+            datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC),
+            interactive_logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        )
+        parent_proc = state_manager.get_process(win_system.hostname, parent_pid)
+
+        assert parent_proc is not None
+        assert "explorer.exe" in parent_proc.image.lower(), (
+            f"Interactive logon process should parent from explorer, got {parent_proc.image}"
+        )

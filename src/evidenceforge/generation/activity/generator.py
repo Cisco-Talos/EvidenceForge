@@ -4125,9 +4125,20 @@ class ActivityGenerator:
             return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        active_session = (
-            next((s for s in sessions if s.system == system.hostname), None) if sessions else None
-        )
+        # Match by logon_id when available to avoid picking the wrong session
+        # when a user has both interactive (type 2) and network (type 3) sessions
+        # on the same host.
+        if logon_id and sessions:
+            active_session = next(
+                (s for s in sessions if s.system == system.hostname and s.logon_id == logon_id),
+                None,
+            )
+        else:
+            active_session = (
+                next((s for s in sessions if s.system == system.hostname), None)
+                if sessions
+                else None
+            )
         is_network_logon = active_session and active_session.logon_type == 3
         if is_network_logon:
             return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))

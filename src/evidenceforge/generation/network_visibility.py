@@ -382,8 +382,8 @@ class NetworkVisibilityEngine:
                         )
 
                 elif rule.type == "static":
-                    # Outbound static: src_ip is the real_ip
-                    if rule.real_ip and src_ip == rule.real_ip:
+                    # Outbound static: src_ip is the real_ip, dst must be external
+                    if rule.real_ip and src_ip == rule.real_ip and not dst_segments:
                         return NatContext(
                             nat_type="static",
                             mapped_src_ip=rule.mapped_ip,
