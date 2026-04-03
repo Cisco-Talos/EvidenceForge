@@ -417,6 +417,12 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
+**Rule-based process trees:** Parent-child relationships are defined in `src/evidenceforge/generation/activity/spawn_rules.yaml` — a data-driven mapping of which processes can spawn which children, with command-line templates, lifetime metadata (long/short), and spawn delay ranges. The `_resolve_parent()` method on ActivityGenerator transparently finds an existing valid parent from the user's process history or auto-creates intermediate chains (e.g., explorer→powershell→dotnet.exe) with realistic backward timing. Long-lived parents created early in the scenario (first 30 minutes) have a 70% chance of being registered as pre-existing (no Sysmon Event 1 emitted). Depth is limited to 3 auto-created levels. Falls back to legacy `_select_parent_pid()` for processes not in the rules. `ProcessContext.parent_command_line` is populated from the parent process's StateManager entry.
+
+**PID allocation diversity:** PIDs use a lognormal distribution for gap sizes (Windows: `lognormvariate(1.2, 0.8)` in multiples of 4; Linux: `lognormvariate(0.5, 0.6)`), producing a heavy-tailed gap distribution with no fixed-set fingerprint. Wraparound at 65536 skips PIDs still held by running processes.
+
+**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events inject 0-3 organic noise commands (pwd, ls, id, w, df -h, etc.) around each attack command via `generate_bash_command_with_noise()`.
+
 ### Key Patterns
 
 **Thread-local RNG:** Each generation thread gets a `random.Random` instance seeded by `hash((thread_id, 42))`. This ensures reproducibility while enabling concurrent generation without GIL contention.

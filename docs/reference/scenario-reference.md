@@ -385,6 +385,12 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Command diversification:** Baseline process commands are parameterized with varied project paths, document names, build configurations, and per-user file references instead of fixed strings.
 
+**Realistic process trees:** Parent-child relationships are driven by `spawn_rules.yaml`, which defines valid parent processes for each child executable. CLI tools (dotnet.exe, git.exe, npm.exe, etc.) are parented from shells (cmd.exe, powershell.exe), GUI apps from explorer.exe, and system services from services.exe/svchost.exe. When a valid parent doesn't exist in the user's process history, the engine auto-creates the intermediate chain with realistic timing. Linux processes follow sshd→bash→command chains. Sysmon Event 1 `ParentCommandLine` is populated from the parent process's actual command line (no longer always "-").
+
+**PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
+
+**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving.
+
 ### DHCP Lease Events
 
 Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attacker plugging in a device during physical access, or a compromised host requesting a new IP).

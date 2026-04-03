@@ -133,7 +133,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓² Lsass ProcessAccess GrantedAccess hardcoded to 0x1010 for Mimikatz — changed to 0x1FFFFF (PROCESS_ALL_ACCESS) in causal expansion rule
 - [x] ✓² Benign lsass accessors limited to MsMpEng + svchost — added csrss.exe, svchost (netsvcs), services.exe as additional baseline lsass accessors
 - [ ] Sysmon Event 3 (NetworkConnect), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) not yet implemented
-- [ ] ParentCommandLine always "-"
+- [x] ✓³ ParentCommandLine always "-" — added parent_command_line to ProcessContext; populated via _lookup_parent_command_line() from StateManager
 - [ ] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — real environments show 10-20+ distinct masks from AV, EDR, WMI, etc.
 - [ ] CallTrace offsets limited to 2 patterns — need diverse ntdll/KERNELBASE offsets per call path
 - [ ] Sysmon EventRecordIDs perfectly sequential (no gaps) — real systems drop events under load
@@ -206,10 +206,10 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY"
 
 **Process Trees:**
-- [ ] explorer.exe parent for everything — developers spawn from cmd/powershell/terminal, not explorer; services.exe/svchost parent tree not modeled for services
+- [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)
+- [x] ✓³ PID allocation monotonic with uniform stride (~4) — replaced choice list with lognormal distribution (Windows mu=1.2 sigma=0.8; Linux mu=0.5 sigma=0.6); PID wraparound skips allocated PIDs
 - [ ] explorer.exe parent for RDP sessions (should be per-session userinit→explorer)
 - [ ] All Linux user processes share same ppid
-- [ ] PID allocation monotonic with uniform stride (~4) — real Windows shows larger gaps, reuse, non-monotonic assignment
 - [ ] Human Burstiness at 56/100 — events too uniformly distributed, need more clustering/idle
 - [ ] Mimikatz at Medium integrity would succeed in scenario but fail in reality — generator doesn't model integrity levels
 
@@ -249,7 +249,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] AWS region mismatch between DNS PTR and SSL SNI for same IP
 
 **Other:**
-- [ ] Bash history too sparse/clean for SSH session duration — no typos, no repeated commands, no tab-completion artifacts despite added organic commands
+- [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()
+- [ ] Bash history still lacks typos, repeated commands, tab-completion artifacts
 - [ ] Baseline generates IPs outside defined network segments
 - [ ] Parsability at ~95% (5% records fail structure validation)
 

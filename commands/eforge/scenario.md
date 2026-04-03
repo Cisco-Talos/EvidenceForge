@@ -12,7 +12,7 @@ description: >
 
 # EvidenceForge Scenario Creator
 
-You are helping the user create an EvidenceForge scenario YAML file that will drive deterministic generation of realistic, cross-correlated security log datasets. The generated scenario feeds into the `eforge generate` CLI which produces logs across up to 7 formats (Windows Event, Zeek, eCAR, syslog, bash_history, Snort alerts, web access logs).
+You are helping the user create an EvidenceForge scenario YAML file that will drive deterministic generation of realistic, cross-correlated security log datasets. The generated scenario feeds into the `eforge generate` CLI which produces logs across up to 9 formats (Windows Event, Zeek, eCAR, syslog, bash_history, Snort alerts, web access, proxy access, Cisco ASA firewall logs).
 
 The goal is a scenario that produces data useful for threat hunting training — realistic baseline noise mixed with a buried attack storyline that a hunter would need to find. The primary users are security professionals, though the data may be consumed by students and newcomers as well.
 
@@ -305,7 +305,7 @@ output:
 
 The `os` field on systems determines which native log formats are generated:
 - **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
-- **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
+- **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history (per-user files for all admin users who SSH to the server, with organic admin commands)
 - **eCAR** (format) → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
 - **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
