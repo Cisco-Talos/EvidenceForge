@@ -513,6 +513,7 @@ class ActivityGenerator:
             command_line=kwargs.get("command_line"),
             process_name=kwargs.get("process_name"),
             os_category=kwargs.get("os_category"),
+            hostname=kwargs.get("hostname"),
             source_system=kwargs.get("source_system"),
             target_system=kwargs.get("target_system"),
             actor=kwargs.get("actor"),
@@ -1207,6 +1208,7 @@ class ActivityGenerator:
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         firewall: FirewallContext | None = None,
+        hostname: str | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1238,6 +1240,14 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
+        # Resolve hostname ONCE for DNS/SNI/proxy consistency.
+        # All downstream uses (causal DNS expansion, SSL SNI, proxy hostname)
+        # share this single resolved value instead of doing independent lookups.
+        if not hostname:
+            hostname = REVERSE_DNS.get(dst_ip)
+        if not hostname and emit_dns and proto == "tcp" and dst_port not in (53,):
+            hostname = _generate_random_hostname(_get_rng(), dst_ip)
+
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         if emit_dns and proto == "tcp" and dst_port not in (53,):
@@ -1249,6 +1259,7 @@ class ActivityGenerator:
                 dst_port=dst_port,
                 proto=proto,
                 service=service,
+                hostname=hostname,
             )
 
         # Same-host connections are valid for host-based logs (eCAR FLOW)
@@ -1481,16 +1492,14 @@ class ActivityGenerator:
                 ad_domain = getattr(self, "_ad_domain", "")
                 if ad_domain and "." not in proxy_fqdn:
                     proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
-                # Prefer DNS query domain (from causal expansion) over reverse-DNS
-                # PTR records. Proxy logs should show the domain the user browsed
-                # (e.g., "slack.com"), not the CDN edge hostname.
-                hostname = None
-                if dns is not None and dns.query:
-                    hostname = dns.query
-                if not hostname:
-                    hostname = REVERSE_DNS.get(dst_ip)
-                if not hostname:
-                    hostname = _generate_random_hostname(_get_rng(), dst_ip)
+                # Hostname was resolved once at the top of generate_connection().
+                proxy_hostname = hostname
+                if not proxy_hostname and dns is not None and dns.query:
+                    proxy_hostname = dns.query
+                if not proxy_hostname:
+                    proxy_hostname = REVERSE_DNS.get(dst_ip)
+                if not proxy_hostname:
+                    proxy_hostname = _generate_random_hostname(_get_rng(), dst_ip)
                 schema = "https" if dst_port == 443 else "http"
                 _PROXY_PATHS = [
                     "/",
@@ -1514,7 +1523,7 @@ class ActivityGenerator:
                     "/messages",
                 ]
                 path = _get_rng().choice(_PROXY_PATHS)
-                url = f"{schema}://{hostname}{path}"
+                url = f"{schema}://{proxy_hostname}{path}"
                 # Pick a random user from the scenario (if available)
                 _PROXY_UAS = [
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1555,10 +1564,11 @@ class ActivityGenerator:
         if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
             from evidenceforge.events.contexts import SslContext
 
-            # Prefer DNS query domain over reverse-DNS PTR records for SNI.
-            # Real browsers send the domain they're visiting, not CDN edge hostnames.
-            server_name = None
-            if dns is not None and dns.query:
+            # Hostname was resolved once at the top of generate_connection().
+            # Fall back to DnsContext query or IP-based generation only for
+            # connections that skipped early resolution (no emit_dns, internal).
+            server_name = hostname
+            if not server_name and dns is not None and dns.query:
                 server_name = dns.query
             if not server_name:
                 server_name = REVERSE_DNS.get(dst_ip)
@@ -1590,29 +1600,29 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import X509Context
 
             cert_hash = hashlib.sha256(f"cert_{server_name}".encode()).hexdigest()
-            is_ecdsa = rng.random() < 0.4
-            _ISSUERS = [
-                "CN=R3, O=Let's Encrypt, C=US",
-                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
-                "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
-                "CN=E1, O=Let's Encrypt, C=US",
-                "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
-            ]
-            now_epoch = int(
-                event.timestamp.timestamp()
-            )  # Whole seconds — real x509 certs have no fractional component
+            # Issuer-aware certificate generation from YAML config
+            from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+            issuer_cfg = pick_issuer(rng)
+            key_type, key_length = pick_key_type(rng, issuer_cfg)
+            is_ecdsa = key_type == "ecdsa"
+            now_epoch = int(event.timestamp.timestamp())
+            validity_days = issuer_cfg.get("validity_days", 397)
+            not_before_max = issuer_cfg.get("not_before_max_days", 300)
+            not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
+            remaining_days = validity_days - not_before_days
             event.x509 = X509Context(
                 fingerprint=cert_hash,
                 certificate_version=3,
                 certificate_serial=f"{rng.getrandbits(128):032X}",
                 certificate_subject=f"CN={server_name}",
-                certificate_issuer=rng.choice(_ISSUERS),
-                certificate_not_valid_before=now_epoch - rng.randint(86400, 86400 * 365),
-                certificate_not_valid_after=now_epoch + rng.randint(86400 * 30, 86400 * 365),
+                certificate_issuer=issuer_cfg["name"],
+                certificate_not_valid_before=now_epoch - not_before_days * 86400,
+                certificate_not_valid_after=now_epoch + remaining_days * 86400,
                 certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
                 certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
-                certificate_key_type="ecdsa" if is_ecdsa else "rsa",
-                certificate_key_length=256 if is_ecdsa else rng.choice([2048, 4096]),
+                certificate_key_type=key_type,
+                certificate_key_length=key_length,
                 certificate_exponent="65537" if not is_ecdsa else "",
                 san_dns=[server_name, f"*.{'.'.join(server_name.split('.')[1:])}"]
                 if "." in server_name
@@ -2243,6 +2253,7 @@ class ActivityGenerator:
         src_ip: str,
         dst_ip: str,
         time: datetime,
+        hostname: str | None = None,
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -2254,11 +2265,14 @@ class ActivityGenerator:
             src_ip: IP of the system making the query
             dst_ip: IP that will be resolved (the "answer")
             time: Timestamp of the DNS query (should precede TCP connection)
+            hostname: Explicit domain name to use (bypasses REVERSE_DNS lookup)
         """
         rng = _get_rng()
 
-        # Look up hostname for this IP, or generate one
-        hostname = REVERSE_DNS.get(dst_ip)
+        # Use explicit hostname if provided (domain-first selection),
+        # otherwise fall back to REVERSE_DNS lookup
+        if not hostname:
+            hostname = REVERSE_DNS.get(dst_ip)
         if not hostname:
             if _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
@@ -2765,6 +2779,7 @@ class ActivityGenerator:
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
             rng = _get_rng()
+            conn_hostname = None  # Domain name for DNS/SNI consistency
 
             # Domain-first selection for web/SaaS: pick a domain, resolve to IP.
             # This matches real-world flow (user visits domain → DNS → connection)
@@ -2780,8 +2795,8 @@ class ActivityGenerator:
                 web_ips = set(EXTERNAL_IPS[activity_type])
                 web_domains = [d for d, ip in FORWARD_DNS.items() if ip in web_ips]
                 if web_domains:
-                    domain = rng.choice(web_domains)
-                    dst_ip = FORWARD_DNS[domain]
+                    conn_hostname = rng.choice(web_domains)
+                    dst_ip = FORWARD_DNS[conn_hostname]
                 else:
                     dst_ip = rng.choice(EXTERNAL_IPS[activity_type])
             else:
@@ -2841,6 +2856,7 @@ class ActivityGenerator:
                 duration=duration,
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes,
+                hostname=conn_hostname,
             )
 
     def generate_machine_account_logon(
@@ -2862,6 +2878,7 @@ class ActivityGenerator:
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
 
+        logon_id = f"0x{rng.randint(0x10000, 0xFFFFF):x}"
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
@@ -2869,7 +2886,7 @@ class ActivityGenerator:
             auth=AuthContext(
                 username=machine_username,
                 user_sid=self._get_sid(machine_username),
-                logon_id=f"0x{rng.randint(0x10000, 0xFFFFF):x}",
+                logon_id=logon_id,
                 logon_type=3,
                 auth_package="Kerberos",
                 source_ip=source_ip,
@@ -2883,6 +2900,21 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+        # Paired logoff for short-lived type 3 machine logon (1-30 seconds)
+        logoff_delay = rng.uniform(1.0, 30.0)
+        logoff_event = SecurityEvent(
+            timestamp=time + timedelta(seconds=logoff_delay),
+            event_type="logoff",
+            dst_host=self._build_dc_host_context(dc_hostname),
+            auth=AuthContext(
+                username=machine_username,
+                user_sid=self._get_sid(machine_username),
+                logon_id=logon_id,
+                logon_type=3,
+            ),
+        )
+        self.dispatcher.dispatch(logoff_event)
 
         # Also generate the Kerberos network connection to DC
         self.generate_connection(
@@ -3648,10 +3680,19 @@ class ActivityGenerator:
         if msg_types is None:
             msg_types = ["DISCOVER", "OFFER", "REQUEST", "ACK"]
 
+        from evidenceforge.events.contexts import NetworkContext
+
         event = SecurityEvent(
             timestamp=time,
             event_type="dhcp_lease",
             src_host=self._build_host_context(system),
+            network=NetworkContext(
+                src_ip=system.ip,
+                dst_ip=server_addr,
+                src_port=68,
+                dst_port=67,
+                protocol="udp",
+            ),
             dhcp=DhcpContext(
                 client_addr=system.ip,
                 server_addr=server_addr,

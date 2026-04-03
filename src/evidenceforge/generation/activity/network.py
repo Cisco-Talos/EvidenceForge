@@ -242,7 +242,11 @@ REVERSE_DNS: dict[str, str] = {
 
 # Forward DNS: domain → IP (inverse of REVERSE_DNS, for domain-first connection selection)
 # Used by baseline web/SaaS activity to pick a domain first, then resolve to an IP.
-FORWARD_DNS: dict[str, str] = {v: k for k, v in REVERSE_DNS.items()}
+# Built with a loop to preserve all entries (dict comprehension loses duplicates).
+FORWARD_DNS: dict[str, str] = {}
+for _ip, _domain in REVERSE_DNS.items():
+    if _domain not in FORWARD_DNS:
+        FORWARD_DNS[_domain] = _ip
 
 # Cloud/CDN IP ranges for random long-tail destination generation
 _CDN_RANGES = [

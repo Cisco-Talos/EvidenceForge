@@ -1987,8 +1987,11 @@ class BaselineMixin:
                     ]
                 task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
 
-            for slot_base in [0, 900, 1800, 2700]:
-                offset = slot_base + host_seed + rng.gauss(0, 8) + rng.uniform(0, 3)
+            # Randomize scheduled task count per hour (2-5) with per-host variation
+            num_tasks = rng.randint(2, 5)
+            slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
+            for slot_base in slot_bases:
+                offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)

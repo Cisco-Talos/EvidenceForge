@@ -69,7 +69,7 @@ class StateManager:
     def __init__(self) -> None:
         """Initialize StateManager with empty state."""
         self.state = GeneratorState()
-        self._logon_id_rng = random.Random(42)  # Deterministic RNG for LogonID generation
+        self._logon_id_rngs: dict[str, random.Random] = {}  # Per-host LogonID RNGs
         self._used_logon_ids: set[int] = set()
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
@@ -111,8 +111,14 @@ class StateManager:
                 raise StateError("Cannot create session: current_time not set")
 
             # Generate high-entropy LogonID (real LSASS uses random 32-bit values)
+            # Per-host RNG ensures different hosts produce different LogonID sequences
+            if system not in self._logon_id_rngs:
+                from evidenceforge.utils.rng import _stable_seed
+
+                self._logon_id_rngs[system] = random.Random(_stable_seed(f"logon_ids_{system}"))
+            host_rng = self._logon_id_rngs[system]
             for _ in range(100):
-                val = self._logon_id_rng.randint(0x10000, 0xFFFFFFFF)
+                val = host_rng.randint(0x10000, 0xFFFFFFFF)
                 if val not in self._used_logon_ids and val not in self._reserved_logon_ids:
                     break
             else:

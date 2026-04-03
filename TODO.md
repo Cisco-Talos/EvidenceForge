@@ -167,7 +167,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **TLS/SSL:**
 - [ ] TLSv13 ratio too low for 2024 timeframe
 - [ ] TLS version/cipher suite mismatches
-- [ ] x509 Let's Encrypt certs show 280+ day validity (should be 90)
+- [x] x509 Let's Encrypt certs show 280+ day validity (should be 90) — tls_issuers.yaml with per-issuer validity (LE=90d, DigiCert=397d, etc.); issuer-aware key type selection
 - [ ] No SSL certificate subject/issuer data in ssl.log
 
 **Syslog:**
@@ -199,11 +199,11 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] 4728 MemberName is "-" (should be DN of added member)
 - [ ] No 4778/4779 (RDP reconnect/disconnect)
 - [x] Process creation timestamp can precede its authorizing logon
-- [ ] Missing 4634 logoff events for network logon sessions
+- [x] Missing 4634 logoff events for network logon sessions — paired logoffs for type 3 machine account logons on DCs (1-30s delay); baseline type 3/5 already had logoff pairing
 - [ ] Only AES-256 Kerberos encryption; no RC4/AES-128 mix
 - [ ] Only 2 unique TicketOptions values; zero 4771 pre-auth failures
 - [ ] File server has no domain user logon events
-- [ ] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY"
+- [x] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY" — _subject_domain() helper in windows.py returns "NT AUTHORITY" for SYSTEM/NETWORK SERVICE/LOCAL SERVICE
 
 **Process Trees:**
 - [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)

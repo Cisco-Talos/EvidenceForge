@@ -43,6 +43,20 @@ from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 
 win_logger = logging.getLogger(__name__)
 
+# Well-known service accounts that always use "NT AUTHORITY" as their domain
+_NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+
+
+def _subject_domain(username: str, netbios_domain: str) -> str:
+    """Return the correct domain for SubjectDomainName / TargetDomainName.
+
+    Windows well-known service accounts always use 'NT AUTHORITY', never
+    the AD domain name.
+    """
+    if username.upper() in _NT_AUTHORITY_ACCOUNTS:
+        return "NT AUTHORITY"
+    return netbios_domain
+
 
 class WindowsEventEmitter(LogEmitter):
     """Emitter for Windows Event Log format (XML).
@@ -374,7 +388,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.user_sid,
             "SubjectUserName": auth.username,
-            "SubjectDomainName": host.netbios_domain,
+            "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
             "SubjectLogonId": proc.logon_id,
             "NewProcessId": f"0x{proc.pid:x}",
             "NewProcessName": proc.image,
@@ -383,7 +397,7 @@ class WindowsEventEmitter(LogEmitter):
             "CommandLine": proc.command_line,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
-            "TargetDomainName": host.netbios_domain,
+            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
             "TargetLogonId": proc.logon_id,
             "ParentProcessName": proc.parent_image,
             "MandatoryLabel": proc.mandatory_label or "S-1-16-8192",

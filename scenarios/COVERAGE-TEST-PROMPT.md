@@ -23,7 +23,7 @@
 
   Sensors:
   - zeek-core: SPAN, monitors corporate_lan + server_vlan, bidirectional
-  - zeek-dmz: SPAN, monitors server_vlan + dmz, bidirectional (overlaps with zeek-core on server_vlan)
+  - zeek-dmz: SPAN, monitors dmz, bidirectional
   - snort-perimeter: TAP, monitors dmz, inbound
   - fw-perimeter: firewall, TAP, monitors corporate_lan + server_vlan + dmz, bidirectional,
     log_formats: [cisco_asa], interfaces: {corporate_lan: inside, server_vlan: inside, dmz: dmz},
@@ -62,7 +62,7 @@
 
   Attack storyline — APT via web app exploit, full kill chain:
   1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
-  (dhcp_lease event with explicit MAC address). Actor: attacker on rogue device.
+  (dhcp_lease event). Actor: attacker on rogue device.
   2. Initial Access (+1h): External attacker (185.70.41.45) scans and exploits SQL injection on
   WEB-EXT-01's EHR portal. Actor: root.
   2. Execution (+1h20m): Web shell upload, reverse shell to C2 at 45.33.32.30:8443. Use real
@@ -112,6 +112,15 @@
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
   - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
   - Baseline activity: medium intensity, medium variation
+
+  Engine behavior expectations:
+  - C2 connections to raw IPs (45.33.32.30) will NOT have DNS queries — realistic for direct-IP C2
+  - DNS queries for baseline web traffic use domain-first selection — SNI, DNS, and proxy hostname will be consistent
+  - DHCP events are routed to sensors by segment visibility (not duplicated across all sensors)
+  - Windows service account events (SYSTEM, NETWORK SERVICE) show "NT AUTHORITY" as SubjectDomainName
+  - Certificate validity periods match issuer (Let's Encrypt = 90 days, DigiCert = 397 days)
+  - MAC addresses use diverse OUI prefixes (Dell, HP, Lenovo, Intel, VMware)
+  - PID 4 resolves to "System" in parent process lookups
 
   eCAR format coverage (verify in generated data):
   - All eCAR records have pid and tid (always present, -1 sentinel when unavailable)

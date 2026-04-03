@@ -649,6 +649,11 @@ class StorylineMixin:
                 src_sys = ip_map[source_ip]
             elif source_ip == system.ip:
                 src_sys = system
+            # Only emit DNS if the destination has a known domain name.
+            # Raw IP connections (typical for C2/exfil) don't have DNS lookups.
+            from evidenceforge.generation.activity.network import REVERSE_DNS
+
+            conn_hostname = REVERSE_DNS.get(dst_ip)
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -658,10 +663,11 @@ class StorylineMixin:
                 duration=rng.uniform(1.0, 30.0),
                 orig_bytes=rng.randint(1000, 10000),
                 resp_bytes=rng.randint(5000, 50000),
-                emit_dns=True,
+                emit_dns=conn_hostname is not None,
                 source_system=src_sys,
                 http=http_ctx,
                 pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                hostname=conn_hostname,
             )
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port

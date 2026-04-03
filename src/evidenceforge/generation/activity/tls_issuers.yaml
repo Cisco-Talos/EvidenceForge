@@ -1,0 +1,61 @@
+# TLS certificate issuer configurations for realistic x509 generation.
+# Each issuer has validity parameters matching real CA practices.
+
+issuers:
+  - name: "CN=R3, O=Let's Encrypt, C=US"
+    weight: 30
+    validity_days: 90
+    not_before_max_days: 60
+    key_types:
+      - {type: "ecdsa", length: 256, weight: 70}
+      - {type: "rsa", length: 2048, weight: 30}
+
+  - name: "CN=E1, O=Let's Encrypt, C=US"
+    weight: 10
+    validity_days: 90
+    not_before_max_days: 60
+    key_types:
+      - {type: "ecdsa", length: 256, weight: 90}
+      - {type: "rsa", length: 2048, weight: 10}
+
+  - name: "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
+    weight: 15
+    validity_days: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "rsa", length: 2048, weight: 50}
+      - {type: "rsa", length: 4096, weight: 25}
+      - {type: "ecdsa", length: 256, weight: 25}
+
+  - name: "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, L=Salford, ST=Greater Manchester, C=GB"
+    weight: 10
+    validity_days: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "rsa", length: 2048, weight: 70}
+      - {type: "rsa", length: 4096, weight: 20}
+      - {type: "ecdsa", length: 256, weight: 10}
+
+  - name: "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
+    weight: 15
+    validity_days: 90
+    not_before_max_days: 60
+    key_types:
+      - {type: "ecdsa", length: 256, weight: 80}
+      - {type: "rsa", length: 2048, weight: 20}
+
+  - name: "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
+    weight: 10
+    validity_days: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "rsa", length: 2048, weight: 60}
+      - {type: "ecdsa", length: 256, weight: 40}
+
+  - name: "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+    weight: 10
+    validity_days: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "rsa", length: 2048, weight: 50}
+      - {type: "ecdsa", length: 256, weight: 50}

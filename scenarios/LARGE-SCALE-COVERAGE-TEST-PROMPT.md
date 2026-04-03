@@ -145,7 +145,7 @@
 
   Phase 1: Initial Access and Fumbling (+2h to +6h, Monday morning)
   1. Rogue Device (+2h): Attacker plugs rogue laptop into corporate_lan, obtains IP via DHCP
-     (dhcp_lease event with explicit MAC address).
+     (dhcp_lease event).
   2a. External Port Scan (+2h10m): External attacker (185.70.41.45) scans the DMZ segment for services.
      Use port_scan event with target_segment: dmz, ports: [22, 80, 443, 8080, 8443, 3306, 5432],
      scan_rate: 200, target_count: 15. Produces ASA 106023 denies + Zeek S0/REJ conn entries on
@@ -258,6 +258,15 @@
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
   - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
   - Baseline activity: high intensity, high variation (more users = more noise to hide in)
+
+  Engine behavior expectations:
+  - C2 connections to raw IPs will NOT have DNS queries — realistic for direct-IP C2
+  - DNS queries for baseline web traffic use domain-first selection — SNI, DNS, and proxy hostname will be consistent
+  - DHCP events are routed to sensors by segment visibility (not duplicated across all sensors)
+  - Windows service account events (SYSTEM, NETWORK SERVICE) show "NT AUTHORITY" as SubjectDomainName
+  - Certificate validity periods match issuer (Let's Encrypt = 90 days, DigiCert = 397 days)
+  - MAC addresses use diverse OUI prefixes (Dell, HP, Lenovo, Intel, VMware)
+  - PID 4 resolves to "System" in parent process lookups
 
   eCAR format coverage (verify in generated data):
   - All eCAR records have pid and tid (always present, -1 sentinel when unavailable)

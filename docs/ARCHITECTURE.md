@@ -407,7 +407,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
 
-**DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames.
+**DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames. Hostname resolution happens once at the top of `generate_connection()` — the resolved hostname is shared by causal DNS expansion, SSL SNI, and proxy hostname rendering, ensuring consistency across all three. Baseline web/SaaS connections use domain-first selection (FORWARD_DNS). Storyline connections to raw C2 IPs skip DNS emission (realistic for direct-IP C2 beaconing).
 
 **Per-system session management:** The baseline engine checks for active sessions on the specific target system before generating processes. If no session exists, a context-aware logon is emitted (type 2 interactive for workstations, type 3/10 network/RDP for servers). This prevents processes appearing on systems where the user has no logon event.
 
@@ -425,7 +425,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 ### Key Patterns
 
-**Thread-local RNG:** Each generation thread gets a `random.Random` instance seeded by `hash((thread_id, 42))`. This ensures reproducibility while enabling concurrent generation without GIL contention.
+**Thread-local RNG:** Each generation thread gets a `random.Random` instance seeded by `hash((thread_id, 42))`. This ensures reproducibility while enabling concurrent generation without GIL contention. LogonID generation uses per-host RNG seeding (`_stable_seed(f"logon_ids_{hostname}")`) to ensure unique LogonID sequences per system.
 
 **Discriminated unions:** Storyline event specs use Pydantic discriminated unions — `type: "process"` selects `ProcessEventSpec`, `type: "logon"` selects `LogonEventSpec`, etc. This provides compile-time-like type safety for YAML input.
 
