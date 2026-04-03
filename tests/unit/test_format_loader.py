@@ -62,25 +62,16 @@ class TestGetDefinitionsDirectory:
         assert result.name == "definitions"
         assert result.parent.name == "formats"
 
-    @pytest.mark.skip(reason="Mocking Path is complex; covered by integration tests")
-    @patch("evidenceforge.formats.loader.Path")
-    def test_raises_error_if_not_exists(self, mock_path):
+    def test_raises_error_if_not_exists(self, tmp_path):
         """Test that error is raised if directory doesn't exist."""
-        mock_definitions = MagicMock()
-        mock_definitions.exists.return_value = False
-        mock_definitions.__str__.return_value = "/fake/path/definitions"
+        # Point __file__ at a fake location where formats/definitions/ doesn't exist
+        fake_loader = tmp_path / "evidenceforge" / "formats" / "loader.py"
+        fake_loader.parent.mkdir(parents=True)
+        fake_loader.touch()
 
-        mock_parent = MagicMock()
-        mock_parent.__truediv__.return_value = mock_definitions
-
-        mock_file = MagicMock()
-        mock_file.parent = mock_parent
-
-        mock_path.return_value = mock_file
-        mock_path.__file__ = "/fake/path/loader.py"
-
-        with pytest.raises(ConfigurationError, match="not found"):
-            get_definitions_directory()
+        with patch("evidenceforge.formats.loader.__file__", str(fake_loader)):
+            with pytest.raises(ConfigurationError, match="not found"):
+                get_definitions_directory()
 
 
 class TestClearCache:

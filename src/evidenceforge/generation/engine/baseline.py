@@ -223,104 +223,154 @@ class BaselineMixin:
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
 
-    def _generate_baseline(self) -> None:
-        """Generate baseline activity for all enabled users.
+    def _generate_hour(
+        self,
+        current_hour: datetime,
+        enabled_users: list,
+        *,
+        emit_storylines: bool = True,
+        flush_emitters: bool = True,
+    ) -> None:
+        """Generate one hour of baseline activity.
 
-        Iterates hour-by-hour through the time window, generating activity
-        for each enabled user based on their persona, intensity, and variation.
-
-        Phase 1 Implementation:
-        - Simple hour-by-hour iteration
-        - Fixed activity patterns (no LLM)
-        - Uniform distribution with jitter within each hour
+        Used by both the warm-up loop and the real baseline loop. During warm-up,
+        storyline/red-herring execution and emitter flushing are skipped.
         """
-        logger.info("Starting baseline activity generation")
-        self._emit_sensor_startup()
-        self._emit_dhcp_leases()
+        self.state_manager.set_current_time(current_hour)
 
-        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
-        logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
+        # Compute local weekday for day-of-week variation
+        if hasattr(self, "_scenario_tz") and self._scenario_tz:
+            local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+        else:
+            local_dt = current_hour
+        local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
+        is_weekend = local_weekday >= 5
 
-        total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
+        for user in enabled_users:
+            persona = self._get_user_persona(user)
+            user_offsets = self._user_time_offsets.get(user.username)
 
-        current_hour = self.start_time
-        hour_count = 0
+            # Weekend filtering: skip non-IT personas on weekends
+            if is_weekend and persona:
+                persona_key = (persona.name or "").lower()
+                if persona_key not in _WEEKEND_ACTIVE_PERSONAS:
+                    continue
 
-        while current_hour < self.end_time:
-            hour_count += 1
-            logger.debug(f"Processing hour {hour_count}: {current_hour}")
-            self.state_manager.set_current_time(current_hour)
-
-            self._report_progress(
-                "hour_progress",
-                {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
+            local_hour = local_dt.hour
+            num_events = self._calculate_events_for_hour(
+                user,
+                current_hour=local_hour,
+                persona=persona,
+                user_offsets=user_offsets,
+                weekday=local_weekday,
             )
 
-            # Compute local weekday for day-of-week variation
-            if hasattr(self, "_scenario_tz") and self._scenario_tz:
-                local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
-            else:
-                local_dt = current_hour
-            local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
-            is_weekend = local_weekday >= 5
+            if num_events > 0:
+                rng = _get_rng()
+                if rng.random() < 0.20:
+                    continue
 
-            for user in enabled_users:
-                persona = self._get_user_persona(user)
-                user_offsets = self._user_time_offsets.get(user.username)
-
-                # Weekend filtering: skip non-IT personas on weekends
-                if is_weekend and persona:
-                    persona_key = (persona.name or "").lower()
-                    if persona_key not in _WEEKEND_ACTIVE_PERSONAS:
-                        continue
-
-                local_hour = local_dt.hour
-                num_events = self._calculate_events_for_hour(
-                    user,
-                    current_hour=local_hour,
-                    persona=persona,
-                    user_offsets=user_offsets,
-                    weekday=local_weekday,
+                persona_name = user.persona if user.persona else None
+                event_times = self._distribute_events_in_hour(
+                    current_hour,
+                    num_events,
+                    persona_name=persona_name,
+                    username=user.username,
                 )
 
-                if num_events > 0:
-                    rng = _get_rng()
-                    if rng.random() < 0.20:
-                        continue
+                for event_time in event_times:
+                    self._generate_user_activity(user, event_time)
 
-                    persona_name = user.persona if user.persona else None
-                    event_times = self._distribute_events_in_hour(
-                        current_hour,
-                        num_events,
-                        persona_name=persona_name,
-                        username=user.username,
-                    )
+        self._generate_system_traffic(current_hour)
+        self._generate_stale_account_noise(current_hour)
+        self._generate_lateral_movement_noise(current_hour)
+        self._generate_suspicious_noise(current_hour)
+        self._generate_firewall_deny_baseline(current_hour)
 
-                    for event_time in event_times:
-                        self._generate_user_activity(user, event_time)
-
-            self._generate_system_traffic(current_hour)
-            self._generate_stale_account_noise(current_hour)
-            self._generate_lateral_movement_noise(current_hour)
-            self._generate_suspicious_noise(current_hour)
-            self._generate_firewall_deny_baseline(current_hour)
-
+        if emit_storylines:
             hour_key = int(current_hour.timestamp())
             for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
                 if event_idx not in self._storyline_executed:
                     self._execute_single_storyline_event(event_idx)
                     self._storyline_executed.add(event_idx)
 
-            # Execute red herring events for this hour
             for _event_time, event_idx in self._red_herring_by_hour.get(hour_key, []):
                 if event_idx not in self._red_herring_executed:
                     self._execute_single_red_herring_event(event_idx)
                     self._red_herring_executed.add(event_idx)
 
-            self._terminate_stale_processes(current_hour)
-            self._generate_logoffs_for_hour(enabled_users, current_hour)
+        self._terminate_stale_processes(current_hour)
+        self._generate_logoffs_for_hour(enabled_users, current_hour)
+
+        if flush_emitters:
             self._barrier_flush_all_emitters()
 
+    def _generate_baseline(self) -> None:
+        """Generate baseline activity for all enabled users.
+
+        Iterates hour-by-hour through the time window, generating activity
+        for each enabled user based on their persona, intensity, and variation.
+        Optionally runs a warm-up phase first to pre-populate state.
+        """
+        logger.info("Starting baseline activity generation")
+
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+        logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
+
+        # --- Warm-up phase: pre-populate state without emitting ---
+        warmup_hours = math.ceil(self.warmup_duration.total_seconds() / 3600)
+        if warmup_hours > 0:
+            logger.info(f"Running {warmup_hours}-hour warm-up for state pre-population")
+            self._report_progress(
+                "phase_start",
+                {
+                    "phase": "warmup",
+                    "description": f"Warm-up: pre-populating state ({warmup_hours}h)",
+                },
+            )
+
+            current_hour = self.warmup_start_time
+            warmup_count = 0
+
+            while current_hour < self.start_time:
+                warmup_count += 1
+                logger.debug(f"Warm-up hour {warmup_count}/{warmup_hours}: {current_hour}")
+
+                self._report_progress(
+                    "warmup_progress",
+                    {
+                        "hour": warmup_count,
+                        "total_hours": warmup_hours,
+                        "current_time": current_hour,
+                    },
+                )
+
+                self._generate_hour(
+                    current_hour, enabled_users, emit_storylines=False, flush_emitters=False
+                )
+                current_hour += timedelta(hours=1)
+
+            logger.info(f"Warm-up complete: processed {warmup_count} hours")
+            self._report_progress("phase_end", {"phase": "warmup"})
+
+        # --- Real baseline: emit sensor startup and begin output ---
+        self._emit_sensor_startup()
+        self._emit_dhcp_leases()
+
+        total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
+        current_hour = self.start_time
+        hour_count = 0
+
+        while current_hour < self.end_time:
+            hour_count += 1
+            logger.debug(f"Processing hour {hour_count}: {current_hour}")
+
+            self._report_progress(
+                "hour_progress",
+                {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
+            )
+
+            self._generate_hour(current_hour, enabled_users)
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
@@ -1598,13 +1648,13 @@ class BaselineMixin:
             if "dns-client" in services:
                 dns_interval = 600 + (hash(f"dns_iv_{system.hostname}") % 1200)
                 dns_phase = hash(f"dns_ph_{system.hostname}") % dns_interval
-                hour_start_sec = (current_hour - self.start_time).total_seconds()
+                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = dns_phase
                 while t < hour_start_sec:
                     t += dns_interval
                 while t < hour_start_sec + 3600:
                     jitter = rng.gauss(0, dns_interval * 0.02)
-                    ts = self.start_time + timedelta(seconds=t + jitter)
+                    ts = self._generation_epoch + timedelta(seconds=t + jitter)
                     self.state_manager.set_current_time(ts)
                     dns_pid = (
                         _svc_pid("svchost_net_svc")
@@ -1663,7 +1713,7 @@ class BaselineMixin:
             if "smb-client" in services and os_cat == "windows" and dc_targets:
                 smb_interval = 1200 + (hash(f"smb_iv_{system.hostname}") % 1800)
                 smb_phase = hash(f"smb_ph_{system.hostname}") % smb_interval
-                hour_start_sec = (current_hour - self.start_time).total_seconds()
+                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = smb_phase
                 while t < hour_start_sec:
                     t += smb_interval

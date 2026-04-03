@@ -245,6 +245,8 @@ personas:                         # Define inline or reference pre-built from pe
 time_window:
   start: "2024-01-15T10:00:00Z"  # ISO 8601 UTC
   duration: "8h"                  # OR use end: "2024-01-15T18:00:00Z"
+  warmup: "8h"                    # Optional (default "8h"). Pre-populates DNS cache, process
+                                  # trees, sessions before start. Set "0s" to disable.
 
 baseline_activity:
   description: "Normal office activity"

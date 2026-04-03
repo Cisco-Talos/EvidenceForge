@@ -343,7 +343,7 @@ class TestGenerationEngine:
         minimal_scenario,
         tmp_path,
     ):
-        """Engine should set StateManager initial time to scenario start."""
+        """Engine should set StateManager initial time to warm-up start."""
         mock_format_def = Mock()
         mock_format_def.output.file_extension = ".log"
         mock_load_format.return_value = mock_format_def
@@ -351,8 +351,91 @@ class TestGenerationEngine:
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine._initialize()
 
-        # Verify state manager time set
-        assert engine.state_manager.get_current_time() == engine.start_time
+        # Verify state manager time set to warm-up start (before scenario start)
+        assert engine.state_manager.get_current_time() == engine.warmup_start_time
+
+    @patch("evidenceforge.generation.engine.core.ActivityGenerator")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekPacketFilterEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekPeEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekOcspEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekX509Emitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekWeirdEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekNtpEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekDhcpEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekFilesEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekSslEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekHttpEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekDnsEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.WindowsEventEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.SysmonEventEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.load_format")
+    def test_warmup_snaps_to_whole_hours(
+        self,
+        mock_load_format,
+        mock_sysmon,
+        mock_windows,
+        mock_zeek,
+        mock_zeek_dns,
+        mock_zeek_http,
+        mock_zeek_ssl,
+        mock_zeek_files,
+        mock_zeek_dhcp,
+        mock_zeek_ntp,
+        mock_zeek_weird,
+        mock_zeek_x509,
+        mock_zeek_ocsp,
+        mock_zeek_pe,
+        mock_zeek_pf,
+        mock_zeek_reporter,
+        mock_activity_gen,
+        tmp_path,
+    ):
+        """Sub-hour warmup values snap up to whole hours to prevent overlap."""
+        mock_format_def = Mock()
+        mock_format_def.output.file_extension = ".log"
+        mock_load_format.return_value = mock_format_def
+
+        scenario = Scenario(
+            version="1.0",
+            name="test-warmup-snap",
+            description="Test warmup snapping",
+            environment=Environment(
+                description="Test",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        enabled=True,
+                        primary_system="TEST-01",
+                    )
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start="2024-01-15T10:00:00Z", duration="2h", warmup="30m"),
+            baseline_activity=BaselineActivity(
+                description="Test baseline", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(
+                logs=[{"format": "windows"}],
+                destination="./output",
+                compression=False,
+            ),
+            personas=[],
+        )
+
+        engine = GenerationEngine(scenario, tmp_path)
+        engine._initialize()
+
+        # 30m snaps up to 1h: warmup_start = 10:00 - 1h = 09:00
+        assert engine.warmup_start_time == datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        assert engine.warmup_duration == timedelta(hours=1)
+        # generation_epoch matches warmup_start_time
+        assert engine._generation_epoch == engine.warmup_start_time
 
     def test_parse_storyline_time_iso8601(self, minimal_scenario, tmp_path):
         """Should parse ISO 8601 absolute time strings."""

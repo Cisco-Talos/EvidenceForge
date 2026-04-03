@@ -513,3 +513,113 @@ class TestBuildHostContext:
         assert ctx.os_category == "windows"
         assert ctx.system_type == "domain_controller"
         assert ctx.ip == ""  # DC IP not needed for event rendering
+
+
+class TestWarmUpSuppression:
+    """Tests for warm-up period emission suppression."""
+
+    def _make_dispatcher(self, output_start_time=None):
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_security": emitter},
+            output_start_time=output_start_time,
+        )
+        return dispatcher, sm, emitter
+
+    def test_dispatch_suppresses_emission_before_output_start(self):
+        """Events before output_start_time update state but don't reach emitters."""
+        output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
+        dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
+
+        # Event 1 hour before output start
+        event = SecurityEvent(
+            timestamp=datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC),
+            event_type="logon",
+        )
+        dispatcher.dispatch(event)
+
+        sm.apply.assert_called_once_with(event)
+        emitter.emit.assert_not_called()
+
+    def test_dispatch_emits_at_output_start(self):
+        """Events exactly at output_start_time are emitted normally."""
+        output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
+        dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
+
+        event = SecurityEvent(
+            timestamp=datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC),
+            event_type="logon",
+        )
+        dispatcher.dispatch(event)
+
+        sm.apply.assert_called_once_with(event)
+        emitter.emit.assert_called_once_with(event)
+
+    def test_dispatch_emits_after_output_start(self):
+        """Events after output_start_time are emitted normally."""
+        output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
+        dispatcher, sm, emitter = self._make_dispatcher(output_start_time=output_start)
+
+        event = SecurityEvent(
+            timestamp=datetime(2026, 3, 19, 11, 0, 0, tzinfo=UTC),
+            event_type="logon",
+        )
+        dispatcher.dispatch(event)
+
+        sm.apply.assert_called_once_with(event)
+        emitter.emit.assert_called_once_with(event)
+
+    def test_dispatch_no_suppression_when_output_start_none(self):
+        """Without output_start_time, all events are emitted (default behavior)."""
+        dispatcher, sm, emitter = self._make_dispatcher(output_start_time=None)
+
+        event = SecurityEvent(
+            timestamp=datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC),
+            event_type="logon",
+        )
+        dispatcher.dispatch(event)
+
+        sm.apply.assert_called_once_with(event)
+        emitter.emit.assert_called_once_with(event)
+
+    def test_dispatch_raw_suppressed_before_output_start(self):
+        """dispatch_raw() skips emission for pre-window raw entries."""
+        output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
+        sm = MagicMock(spec=StateManager)
+        syslog = _make_mock_emitter("syslog")
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"syslog": syslog},
+            output_start_time=output_start,
+        )
+
+        entry = RawLogEntry(
+            timestamp=datetime(2026, 3, 19, 9, 0, 0, tzinfo=UTC),
+            target_emitter="syslog",
+            data={"message": "test"},
+        )
+        dispatcher.dispatch_raw(entry)
+
+        syslog.emit_raw.assert_not_called()
+
+    def test_dispatch_raw_emitted_at_output_start(self):
+        """dispatch_raw() emits normally at output_start_time."""
+        output_start = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
+        sm = MagicMock(spec=StateManager)
+        syslog = _make_mock_emitter("syslog")
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"syslog": syslog},
+            output_start_time=output_start,
+        )
+
+        entry = RawLogEntry(
+            timestamp=datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC),
+            target_emitter="syslog",
+            data={"message": "test"},
+        )
+        dispatcher.dispatch_raw(entry)
+
+        syslog.emit_raw.assert_called_once_with({"message": "test"})

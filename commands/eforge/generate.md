@@ -77,7 +77,11 @@ cd /Users/dabianco/projects/SURGe/data-gen-test
 uv run eforge generate <scenario-file> --verbose
 ```
 
-Always use `--verbose` so you can see progress and diagnose issues. Generation writes log files to a `data/` subdirectory alongside the scenario file:
+Always use `--verbose` so you can see progress and diagnose issues.
+
+**Warm-up phase:** Generation begins with a warm-up period (default 8 hours, configurable via `time_window.warmup`). During warm-up, the engine runs baseline generation to pre-populate DNS cache, process trees, active sessions, and other internal state — but warm-up events are **not** written to output files. This ensures the first minutes of output look like a running system rather than a cold start. Progress output distinguishes the warm-up phase from real generation.
+
+Generation writes log files to a `data/` subdirectory alongside the scenario file:
 
 ```
 scenarios/<scenario-name>/

@@ -108,6 +108,42 @@ class TestTimeWindow:
         with pytest.raises(ValidationError, match="Duration must match pattern"):
             TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="invalid")
 
+    def test_time_window_warmup_default(self):
+        """Default warmup is '8h'."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h")
+        assert tw.warmup == "8h"
+
+    def test_time_window_warmup_custom(self):
+        """Custom warmup values are accepted."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="30m")
+        assert tw.warmup == "30m"
+
+        tw2 = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="1h30m")
+        assert tw2.warmup == "1h30m"
+
+    def test_time_window_warmup_zero(self):
+        """'0s' disables warm-up."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="0s")
+        assert tw.warmup == "0s"
+
+    def test_time_window_warmup_none(self):
+        """None disables warm-up."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup=None)
+        assert tw.warmup is None
+
+    def test_time_window_warmup_invalid(self):
+        """Invalid warmup format raises ValidationError."""
+        with pytest.raises(ValidationError, match="warmup must match pattern"):
+            TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="invalid")
+
+    def test_time_window_warmup_sub_hour_accepted(self):
+        """Sub-hour warmup values are accepted (engine snaps to whole hours)."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="30m")
+        assert tw.warmup == "30m"
+
+        tw2 = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="62m")
+        assert tw2.warmup == "62m"
+
 
 class TestUser:
     """Tests for User model."""

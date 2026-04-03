@@ -58,11 +58,20 @@ class TimeWindow(BaseModel):
         start: Start time in ISO 8601 UTC format (e.g., "2024-01-15T10:00:00Z")
         end: End time in ISO 8601 UTC format (mutually exclusive with duration)
         duration: Duration string like "10h", "3d", "2h30m" (mutually exclusive with end)
+        warmup: Warm-up duration before start for state pre-population (default "8h").
+            Events generated during warm-up populate DNS cache, process trees, sessions,
+            and other internal state but are NOT written to output files. Set to "0s"
+            to disable.
     """
 
     start: datetime = Field(..., description="Start time (ISO 8601 UTC)")
     end: datetime | None = Field(None, description="End time (ISO 8601 UTC)")
     duration: str | None = Field(None, description="Duration string (e.g., '10h', '3d')")
+    warmup: str | None = Field(
+        default="8h",
+        description="Warm-up duration before start for state pre-population (e.g., '8h', '30m'). "
+        "Set to '0s' to disable.",
+    )
 
     @field_validator("duration")
     @classmethod
@@ -78,6 +87,19 @@ class TimeWindow(BaseModel):
         if not re.match(r"^(\d+(ms|[hdms]))+$", v):
             raise ValueError(
                 "Duration must match pattern like '10h', '3d', '2h30m', '5m30s', '500ms' "
+                "(digits followed by d/h/m/s/ms units)"
+            )
+        return v
+
+    @field_validator("warmup")
+    @classmethod
+    def validate_warmup_format(cls, v: str | None) -> str | None:
+        """Validate warmup format matches same pattern as duration."""
+        if v is None:
+            return None
+        if not re.match(r"^(\d+(ms|[hdms]))+$", v):
+            raise ValueError(
+                "warmup must match pattern like '8h', '30m', '1h30m' "
                 "(digits followed by d/h/m/s/ms units)"
             )
         return v

@@ -302,6 +302,10 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 - [x] **Static command pool diversification** — All process template categories parameterized with {placeholder} syntax. New _GENERAL_PARAMS pool (project paths, doc names, build configs, git branches, internal URLs). Per-user affinity via {username} substitution.
 
+### State Pre-Population
+
+- [x] **Warm-up period** — Configurable `warmup` field on `time_window` (default `"8h"`). Runs baseline generation before `start` to pre-populate DNS cache, process trees, active sessions, Kerberos tickets, Hawkes timing kernels, and event counters. Events during warm-up update internal state but are not written to output files, eliminating cold-start artifacts (logon bursts, universal DNS cache misses, orphaned process parents).
+
 ---
 
 ## Post-MVP Enhancements (Future)

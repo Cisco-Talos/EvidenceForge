@@ -4295,6 +4295,10 @@ class ActivityGenerator:
             elapsed = (time - scenario_start).total_seconds()
             if elapsed < 1800 and rng.random() < 0.7:  # First 30 min, 70% chance
                 is_pre_existing = True
+        # Parents created before the output window are always pre-existing
+        # (their creation events would be suppressed by the warm-up filter anyway)
+        if not is_pre_existing and scenario_start and parent_time < scenario_start:
+            is_pre_existing = True
 
         if not is_pre_existing:
             # Emit a process creation event
