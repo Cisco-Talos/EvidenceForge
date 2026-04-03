@@ -63,7 +63,6 @@ from .network import (
     EXTERNAL_IPS,
     REVERSE_DNS,
     _generate_internal_hostname,
-    _generate_random_external_ip,
     _generate_random_hostname,
     _generate_rdns_name,
     _get_http_status,
@@ -113,6 +112,8 @@ BASELINE_PATTERNS = {
     ],
 }
 
+# Organic bash commands for noise injection between storyline events
+# and baseline Linux user activity. Common admin/orientation commands.
 # Process names and command lines for baseline activities (Windows)
 PROCESS_TEMPLATES = {
     "process_code": [
@@ -511,6 +512,7 @@ class ActivityGenerator:
             command_line=kwargs.get("command_line"),
             process_name=kwargs.get("process_name"),
             os_category=kwargs.get("os_category"),
+            hostname=kwargs.get("hostname"),
             source_system=kwargs.get("source_system"),
             target_system=kwargs.get("target_system"),
             actor=kwargs.get("actor"),
@@ -1050,7 +1052,10 @@ class ActivityGenerator:
                 username=user.username,
                 integrity_level="Medium",
                 logon_id=logon_id,
-                parent_image=self._lookup_process_name(system.hostname, parent_pid),
+                parent_image=self._lookup_process_name(
+                    system.hostname, parent_pid, _get_os_category(system.os)
+                ),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
             ),
@@ -1202,6 +1207,7 @@ class ActivityGenerator:
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         firewall: FirewallContext | None = None,
+        hostname: str | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1233,6 +1239,14 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
+        # Resolve hostname ONCE for DNS/SNI/proxy consistency.
+        # All downstream uses (causal DNS expansion, SSL SNI, proxy hostname)
+        # share this single resolved value instead of doing independent lookups.
+        if not hostname:
+            hostname = REVERSE_DNS.get(dst_ip)
+        if not hostname and emit_dns and proto == "tcp" and dst_port not in (53,):
+            hostname = _generate_random_hostname(_get_rng(), dst_ip)
+
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         if emit_dns and proto == "tcp" and dst_port not in (53,):
@@ -1244,6 +1258,7 @@ class ActivityGenerator:
                 dst_port=dst_port,
                 proto=proto,
                 service=service,
+                hostname=hostname,
             )
 
         # Same-host connections are valid for host-based logs (eCAR FLOW)
@@ -1476,18 +1491,67 @@ class ActivityGenerator:
                 ad_domain = getattr(self, "_ad_domain", "")
                 if ad_domain and "." not in proxy_fqdn:
                     proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
-                hostname = REVERSE_DNS.get(dst_ip)
-                if not hostname:
-                    hostname = _generate_random_hostname(_get_rng(), dst_ip)
+                # Hostname was resolved once at the top of generate_connection().
+                proxy_hostname = hostname
+                if not proxy_hostname and dns is not None and dns.query:
+                    proxy_hostname = dns.query
+                if not proxy_hostname:
+                    proxy_hostname = REVERSE_DNS.get(dst_ip)
+                if not proxy_hostname:
+                    proxy_hostname = _generate_random_hostname(_get_rng(), dst_ip)
                 schema = "https" if dst_port == 443 else "http"
-                url = f"{schema}://{hostname}/"
+                _PROXY_PATHS = [
+                    "/",
+                    "/",
+                    "/",  # Root path is common
+                    "/index.html",
+                    "/login",
+                    "/api/v1/status",
+                    "/api/v2/data",
+                    "/dashboard",
+                    "/assets/main.css",
+                    "/assets/app.js",
+                    "/images/logo.png",
+                    "/favicon.ico",
+                    "/robots.txt",
+                    "/search?q=healthcare+integration",
+                    "/docs/api-reference",
+                    "/settings/profile",
+                    "/notifications",
+                    "/feed",
+                    "/messages",
+                ]
+                path = _get_rng().choice(_PROXY_PATHS)
+                url = f"{schema}://{proxy_hostname}{path}"
+                # Map URI extension to MIME type
+                _EXT_MIME = {
+                    ".html": "text/html",
+                    ".css": "text/css",
+                    ".js": "application/javascript",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".gif": "image/gif",
+                    ".ico": "image/x-icon",
+                    ".json": "application/json",
+                    ".xml": "text/xml",
+                    ".svg": "image/svg+xml",
+                    ".woff2": "font/woff2",
+                    ".txt": "text/plain",
+                }
+                _ext = f".{path.rsplit('.', 1)[-1]}" if "." in path.split("?")[0] else ""
+                proxy_content_type = _EXT_MIME.get(_ext, "text/html")
                 # Pick a random user from the scenario (if available)
-                user_agent = _get_rng().choice(
-                    [
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                    ]
-                )
+                _PROXY_UAS = [
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
+                    "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
+                ]
+                user_agent = _get_rng().choice(_PROXY_UAS)
                 cache_roll = _get_rng().random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
@@ -1505,7 +1569,7 @@ class ActivityGenerator:
                     cs_bytes=orig_bytes or 0,
                     time_taken=int((duration or 0) * 1000),
                     user_agent=user_agent,
-                    content_type="text/html",
+                    content_type=proxy_content_type,
                     cache_result=cache_result,
                     proxy_fqdn=proxy_fqdn,
                 )
@@ -1516,9 +1580,15 @@ class ActivityGenerator:
         if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
             from evidenceforge.events.contexts import SslContext
 
-            server_name = REVERSE_DNS.get(dst_ip)
+            # Hostname was resolved once at the top of generate_connection().
+            # Fall back to DnsContext query or IP-based generation only for
+            # connections that skipped early resolution (no emit_dns, internal).
+            server_name = hostname
+            if not server_name and dns is not None and dns.query:
+                server_name = dns.query
             if not server_name:
-                # Generate a plausible hostname for IPs not in REVERSE_DNS
+                server_name = REVERSE_DNS.get(dst_ip)
+            if not server_name:
                 server_name = _generate_random_hostname(rng, dst_ip)
             _TLS12_CIPHERS = [
                 "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
@@ -1546,27 +1616,29 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import X509Context
 
             cert_hash = hashlib.sha256(f"cert_{server_name}".encode()).hexdigest()
-            is_ecdsa = rng.random() < 0.4
-            _ISSUERS = [
-                "CN=R3, O=Let's Encrypt, C=US",
-                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
-                "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
-                "CN=E1, O=Let's Encrypt, C=US",
-                "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
-            ]
-            now_epoch = event.timestamp.timestamp()
+            # Issuer-aware certificate generation from YAML config
+            from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+            issuer_cfg = pick_issuer(rng, server_name=server_name)
+            key_type, key_length = pick_key_type(rng, issuer_cfg)
+            is_ecdsa = key_type == "ecdsa"
+            now_epoch = int(event.timestamp.timestamp())
+            validity_days = issuer_cfg.get("validity_days", 397)
+            not_before_max = issuer_cfg.get("not_before_max_days", 300)
+            not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
+            remaining_days = validity_days - not_before_days
             event.x509 = X509Context(
                 fingerprint=cert_hash,
                 certificate_version=3,
                 certificate_serial=f"{rng.getrandbits(128):032X}",
                 certificate_subject=f"CN={server_name}",
-                certificate_issuer=rng.choice(_ISSUERS),
-                certificate_not_valid_before=now_epoch - rng.randint(86400, 86400 * 365),
-                certificate_not_valid_after=now_epoch + rng.randint(86400 * 30, 86400 * 365),
+                certificate_issuer=issuer_cfg["name"],
+                certificate_not_valid_before=now_epoch - not_before_days * 86400,
+                certificate_not_valid_after=now_epoch + remaining_days * 86400,
                 certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
                 certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
-                certificate_key_type="ecdsa" if is_ecdsa else "rsa",
-                certificate_key_length=256 if is_ecdsa else rng.choice([2048, 4096]),
+                certificate_key_type=key_type,
+                certificate_key_length=key_length,
                 certificate_exponent="65537" if not is_ecdsa else "",
                 san_dns=[server_name, f"*.{'.'.join(server_name.split('.')[1:])}"]
                 if "." in server_name
@@ -1733,11 +1805,13 @@ class ActivityGenerator:
                 xmt_ts=round(ntp_epoch + ntp_jitter + 0.0001, 6),
             )
 
-        # Zeek weird.log: probabilistic network anomalies (~3% of connections)
-        if not local_only and rng.random() < 0.03:
+        # Zeek weird.log: probabilistic network anomalies
+        # TCP: ~3% of connections; UDP: ~0.5% (much rarer in real Zeek deployments)
+        weird_prob = 0.03 if proto == "tcp" else 0.005 if proto == "udp" else 0
+        if not local_only and weird_prob > 0 and rng.random() < weird_prob:
             from evidenceforge.events.contexts import WeirdContext
 
-            _WEIRD_NAMES = [
+            _TCP_WEIRD_NAMES = [
                 "window_recision",
                 "possible_split_routing",
                 "above_hole_data_without_any_acks",
@@ -1747,10 +1821,25 @@ class ActivityGenerator:
                 "inappropriate_FIN",
                 "bad_TCP_checksum",
             ]
+            _UDP_WEIRD_NAMES = [
+                "DNS_truncated_len_lt_hdr_len",
+                "bad_UDP_checksum",
+                "UDP_datagram_length_mismatch",
+                "DNS_RR_unknown_type",
+            ]
+            weird_pool = _TCP_WEIRD_NAMES if proto == "tcp" else _UDP_WEIRD_NAMES
             event.weird = WeirdContext(
-                name=rng.choice(_WEIRD_NAMES),
+                name=rng.choice(weird_pool),
                 source="TCP" if proto == "tcp" else "UDP",
             )
+
+        # Enforce conn_state/HTTP consistency: if HTTP context exists,
+        # the connection must have completed successfully (SF). A connection
+        # with S0/REJ cannot have served an HTTP response.
+        if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
+            event.network.conn_state = "SF"
+            if event.network.resp_bytes == 0:
+                event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
@@ -1934,71 +2023,90 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ShellContext
 
-        # If the argument looks like a direct command (contains / or spaces), use it directly
-        if "/" in activity_type_or_command or " " in activity_type_or_command:
-            command = activity_type_or_command
-        else:
-            # Select command based on activity type
-            commands = {
-                "process_code": [
-                    "vim script.py",
-                    "nano config.conf",
-                    "code .",
-                    "git status",
-                    "git diff",
-                    "python3 -m pytest",
-                    "cat README.md",
-                ],
-                "process_build": [
-                    "make",
-                    "gcc -o output source.c",
-                    "npm run build",
-                    "docker build -t app .",
-                    "cargo build --release",
-                ],
-                "connection_web": [
-                    "curl https://example.com",
-                    "wget https://github.com/repo/file.tar.gz",
-                    "curl -I https://api.example.com/health",
-                ],
-                "process_user_apps": [
-                    "ls -la",
-                    "cd /var/www/html",
-                    "tail -f /var/log/syslog",
-                    'grep -r "error" /var/log/',
-                    "systemctl status apache2",
-                    "free -m",
-                    "uptime",
-                    "cat /etc/hostname",
-                    "netstat -tlnp",
-                    "du -sh /var/log/*",
-                    "w",
-                    'journalctl -u apache2 --since "1 hour ago"',
-                    "htop",
-                    "ss -tulnp",
-                    "ip addr show",
-                ],
-                "default": [
-                    "ls -la",
-                    "ps aux",
-                    "top",
-                    "df -h",
-                    "whoami",
-                    "pwd",
-                    "cat /etc/os-release",
-                    "uptime",
-                    "free -m",
-                    "w",
-                    "tail -20 /var/log/syslog",
-                    "history",
-                    "date",
-                    "ls /tmp",
-                    "mount | grep -v tmpfs",
-                ],
-            }
+        # Activity type pools: if the arg matches a known key, pick from pool.
+        # Otherwise treat as a literal command (supports typos, direct strings, etc.)
+        _activity_type_commands = {
+            "process_code": [
+                "vim script.py",
+                "nano config.conf",
+                "code .",
+                "git status",
+                "git diff",
+                "python3 -m pytest",
+                "cat README.md",
+            ],
+            "process_build": [
+                "make",
+                "gcc -o output source.c",
+                "npm run build",
+                "docker build -t app .",
+                "cargo build --release",
+            ],
+            "connection_web": [
+                "curl https://example.com",
+                "wget https://github.com/repo/file.tar.gz",
+                "curl -I https://api.example.com/health",
+            ],
+            "process_query": [
+                "mysql -u root -p -e 'SHOW DATABASES'",
+                "psql -c '\\l'",
+                "redis-cli info",
+                "mysql -u root -p -e 'SHOW PROCESSLIST'",
+                "psql -c 'SELECT pg_size_pretty(pg_database_size(current_database()))'",
+                "sqlite3 /var/lib/app/data.db '.tables'",
+            ],
+            "process_system": [
+                "systemctl status sshd",
+                "journalctl -u cron --since '1 hour ago'",
+                "top -bn1 | head -20",
+                "ss -tulnp",
+                "df -h",
+                "free -m",
+                "dmesg | tail -20",
+                "last -10",
+            ],
+            "process_user_apps": [
+                "ls -la",
+                "cd /var/www/html",
+                "tail -f /var/log/syslog",
+                'grep -r "error" /var/log/',
+                "systemctl status apache2",
+                "free -m",
+                "uptime",
+                "cat /etc/hostname",
+                "netstat -tlnp",
+                "du -sh /var/log/*",
+                "w",
+                'journalctl -u apache2 --since "1 hour ago"',
+                "htop",
+                "ss -tulnp",
+                "ip addr show",
+            ],
+            "default": [
+                "ls -la",
+                "ps aux",
+                "top",
+                "df -h",
+                "whoami",
+                "pwd",
+                "cat /etc/os-release",
+                "uptime",
+                "free -m",
+                "w",
+                "tail -20 /var/log/syslog",
+                "history",
+                "date",
+                "ls /tmp",
+                "mount | grep -v tmpfs",
+            ],
+        }
 
-            command_list = commands.get(activity_type_or_command, commands["default"])
+        if activity_type_or_command in _activity_type_commands:
+            command_list = _activity_type_commands[activity_type_or_command]
             command = _get_rng().choice(command_list)
+        else:
+            # Literal command string (direct commands, typos, etc.)
+            command = activity_type_or_command
 
         event = SecurityEvent(
             timestamp=time,
@@ -2010,6 +2118,33 @@ class ActivityGenerator:
 
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
+
+    def generate_bash_command_with_noise(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        command: str,
+    ) -> None:
+        """Generate a bash command with organic noise commands around it.
+
+        Emits the primary command plus 0-3 organic noise commands at
+        slight time offsets, simulating an attacker or admin who types
+        ls, pwd, id etc. between deliberate actions.
+        """
+        # Emit the primary command
+        self.generate_bash_command(user, system, time, command)
+
+        # Probabilistically emit 0-3 noise commands (role-aware)
+        from evidenceforge.generation.activity.bash_commands import pick_bash_command
+
+        rng = _get_rng()
+        n_noise = rng.choices([0, 1, 1, 2, 2, 3], k=1)[0]
+        for _ in range(n_noise):
+            offset_sec = rng.uniform(-5.0, 15.0)
+            noise_time = time + timedelta(seconds=offset_sec)
+            noise_cmd = pick_bash_command(rng, user.persona or "", system.hostname, system.services)
+            self.generate_bash_command(user, system, noise_time, noise_cmd)
 
     def generate_system_process(
         self,
@@ -2078,6 +2213,7 @@ class ActivityGenerator:
                 integrity_level="System",
                 logon_id=logon_id,
                 parent_image=self._lookup_parent_image(system.hostname, parent_pid),
+                parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1936",
                 mandatory_label="S-1-16-16384",
             ),
@@ -2169,6 +2305,7 @@ class ActivityGenerator:
         src_ip: str,
         dst_ip: str,
         time: datetime,
+        hostname: str | None = None,
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -2180,11 +2317,14 @@ class ActivityGenerator:
             src_ip: IP of the system making the query
             dst_ip: IP that will be resolved (the "answer")
             time: Timestamp of the DNS query (should precede TCP connection)
+            hostname: Explicit domain name to use (bypasses REVERSE_DNS lookup)
         """
         rng = _get_rng()
 
-        # Look up hostname for this IP, or generate one
-        hostname = REVERSE_DNS.get(dst_ip)
+        # Use explicit hostname if provided (domain-first selection),
+        # otherwise fall back to REVERSE_DNS lookup
+        if not hostname:
+            hostname = REVERSE_DNS.get(dst_ip)
         if not hostname:
             if _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
@@ -2492,8 +2632,16 @@ class ActivityGenerator:
         conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
 
         if conn_info["external"]:
-            # External connection: pick a random external IP
-            dst_ip = _generate_random_external_ip(rng)
+            # External connection: domain-first selection
+            from evidenceforge.generation.activity.dns_registry import (
+                _domain_to_ip as _d2ip,
+            )
+            from evidenceforge.generation.activity.dns_registry import (
+                generate_long_tail_domain as _gen_lt_domain,
+            )
+
+            ext_hostname = _gen_lt_domain(rng)
+            dst_ip = _d2ip(ext_hostname)
         else:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])
@@ -2519,6 +2667,7 @@ class ActivityGenerator:
             resp_bytes=rng.randint(500, 50000),
             emit_dns=conn_info["external"],
             pid=pid,
+            hostname=ext_hostname if conn_info["external"] else None,
         )
 
     def execute_baseline_activity(
@@ -2651,7 +2800,7 @@ class ActivityGenerator:
                 process_name = process_name.replace("{username}", user.username)
                 # Parameterize command templates (all categories — queries, paths, docs)
                 command_line = _parameterize_command(rng, command_line, username=user.username)
-                parent_pid = self._select_parent_pid(system, user, process_name)
+                parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
@@ -2674,7 +2823,7 @@ class ActivityGenerator:
                 rng = _get_rng()
                 process_name, command_line = rng.choice(pool)
                 command_line = _parameterize_command(rng, command_line, username=user.username)
-                parent_pid = self._select_parent_pid(system, user, process_name)
+                parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
@@ -2691,10 +2840,32 @@ class ActivityGenerator:
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
             rng = _get_rng()
+            conn_hostname = None  # Domain name for DNS/SNI consistency
 
-            # Phase 5.3: 30% chance of random CDN/cloud IP for destination diversity
+            # Domain-first selection for web/SaaS: pick a domain, resolve to IP.
+            # This matches real-world flow (user visits domain → DNS → connection)
+            # and ensures DNS query, SNI, and proxy hostname are all consistent.
             if activity_type in ("connection_web", "connection_saas") and rng.random() < 0.30:
-                dst_ip = _generate_random_external_ip(rng)
+                # 30% chance: long-tail domain for CDN/SaaS/analytics diversity
+                from evidenceforge.generation.activity.dns_registry import (
+                    _domain_to_ip,
+                    generate_long_tail_domain,
+                )
+
+                conn_hostname = generate_long_tail_domain(rng)
+                dst_ip = _domain_to_ip(conn_hostname)
+            elif activity_type in ("connection_web", "connection_saas"):
+                # 70%: pick a known domain, resolve to its IP
+                from evidenceforge.generation.activity.network import FORWARD_DNS
+
+                # Filter to domains whose IPs are in the activity type's pool
+                web_ips = set(EXTERNAL_IPS[activity_type])
+                web_domains = [d for d, ip in FORWARD_DNS.items() if ip in web_ips]
+                if web_domains:
+                    conn_hostname = rng.choice(web_domains)
+                    dst_ip = FORWARD_DNS[conn_hostname]
+                else:
+                    dst_ip = rng.choice(EXTERNAL_IPS[activity_type])
             else:
                 available_destinations = [
                     ip for ip in EXTERNAL_IPS[activity_type] if ip != system.ip
@@ -2752,6 +2923,7 @@ class ActivityGenerator:
                 duration=duration,
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes,
+                hostname=conn_hostname,
             )
 
     def generate_machine_account_logon(
@@ -2773,6 +2945,7 @@ class ActivityGenerator:
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
 
+        logon_id = f"0x{rng.randint(0x10000, 0xFFFFF):x}"
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
@@ -2780,7 +2953,7 @@ class ActivityGenerator:
             auth=AuthContext(
                 username=machine_username,
                 user_sid=self._get_sid(machine_username),
-                logon_id=f"0x{rng.randint(0x10000, 0xFFFFF):x}",
+                logon_id=logon_id,
                 logon_type=3,
                 auth_package="Kerberos",
                 source_ip=source_ip,
@@ -2794,6 +2967,21 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+        # Paired logoff for short-lived type 3 machine logon (1-30 seconds)
+        logoff_delay = rng.uniform(1.0, 30.0)
+        logoff_event = SecurityEvent(
+            timestamp=time + timedelta(seconds=logoff_delay),
+            event_type="logoff",
+            dst_host=self._build_dc_host_context(dc_hostname),
+            auth=AuthContext(
+                username=machine_username,
+                user_sid=self._get_sid(machine_username),
+                logon_id=logon_id,
+                logon_type=3,
+            ),
+        )
+        self.dispatcher.dispatch(logoff_event)
 
         # Also generate the Kerberos network connection to DC
         self.generate_connection(
@@ -2819,7 +3007,8 @@ class ActivityGenerator:
         """Generate Kerberos TGT request event (4768) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
-        domain = domain or getattr(self, "_netbios_domain", "CORP")
+        # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
+        domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
 
         event = SecurityEvent(
@@ -2853,7 +3042,7 @@ class ActivityGenerator:
         """Generate Kerberos TGT renewal event (4770) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
-        domain = domain or getattr(self, "_netbios_domain", "CORP")
+        domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
 
         event = SecurityEvent(
@@ -2887,7 +3076,7 @@ class ActivityGenerator:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
-        domain = domain or getattr(self, "_netbios_domain", "CORP")
+        domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
 
         event = SecurityEvent(
@@ -3129,7 +3318,7 @@ class ActivityGenerator:
             dst_host=dc_host,
             kerberos=KerberosContext(
                 target_username=username,
-                target_domain=dc_host.netbios_domain,
+                target_domain=getattr(self, "_ad_domain", "corp.local").upper(),
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 ticket_options="0x40810010",
@@ -3551,14 +3740,27 @@ class ActivityGenerator:
         server_addr: str = "10.0.0.1",
         lease_time: float = 3600.0,
         uid: str = "",
+        msg_types: list[str] | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         from evidenceforge.events.contexts import DhcpContext
+
+        if msg_types is None:
+            msg_types = ["DISCOVER", "OFFER", "REQUEST", "ACK"]
+
+        from evidenceforge.events.contexts import NetworkContext
 
         event = SecurityEvent(
             timestamp=time,
             event_type="dhcp_lease",
             src_host=self._build_host_context(system),
+            network=NetworkContext(
+                src_ip=system.ip,
+                dst_ip=server_addr,
+                src_port=68,
+                dst_port=67,
+                protocol="udp",
+            ),
             dhcp=DhcpContext(
                 client_addr=system.ip,
                 server_addr=server_addr,
@@ -3567,7 +3769,7 @@ class ActivityGenerator:
                 assigned_addr=system.ip,
                 lease_time=lease_time,
                 uids=[uid] if uid else [],
-                msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+                msg_types=msg_types,
                 duration=_get_rng().uniform(0.01, 0.5),
             ),
         )
@@ -3825,15 +4027,17 @@ class ActivityGenerator:
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
 
-    def _lookup_process_name(self, hostname: str, pid: int) -> str:
+    def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.
 
-        Falls back to explorer.exe for user processes if PID not tracked.
+        Falls back to an OS-appropriate shell if PID not tracked.
         """
         key = (hostname, pid)
         proc = self.state_manager.state.running_processes.get(key)
         if proc:
             return proc.image
+        if os_category == "linux":
+            return "/usr/bin/bash"
         return r"C:\Windows\explorer.exe"
 
     # Process names that can spawn child processes
@@ -3879,6 +4083,13 @@ class ActivityGenerator:
         proc = self.state_manager.get_process(hostname, parent_pid)
         if proc:
             return proc.image
+        return "-"
+
+    def _lookup_parent_command_line(self, hostname: str, parent_pid: int) -> str:
+        """Look up parent process command line from StateManager."""
+        proc = self.state_manager.get_process(hostname, parent_pid)
+        if proc:
+            return proc.command_line
         return "-"
 
     def _get_session_explorer_pid(self, system: System, user: User) -> int | None:
@@ -3980,6 +4191,269 @@ class ActivityGenerator:
             if shells:
                 return shells[-1][0]
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
+
+    def _resolve_parent(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+    ) -> int:
+        """Resolve the parent PID for a process using spawn rules.
+
+        Transparently finds an existing valid parent or auto-creates the
+        parent chain (with realistic timing) using the spawn rules YAML.
+        Falls back to the legacy _select_parent_pid() for unknown processes.
+        """
+        from evidenceforge.generation.activity.spawn_rules import (
+            get_reverse_index_linux,
+            get_reverse_index_windows,
+        )
+
+        rng = _get_rng()
+        os_cat = _get_os_category(system.os)
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+
+        # Extract basename for rule lookup
+        if os_cat == "windows":
+            exe_name = (
+                process_name.rsplit("\\", 1)[-1].lower()
+                if "\\" in process_name
+                else process_name.lower()
+            )
+        else:
+            exe_name = (
+                process_name.rsplit("/", 1)[-1].lower()
+                if "/" in process_name
+                else process_name.lower()
+            )
+
+        # Special override: SYSTEM user or network logon → svchost (not services.exe directly)
+        # Real Windows: services.exe → svchost.exe → cmd.exe (never services.exe → cmd.exe)
+        _SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"}
+        is_shell = exe_name in _SHELLS
+        if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
+            if is_shell:
+                # Shells get svchost as parent (realistic: service host spawns shell)
+                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
+            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        # Match by logon_id when available to avoid picking the wrong session
+        # when a user has both interactive (type 2) and network (type 3) sessions
+        # on the same host.
+        if logon_id and sessions:
+            active_session = next(
+                (s for s in sessions if s.system == system.hostname and s.logon_id == logon_id),
+                None,
+            )
+        else:
+            active_session = (
+                next((s for s in sessions if s.system == system.hostname), None)
+                if sessions
+                else None
+            )
+        is_network_logon = active_session and active_session.logon_type == 3
+        if is_network_logon:
+            if is_shell:
+                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
+            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+
+        # Look up valid parents from spawn rules
+        if os_cat == "windows":
+            reverse = get_reverse_index_windows()
+        else:
+            reverse = get_reverse_index_linux()
+
+        possible_parents = reverse.get(exe_name, [])
+
+        if not possible_parents:
+            # No rules for this exe — fall back to legacy logic
+            return self._select_parent_pid(system, user, process_name)
+
+        # Check alive_history for a matching parent
+        key = (system.hostname, user.username)
+        history = self._user_process_history.get(key, [])
+        alive_parents = []
+        for pid, name in history:
+            if not self._is_pid_alive(system, pid):
+                continue
+            hist_exe = (
+                name.rsplit("\\", 1)[-1].lower()
+                if "\\" in name
+                else name.rsplit("/", 1)[-1].lower()
+            )
+            if hist_exe in possible_parents:
+                alive_parents.append((pid, name))
+
+        # Also check seeded system processes as potential parents
+        for _role, pid in sys_pids.items():
+            proc = self.state_manager.get_process(system.hostname, pid)
+            if proc:
+                proc_exe = (
+                    proc.image.rsplit("\\", 1)[-1].lower()
+                    if "\\" in proc.image
+                    else proc.image.rsplit("/", 1)[-1].lower()
+                )
+                if proc_exe in possible_parents:
+                    alive_parents.append((pid, proc.image))
+
+        if alive_parents:
+            # Deduplicate by PID
+            seen = set()
+            unique = []
+            for pid, name in alive_parents:
+                if pid not in seen:
+                    seen.add(pid)
+                    unique.append((pid, name))
+            return rng.choice(unique)[0]
+
+        # No valid parent alive — auto-create the chain
+        return self._ensure_parent_chain(system, user, time, logon_id, exe_name, os_cat, depth=0)
+
+    def _ensure_parent_chain(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        child_exe: str,
+        os_cat: str,
+        depth: int = 0,
+    ) -> int:
+        """Recursively create parent processes needed for child_exe.
+
+        Builds the chain up to the nearest seeded system process (explorer,
+        services, sshd, systemd). Depth-limited to 3 to prevent infinite
+        recursion.
+        """
+        from evidenceforge.generation.activity.spawn_rules import (
+            get_parent_config,
+            get_reverse_index_linux,
+            get_reverse_index_windows,
+        )
+
+        rng = _get_rng()
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+
+        if os_cat == "windows":
+            reverse = get_reverse_index_windows()
+        else:
+            reverse = get_reverse_index_linux()
+
+        # Safety limit
+        if depth > 3:
+            if os_cat == "windows":
+                return sys_pids.get("explorer", 4)
+            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+
+        # Pick a parent for child_exe from the rules
+        possible_parents = reverse.get(child_exe, [])
+        if not possible_parents:
+            if os_cat == "windows":
+                return sys_pids.get("explorer", 4)
+            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+
+        # Prefer shells for CLI tools on Windows, sshd→bash for Linux
+        chosen_parent = rng.choice(possible_parents)
+
+        # Check if chosen parent is already a seeded system process
+        for _role, pid in sys_pids.items():
+            proc = self.state_manager.get_process(system.hostname, pid)
+            if proc:
+                proc_exe = (
+                    proc.image.rsplit("\\", 1)[-1].lower()
+                    if "\\" in proc.image
+                    else proc.image.rsplit("/", 1)[-1].lower()
+                )
+                if proc_exe == chosen_parent:
+                    return pid
+
+        # Not a seeded process — need to create it, but first ensure ITS parent
+        grandparent_pid = self._ensure_parent_chain(
+            system, user, time, logon_id, chosen_parent, os_cat, depth=depth + 1
+        )
+
+        # Get command template for the parent we're creating
+        config = get_parent_config(os_cat, chosen_parent)
+        cmd_templates = config.get("command_templates", [chosen_parent])
+        cmd_line = rng.choice(cmd_templates)
+
+        # Determine image path
+        if os_cat == "windows":
+            image = f"C:\\Windows\\System32\\{chosen_parent}"
+        else:
+            image = f"/usr/bin/{chosen_parent}"
+            if chosen_parent in ("bash", "sh", "zsh"):
+                image = f"/bin/{chosen_parent}"
+
+        # Timing: parent is created before child
+        spawn_delay = config.get("spawn_delay", [0.5, 3.0])
+        delay_sec = rng.uniform(spawn_delay[0], spawn_delay[1])
+        parent_time = time - timedelta(seconds=delay_sec * (depth + 1))
+
+        # Create the parent process
+        parent_pid = self.state_manager.create_process(
+            system=system.hostname,
+            parent_pid=grandparent_pid,
+            image=image,
+            command_line=cmd_line,
+            username=user.username,
+            integrity_level="System" if user.username == "SYSTEM" else "Medium",
+        )
+
+        # Determine if this is a pre-existing process (no creation event)
+        # Long-lived parents early in the scenario were "already running"
+        lifetime = config.get("lifetime", "long")
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        is_pre_existing = False
+        if lifetime == "long" and scenario_start:
+            elapsed = (time - scenario_start).total_seconds()
+            if elapsed < 1800 and rng.random() < 0.7:  # First 30 min, 70% chance
+                is_pre_existing = True
+        # Parents created before the output window are always pre-existing
+        # (their creation events would be suppressed by the warm-up filter anyway)
+        if not is_pre_existing and scenario_start and parent_time < scenario_start:
+            is_pre_existing = True
+
+        if not is_pre_existing:
+            # Emit a process creation event
+            from evidenceforge.events.base import SecurityEvent
+            from evidenceforge.events.contexts import AuthContext, ProcessContext
+
+            event = SecurityEvent(
+                timestamp=parent_time,
+                event_type="process_create",
+                src_host=self._build_host_context(system),
+                auth=AuthContext(
+                    username=user.username,
+                    user_sid=self._get_sid(user.username),
+                    logon_id=logon_id,
+                ),
+                process=ProcessContext(
+                    pid=parent_pid,
+                    parent_pid=grandparent_pid,
+                    image=image,
+                    command_line=cmd_line,
+                    username=user.username,
+                    integrity_level="Medium",
+                    logon_id=logon_id,
+                    parent_image=self._lookup_process_name(
+                        system.hostname, grandparent_pid, _get_os_category(system.os)
+                    ),
+                    parent_command_line=self._lookup_parent_command_line(
+                        system.hostname, grandparent_pid
+                    ),
+                    token_elevation="%%1938",
+                    mandatory_label="S-1-16-8192",
+                ),
+            )
+            self.dispatcher.dispatch(event)
+
+        # Record in user process history
+        self._record_user_process(system, user, parent_pid, image)
+        return parent_pid
 
     def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
         """Record a user process in history for future parent selection."""

@@ -30,6 +30,7 @@ Two-layer filtering for emitter selection:
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
@@ -88,14 +89,35 @@ class EventDispatcher:
         state_manager: StateManager,
         emitters: dict[str, LogEmitter],
         visibility_engine: NetworkVisibilityEngine | None = None,
+        output_start_time: datetime | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.emitters = emitters
         self.visibility_engine = visibility_engine
+        self.output_start_time = output_start_time
+
+    def _is_suppressed(self, timestamp: datetime) -> bool:
+        """Return True if the event falls before the output window (warm-up period)."""
+        if self.output_start_time is None:
+            return False
+        # Normalize tz-awareness to avoid naive/aware comparison errors
+        ts = timestamp
+        gate = self.output_start_time
+        if ts.tzinfo is not None and gate.tzinfo is None:
+            ts = ts.replace(tzinfo=None)
+        elif ts.tzinfo is None and gate.tzinfo is not None:
+            gate = gate.replace(tzinfo=None)
+        return ts < gate
 
     def dispatch(self, event: SecurityEvent) -> None:
-        """Route a structured event to StateManager + matching emitters."""
+        """Route a structured event to StateManager + matching emitters.
+
+        State is always updated (even during warm-up). Emission to log files
+        is suppressed for events before output_start_time.
+        """
         self.state_manager.apply(event)
+        if self._is_suppressed(event.timestamp):
+            return
         for emitter in self._get_matching_emitters(event):
             if event.raw is not None:
                 emitter.emit_raw(event.raw.fields)
@@ -107,6 +129,8 @@ class EventDispatcher:
 
         target_emitter must match a key in self.emitters dict.
         """
+        if self._is_suppressed(entry.timestamp):
+            return
         emitter = self.emitters.get(entry.target_emitter)
         if emitter is None:
             raise KeyError(f"Unknown emitter: {entry.target_emitter!r}")

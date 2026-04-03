@@ -428,7 +428,7 @@ class TestProcessAccessAfterRemoteThread:
         assert len(result) == 1
         ev = result[0]
         assert ev.method == "generate_process_access"
-        assert ev.kwargs["granted_access"] == "0x1010"
+        assert ev.kwargs["granted_access"] == "0x1FFFFF"
         assert ev.kwargs["source_pid"] == 1234
         assert ev.kwargs["target_pid"] == 636
         assert ev.timing.position == "after"

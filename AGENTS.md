@@ -136,6 +136,56 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 ### Path Handling
 - Always use `pathlib.Path`, never string paths. Resolve paths early at boundaries.
 
+## Generation Realism Patterns
+
+These rules prevent the recurring anti-patterns that make generated data look synthetic. Apply them to ALL generation code — engine, emitters, baseline, storyline.
+
+### 1. Compute once, use everywhere
+Derived values (hostname, hash, domain) must be computed **once** and attached to the SecurityEvent. Emitters must **never** independently derive shared values via `REVERSE_DNS`, `hashlib`, or RNG. If two log formats need the same value (e.g., DNS query domain = SSL SNI = proxy hostname), it must come from a single source on the event object.
+
+**Anti-pattern:** Each emitter does its own `REVERSE_DNS.get(dst_ip)` → produces inconsistent results.
+**Correct:** Resolve hostname once in `generate_connection()`, pass to all downstream consumers.
+
+### 2. Data-driven, not code-driven
+Enumerable pools (domains, processes, user agents, file paths, OUI prefixes, TLS issuers) belong in **YAML files** with cached loaders, not hardcoded Python lists. Follow the existing pattern:
+- `src/evidenceforge/generation/activity/spawn_rules.yaml` + `spawn_rules.py`
+- `src/evidenceforge/generation/activity/bash_commands.yaml` + `bash_commands.py`
+- `src/evidenceforge/generation/activity/tls_issuers.yaml` + `tls_issuers.py`
+- `src/evidenceforge/generation/activity/network_params.yaml`
+
+**Anti-pattern:** `_ISSUERS = ["CN=R3, O=Let's Encrypt...", ...]` hardcoded in generator.py.
+**Correct:** Load from YAML at module level, cache after first call.
+
+### 3. OS-aware defaults
+Every function returning a fallback/default value must check `os_category`. Grep for hardcoded Windows paths (`C:\\`, `explorer.exe`, `svchost.exe`) outside explicitly Windows-only code blocks — each one is a potential Linux data corruption.
+
+**Anti-pattern:** `return r"C:\Windows\explorer.exe"` without checking OS.
+**Correct:** `return "/usr/bin/bash" if os_category == "linux" else r"C:\Windows\explorer.exe"`
+
+### 4. Lifecycle completeness
+Every event type that creates state must have a corresponding termination event with realistic timing:
+- `logon` → paired `logoff` (immediate for type 3, end-of-day for type 2/10)
+- `process_create` → `process_terminate`
+- `dhcp_lease` (DISCOVER) → periodic renewals (REQUEST/ACK at T/2)
+- `connection` → duration + close
+
+**Anti-pattern:** `generate_machine_account_logon()` creates type 3 session but never generates 4634 logoff.
+**Correct:** Emit paired logoff 1-30 seconds after type 3 logon.
+
+### 5. No uniform distributions
+Any generation loop must use randomized counts, probabilistic skipping, and per-entity jitter. Fixed counts, fixed intervals, and uniform iteration are tells that reveal synthetic generation.
+
+**Anti-pattern:** `for slot_base in [0, 900, 1800, 2700]:` → exactly 4 events/hour on every host.
+**Correct:** `num_tasks = rng.randint(2, 5); slots = sorted(rng.sample(range(0, 3600, 300), num_tasks))`
+
+### 6. Deterministic but scoped
+Use `_stable_seed(f"context_{scope_key}")` for all deterministic derivation. **Never** use:
+- Python's `hash()` — non-deterministic across processes (PYTHONHASHSEED)
+- Globally-seeded `random.Random(42)` — produces identical sequences for different entities
+
+**Anti-pattern:** `hash(f"mac_{system.ip}")` for MAC generation; `Random(42)` for LogonIDs.
+**Correct:** `_stable_seed(f"mac_{system.ip}")` for MAC; per-host RNG `Random(_stable_seed(f"logon_ids_{hostname}"))`.
+
 ## Key Architecture Patterns
 
 ### Canonical Event Model

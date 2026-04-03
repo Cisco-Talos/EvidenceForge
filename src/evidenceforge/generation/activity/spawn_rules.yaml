@@ -1,0 +1,299 @@
+# Spawn rules: parent → children that it can realistically create.
+# The generator reverse-indexes this to find valid parents for any child.
+#
+# Fields per parent:
+#   command_templates: list of command lines for auto-creating this parent
+#   lifetime: long (persists for session) | short (runs briefly)
+#   spawn_delay: [min_sec, max_sec] before spawning children (default: [0.5, 3.0])
+#   max_children: optional cap (omit for unlimited — the common case)
+#   children: list of exe names this parent can spawn
+
+windows:
+  explorer.exe:
+    command_templates:
+      - "C:\\Windows\\explorer.exe"
+    lifetime: long
+    children:
+      - chrome.exe
+      - firefox.exe
+      - msedge.exe
+      - iexplore.exe
+      - outlook.exe
+      - winword.exe
+      - excel.exe
+      - powerpnt.exe
+      - teams.exe
+      - onedrive.exe
+      - acrobat.exe
+      - 7zfm.exe
+      - notepad++.exe
+      - code.exe
+      - idea64.exe
+      - sublime_text.exe
+      - cmd.exe
+      - powershell.exe
+      - pwsh.exe
+      - WindowsTerminal.exe
+      - mmc.exe
+      - eventvwr.exe
+      - taskmgr.exe
+      - regedit.exe
+      - notepad.exe
+
+  cmd.exe:
+    command_templates:
+      - "cmd.exe"
+      - "cmd.exe /k"
+      - "C:\\Windows\\System32\\cmd.exe"
+    lifetime: long
+    children:
+      - dotnet.exe
+      - msbuild.exe
+      - git.exe
+      - npm.exe
+      - node.exe
+      - python.exe
+      - python3.exe
+      - pip.exe
+      - cargo.exe
+      - go.exe
+      - sqlcmd.exe
+      - wmic.exe
+      - ipconfig.exe
+      - nslookup.exe
+      - netstat.exe
+      - ping.exe
+      - tracert.exe
+      - systeminfo.exe
+      - tasklist.exe
+      - whoami.exe
+      - net.exe
+      - schtasks.exe
+      - sc.exe
+      - wevtutil.exe
+      - xcopy.exe
+      - robocopy.exe
+      - findstr.exe
+      - cmd.exe
+      - powershell.exe
+      - conhost.exe
+      - reg.exe
+
+  powershell.exe:
+    command_templates:
+      - "powershell.exe"
+      - "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    lifetime: long
+    children:
+      - dotnet.exe
+      - msbuild.exe
+      - git.exe
+      - npm.exe
+      - node.exe
+      - python.exe
+      - python3.exe
+      - pip.exe
+      - cargo.exe
+      - go.exe
+      - sqlcmd.exe
+      - ipconfig.exe
+      - nslookup.exe
+      - netstat.exe
+      - ping.exe
+      - whoami.exe
+      - net.exe
+      - schtasks.exe
+      - sc.exe
+      - wevtutil.exe
+      - cmd.exe
+      - powershell.exe
+      - conhost.exe
+      - reg.exe
+
+  code.exe:
+    command_templates:
+      - "Code.exe"
+    lifetime: long
+    spawn_delay: [1.0, 5.0]
+    children:
+      - node.exe
+      - git.exe
+      - dotnet.exe
+      - python.exe
+      - npm.exe
+
+  idea64.exe:
+    command_templates:
+      - "idea64.exe"
+    lifetime: long
+    spawn_delay: [1.0, 5.0]
+    children:
+      - java.exe
+      - javac.exe
+      - git.exe
+      - gradle.exe
+
+  services.exe:
+    command_templates:
+      - "C:\\Windows\\System32\\services.exe"
+    lifetime: long
+    spawn_delay: [0.01, 0.5]
+    children:
+      - svchost.exe
+      - MsMpEng.exe
+      - SearchIndexer.exe
+      - spoolsv.exe
+      - lsaiso.exe
+      - msdtc.exe
+
+  svchost.exe:
+    command_templates:
+      - "svchost.exe -k netsvcs -p"
+      - "svchost.exe -k DcomLaunch -p"
+      - "svchost.exe -k LocalServiceNetworkRestricted -p"
+      - "svchost.exe -k LocalServiceNoNetwork -p"
+    lifetime: long
+    spawn_delay: [0.01, 0.5]
+    children:
+      - taskhostw.exe
+      - dllhost.exe
+      - WmiPrvSE.exe
+      - conhost.exe
+      - RuntimeBroker.exe
+      - sihost.exe
+      - backgroundTaskHost.exe
+
+linux:
+  sshd:
+    command_templates:
+      - "/usr/sbin/sshd -D"
+    lifetime: long
+    children:
+      - bash
+      - sh
+      - zsh
+      - sftp-server
+
+  bash:
+    command_templates:
+      - "-bash"
+      - "/bin/bash"
+    lifetime: long
+    children:
+      - vim
+      - nano
+      - emacs
+      - code
+      - git
+      - make
+      - gcc
+      - npm
+      - cargo
+      - python3
+      - pip
+      - pip3
+      - docker
+      - kubectl
+      - curl
+      - wget
+      - ssh
+      - scp
+      - rsync
+      - mysql
+      - psql
+      - mysqldump
+      - gzip
+      - tar
+      - unzip
+      - ls
+      - cat
+      - grep
+      - find
+      - ps
+      - top
+      - htop
+      - df
+      - free
+      - systemctl
+      - journalctl
+      - tail
+      - head
+      - less
+      - nmap
+      - ip
+      - ss
+      - netstat
+      - id
+      - whoami
+      - uname
+      - hostname
+      - w
+      - uptime
+      - chmod
+      - chown
+      - ln
+      - mv
+      - cp
+      - rm
+      - mkdir
+      - sed
+      - awk
+      - sort
+      - wc
+      - bash
+      - sh
+
+  sh:
+    command_templates:
+      - "/bin/sh"
+    lifetime: short
+    max_children: 5
+    spawn_delay: [0.01, 0.1]
+    children:
+      - make
+      - gcc
+      - bash
+      - sh
+
+  cron:
+    command_templates:
+      - "/usr/sbin/cron -f"
+    lifetime: long
+    spawn_delay: [0.01, 0.1]
+    children:
+      - sh
+      - bash
+
+  systemd:
+    command_templates:
+      - "/usr/lib/systemd/systemd --system"
+    lifetime: long
+    spawn_delay: [0.01, 0.5]
+    children:
+      - sshd
+      - cron
+      - rsyslogd
+      - NetworkManager
+      - chronyd
+      - systemd-resolved
+      - systemd-timesyncd
+      - systemd-logind
+      - dockerd
+      - mysqld
+      - nginx
+      - apache2
+      - containerd
+
+  dockerd:
+    command_templates:
+      - "/usr/bin/dockerd"
+    lifetime: long
+    children:
+      - containerd
+
+  containerd:
+    command_templates:
+      - "/usr/bin/containerd"
+    lifetime: long
+    children:
+      - runc

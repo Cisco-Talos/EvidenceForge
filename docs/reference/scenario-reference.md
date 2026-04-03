@@ -252,7 +252,14 @@ time_window:
   start: "2024-01-15T10:00:00Z"  # Required: ISO 8601 UTC
   end: "2024-01-15T18:00:00Z"    # Either end OR duration required
   duration: "8h"                   # Supports: "10h", "3d", "2h30m", "5m30s", "500ms"
+  warmup: "8h"                     # Optional (default "8h"). Minimum 1 hour.
 ```
+
+The `warmup` field controls a pre-generation phase that runs *before* `start` to pre-populate
+internal state (DNS cache, process trees, active sessions, Kerberos tickets, Hawkes timing kernels).
+Events generated during warm-up update state but are **not** written to output files. This makes
+the first minutes of output look like a running system rather than a cold start. Minimum 1 hour;
+default 8 hours covers a full day/night transition for maximum realism.
 
 ## Baseline Activity
 
@@ -385,6 +392,12 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Command diversification:** Baseline process commands are parameterized with varied project paths, document names, build configurations, and per-user file references instead of fixed strings.
 
+**Realistic process trees:** Parent-child relationships are driven by `spawn_rules.yaml`, which defines valid parent processes for each child executable. CLI tools (dotnet.exe, git.exe, npm.exe, etc.) are parented from shells (cmd.exe, powershell.exe), GUI apps from explorer.exe, and system services from services.exe/svchost.exe. When a valid parent doesn't exist in the user's process history, the engine auto-creates the intermediate chain with realistic timing. Linux processes follow sshd→bash→command chains. Sysmon Event 1 `ParentCommandLine` is populated from the parent process's actual command line (no longer always "-").
+
+**PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
+
+**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving.
+
 ### DHCP Lease Events
 
 Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attacker plugging in a device during physical access, or a compromised host requesting a new IP).
@@ -401,7 +414,7 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC from the system IP and uses the system's configured IP if omitted.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing — they will only appear on sensors monitoring the client's network segment.
 
 ### Port Scan Events
 

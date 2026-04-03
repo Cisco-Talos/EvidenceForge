@@ -190,6 +190,24 @@ class TestNoNat:
         result = engine.compute_nat("203.0.113.1", "8.8.8.8", 54321, 443)
         assert result is None
 
+    def test_static_nat_internal_to_internal_no_translation(self, engine):
+        """DMZ host talking to internal server should NOT have static NAT applied.
+
+        Bug: compute_nat() applied static NAT whenever src_ip == real_ip
+        without checking if destination is external. A 172.16.0.5 → 10.0.20.5
+        connection incorrectly returned mapped_src_ip=203.0.113.5.
+        """
+        result = engine.compute_nat("172.16.0.5", "10.0.20.5", 443, 3306)
+        assert result is None, (
+            f"Static NAT should not apply to internal-to-internal traffic, but got {result}"
+        )
+
+    def test_static_nat_outbound_to_external_still_works(self, engine):
+        """DMZ host going to external IP should still get static NAT."""
+        result = engine.compute_nat("172.16.0.5", "8.8.8.8", 443, 80)
+        assert result is not None
+        assert result.mapped_src_ip == "203.0.113.5"
+
 
 class TestRuleOrdering:
     """Tests for rule matching order."""

@@ -50,7 +50,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     pick_suspicious_pattern,
 )
 from evidenceforge.models.scenario import Persona, User
-from evidenceforge.utils.rng import _get_rng
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,27 @@ _BENIGN_PA_PAIRS = [
         r"C:\Windows\System32\lsass.exe",
         "0x1000",
     ),
+    (
+        "csrss_s0",
+        r"C:\Windows\System32\csrss.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
+    (
+        "svchost_netsvcs",
+        r"C:\Windows\System32\svchost.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
+    (
+        "services",
+        r"C:\Windows\System32\services.exe",
+        "lsass",
+        r"C:\Windows\System32\lsass.exe",
+        "0x1000",
+    ),
 ]
 
 # Synthetic SYSTEM user for baseline Event 8/10 generation
@@ -202,104 +223,157 @@ class BaselineMixin:
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
 
-    def _generate_baseline(self) -> None:
-        """Generate baseline activity for all enabled users.
+    def _generate_hour(
+        self,
+        current_hour: datetime,
+        enabled_users: list,
+        *,
+        emit_storylines: bool = True,
+        flush_emitters: bool = True,
+    ) -> None:
+        """Generate one hour of baseline activity.
 
-        Iterates hour-by-hour through the time window, generating activity
-        for each enabled user based on their persona, intensity, and variation.
-
-        Phase 1 Implementation:
-        - Simple hour-by-hour iteration
-        - Fixed activity patterns (no LLM)
-        - Uniform distribution with jitter within each hour
+        Used by both the warm-up loop and the real baseline loop. During warm-up,
+        storyline/red-herring execution and emitter flushing are skipped.
         """
-        logger.info("Starting baseline activity generation")
-        self._emit_sensor_startup()
-        self._emit_dhcp_leases()
+        self.state_manager.set_current_time(current_hour)
 
-        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
-        logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
+        # Compute local weekday for day-of-week variation
+        if hasattr(self, "_scenario_tz") and self._scenario_tz:
+            local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+        else:
+            local_dt = current_hour
+        local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
+        is_weekend = local_weekday >= 5
 
-        total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
+        for user in enabled_users:
+            persona = self._get_user_persona(user)
+            user_offsets = self._user_time_offsets.get(user.username)
 
-        current_hour = self.start_time
-        hour_count = 0
+            # Weekend filtering: skip non-IT personas on weekends
+            if is_weekend and persona:
+                persona_key = (persona.name or "").lower()
+                if persona_key not in _WEEKEND_ACTIVE_PERSONAS:
+                    continue
 
-        while current_hour < self.end_time:
-            hour_count += 1
-            logger.debug(f"Processing hour {hour_count}: {current_hour}")
-            self.state_manager.set_current_time(current_hour)
-
-            self._report_progress(
-                "hour_progress",
-                {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
+            local_hour = local_dt.hour
+            num_events = self._calculate_events_for_hour(
+                user,
+                current_hour=local_hour,
+                persona=persona,
+                user_offsets=user_offsets,
+                weekday=local_weekday,
             )
 
-            # Compute local weekday for day-of-week variation
-            if hasattr(self, "_scenario_tz") and self._scenario_tz:
-                local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
-            else:
-                local_dt = current_hour
-            local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
-            is_weekend = local_weekday >= 5
+            if num_events > 0:
+                rng = _get_rng()
+                if rng.random() < 0.20:
+                    continue
 
-            for user in enabled_users:
-                persona = self._get_user_persona(user)
-                user_offsets = self._user_time_offsets.get(user.username)
-
-                # Weekend filtering: skip non-IT personas on weekends
-                if is_weekend and persona:
-                    persona_key = (persona.name or "").lower()
-                    if persona_key not in _WEEKEND_ACTIVE_PERSONAS:
-                        continue
-
-                local_hour = local_dt.hour
-                num_events = self._calculate_events_for_hour(
-                    user,
-                    current_hour=local_hour,
-                    persona=persona,
-                    user_offsets=user_offsets,
-                    weekday=local_weekday,
+                persona_name = user.persona if user.persona else None
+                event_times = self._distribute_events_in_hour(
+                    current_hour,
+                    num_events,
+                    persona_name=persona_name,
+                    username=user.username,
                 )
 
-                if num_events > 0:
-                    rng = _get_rng()
-                    if rng.random() < 0.20:
-                        continue
+                for event_time in event_times:
+                    self._generate_user_activity(user, event_time)
 
-                    persona_name = user.persona if user.persona else None
-                    event_times = self._distribute_events_in_hour(
-                        current_hour,
-                        num_events,
-                        persona_name=persona_name,
-                        username=user.username,
-                    )
+        self._generate_system_traffic(current_hour)
+        self._generate_stale_account_noise(current_hour)
+        self._generate_lateral_movement_noise(current_hour)
+        self._generate_suspicious_noise(current_hour)
+        self._generate_firewall_deny_baseline(current_hour)
 
-                    for event_time in event_times:
-                        self._generate_user_activity(user, event_time)
-
-            self._generate_system_traffic(current_hour)
-            self._generate_stale_account_noise(current_hour)
-            self._generate_lateral_movement_noise(current_hour)
-            self._generate_suspicious_noise(current_hour)
-            self._generate_firewall_deny_baseline(current_hour)
-
+        if emit_storylines:
             hour_key = int(current_hour.timestamp())
             for _event_time, event_idx in self._storyline_by_hour.get(hour_key, []):
                 if event_idx not in self._storyline_executed:
                     self._execute_single_storyline_event(event_idx)
                     self._storyline_executed.add(event_idx)
 
-            # Execute red herring events for this hour
             for _event_time, event_idx in self._red_herring_by_hour.get(hour_key, []):
                 if event_idx not in self._red_herring_executed:
                     self._execute_single_red_herring_event(event_idx)
                     self._red_herring_executed.add(event_idx)
 
-            self._terminate_stale_processes(current_hour)
-            self._generate_logoffs_for_hour(enabled_users, current_hour)
+        self._terminate_stale_processes(current_hour)
+        self._generate_logoffs_for_hour(enabled_users, current_hour)
+
+        if flush_emitters:
             self._barrier_flush_all_emitters()
 
+    def _generate_baseline(self) -> None:
+        """Generate baseline activity for all enabled users.
+
+        Iterates hour-by-hour through the time window, generating activity
+        for each enabled user based on their persona, intensity, and variation.
+        Optionally runs a warm-up phase first to pre-populate state.
+        """
+        logger.info("Starting baseline activity generation")
+
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+        logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
+
+        # Emit initial DHCP leases (during warm-up they're suppressed from output
+        # but establish lease state for periodic renewals)
+        self._emit_dhcp_leases()
+
+        # --- Warm-up phase: pre-populate state without emitting ---
+        warmup_hours = math.ceil(self.warmup_duration.total_seconds() / 3600)
+        if warmup_hours > 0:
+            logger.info(f"Running {warmup_hours}-hour warm-up for state pre-population")
+            self._report_progress(
+                "phase_start",
+                {
+                    "phase": "warmup",
+                    "description": f"Warm-up: pre-populating state ({warmup_hours}h)",
+                },
+            )
+
+            current_hour = self.warmup_start_time
+            warmup_count = 0
+
+            while current_hour < self.start_time:
+                warmup_count += 1
+                logger.debug(f"Warm-up hour {warmup_count}/{warmup_hours}: {current_hour}")
+
+                self._report_progress(
+                    "warmup_progress",
+                    {
+                        "hour": warmup_count,
+                        "total_hours": warmup_hours,
+                        "current_time": current_hour,
+                    },
+                )
+
+                self._generate_hour(
+                    current_hour, enabled_users, emit_storylines=False, flush_emitters=False
+                )
+                current_hour += timedelta(hours=1)
+
+            logger.info(f"Warm-up complete: processed {warmup_count} hours")
+            self._report_progress("phase_end", {"phase": "warmup"})
+
+        # --- Real baseline: emit sensor startup and begin output ---
+        self._emit_sensor_startup()
+
+        total_hours = int((self.end_time - self.start_time).total_seconds() / 3600)
+        current_hour = self.start_time
+        hour_count = 0
+
+        while current_hour < self.end_time:
+            hour_count += 1
+            logger.debug(f"Processing hour {hour_count}: {current_hour}")
+
+            self._report_progress(
+                "hour_progress",
+                {"hour": hour_count, "total_hours": total_hours, "current_time": current_hour},
+            )
+
+            self._generate_hour(current_hour, enabled_users)
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
@@ -850,6 +924,7 @@ class BaselineMixin:
                         orig_bytes=orig_bytes,
                         resp_bytes=resp_bytes,
                         emit_dns=True,
+                        hostname=result.get("hostname"),
                     )
 
             elif pattern_type == "scheduled_scan_overlap":
@@ -1539,6 +1614,69 @@ class BaselineMixin:
                 user=user, system=system, time=t, activity_type=activity_type
             )
 
+    def _get_server_ssh_users(self, system) -> list:
+        """Return the subset of admin users who would SSH into this server.
+
+        Sysadmins access all servers. Other personas are added based on
+        server role (determined from services and hostname). Workstations
+        return only their assigned user. Results are cached per hostname.
+        """
+        if not hasattr(self, "_ssh_user_roster_cache"):
+            self._ssh_user_roster_cache: dict[str, list] = {}
+        if system.hostname in self._ssh_user_roster_cache:
+            return self._ssh_user_roster_cache[system.hostname]
+
+        from evidenceforge.generation.activity.bash_commands import _resolve_server_role
+
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+
+        # Workstations: only the assigned user
+        if system.type == "workstation" and system.assigned_user:
+            roster = [u for u in enabled_users if u.username == system.assigned_user]
+            self._ssh_user_roster_cache[system.hostname] = roster
+            return roster
+
+        # Servers: sysadmins always, plus role-specific personas
+        admin_personas = {"sysadmin", "help_desk"}
+        sysadmins = [u for u in enabled_users if (u.persona or "").lower() in admin_personas]
+
+        server_role = _resolve_server_role(system.hostname, system.services)
+        role_personas: set[str] = set()
+        if server_role == "db":
+            role_personas = {"developer", "data_analyst", "analyst"}
+        elif server_role == "web":
+            role_personas = {"developer"}
+        elif server_role == "log":
+            role_personas = {"security_analyst"}
+
+        role_users = [u for u in enabled_users if (u.persona or "").lower() in role_personas]
+
+        # Deduplicate by username, preserving order
+        seen = set()
+        roster = []
+        for u in sysadmins + role_users:
+            if u.username not in seen:
+                seen.add(u.username)
+                roster.append(u)
+
+        # Fallback: at least 2 admin users
+        if len(roster) < 2:
+            all_admins = [
+                u
+                for u in enabled_users
+                if (u.persona or "").lower()
+                in ("sysadmin", "help_desk", "developer", "security_analyst")
+            ]
+            for u in all_admins:
+                if u.username not in seen:
+                    seen.add(u.username)
+                    roster.append(u)
+                if len(roster) >= 2:
+                    break
+
+        self._ssh_user_roster_cache[system.hostname] = roster
+        return roster
+
     def _generate_system_traffic(self, current_hour: datetime) -> None:
         """Generate system-initiated background traffic for all systems.
 
@@ -1577,13 +1715,13 @@ class BaselineMixin:
             if "dns-client" in services:
                 dns_interval = 600 + (hash(f"dns_iv_{system.hostname}") % 1200)
                 dns_phase = hash(f"dns_ph_{system.hostname}") % dns_interval
-                hour_start_sec = (current_hour - self.start_time).total_seconds()
+                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = dns_phase
                 while t < hour_start_sec:
                     t += dns_interval
                 while t < hour_start_sec + 3600:
                     jitter = rng.gauss(0, dns_interval * 0.02)
-                    ts = self.start_time + timedelta(seconds=t + jitter)
+                    ts = self._generation_epoch + timedelta(seconds=t + jitter)
                     self.state_manager.set_current_time(ts)
                     dns_pid = (
                         _svc_pid("svchost_net_svc")
@@ -1633,6 +1771,30 @@ class BaselineMixin:
                     pid=ntp_pid,
                 )
 
+            # DHCP lease renewal at T/2 of lease duration
+            dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
+            if dhcp_state and "zeek_dhcp" in self.emitters:
+                lease_time = dhcp_state["lease_time"]
+                renewal_interval = lease_time / 2  # Renew at T/2
+                last_renewal = dhcp_state["last_renewal"]
+                hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
+                # Check if a renewal falls within this hour
+                next_renewal = last_renewal + renewal_interval
+                if next_renewal < hour_end_epoch:
+                    from evidenceforge.utils.ids import generate_zeek_uid
+
+                    renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
+                    self.state_manager.set_current_time(renewal_ts)
+                    self.activity_generator.generate_dhcp_lease(
+                        system=dhcp_state["system"],
+                        time=renewal_ts,
+                        mac=dhcp_state["mac"],
+                        lease_time=lease_time,
+                        uid=generate_zeek_uid("C"),
+                        msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
+                    )
+                    dhcp_state["last_renewal"] = next_renewal
+
             # SMB browsing: Windows workstations only
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
             if isinstance(dc_ips, str):
@@ -1642,7 +1804,7 @@ class BaselineMixin:
             if "smb-client" in services and os_cat == "windows" and dc_targets:
                 smb_interval = 1200 + (hash(f"smb_iv_{system.hostname}") % 1800)
                 smb_phase = hash(f"smb_ph_{system.hostname}") % smb_interval
-                hour_start_sec = (current_hour - self.start_time).total_seconds()
+                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = smb_phase
                 while t < hour_start_sec:
                     t += smb_interval
@@ -1715,24 +1877,21 @@ class BaselineMixin:
                         pid=_svc_pid("lsass"),
                     )
 
-            # HTTPS background traffic
+            # HTTPS background traffic — domain-first from dns_registry
+            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
             if os_cat == "windows":
-                _bg_https_ips = [
-                    "23.196.25.38",
-                    "13.107.4.50",
-                    "93.184.220.29",
-                    "23.45.101.50",
-                    "52.114.128.40",
-                    "204.79.197.200",
-                ]
                 num_https = rng.randint(8, 20)
                 for _i in range(num_https):
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    bg_domain, bg_ip = pick_domain_and_ip(
+                        rng, "background", "windows", src_host=system.hostname
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(_bg_https_ips),
+                        dst_ip=bg_ip,
                         time=ts,
                         dst_port=443,
                         proto="tcp",
@@ -1743,17 +1902,20 @@ class BaselineMixin:
                         emit_dns=True,
                         source_system=system,
                         pid=_svc_pid("svchost_netsvcs"),
+                        hostname=bg_domain,
                     )
             elif os_cat == "linux":
-                _linux_https_ips = ["91.189.91.39", "185.125.190.39", "151.101.0.204"]
                 num_https = rng.randint(3, 10)
                 for _i in range(num_https):
                     offset = rng.randint(0, 3599) + rng.random()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    bg_domain, bg_ip = pick_domain_and_ip(
+                        rng, "background", "linux", src_host=system.hostname
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(_linux_https_ips),
+                        dst_ip=bg_ip,
                         time=ts,
                         dst_port=443,
                         proto="tcp",
@@ -1764,6 +1926,7 @@ class BaselineMixin:
                         emit_dns=True,
                         source_system=system,
                         pid=_svc_pid("snapd") if not is_rhel_like else -1,
+                        hostname=bg_domain,
                     )
 
             # Database traffic
@@ -1795,15 +1958,38 @@ class BaselineMixin:
                             source_system=system,
                         )
 
-            # Scheduled tasks
-            host_seed = hash(system.hostname) % 900
+            # Independent system service processes (not tied to user activity)
+            # Windows hosts spawn 3-8 service processes per hour
             if os_cat == "windows":
-                win_tasks = [
-                    (r"C:\Windows\System32\svchost.exe", "svchost.exe -k netsvcs -p -s Schedule"),
-                    (r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe /Run"),
-                    (r"C:\Windows\System32\usoclient.exe", "usoclient.exe StartScan"),
-                ]
-                task_name, task_cmd = win_tasks[hash(system.hostname) % len(win_tasks)]
+                from evidenceforge.generation.activity.system_processes import (
+                    pick_system_service_process as _pick_svc,
+                )
+
+                sys_type_str = (system.type or "workstation").lower()
+                num_svc = rng.randint(3, 8)
+                for _si in range(num_svc):
+                    svc_offset = rng.randint(0, 3599) + rng.random()
+                    svc_ts = current_hour + timedelta(seconds=svc_offset)
+                    self.state_manager.set_current_time(svc_ts)
+                    svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
+                    svc_parent = sys_pids.get(svc_parent_key, sys_pids.get("services", 4))
+                    self.activity_generator.generate_system_process(
+                        system=system,
+                        time=svc_ts,
+                        process_name=svc_image,
+                        command_line=svc_cmd,
+                        parent_pid=svc_parent,
+                        username="SYSTEM",
+                    )
+
+            # Scheduled tasks — diverse per-hour selection from YAML
+            from evidenceforge.generation.activity.system_processes import (
+                pick_scheduled_task,
+            )
+
+            host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
+            if os_cat == "windows":
+                pass  # Tasks selected per-iteration below
             else:
                 os_str = (system.os or "").lower()
                 is_rhel_task = any(
@@ -1826,14 +2012,19 @@ class BaselineMixin:
                     ]
                 task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
 
-            for slot_base in [0, 900, 1800, 2700]:
-                offset = slot_base + host_seed + rng.gauss(0, 8) + rng.uniform(0, 3)
+            # Randomize scheduled task count per hour (2-5) with per-host variation
+            num_tasks = rng.randint(2, 5)
+            slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
+            for slot_base in slot_bases:
+                offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
 
                 if os_cat == "windows":
-                    parent_pid = sys_pids.get("svchost_local_system", sys_pids.get("services", 4))
+                    # Pick a diverse task each iteration (not deterministic per host)
+                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
+                    parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
                     # 4648 explicit credentials for scheduled task execution
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
@@ -1848,7 +2039,7 @@ class BaselineMixin:
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
-                        process_name=task_name,
+                        process_name=task_image,
                         command_line=task_cmd,
                         parent_pid=parent_pid,
                         username="SYSTEM",
@@ -1964,6 +2155,37 @@ class BaselineMixin:
                             pid=_svc_pid("sshd"),
                             source_system=src_sys_obj,
                         )
+
+                        # Generate bash history for the admin who SSH'd in.
+                        # User roster is role-based: sysadmins on all servers,
+                        # role-specific users on matching servers.
+                        from evidenceforge.generation.activity.bash_commands import (
+                            pick_bash_command,
+                        )
+
+                        roster = self._get_server_ssh_users(system)
+                        if roster:
+                            ssh_user = rng.choice(roster)
+                            # Vary command count by persona
+                            persona_lower = (ssh_user.persona or "").lower()
+                            if persona_lower == "sysadmin":
+                                n_cmds = rng.randint(3, 8)
+                            elif persona_lower == "developer":
+                                n_cmds = rng.randint(2, 6)
+                            else:
+                                n_cmds = rng.randint(1, 4)
+                            for cmd_i in range(n_cmds):
+                                cmd_offset = rng.randint(30, 600)
+                                cmd_time = ts + timedelta(seconds=cmd_offset + cmd_i * 5)
+                                cmd = pick_bash_command(
+                                    rng,
+                                    ssh_user.persona or "",
+                                    system.hostname,
+                                    system.services,
+                                )
+                                self.activity_generator.generate_bash_command(
+                                    ssh_user, system, cmd_time, cmd
+                                )
 
         # RDP: IT admin connections to Windows servers/DCs
         for system in self.scenario.environment.systems:
@@ -2965,7 +3187,7 @@ class BaselineMixin:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
                 if not monitored_systems:
                     continue
-                num_alerts = rng.randint(1, 3)
+                num_alerts = rng.randint(5, 15)
                 # For IDS sensors (typically perimeter), generate alerts with
                 # external source IPs targeting monitored systems.
                 _EXTERNAL_SCAN_IPS = [

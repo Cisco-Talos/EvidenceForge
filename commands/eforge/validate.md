@@ -53,4 +53,8 @@ Fix the issue in the scenario file, then re-run `eforge validate` to confirm.
 - Storyline that references systems or users that don't exist and can't be trivially added
 - Fundamental schema mismatches (wrong version, missing required sections)
 
+### Known optional fields
+The following optional fields are valid and should not be flagged as unknown:
+- `time_window.warmup` — warm-up duration for state pre-population (default "8h", minimum "1h")
+
 For these, advise the user to use `/eforge scenario` to rework the relevant section, and be specific about what needs to change.

@@ -43,7 +43,7 @@ output/
 | 1102 | Security Log Cleared | Defense Evasion | Different provider (Microsoft-Windows-Eventlog). Uses `<UserData>` instead of `<EventData>`. Level=4, Keywords=0x4020. |
 | 4624 | Successful Logon | Authentication | Version 2 format. Includes ImpersonationLevel, VirtualAccount, ElevatedToken, TargetLinkedLogonId. LogonTypes: 2 (interactive), 3 (network), 5 (service), 7 (unlock), 10 (RDP), 11 (cached). IPv4 rendered as `::ffff:x.x.x.x`. |
 | 4625 | Failed Logon | Authentication | Version 0. Keywords=0x8010 (Audit Failure). Includes Status/SubStatus failure codes. |
-| 4634 | Logoff | Authentication | Paired with 4624 via matching TargetLogonId. |
+| 4634 | Logoff | Authentication | Paired with 4624 via matching TargetLogonId. Generated for interactive sessions (type 2/10) at work-day end and for type 3 network logons (including machine account logons on DCs) after short delays. |
 | 4648 | Explicit Credentials | Lateral Movement | Fires when RunAs, PsExec, WMIC, or scheduled tasks use alternate credentials. Emitted on the source system. |
 | 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside 4624 for elevated accounts. Admin accounts get full privilege set; regular users get limited set. |
 | 4688 | Process Created | Execution | Version 2. Includes CommandLine, ParentProcessName, MandatoryLabel. TokenElevationType indicates UAC status. |
@@ -73,9 +73,10 @@ output/
 
 **Known Limitations:**
 - EventRecordIDs use probabilistic gaps (15% chance +2-8, 3% chance +20-200) rather than correlating with unlogged events
-- Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses System (4)
-- 4648 only fires for storyline lateral movement and explicit-credential tool processes, not for all service logons
+- Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses the System process (PID 4, now properly registered)
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
+- SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts
+- 4648 (explicit credentials) fires in baseline for scheduled task execution with randomized counts (2-5/hour) plus storyline lateral movement
 
 ---
 
@@ -88,7 +89,7 @@ output/
 
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
-| 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. |
+| 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. ParentCommandLine is populated from the parent process's actual command line in StateManager (e.g., `powershell.exe`, `cmd.exe /k`, `Code.exe --folder-uri ...`). ParentImage reflects realistic parent-child relationships driven by `spawn_rules.yaml` — CLI tools parent from shells, GUI apps from explorer.exe, system services from services.exe/svchost.exe. |
 | 5 | ProcessTerminate | Execution | Version 3. Emitted alongside Security 4689 and eCAR PROCESS/TERMINATE for the same process exit. Storyline processes terminate with realistic delays based on command type (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination). Fields: ProcessGuid, ProcessId, Image, User. |
 | 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. Baseline generates benign noise (1-3/hr) from Defender, CSRSS, svchost. Correlated with eCAR THREAD/REMOTE_CREATE. |
 | 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz accessing lsass.exe). Includes GrantedAccess mask, CallTrace. Baseline generates benign noise (3-8/hr) from Defender, CSRSS, Services.exe. Correlated with eCAR PROCESS/OPEN. |
@@ -115,9 +116,9 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for port 443 connections. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
-| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
+| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Sensor-routed via NetworkContext. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity, key info. |
+| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info. Whole-second timestamps. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
 | ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
@@ -195,11 +196,10 @@ Authentication and system logs from Linux hosts. All syslog entries are rendered
 **File:** `<hostname.domain>/bash_history/<username>.bash_history`
 **Format:** Timestamped bash history (`#<epoch>\n<command>`)
 
-Per-user command history for Linux systems.
+Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving.
 
 **Known Limitations:**
-- Commands generated from persona activity templates, not interactive session simulation
-- May be sparse for long SSH sessions
+- No command typos, tab-completion artifacts, or repeated commands
 - No command output or error messages
 
 ---

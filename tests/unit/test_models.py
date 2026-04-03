@@ -108,6 +108,44 @@ class TestTimeWindow:
         with pytest.raises(ValidationError, match="Duration must match pattern"):
             TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="invalid")
 
+    def test_time_window_warmup_default(self):
+        """Default warmup is '8h'."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h")
+        assert tw.warmup == "8h"
+
+    def test_time_window_warmup_custom(self):
+        """Custom warmup values >= 1h are accepted."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="1h30m")
+        assert tw.warmup == "1h30m"
+
+        tw2 = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="2h")
+        assert tw2.warmup == "2h"
+
+    def test_time_window_warmup_rejects_zero(self):
+        """'0s' is rejected — warm-up cannot be disabled."""
+        with pytest.raises(ValidationError, match="at least 1 hour"):
+            TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="0s")
+
+    def test_time_window_warmup_rejects_sub_hour(self):
+        """Sub-hour warmup values are rejected (minimum 1 hour)."""
+        with pytest.raises(ValidationError, match="at least 1 hour"):
+            TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="30m")
+
+    def test_time_window_warmup_none(self):
+        """None means use default (engine provides 8h)."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup=None)
+        assert tw.warmup is None
+
+    def test_time_window_warmup_invalid(self):
+        """Invalid warmup format raises ValidationError."""
+        with pytest.raises(ValidationError, match="warmup must match pattern"):
+            TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="invalid")
+
+    def test_time_window_warmup_minimum_1h(self):
+        """Exactly 1h is the minimum accepted warmup."""
+        tw = TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="8h", warmup="1h")
+        assert tw.warmup == "1h"
+
 
 class TestUser:
     """Tests for User model."""

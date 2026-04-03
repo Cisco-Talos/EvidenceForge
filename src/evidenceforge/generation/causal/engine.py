@@ -62,6 +62,9 @@ class ExpansionContext:
     target_system: Any = None
     actor: Any = None
 
+    # Hostname for DNS/SNI consistency (domain-first selection)
+    hostname: str | None = None
+
     # Process/thread fields (for create_remote_thread, process_access)
     source_pid: int | None = None
     source_image: str | None = None

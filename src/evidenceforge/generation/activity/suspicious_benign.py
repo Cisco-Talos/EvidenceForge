@@ -313,28 +313,67 @@ _BENIGN_UNUSUAL_CONNECTIONS = [
         "dst_ip": "13.236.8.128",
         "dst_port": 443,
         "service": "ssl",
+        "hostname": "ec2.ap-southeast-2.amazonaws.com",
         "desc": "AWS ap-southeast-2 (dev testing)",
     },
     {
         "dst_ip": "20.205.243.166",
         "dst_port": 443,
         "service": "ssl",
+        "hostname": "copilot.github.com",
         "desc": "GitHub Copilot endpoint",
     },
-    {"dst_ip": "104.16.0.35", "dst_port": 443, "service": "ssl", "desc": "Cloudflare API"},
+    {
+        "dst_ip": "104.16.0.35",
+        "dst_port": 443,
+        "service": "ssl",
+        "hostname": "api.cloudflare.com",
+        "desc": "Cloudflare API",
+    },
     # Package registries and dev tools
-    {"dst_ip": "151.101.0.63", "dst_port": 443, "service": "ssl", "desc": "PyPI package download"},
-    {"dst_ip": "185.125.190.39", "dst_port": 443, "service": "ssl", "desc": "Ubuntu snap store"},
+    {
+        "dst_ip": "151.101.0.63",
+        "dst_port": 443,
+        "service": "ssl",
+        "hostname": "pypi.org",
+        "desc": "PyPI package download",
+    },
+    {
+        "dst_ip": "185.125.190.39",
+        "dst_port": 443,
+        "service": "ssl",
+        "hostname": "snapcraft.io",
+        "desc": "Ubuntu snap store",
+    },
     {
         "dst_ip": "34.104.35.123",
         "dst_port": 443,
         "service": "ssl",
+        "hostname": "gcr.io",
         "desc": "Google Container Registry",
     },
     # Large outbound transfers (look like exfil but are backup/sync)
-    {"dst_ip": "52.216.84.0", "dst_port": 443, "service": "ssl", "desc": "AWS S3 backup sync"},
-    {"dst_ip": "13.107.42.14", "dst_port": 443, "service": "ssl", "desc": "OneDrive sync"},
-    {"dst_ip": "142.250.80.46", "dst_port": 443, "service": "ssl", "desc": "Google Drive upload"},
+    {
+        "dst_ip": "52.216.84.0",
+        "dst_port": 443,
+        "service": "ssl",
+        "hostname": "s3.amazonaws.com",
+        "desc": "AWS S3 backup sync",
+    },
+    {
+        "dst_ip": "13.107.42.14",
+        "dst_port": 443,
+        "service": "ssl",
+        "hostname": "onedrive.live.com",
+        "desc": "OneDrive sync",
+    },
+    {
+        "dst_ip": "142.250.80.46",
+        "dst_port": 443,
+        "service": "ssl",
+        "hostname": "drive.google.com",
+        "desc": "Google Drive upload",
+    },
 ]
 
 
@@ -389,6 +428,7 @@ def generate_unusual_outbound(
         "dst_ip": conn_info["dst_ip"],
         "dst_port": conn_info["dst_port"],
         "service": conn_info["service"],
+        "hostname": conn_info.get("hostname"),
         "large_transfer": "backup" in conn_info["desc"].lower()
         or "sync" in conn_info["desc"].lower(),
     }

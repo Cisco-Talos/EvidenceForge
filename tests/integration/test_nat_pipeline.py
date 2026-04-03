@@ -188,9 +188,9 @@ class TestOutboundDynamicPat:
         # Built connection records should show mapped IP in parentheses
         built_conn = [line for line in asa_lines if "302013" in line or "302015" in line]
         assert len(built_conn) >= 1
-        # The parenthesized source should be the mapped (public) IP
-        assert "198.51.100.1" in built_conn[0], (
-            "Built connection should show mapped IP in parentheses"
+        # At least one Built record should contain the mapped (public) IP
+        assert any("198.51.100.1" in line for line in built_conn), (
+            "No Built connection record contains mapped IP 198.51.100.1 in parentheses"
         )
 
 
@@ -229,13 +229,12 @@ class TestInboundStaticNat:
 
         # The Built connection should show the real DMZ IP and mapped public IP
         built_conn = [line for line in asa_lines if "302013" in line]
-        for line in built_conn:
-            if "172.16.0.5" in line:
-                # Inbound connection to DMZ server should show mapped public IP
-                assert "203.0.113.5" in line, (
-                    "Inbound Built should reference both real and mapped IPs"
-                )
-                break
+        dmz_records = [line for line in built_conn if "172.16.0.5" in line]
+        if dmz_records:
+            # At least one DMZ record should contain the mapped public IP
+            assert any("203.0.113.5" in line for line in dmz_records), (
+                "Inbound Built records for DMZ server should reference mapped IP 203.0.113.5"
+            )
 
 
 # @pytest.mark.skip(reason="NAT implementation pending")

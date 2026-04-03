@@ -184,6 +184,147 @@ class SysmonEventEmitter(LogEmitter):
             "Microsoft Corporation",
             "conhost.exe",
         ),
+        # Additional system binaries from system_processes.yaml
+        "wmiprvse.exe": (
+            "10.0.19041.1",
+            "WMI Provider Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "WmiPrvSE.exe",
+        ),
+        "dllhost.exe": (
+            "10.0.19041.1",
+            "COM Surrogate",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "dllhost.exe",
+        ),
+        "runtimebroker.exe": (
+            "10.0.19041.1",
+            "Runtime Broker",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "RuntimeBroker.exe",
+        ),
+        "spoolsv.exe": (
+            "10.0.19041.1",
+            "Spooler SubSystem App",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "spoolsv.exe",
+        ),
+        "sihost.exe": (
+            "10.0.19041.1",
+            "Shell Infrastructure Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "sihost.exe",
+        ),
+        "tiworker.exe": (
+            "10.0.19041.1",
+            "Windows Module Installer Worker",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "TiWorker.exe",
+        ),
+        "backgroundtaskhost.exe": (
+            "10.0.19041.1",
+            "Background Task Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "backgroundTaskHost.exe",
+        ),
+        "searchhost.exe": (
+            "10.0.19041.1",
+            "Search application",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "SearchHost.exe",
+        ),
+        "searchprotocolhost.exe": (
+            "10.0.19041.1",
+            "Microsoft Windows Search Protocol Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "SearchProtocolHost.exe",
+        ),
+        "searchfilterhost.exe": (
+            "10.0.19041.1",
+            "Microsoft Windows Search Filter Host",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "SearchFilterHost.exe",
+        ),
+        "searchindexer.exe": (
+            "10.0.19041.1",
+            "Microsoft Windows Search Indexer",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "SearchIndexer.exe",
+        ),
+        "dfsr.exe": (
+            "10.0.19041.1",
+            "DFS Replication Service",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "dfsr.exe",
+        ),
+        "dns.exe": (
+            "10.0.19041.1",
+            "DNS Server Service",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "dns.exe",
+        ),
+        "ntdsutil.exe": (
+            "10.0.19041.1",
+            "NT Directory Services Utility",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "ntdsutil.exe",
+        ),
+        "mpcmdrun.exe": (
+            "4.18.2211.5",
+            "Microsoft Malware Protection Command Line Utility",
+            "Microsoft Antimalware",
+            "Microsoft Corporation",
+            "MpCmdRun.exe",
+        ),
+        "msmpeng.exe": (
+            "4.18.2211.5",
+            "Antimalware Service Executable",
+            "Microsoft Antimalware",
+            "Microsoft Corporation",
+            "MsMpEng.exe",
+        ),
+        "compattelrunner.exe": (
+            "10.0.19041.1",
+            "Microsoft Compatibility Appraiser",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "CompatTelRunner.exe",
+        ),
+        "cleanmgr.exe": (
+            "10.0.19041.1",
+            "Disk Cleanup",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "cleanmgr.exe",
+        ),
+        "msdtc.exe": (
+            "10.0.19041.1",
+            "Microsoft Distributed Transaction Coordinator",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "msdtc.exe",
+        ),
+        "ismserv.exe": (
+            "10.0.19041.1",
+            "Intersite Messaging Service",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "ismserv.exe",
+        ),
     }
 
     @classmethod
@@ -249,9 +390,13 @@ class SysmonEventEmitter(LogEmitter):
 
     @staticmethod
     def _generate_hashes(image: str, hostname: str) -> str:
-        """Generate deterministic fake file hashes from image+hostname."""
-        seed = f"{image}:{hostname}"
-        random.Random(seed)
+        """Generate deterministic fake file hashes from image path.
+
+        Hashes are keyed on image path only (not hostname) so the same
+        binary produces identical hashes across all hosts — matching
+        real Windows behavior for identical OS builds.
+        """
+        seed = image
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
         md5 = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest().upper()
         sha256 = hashlib.sha256(seed.encode(), usedforsecurity=False).hexdigest().upper()
@@ -302,7 +447,9 @@ class SysmonEventEmitter(LogEmitter):
             "CommandLine": proc.command_line,
             "User": user,
             "LogonGuid": self._generate_process_guid(
-                host.hostname, 0, datetime(event.timestamp.year, 1, 1)
+                host.hostname,
+                int(logon_id, 16) if logon_id.startswith("0x") else hash(logon_id) & 0xFFFFFFFF,
+                event.timestamp,
             ),
             "LogonId": logon_id,
             "IntegrityLevel": integrity,

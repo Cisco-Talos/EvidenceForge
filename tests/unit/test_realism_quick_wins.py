@@ -328,8 +328,12 @@ def test_asa_output_sorted(tmp_path):
         f"Expected at least 10 ASA lines (5 Built + 5 Teardown), got {len(lines)}"
     )
 
-    # Verify lines are in lexicographic (= chronological) order
+    # Verify lines are in chronological order (by timestamp, not lexicographic)
+    def _extract_ts(line):
+        gt = line.find(">")
+        return line[gt + 1 : gt + 16] if gt >= 0 else ""
+
     for i in range(len(lines) - 1):
-        assert lines[i] <= lines[i + 1], (
-            f"ASA output not sorted at line {i}:\n  {lines[i]}\n  {lines[i + 1]}"
+        assert _extract_ts(lines[i]) <= _extract_ts(lines[i + 1]), (
+            f"ASA output not chronologically sorted at line {i}:\n  {lines[i]}\n  {lines[i + 1]}"
         )

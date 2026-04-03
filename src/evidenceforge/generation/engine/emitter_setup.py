@@ -258,29 +258,61 @@ class EmitterSetupMixin:
             )
 
     def _emit_dhcp_leases(self) -> None:
-        """Emit DHCP lease records for each system at scenario start.
+        """Emit initial DHCP lease records during warm-up period.
 
-        Real networks show DHCP transactions at boot. One transaction per
-        host with deterministic MAC address derived from IP.
+        Leases are staggered across the first 5 minutes of generation using
+        per-host hash offsets. During warm-up these are suppressed from output
+        but establish lease state. Lease times and MACs are stored in
+        _dhcp_lease_state for periodic renewal in _generate_system_traffic().
         """
         if "zeek_dhcp" not in self.emitters:
             return
         rng = random.Random(_stable_seed("dhcp_leases"))
         from evidenceforge.utils.ids import generate_zeek_uid
 
+        # Track lease state for periodic renewals
+        self._dhcp_lease_state: dict[str, dict] = {}
+
+        # Stagger across first 5 minutes using per-host deterministic offsets
+        base_time = getattr(self, "warmup_start_time", self.start_time)
+
+        # Load OUI prefixes for diverse MAC generation
+        from pathlib import Path as _Path
+
+        import yaml as _yaml
+
+        _oui_path = _Path(__file__).parent.parent / "activity" / "network_params.yaml"
+        with open(_oui_path) as _f:
+            _net_params = _yaml.safe_load(_f)
+        _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])
+        _oui_weights = [o["weight"] for o in _oui_prefixes]
+        _oui_values = [o["prefix"] for o in _oui_prefixes]
+
         for system in self.scenario.environment.systems:
-            ip_hash = hash(f"mac_{system.ip}")
-            mac = f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}:{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
-            ts = self.start_time + timedelta(seconds=rng.uniform(0.5, 5.0))
+            ip_seed = _stable_seed(f"mac_{system.ip}")
+            # Select OUI prefix deterministically per host using weighted distribution
+            oui_rng = random.Random(ip_seed)
+            oui = oui_rng.choices(_oui_values, weights=_oui_weights, k=1)[0]
+            mac = f"{oui}:{(ip_seed >> 16) & 0xFF:02x}:{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}"
+            offset = (_stable_seed(f"dhcp_offset_{system.hostname}") % 300) + rng.uniform(0, 5)
+            ts = base_time + timedelta(seconds=offset)
             uid = generate_zeek_uid("C")
+            lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=ts,
                 mac=mac,
-                lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
+                lease_time=lease_time,
                 uid=uid,
             )
+            # Store state for renewals
+            self._dhcp_lease_state[system.hostname] = {
+                "mac": mac,
+                "lease_time": lease_time,
+                "last_renewal": ts.timestamp(),
+                "system": system,
+            }
 
     def _build_sid_registry(self) -> dict[str, str]:
         """Build a SID registry mapping usernames to Windows SIDs.
@@ -476,6 +508,21 @@ class EmitterSetupMixin:
         def _c(parent, image, cmd, user):
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
+        # PID 4 is always the Windows System process (parent of smss.exe).
+        # Register it directly — create_process() auto-allocates PIDs so we
+        # bypass it to hardcode PID 4 as Windows requires.
+        from evidenceforge.models.state import RunningProcess
+
+        sm.state.running_processes[(hn, 4)] = RunningProcess(
+            pid=4,
+            parent_pid=0,
+            image="System",
+            command_line="",
+            username="SYSTEM",
+            system=hn,
+            start_time=sm.state.current_time,
+            integrity_level="System",
+        )
         pids["smss"] = _c(4, r"C:\Windows\System32\smss.exe", "smss.exe", "SYSTEM")
         pids["csrss_s0"] = _c(pids["smss"], r"C:\Windows\System32\csrss.exe", "csrss.exe", "SYSTEM")
         pids["wininit"] = _c(

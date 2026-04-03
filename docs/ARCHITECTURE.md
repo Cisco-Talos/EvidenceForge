@@ -407,7 +407,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Entity lifecycle validation:** StateManager tracks per-system boot times and validates that process injection events (Sysmon 8/10) target existing PIDs. Warnings are logged for impossible sequences without blocking generation.
 
-**DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames.
+**DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames. All domain↔IP data lives in a single `dns_registry.yaml` (source of truth). The loader (`dns_registry.py`) builds REVERSE_DNS, FORWARD_DNS, and tag-based lookups. All external connections use domain-first selection via `pick_domain_and_ip()` — hostname is resolved once at the top of `generate_connection()` and shared by causal DNS expansion, SSL SNI, and proxy rendering. Background HTTPS traffic (Windows Update, Ubuntu packages, CRL checks) uses tag-based selection from the same registry. Storyline connections to raw C2 IPs skip DNS emission (realistic for direct-IP C2 beaconing).
 
 **Per-system session management:** The baseline engine checks for active sessions on the specific target system before generating processes. If no session exists, a context-aware logon is emitted (type 2 interactive for workstations, type 3/10 network/RDP for servers). This prevents processes appearing on systems where the user has no logon event.
 
@@ -417,9 +417,15 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **Command pool diversification:** Process templates use `{placeholder}` syntax across all categories (not just queries). Parameterized values include project paths, solution names, document names, build configs, Git branches, and internal URLs. `{username}` substitution provides per-user path affinity.
 
+**Rule-based process trees:** Parent-child relationships are defined in `src/evidenceforge/generation/activity/spawn_rules.yaml` — a data-driven mapping of which processes can spawn which children, with command-line templates, lifetime metadata (long/short), and spawn delay ranges. The `_resolve_parent()` method on ActivityGenerator transparently finds an existing valid parent from the user's process history or auto-creates intermediate chains (e.g., explorer→powershell→dotnet.exe) with realistic backward timing. Long-lived parents created early in the scenario (first 30 minutes) have a 70% chance of being registered as pre-existing (no Sysmon Event 1 emitted). Depth is limited to 3 auto-created levels. Falls back to legacy `_select_parent_pid()` for processes not in the rules. `ProcessContext.parent_command_line` is populated from the parent process's StateManager entry.
+
+**PID allocation diversity:** PIDs use a lognormal distribution for gap sizes (Windows: `lognormvariate(1.2, 0.8)` in multiples of 4; Linux: `lognormvariate(0.5, 0.6)`), producing a heavy-tailed gap distribution with no fixed-set fingerprint. Wraparound at 65536 skips PIDs still held by running processes.
+
+**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events inject 0-3 organic noise commands (pwd, ls, id, w, df -h, etc.) around each attack command via `generate_bash_command_with_noise()`.
+
 ### Key Patterns
 
-**Thread-local RNG:** Each generation thread gets a `random.Random` instance seeded by `hash((thread_id, 42))`. This ensures reproducibility while enabling concurrent generation without GIL contention.
+**Thread-local RNG:** Each generation thread gets a `random.Random` instance seeded by `hash((thread_id, 42))`. This ensures reproducibility while enabling concurrent generation without GIL contention. LogonID generation uses per-host RNG seeding (`_stable_seed(f"logon_ids_{hostname}")`) to ensure unique LogonID sequences per system.
 
 **Discriminated unions:** Storyline event specs use Pydantic discriminated unions — `type: "process"` selects `ProcessEventSpec`, `type: "logon"` selects `LogonEventSpec`, etc. This provides compile-time-like type safety for YAML input.
 

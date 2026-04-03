@@ -12,7 +12,7 @@ description: >
 
 # EvidenceForge Scenario Creator
 
-You are helping the user create an EvidenceForge scenario YAML file that will drive deterministic generation of realistic, cross-correlated security log datasets. The generated scenario feeds into the `eforge generate` CLI which produces logs across up to 7 formats (Windows Event, Zeek, eCAR, syslog, bash_history, Snort alerts, web access logs).
+You are helping the user create an EvidenceForge scenario YAML file that will drive deterministic generation of realistic, cross-correlated security log datasets. The generated scenario feeds into the `eforge generate` CLI which produces logs across up to 9 formats (Windows Event, Zeek, eCAR, syslog, bash_history, Snort alerts, web access, proxy access, Cisco ASA firewall logs).
 
 The goal is a scenario that produces data useful for threat hunting training — realistic baseline noise mixed with a buried attack storyline that a hunter would need to find. The primary users are security professionals, though the data may be consumed by students and newcomers as well.
 
@@ -245,6 +245,8 @@ personas:                         # Define inline or reference pre-built from pe
 time_window:
   start: "2024-01-15T10:00:00Z"  # ISO 8601 UTC
   duration: "8h"                  # OR use end: "2024-01-15T18:00:00Z"
+  warmup: "8h"                    # Optional (default "8h", minimum "1h"). Pre-populates DNS
+                                  # cache, process trees, sessions before start.
 
 baseline_activity:
   description: "Normal office activity"
@@ -305,7 +307,7 @@ output:
 
 The `os` field on systems determines which native log formats are generated:
 - **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
-- **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history
+- **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history (per-user files for all admin users who SSH to the server, with organic admin commands)
 - **eCAR** (format) → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
 - **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
@@ -460,7 +462,7 @@ events:
 
 **Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets. You do NOT need to manually specify these as prerequisites:
 
-- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions
+- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections to raw C2 IPs (not in REVERSE_DNS) skip DNS emission — realistic for direct-IP C2 beaconing
 - **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC, plus 4672 for elevated users
 - **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
@@ -590,6 +592,11 @@ After the interview, generate both files:
    - **Detection opportunity**: Is there enough signal for a hunter to find the attack while still requiring genuine effort?
    - **Attacker messiness**: Does the storyline include fumbles and dead ends appropriate to the chosen attacker realism level? A storyline with zero mistakes is unrealistic unless the user specifically requested a surgical APT scenario.
    - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
+   - **Engine-aware realism**:
+     - Do NOT specify explicit `mac_address` in `dhcp_lease` events — the engine auto-generates diverse OUI prefixes from `network_params.yaml`
+     - Storyline `connection` events to raw C2 IPs will skip DNS emission (realistic for direct-IP beaconing, but means no DNS trail for hunters). If you want DNS evidence, use a domain name as the C2 destination and add it to the scenario narrative
+     - Assign role-appropriate `services` to Linux servers (e.g., `mysql` on DB servers, `apache`/`nginx` on web servers) — this drives per-server bash history RBAC (sysadmins on all servers, DBAs only on DB servers, etc.)
+     - Ensure each server has a distinct role to avoid identical bash history content across all servers
    If you find issues, fix them. Tell the user what you changed and why.
 
 ### Sensor Coverage Verification

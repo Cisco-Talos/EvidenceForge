@@ -28,9 +28,10 @@ consistent synthetic security logs across multiple formats.
 """
 
 import logging
+import math
 import random
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from evidenceforge.events.dispatcher import EventDispatcher
@@ -42,7 +43,7 @@ from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import Scenario, System, User
 from evidenceforge.utils.rng import _stable_seed
-from evidenceforge.utils.time import resolve_time_window
+from evidenceforge.utils.time import parse_duration, resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,25 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.start_time, self.end_time = resolve_time_window(self.scenario.time_window)
         logger.info(f"Time window: {self.start_time} to {self.end_time}")
 
+        # Compute warm-up period (snapped to whole hours so _generate_hour()
+        # never produces events that overlap with the real baseline loop)
+        warmup_str = self.scenario.time_window.warmup
+        if warmup_str:
+            raw_duration = parse_duration(warmup_str)
+            warmup_hours = max(1, math.ceil(raw_duration.total_seconds() / 3600))
+            self.warmup_duration = timedelta(hours=warmup_hours)
+        else:
+            # Default: 8 hours if not specified (warmup is always on)
+            self.warmup_duration = timedelta(hours=8)
+        self.warmup_start_time = self.start_time - self.warmup_duration
+        # Epoch for periodic schedules (DNS, SMB) — covers warm-up + real window
+        self._generation_epoch = self.warmup_start_time
+        if self.warmup_duration.total_seconds() > 0:
+            logger.info(
+                f"Warm-up period: {self.warmup_start_time} to {self.start_time} "
+                f"({warmup_str} → {int(self.warmup_duration.total_seconds() / 3600)}h)"
+            )
+
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {self.output_dir}")
@@ -249,6 +269,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             state_manager=self.state_manager,
             emitters=self.emitters,
             visibility_engine=visibility_engine,
+            output_start_time=self.start_time,
         )
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
@@ -260,10 +281,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         )
         # Build IP->System lookup for HostContext resolution on connection events
         self.activity_generator._ip_to_system = {s.ip: s for s in self.scenario.environment.systems}
+        # Set scenario start time for pre-existing process chain logic
+        self.activity_generator._scenario_start_time = self.start_time
         logger.info("Initialized activity generator")
 
-        # Set initial state manager time
-        self.state_manager.set_current_time(self.start_time)
+        # Set initial state manager time (warm-up start if applicable)
+        self.state_manager.set_current_time(self.warmup_start_time)
 
         # Resolve scenario timezone for work-hours modulation
         self._scenario_tz = None

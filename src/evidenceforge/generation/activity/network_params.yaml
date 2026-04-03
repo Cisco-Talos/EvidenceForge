@@ -1,0 +1,24 @@
+# Network parameters for realistic DHCP and MAC address generation.
+
+oui_prefixes:
+  - prefix: "D4:BE:D9"
+    vendor: "Dell"
+    weight: 25
+  - prefix: "3C:97:0E"
+    vendor: "HP/HPE"
+    weight: 20
+  - prefix: "F0:1F:AF"
+    vendor: "Dell"
+    weight: 15
+  - prefix: "A4:1F:72"
+    vendor: "Lenovo"
+    weight: 15
+  - prefix: "00:25:B5"
+    vendor: "Intel"
+    weight: 10
+  - prefix: "00:50:56"
+    vendor: "VMware"
+    weight: 10
+  - prefix: "8C:DC:D4"
+    vendor: "Intel"
+    weight: 5

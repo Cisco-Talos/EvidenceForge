@@ -123,13 +123,16 @@ class DnsBeforeConnection(ExpansionRule):
         from evidenceforge.generation.causal.engine import ExpandedEvent
         from evidenceforge.generation.causal.timing import TimingSpec
 
+        kwargs = {
+            "src_ip": ctx.src_ip,
+            "dst_ip": ctx.dst_ip,
+        }
+        if ctx.hostname:
+            kwargs["hostname"] = ctx.hostname
         return [
             ExpandedEvent(
                 method="_emit_dns_lookup",
-                kwargs={
-                    "src_ip": ctx.src_ip,
-                    "dst_ip": ctx.dst_ip,
-                },
+                kwargs=kwargs,
                 timing=TimingSpec(min_ms=0, max_ms=0, position="before"),
                 description="DNS lookup for connection destination",
             )
@@ -170,7 +173,7 @@ class ProcessAccessAfterRemoteThread(ExpansionRule):
                     "source_image": ctx.source_image,
                     "target_pid": ctx.target_pid,
                     "target_image": ctx.target_image,
-                    "granted_access": "0x1010",
+                    "granted_access": "0x1FFFFF",
                 },
                 timing=TimingSpec(min_ms=1, max_ms=50, position="after"),
                 description="ProcessAccess for lsass credential dumping detection",

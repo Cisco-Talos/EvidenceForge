@@ -13,10 +13,12 @@
 
   Systems (mix of Windows and Linux, ~75+ total):
 
-  Windows workstations (Windows 10/11) — one per user (see Users section), with naming convention
-  WS-{DEPT}-{NN} across departments: dev, IT, security, finance, data analytics, executive, PM, HR,
-  sales, legal, marketing, front desk. Exception: IT helpdesk staff (sysadmin persona) share 2-3
-  workstations to represent shift coverage (e.g., WS-IT-HELP-01, WS-IT-HELP-02).
+  Workstations — one per user (see Users section), with naming convention WS-{DEPT}-{NN} across
+  departments: dev, IT, security, finance, data analytics, executive, PM, HR, sales, legal,
+  marketing, front desk. Most are Windows 10/11, but at least 4 users have Linux desktops
+  (Ubuntu 22.04, type: workstation) — typically developers and data analysts who prefer Linux for
+  daily work. Exception: IT helpdesk staff (sysadmin persona) share 2-3 workstations to represent
+  shift coverage (e.g., WS-IT-HELP-01, WS-IT-HELP-02).
 
   Windows servers (10, Server 2019/2022):
   - DC-01 (domain controller, Server 2022, roles: [domain_controller])
@@ -143,7 +145,7 @@
 
   Phase 1: Initial Access and Fumbling (+2h to +6h, Monday morning)
   1. Rogue Device (+2h): Attacker plugs rogue laptop into corporate_lan, obtains IP via DHCP
-     (dhcp_lease event with explicit MAC address).
+     (dhcp_lease event).
   2a. External Port Scan (+2h10m): External attacker (185.70.41.45) scans the DMZ segment for services.
      Use port_scan event with target_segment: dmz, ports: [22, 80, 443, 8080, 8443, 3306, 5432],
      scan_rate: 200, target_count: 15. Produces ASA 106023 denies + Zeek S0/REJ conn entries on
@@ -256,6 +258,15 @@
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
   - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
   - Baseline activity: high intensity, high variation (more users = more noise to hide in)
+
+  Engine behavior expectations:
+  - C2 connections to raw IPs will NOT have DNS queries — realistic for direct-IP C2
+  - DNS queries for baseline web traffic use domain-first selection — SNI, DNS, and proxy hostname will be consistent
+  - DHCP events are routed to sensors by segment visibility (not duplicated across all sensors)
+  - Windows service account events (SYSTEM, NETWORK SERVICE) show "NT AUTHORITY" as SubjectDomainName
+  - Certificate validity periods match issuer (Let's Encrypt = 90 days, DigiCert = 397 days)
+  - MAC addresses use diverse OUI prefixes (Dell, HP, Lenovo, Intel, VMware)
+  - PID 4 resolves to "System" in parent process lookups
 
   eCAR format coverage (verify in generated data):
   - All eCAR records have pid and tid (always present, -1 sentinel when unavailable)

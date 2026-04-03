@@ -1,0 +1,372 @@
+# Unified DNS registry — single source of truth for all domain↔IP mappings.
+#
+# Tags determine which connection types use each domain:
+#   web        — baseline user web browsing
+#   saas       — SaaS application traffic
+#   email      — email server connections
+#   git        — source control
+#   background — OS-level background HTTPS (updates, telemetry, CRL)
+#   windows    — Windows-specific background traffic
+#   linux      — Linux-specific background traffic
+#   internal   — internal infrastructure (DB servers, etc.)
+#   storage    — cloud storage (potential exfiltration targets)
+#
+# Each domain can have multiple IPs (realistic for CDN/cloud services).
+# The loader builds REVERSE_DNS, FORWARD_DNS, and tag-based lookups from this data.
+
+domains:
+  # === Google ===
+  - domain: www.google.com
+    ips: ["172.217.14.206", "142.250.80.46"]
+    tags: [web]
+  - domain: accounts.google.com
+    ips: ["142.250.80.46", "142.250.185.206"]
+    tags: [web, saas]
+  - domain: drive.google.com
+    ips: ["142.250.185.206", "142.250.191.46"]
+    tags: [saas]
+  - domain: calendar.google.com
+    ips: ["142.250.191.46", "142.250.80.46"]
+    tags: [saas]
+
+  # === Cloudflare ===
+  - domain: www.cloudflare.com
+    ips: ["104.16.132.229", "104.16.133.229"]
+    tags: [web]
+  - domain: dash.cloudflare.com
+    ips: ["104.18.32.7", "104.18.33.7"]
+    tags: [web]
+  - domain: api.cloudflare.com
+    ips: ["104.18.25.35", "104.18.26.35"]
+    tags: [web]
+  - domain: blog.cloudflare.com
+    ips: ["104.21.67.152", "104.21.68.152"]
+    tags: [web]
+
+  # === Reddit / Fastly ===
+  - domain: www.reddit.com
+    ips: ["151.101.1.140", "151.101.65.140"]
+    tags: [web]
+  - domain: i.redd.it
+    ips: ["151.101.65.140", "151.101.129.140"]
+    tags: [web]
+  - domain: old.reddit.com
+    ips: ["151.101.129.140", "151.101.193.140"]
+    tags: [web]
+  - domain: v.redd.it
+    ips: ["151.101.193.140", "151.101.1.140"]
+    tags: [web]
+
+  # === Akamai ===
+  - domain: download.windowsupdate.com
+    ips: ["23.196.25.38", "23.196.101.50", "23.45.101.50"]
+    tags: [background, windows]
+  - domain: static.akamai.net
+    ips: ["23.72.134.56", "23.72.135.56"]
+    tags: [web]
+  - domain: media.akamai.net
+    ips: ["23.205.100.42", "23.205.101.42"]
+    tags: [web]
+
+  # === AWS CloudFront ===
+  - domain: cdn.jsdelivr.net
+    ips: ["54.230.129.180", "54.230.130.180"]
+    tags: [web]
+  - domain: aws.amazon.com
+    ips: ["52.85.83.55", "52.85.84.55"]
+    tags: [web]
+
+  # === Microsoft / Azure ===
+  - domain: www.office.com
+    ips: ["13.107.42.14", "13.107.42.15"]
+    tags: [web, saas]
+  - domain: outlook.office365.com
+    ips: ["13.107.213.70", "52.97.145.162"]
+    tags: [email, saas]
+  - domain: www.bing.com
+    ips: ["204.79.197.200", "13.107.21.200"]
+    tags: [web, background, windows]
+  - domain: teams.microsoft.com
+    ips: ["13.107.246.40", "13.107.246.41"]
+    tags: [saas]
+  - domain: settings-win.data.microsoft.com
+    ips: ["13.107.4.50", "13.107.4.52"]
+    tags: [background, windows]
+  - domain: ctldl.windowsupdate.com
+    ips: ["52.114.128.40", "52.114.132.73"]
+    tags: [background, windows]
+  - domain: ocsp.digicert.com
+    ips: ["93.184.220.29", "93.184.221.240"]
+    tags: [background, windows]
+  - domain: crl.microsoft.com
+    ips: ["23.45.67.89", "23.72.134.56"]
+    tags: [background, windows]
+  - domain: arc.msn.com
+    ips: ["204.79.197.203", "13.107.246.42"]
+    tags: [background, windows]
+  - domain: login.microsoftonline.com
+    ips: ["40.126.28.17", "40.126.28.19", "20.190.159.64"]
+    tags: [saas, background, windows]
+
+  # === Other popular sites ===
+  - domain: www.example.com
+    ips: ["93.184.216.34"]
+    tags: [web]
+  - domain: www.facebook.com
+    ips: ["31.13.65.36", "31.13.65.37"]
+    tags: [web]
+  - domain: stackoverflow.com
+    ips: ["44.238.149.75", "44.238.150.75"]
+    tags: [web]
+  - domain: registry.npmjs.org
+    ips: ["199.232.64.133", "199.232.65.133"]
+    tags: [web]
+  - domain: pages.github.io
+    ips: ["185.199.108.153", "185.199.109.153"]
+    tags: [web]
+
+  # === Email ===
+  - domain: smtp.office365.com
+    ips: ["52.97.151.18", "52.97.152.18"]
+    tags: [email]
+  - domain: protection.outlook.com
+    ips: ["52.97.200.30", "52.97.201.30"]
+    tags: [email]
+  - domain: outlook.office.com
+    ips: ["52.97.166.42", "52.97.167.42"]
+    tags: [email]
+  - domain: mail.protection.outlook.com
+    ips: ["40.107.22.52", "40.107.22.53"]
+    tags: [email]
+  - domain: mx.office365.com
+    ips: ["40.107.22.53", "40.107.23.53"]
+    tags: [email]
+  - domain: smtp.gmail.com
+    ips: ["209.85.233.27", "209.85.234.27"]
+    tags: [email]
+  - domain: imap.gmail.com
+    ips: ["209.85.128.25", "209.85.129.25"]
+    tags: [email]
+  - domain: smtp-relay.gmail.com
+    ips: ["74.125.68.27", "74.125.69.27"]
+    tags: [email]
+  - domain: pop.gmail.com
+    ips: ["74.125.200.27", "74.125.201.27"]
+    tags: [email]
+  - domain: aspmx.l.google.com
+    ips: ["108.177.96.27", "108.177.97.27"]
+    tags: [email]
+
+  # === Git ===
+  - domain: github.com
+    ips: ["140.82.121.3", "140.82.121.4"]
+    tags: [git]
+  - domain: api.github.com
+    ips: ["140.82.121.4", "140.82.121.3"]
+    tags: [git]
+  - domain: ssh.github.com
+    ips: ["140.82.112.22"]
+    tags: [git]
+  - domain: gist.github.com
+    ips: ["140.82.114.3", "140.82.114.4"]
+    tags: [git]
+  - domain: gitlab.com
+    ips: ["104.26.7.33", "104.26.6.33"]
+    tags: [git]
+  - domain: registry.gitlab.com
+    ips: ["172.65.251.78"]
+    tags: [git]
+  - domain: api.gitlab.com
+    ips: ["104.26.6.33", "104.26.7.33"]
+    tags: [git]
+  - domain: bitbucket.org
+    ips: ["185.166.143.48", "185.166.143.49"]
+    tags: [git]
+  - domain: api.bitbucket.org
+    ips: ["185.166.143.49", "185.166.143.48"]
+    tags: [git]
+
+  # === SaaS ===
+  - domain: sharepoint.com
+    ips: ["13.107.6.156", "13.107.6.157"]
+    tags: [saas]
+  - domain: onedrive.live.com
+    ips: ["13.107.18.10", "13.107.18.11"]
+    tags: [saas]
+  - domain: cdn.onenote.net
+    ips: ["52.109.8.20", "52.109.8.21"]
+    tags: [saas]
+  - domain: onenote.officeapps.live.com
+    ips: ["52.109.12.22", "52.109.12.23"]
+    tags: [saas]
+  - domain: graph.microsoft.com
+    ips: ["40.126.28.19", "40.126.29.19"]
+    tags: [saas]
+  - domain: login.live.com
+    ips: ["20.190.159.64", "20.190.160.64"]
+    tags: [saas]
+  - domain: slack.com
+    ips: ["34.237.161.42", "34.237.162.42"]
+    tags: [saas]
+  - domain: api.slack.com
+    ips: ["52.26.132.56", "52.26.133.56"]
+    tags: [saas]
+  - domain: files.slack.com
+    ips: ["54.187.91.57", "54.187.92.57"]
+    tags: [saas]
+  - domain: zoom.us
+    ips: ["3.21.137.128", "3.21.138.128"]
+    tags: [saas]
+  - domain: us02web.zoom.us
+    ips: ["3.235.69.6", "3.235.70.6"]
+    tags: [saas]
+  - domain: us06web.zoom.us
+    ips: ["18.205.93.88", "18.205.94.88"]
+    tags: [saas]
+  - domain: login.salesforce.com
+    ips: ["13.108.0.20", "13.108.0.21"]
+    tags: [saas]
+  - domain: na139.salesforce.com
+    ips: ["13.110.54.8", "13.110.54.9"]
+    tags: [saas]
+
+  # === Cloud storage ===
+  - domain: api.pcloud.com
+    ips: ["185.26.156.40"]
+    tags: [storage]
+
+  # === Linux background ===
+  - domain: changelogs.ubuntu.com
+    ips: ["91.189.91.39", "91.189.91.40"]
+    tags: [background, linux]
+  - domain: security.ubuntu.com
+    ips: ["185.125.190.39", "185.125.190.40"]
+    tags: [background, linux]
+  - domain: archive.ubuntu.com
+    ips: ["91.189.91.83", "91.189.91.82"]
+    tags: [background, linux]
+  - domain: pypi.org
+    ips: ["151.101.0.223", "151.101.64.223"]
+    tags: [background, linux]
+
+  # === Internal infrastructure ===
+  - domain: db-primary.corp.local
+    ips: ["10.0.100.10"]
+    tags: [internal]
+  - domain: db-replica.corp.local
+    ips: ["10.0.100.11"]
+    tags: [internal]
+  - domain: db-analytics.corp.local
+    ips: ["10.0.100.12"]
+    tags: [internal]
+
+# Long-tail domain generation templates for connections beyond the curated pool.
+# Used for the ~30% of web connections that need CDN/SaaS diversity.
+long_tail:
+  prefixes:
+    - cdn
+    - static
+    - assets
+    - media
+    - images
+    - api
+    - app
+    - www
+    - analytics
+    - tracking
+    - metrics
+    - widget
+    - embed
+    - sdk
+    - js
+    - fonts
+    - styles
+    - content
+    - data
+    - edge
+    - cache
+    - proxy
+  brands:
+    - acmehealth
+    - medflow
+    - carepoint
+    - healthnexus
+    - rxportal
+    - docusync
+    - patientiq
+    - wellbridge
+    - vitalsource
+    - mediquant
+    - clearstream
+    - dataforge
+    - cloudmetrics
+    - fastreach
+    - signalwire
+    - pixeltrack
+    - growthkit
+    - eventpulse
+    - renderbase
+    - snapwidget
+    - formstack
+    - pollfish
+    - typekit
+    - loadbalance
+    - netscaler
+    - appdynamic
+    - sentry
+    - bugsnag
+    - rollbar
+    - newrelic
+    - pagerduty
+    - opsgenie
+    - statuspage
+    - pingdom
+    - uptime
+    - segment
+    - mixpanel
+    - amplitude
+    - hotjar
+    - fullstory
+  tlds:
+    - com
+    - com
+    - com
+    - com  # weighted toward .com
+    - io
+    - io
+    - net
+    - org
+    - co
+    - dev
+    - app
+
+# CDN IP ranges for hash-based IP derivation (_domain_to_ip).
+# Each entry is [first_octet, second_octet] — third and fourth are derived from domain hash.
+cdn_ranges:
+  - [104, 16]   # Cloudflare
+  - [104, 18]   # Cloudflare
+  - [151, 101]  # Fastly
+  - [23, 45]    # Akamai
+  - [23, 72]    # Akamai
+  - [52, 84]    # AWS CloudFront
+  - [54, 230]   # AWS CloudFront
+  - [13, 107]   # Microsoft/Azure
+  - [142, 250]  # Google
+  - [172, 217]  # Google
+
+# IPv6 addresses for known IPs (used by AAAA queries).
+ipv6_map:
+  "172.217.14.206": "2607:f8b0:4004:800::200e"
+  "142.250.80.46": "2607:f8b0:4004:806::200e"
+  "142.250.185.206": "2607:f8b0:4004:803::200e"
+  "142.250.191.46": "2607:f8b0:4004:810::200e"
+  "13.107.42.14": "2620:1ec:c11::14"
+  "13.107.213.70": "2620:1ec:a92::70"
+  "204.79.197.200": "2620:1ec:c11::200"
+  "13.107.246.40": "2620:1ec:46::40"
+  "140.82.121.3": "2606:50c0:8000::153"
+  "140.82.121.4": "2606:50c0:8001::154"
+  "31.13.65.36": "2a03:2880:f12f:83:face:b00c:0:25de"
+  "104.16.132.229": "2606:4700::6810:84e5"
+  "151.101.1.140": "2a04:4e42::396"
+  "93.184.216.34": "2606:2800:220:1:248:1893:25c8:1946"
