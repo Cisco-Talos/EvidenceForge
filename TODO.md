@@ -122,7 +122,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Snort SID revisions all `:1:1` — should vary to match real ET ruleset update patterns
 - [ ] Snort baseline scan IPs absent from Zeek conn — visibility engine filters external→internal connections out of non-firewall sensors; need to emit Zeek conn records for IDS-observed scans
 - [ ] Snort alert volume still 10-100x too low for real perimeter IDS (experts expect thousands/day)
-- [ ] No ET POLICY, ET INFO, ET DNS categories in baseline — only attack-relevant signatures
+- [x] No ET POLICY, ET INFO, ET DNS categories in baseline — added ET POLICY (curl UA, Basic Auth, SSLv3, APT, PE download), ET INFO (Let's Encrypt, Discord, Telegram, IP lookup, TLS failure, STUN), ET DNS (.top/.cloud TLDs) in baseline.py
 
 **Sysmon:**
 - [x] ✓ Sysmon Execution ProcessID rotates every event — stable per-host PID via hostname hash
@@ -145,10 +145,10 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
 - [ ] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states
 - [ ] SSL ssl_history limited to 2 values (CsiI, CsijI) — need 10-20+ patterns including resumed sessions, failed handshakes
-- [ ] Zeek conn history too uniform (ShADadfF dominant) — need RST-based terminations, retransmissions, partial closes
+- [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
 - [ ] SMB volume too low for Windows file server environments
 - [ ] DNS UIDs missing from conn.log (~7%)
-- [ ] UFW BLOCK entries don't appear in conn.log
+- [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
 - [x] weird.json TCP-specific types attributed to UDP sources — split into protocol-specific pools; UDP gets DNS/checksum/length anomalies at 0.5% rate vs TCP's 3%
 - [ ] Exfiltration connections show 0 bytes transferred
 - [ ] No port 135 (RPC/EPMAP) traffic
@@ -160,7 +160,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] CloudFront distributions resolve to Microsoft IP ranges (cross-provider)
 - [ ] No TXT queries (SPF/DKIM/DMARC checks)
 - [ ] No Windows telemetry noise in query set
-- [ ] TTL distribution too uniform
+- [x] TTL distribution too uniform — Phase 6.0: varied TTLs with cache-aging jitter
 - [ ] Queries default to corp.local instead of scenario domain
 - [ ] MX records for CDN domains that shouldn't have mail exchangers
 
@@ -168,7 +168,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] TLSv13 ratio too low for 2024 timeframe
 - [ ] TLS version/cipher suite mismatches
 - [x] x509 Let's Encrypt certs show 280+ day validity (should be 90) — tls_issuers.yaml with per-issuer validity (LE=90d, DigiCert=397d, etc.); issuer-aware key type selection
-- [ ] No SSL certificate subject/issuer data in ssl.log
+- [x] No SSL certificate subject/issuer data in ssl.log — zeek_x509.yaml includes subject/issuer fields; generation uses tls_issuers.yaml
 
 **Syslog:**
 - [x] ✓ DHCP messages contain integers instead of IP addresses — use system.ip
@@ -185,7 +185,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] NTP server mismatch (Zeek shows NIST, syslog shows Ubuntu pool)
 - [ ] No SSH protocol negotiation messages
 - [ ] Logrotate/cron.daily fire too frequently (should be daily, not multiple times per hour)
-- [ ] Centralized syslog timestamps not chronologically sorted
+- [x] Centralized syslog timestamps not chronologically sorted — _sort_flat_file = True in syslog.py; sorting in host_base.py
 - [ ] Dual SSH syslog entries with mismatched PIDs/ports
 
 **Windows Events:**
@@ -218,8 +218,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓² Proxy/SSL hostname uses CDN reverse-DNS PTR records instead of domain names — now prefers dns.query from DnsContext; partial fix (first connections per host still use PTR when no DNS context exists)
 - [x] ✓² Proxy URL paths all root "/" only — added pool of 18 realistic URI paths
 - [ ] User-Agent OS mismatch with source hosts
-- [ ] 100% HTTP 200 status codes (need 301/302/404/500 mix); HTTP to HSTS sites (facebook.com) returns 200 on port 80
-- [ ] HTTP MIME type mismatches with URI
+- [x] 100% HTTP 200 status codes — _get_http_status() in network.py returns 200 (70%), 304 (8%), 301 (10%), 302 (5%), 404 (4%), 403 (2%), 500 (1%)
+- [x] HTTP MIME type mismatches with URI — _URI_MIME_MAP in baseline.py and generator.py pairs URIs to correct MIME types
 - [ ] Proxy format doesn't match standard Squid or Bluecoat output
 - [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
 - [ ] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — paths need hostname-aware selection
@@ -241,7 +241,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 
 **Cross-Source / General:**
 - [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
-- [ ] Cross-sensor timestamp precision identical to 15+ decimal places — real multi-sensor captures have microsecond jitter
+- [x] Cross-sensor timestamp precision identical to 15+ decimal places — microsecond jitter added in snort.py, windows.py, and storyline.py
 - [ ] Encoded PowerShell baseline noise identical across hosts (same Get-Service blob) — needs per-host variation
 - [ ] Workstation connection counts suspiciously uniform (808-1068 range) — Hawkes process variance too narrow
 - [ ] Uniform log file sets across all hosts (every workstation has identical format coverage)
