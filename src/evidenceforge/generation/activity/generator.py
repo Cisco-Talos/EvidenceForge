@@ -113,6 +113,36 @@ BASELINE_PATTERNS = {
     ],
 }
 
+# Organic bash commands for noise injection between storyline events
+# and baseline Linux user activity. Common admin/orientation commands.
+_ORGANIC_BASH_COMMANDS = [
+    "pwd",
+    "ls",
+    "ls -la",
+    "ls /tmp",
+    "id",
+    "w",
+    "whoami",
+    "uname -a",
+    "uptime",
+    "df -h",
+    "free -m",
+    "ps aux",
+    "clear",
+    "cd /var/log",
+    "cd /tmp",
+    "hostname",
+    "hostname -f",
+    "ss -tulnp",
+    "systemctl status sshd",
+    "tail -50 /var/log/auth.log",
+    "grep -i error /var/log/syslog | tail -10",
+    "date",
+    "cat /etc/hostname",
+    "history",
+    "ll",
+]
+
 # Process names and command lines for baseline activities (Windows)
 PROCESS_TEMPLATES = {
     "process_code": [
@@ -2050,6 +2080,31 @@ class ActivityGenerator:
 
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
+
+    def generate_bash_command_with_noise(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        command: str,
+    ) -> None:
+        """Generate a bash command with organic noise commands around it.
+
+        Emits the primary command plus 0-3 organic noise commands at
+        slight time offsets, simulating an attacker or admin who types
+        ls, pwd, id etc. between deliberate actions.
+        """
+        # Emit the primary command
+        self.generate_bash_command(user, system, time, command)
+
+        # Probabilistically emit 0-3 noise commands
+        rng = _get_rng()
+        n_noise = rng.choices([0, 1, 1, 2, 2, 3], k=1)[0]
+        for _ in range(n_noise):
+            offset_sec = rng.uniform(-5.0, 15.0)
+            noise_time = time + timedelta(seconds=offset_sec)
+            noise_cmd = rng.choice(_ORGANIC_BASH_COMMANDS)
+            self.generate_bash_command(user, system, noise_time, noise_cmd)
 
     def generate_system_process(
         self,

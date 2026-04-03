@@ -513,7 +513,9 @@ class StorylineMixin:
             command_line = spec.command_line or process_name
 
             if os_category == "linux":
-                self.activity_generator.generate_bash_command(actor, system, time, command_line)
+                self.activity_generator.generate_bash_command_with_noise(
+                    actor, system, time, command_line
+                )
 
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(
