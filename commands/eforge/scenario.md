@@ -592,6 +592,11 @@ After the interview, generate both files:
    - **Detection opportunity**: Is there enough signal for a hunter to find the attack while still requiring genuine effort?
    - **Attacker messiness**: Does the storyline include fumbles and dead ends appropriate to the chosen attacker realism level? A storyline with zero mistakes is unrealistic unless the user specifically requested a surgical APT scenario.
    - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
+   - **Engine-aware realism**:
+     - Do NOT specify explicit `mac_address` in `dhcp_lease` events — the engine auto-generates diverse OUI prefixes from `network_params.yaml`
+     - Storyline `connection` events to raw C2 IPs will skip DNS emission (realistic for direct-IP beaconing, but means no DNS trail for hunters). If you want DNS evidence, use a domain name as the C2 destination and add it to the scenario narrative
+     - Assign role-appropriate `services` to Linux servers (e.g., `mysql` on DB servers, `apache`/`nginx` on web servers) — this drives per-server bash history RBAC (sysadmins on all servers, DBAs only on DB servers, etc.)
+     - Ensure each server has a distinct role to avoid identical bash history content across all servers
    If you find issues, fix them. Tell the user what you changed and why.
 
 ### Sensor Coverage Verification
