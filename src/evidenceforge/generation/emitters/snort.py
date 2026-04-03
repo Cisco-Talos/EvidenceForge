@@ -41,6 +41,7 @@ class SnortEmitter(SensorMultiplexEmitter):
 
     _log_filename = "snort_alert.log"
     _flat_filename = "snort_alert.log"
+    _sort_before_flush: bool = True
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: SecurityEvent) -> bool:

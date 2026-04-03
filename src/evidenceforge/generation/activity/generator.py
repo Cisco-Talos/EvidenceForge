@@ -1487,7 +1487,29 @@ class ActivityGenerator:
                 if not hostname:
                     hostname = _generate_random_hostname(_get_rng(), dst_ip)
                 schema = "https" if dst_port == 443 else "http"
-                url = f"{schema}://{hostname}/"
+                _PROXY_PATHS = [
+                    "/",
+                    "/",
+                    "/",  # Root path is common
+                    "/index.html",
+                    "/login",
+                    "/api/v1/status",
+                    "/api/v2/data",
+                    "/dashboard",
+                    "/assets/main.css",
+                    "/assets/app.js",
+                    "/images/logo.png",
+                    "/favicon.ico",
+                    "/robots.txt",
+                    "/search?q=healthcare+integration",
+                    "/docs/api-reference",
+                    "/settings/profile",
+                    "/notifications",
+                    "/feed",
+                    "/messages",
+                ]
+                path = _get_rng().choice(_PROXY_PATHS)
+                url = f"{schema}://{hostname}{path}"
                 # Pick a random user from the scenario (if available)
                 _PROXY_UAS = [
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
