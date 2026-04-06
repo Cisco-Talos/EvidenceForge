@@ -28,6 +28,7 @@ into separate files organized as: bash_history/<hostname>/<username>.bash_histor
 """
 
 import logging
+import re
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -39,6 +40,17 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
 logger = logging.getLogger(__name__)
+
+# Patterns that indicate bash history was cleared by the user/attacker.
+# If any entry matches, all prior entries (and the clearing command itself)
+# should be discarded — they would not survive the clearing operation.
+_CLEAR_PATTERNS = [
+    re.compile(r"history\s+-c"),
+    re.compile(r">\s*~/\.bash_history"),
+    re.compile(r"cat\s+/dev/null\s*>\s*~/\.bash_history"),
+    re.compile(r"truncate\s+-s\s+0\s+.*\.bash_history"),
+    re.compile(r"rm\s+((-[rf]+\s+)?.*)?\.bash_history"),
+]
 
 
 class _SingleHistoryWriter:
@@ -68,6 +80,9 @@ class _SingleHistoryWriter:
         # Sort entries by timestamp to ensure monotonic ordering
         # Bash history format: #<epoch>\n<command>\n — sort by epoch line
         self._sort_by_timestamp()
+        self._apply_history_clearing()
+        if not self.buffer:
+            return
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
@@ -86,6 +101,28 @@ class _SingleHistoryWriter:
             return 0
 
         self.buffer.sort(key=_extract_ts)
+
+    def _apply_history_clearing(self) -> None:
+        """Remove entries that would have been cleared by a history-clearing command.
+
+        Scans for commands matching _CLEAR_PATTERNS. If found, discards all
+        entries at or before the last clearing command (including the command
+        itself), keeping only entries that came after.
+        """
+        last_clear_idx = -1
+        for i, entry in enumerate(self.buffer):
+            # Extract command text (lines after the #epoch line)
+            lines = entry.split("\n")
+            cmd_lines = [ln for ln in lines if not ln.startswith("#")]
+            cmd_text = " ".join(cmd_lines).strip()
+            for pattern in _CLEAR_PATTERNS:
+                if pattern.search(cmd_text):
+                    last_clear_idx = i
+                    break
+
+        if last_clear_idx >= 0:
+            # Discard everything up to and including the clearing command
+            self.buffer = self.buffer[last_clear_idx + 1 :]
 
 
 class BashHistoryEmitter(LogEmitter):

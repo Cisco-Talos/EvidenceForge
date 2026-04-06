@@ -34,6 +34,10 @@ Contains the BaselineMixin with methods for:
 import logging
 import math
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
@@ -217,11 +221,207 @@ _SYSTEM_USER = User(
 )
 
 
+_SCHEDULES_PATH = Path(__file__).parents[1] / "activity" / "systemd_schedules.yaml"
+_CACHED_SCHEDULES: list[dict[str, Any]] | None = None
+
+_DAY_NAME_TO_INT = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _load_systemd_schedules() -> list[dict[str, Any]]:
+    """Load systemd/cron schedule definitions from YAML. Cached after first call."""
+    global _CACHED_SCHEDULES
+    if _CACHED_SCHEDULES is not None:
+        return _CACHED_SCHEDULES
+
+    with open(_SCHEDULES_PATH) as f:
+        data = yaml.safe_load(f)
+    _CACHED_SCHEDULES = data.get("schedules", [])
+    return _CACHED_SCHEDULES
+
+
 class BaselineMixin:
     """Mixin providing baseline activity generation methods."""
 
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
+
+    def _generate_scheduled_tasks(
+        self,
+        current_hour: datetime,
+        system: Any,
+        rng: Any,
+        sys_pids: dict,
+        is_rhel_like: bool,
+        has_web_role: bool,
+    ) -> None:
+        """Generate cron/systemd timer events at realistic frequencies.
+
+        Each scheduled task fires at most once per day (or once per week for
+        weekly tasks) instead of appearing randomly in every hourly loop.
+        Per-host jitter is deterministic so the same host always runs tasks
+        at the same time.
+        """
+
+        schedules = _load_systemd_schedules()
+
+        for sched in schedules:
+            # Filter by distro
+            distro = sched.get("distro", "all")
+            if distro == "debian" and is_rhel_like:
+                continue
+            if distro == "rhel" and not is_rhel_like:
+                continue
+
+            # Filter by role
+            role = sched.get("role")
+            if role == "web_server" and not has_web_role:
+                continue
+
+            service = sched["service"]
+            frequency = sched.get("frequency", "daily")
+            typical_hour = sched.get("typical_hour", 6)
+            jitter_minutes = sched.get("jitter_minutes", 30)
+
+            # Deterministic per-host jitter offset
+            jitter_seed = _stable_seed(f"sched_{system.hostname}_{service}")
+            jitter_offset_min = jitter_seed % max(1, jitter_minutes)
+
+            if frequency == "daily":
+                # Compute the actual fire hour for this host
+                fire_hour = (typical_hour + jitter_offset_min // 60) % 24
+                if current_hour.hour != fire_hour:
+                    continue
+                fire_minute = jitter_offset_min % 60
+            elif frequency == "weekly":
+                typical_day = _DAY_NAME_TO_INT.get(sched.get("typical_day", "monday"), 0)
+                # Jitter can shift across days for weekly tasks
+                fire_day = (typical_day + jitter_offset_min // (24 * 60)) % 7
+                remaining = jitter_offset_min % (24 * 60)
+                fire_hour = (typical_hour + remaining // 60) % 24
+                fire_minute = remaining % 60
+                if current_hour.weekday() != fire_day:
+                    continue
+                if current_hour.hour != fire_hour:
+                    continue
+            elif frequency == "30min":
+                # Fires twice per hour at fixed offsets
+                fire_minute_1 = jitter_offset_min % 30
+                fire_minute_2 = fire_minute_1 + 30
+                fire_minute = fire_minute_1  # use first slot
+            else:
+                continue
+
+            # Compute event timestamp
+            if frequency == "30min":
+                # Generate two events per hour
+                for fm in (fire_minute_1, fire_minute_2):
+                    ts = current_hour + timedelta(minutes=fm, seconds=rng.uniform(0, 30))
+                    self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
+            else:
+                ts = current_hour + timedelta(minutes=fire_minute, seconds=rng.uniform(0, 59))
+                self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
+
+    def _emit_scheduled_event(
+        self,
+        sched: dict,
+        system: Any,
+        ts: datetime,
+        rng: Any,
+        sys_pids: dict,
+        is_rhel_like: bool,
+    ) -> None:
+        """Emit syslog/process events for a single scheduled task firing."""
+        sched_type = sched.get("type", "systemd_timer")
+        service = sched["service"]
+        systemd_pid = sys_pids.get("systemd", 1)
+
+        self.state_manager.set_current_time(ts)
+
+        if sched_type == "systemd_timer":
+            process_path = sched.get("process_path", f"/usr/lib/systemd/{service}")
+
+            # Optional timer trigger message (from PID 1)
+            timer_msg = sched.get("timer_message")
+            if timer_msg:
+                self.activity_generator.generate_syslog_event(
+                    system=system,
+                    time=ts - timedelta(seconds=rng.uniform(0.1, 1.0)),
+                    app_name="systemd",
+                    message=timer_msg,
+                    pid=1,
+                )
+
+            # Starting message + process create
+            start_msg = sched.get("start_message", f"Starting {service}.service.")
+            svc_pid = self.activity_generator.generate_system_process(
+                system=system,
+                time=ts,
+                process_name=process_path,
+                command_line=process_path,
+                parent_pid=systemd_pid,
+                username="root",
+                syslog_message=start_msg,
+            )
+
+            # Detail messages (e.g., logrotate per-file messages)
+            detail_messages = sched.get("detail_messages")
+            if detail_messages:
+                distro_key = "rhel" if is_rhel_like else "debian"
+                msgs = detail_messages.get(distro_key, [])
+                detail_delay = rng.uniform(0.5, 2.0)
+                for msg in msgs:
+                    detail_ts = ts + timedelta(seconds=detail_delay)
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=detail_ts,
+                        app_name=service,
+                        message=msg,
+                        pid=svc_pid if svc_pid else rng.randint(10000, 60000),
+                    )
+                    detail_delay += rng.uniform(0.2, 1.0)
+
+            # Finished message + process terminate
+            finish_delay = rng.uniform(0.5, 5.0)
+            finish_ts = ts + timedelta(seconds=finish_delay)
+            self.state_manager.set_current_time(finish_ts)
+            finish_msg = sched.get("finish_message", f"Finished {service}.service.")
+            self.activity_generator.generate_system_process_termination(
+                system=system,
+                time=finish_ts,
+                pid=svc_pid,
+                process_name=process_path,
+                parent_pid=systemd_pid,
+                username="root",
+                syslog_message=finish_msg,
+            )
+
+        elif sched_type == "cron":
+            cron_user = sched.get("cron_user", "root")
+            cron_commands = sched.get("cron_commands", {})
+            # Pick the right command for this distro
+            if is_rhel_like:
+                cmd = cron_commands.get("rhel", cron_commands.get("all", ""))
+            else:
+                cmd = cron_commands.get("debian", cron_commands.get("all", ""))
+            if not cmd:
+                return
+
+            self.activity_generator.generate_system_process(
+                system=system,
+                time=ts,
+                process_name="/usr/sbin/cron",
+                command_line=cmd,
+                parent_pid=sys_pids.get("cron", 0),
+                username=cron_user,
+            )
 
     def _generate_hour(
         self,
@@ -414,7 +614,7 @@ class BaselineMixin:
             if rng.random() < 0.15:
                 target_system = rng.choice(target_systems)
                 source_system = rng.choice(target_systems)
-                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                 self.state_manager.set_current_time(event_time)
                 self.activity_generator.generate_failed_logon(
                     user=stale_user,
@@ -428,7 +628,7 @@ class BaselineMixin:
             if rng.random() < 0.05 and dcs:
                 dc = rng.choice(dcs)
                 source_system = rng.choice(target_systems)
-                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                 self.state_manager.set_current_time(event_time)
                 self.activity_generator.generate_kerberos_preauth_failed(
                     username=stale.username,
@@ -441,7 +641,7 @@ class BaselineMixin:
             # Pattern 3: Scheduled task failure (~3%/hour)
             if rng.random() < 0.03 and windows_servers:
                 task_host = rng.choice(windows_servers)
-                event_time = current_hour + timedelta(seconds=rng.randint(0, 3599))
+                event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                 self.state_manager.set_current_time(event_time)
                 # Failed batch logon for the scheduled task
                 self.activity_generator.generate_failed_logon(
@@ -666,7 +866,7 @@ class BaselineMixin:
             if rng.random() < 0.15:
                 ws = rng.choice(workstations)
                 dc = rng.choice(dcs)
-                offset = rng.randint(0, 3599) + rng.random()
+                offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(
@@ -730,7 +930,7 @@ class BaselineMixin:
             if rng.random() < 0.30:
                 sender = rng.choice(linux_sys)
                 collector = rng.choice([s for s in linux_sys if s != sender] or linux_sys)
-                offset = rng.randint(0, 3599) + rng.random()
+                offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(
@@ -1883,7 +2083,7 @@ class BaselineMixin:
             if os_cat == "windows":
                 num_https = rng.randint(8, 20)
                 for _i in range(num_https):
-                    offset = rng.randint(0, 3599) + rng.random()
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     bg_domain, bg_ip = pick_domain_and_ip(
@@ -1907,7 +2107,7 @@ class BaselineMixin:
             elif os_cat == "linux":
                 num_https = rng.randint(3, 10)
                 for _i in range(num_https):
-                    offset = rng.randint(0, 3599) + rng.random()
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     bg_domain, bg_ip = pick_domain_and_ip(
@@ -1968,7 +2168,7 @@ class BaselineMixin:
                 sys_type_str = (system.type or "workstation").lower()
                 num_svc = rng.randint(3, 8)
                 for _si in range(num_svc):
-                    svc_offset = rng.randint(0, 3599) + rng.random()
+                    svc_offset = rng.uniform(0, 3599)
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
                     self.state_manager.set_current_time(svc_ts)
                     svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
@@ -2064,7 +2264,7 @@ class BaselineMixin:
                     tgt_pid = sys_pids.get(tgt_key, rng.randint(1000, 5000))
                     if src_pid == tgt_pid:
                         continue
-                    offset = rng.randint(0, 3599) + rng.random()
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_create_remote_thread(
@@ -2084,7 +2284,7 @@ class BaselineMixin:
                     src_key, src_image, tgt_key, tgt_image, access = rng.choice(_BENIGN_PA_PAIRS)
                     src_pid = sys_pids.get(src_key, rng.randint(1000, 5000))
                     tgt_pid = sys_pids.get(tgt_key, rng.randint(1000, 5000))
-                    offset = rng.randint(0, 3599) + rng.random()
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_process_access(
@@ -2110,7 +2310,7 @@ class BaselineMixin:
                 ][:5]
                 if targets:
                     target_ip = rng.choice(targets)
-                    offset = rng.randint(0, 3599) + rng.random()
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_connection(
@@ -2134,7 +2334,7 @@ class BaselineMixin:
                     num_ssh = rng.randint(1, 3)
                     for _ in range(num_ssh):
                         src_ip = rng.choice(ssh_sources)
-                        offset = rng.randint(0, 3599)
+                        offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         # Resolve source system for WFP 5156 emission
@@ -2182,6 +2382,7 @@ class BaselineMixin:
                                     ssh_user.persona or "",
                                     system.hostname,
                                     system.services,
+                                    username=ssh_user.username,
                                 )
                                 self.activity_generator.generate_bash_command(
                                     ssh_user, system, cmd_time, cmd
@@ -2210,7 +2411,7 @@ class BaselineMixin:
             num_rdp = rng.randint(1, 3)
             for _ in range(num_rdp):
                 src_sys = rng.choice(rdp_sources)
-                offset = rng.randint(0, 3599)
+                offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
 
@@ -2249,7 +2450,7 @@ class BaselineMixin:
             sys_type_svc = (system.type or "workstation").lower()
             num_svc = rng.randint(2, 5) if sys_type_svc != "workstation" else rng.randint(1, 2)
             for _ in range(num_svc):
-                offset = rng.randint(0, 3599)
+                offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 svc_accounts = ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"]
                 svc_user = rng.choice(svc_accounts)
@@ -2262,7 +2463,7 @@ class BaselineMixin:
             if sys_type_svc in ("server", "domain_controller"):
                 num_anon = rng.randint(1, 3)
                 for _ in range(num_anon):
-                    offset = rng.randint(0, 3599)
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     self.activity_generator.generate_anonymous_logon(
@@ -2375,7 +2576,7 @@ class BaselineMixin:
                 username = f"{client.hostname}$"
                 last_tgt = self._last_tgt_time.get(username)
                 if last_tgt and (current_hour - last_tgt) >= renewal_interval:
-                    offset = rng.randint(0, 3599)
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     dc_idx = rng.randint(0, len(dc_hostnames) - 1)
@@ -2410,81 +2611,18 @@ class BaselineMixin:
             scenario_start = self.scenario.time_window.start
             boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
 
+            # Generate scheduled tasks (cron/systemd timers) at real frequencies
+            self._generate_scheduled_tasks(
+                current_hour, system, rng, sys_pids, is_rhel_like, has_web_role
+            )
+
             for _ in range(num_events):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
 
                 source_roll = rng.random()
-                if source_roll < 0.20:
-                    # Filter systemd services by distro and role
-                    services = [
-                        "logrotate",
-                        "man-db",
-                        "fstrim",
-                        "systemd-tmpfiles-clean",
-                    ]
-                    if not is_rhel_like:
-                        services.extend(["apt-daily", "motd-news", "ua-timer"])
-                    if has_web_role:
-                        services.append("phpsessionclean")
-                    svc = rng.choice(services)
-                    svc_title = svc.replace("-", " ").title()
-                    systemd_pid = sys_pids.get("systemd", 1)
-
-                    # Paired lifecycle: Starting → process create, Finished → terminate
-                    svc_pid = self.activity_generator.generate_system_process(
-                        system=system,
-                        time=ts,
-                        process_name=f"/usr/lib/systemd/{svc}",
-                        command_line=f"/usr/lib/systemd/{svc}",
-                        parent_pid=systemd_pid,
-                        username="root",
-                        syslog_message=f"Starting {svc}.service - {svc_title}.",
-                    )
-                    finish_delay = rng.uniform(0.5, 5.0)
-                    finish_ts = ts + timedelta(seconds=finish_delay)
-                    self.state_manager.set_current_time(finish_ts)
-                    self.activity_generator.generate_system_process_termination(
-                        system=system,
-                        time=finish_ts,
-                        pid=svc_pid,
-                        process_name=f"/usr/lib/systemd/{svc}",
-                        parent_pid=systemd_pid,
-                        username="root",
-                        syslog_message=f"Finished {svc}.service - {svc_title}.",
-                    )
-                elif source_roll < 0.35:
-                    # Distro-aware cron commands
-                    cron_cmds = [
-                        ("root", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                    ]
-                    if is_rhel_like:
-                        cron_cmds.append(
-                            ("root", "run-parts /etc/cron.daily"),
-                        )
-                    else:
-                        cron_cmds.extend(
-                            [
-                                (
-                                    "root",
-                                    "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )",
-                                ),
-                                ("root", "command -v debian-sa1 > /dev/null && debian-sa1 1 1"),
-                            ]
-                        )
-                    if has_web_role:
-                        cron_cmds.append(("www-data", "/usr/bin/php /var/www/html/cron.php"))
-                    user, cmd = rng.choice(cron_cmds)
-                    self.activity_generator.generate_system_process(
-                        system=system,
-                        time=ts,
-                        process_name="/usr/sbin/cron",
-                        command_line=cmd,
-                        parent_pid=sys_pids.get("cron", 0),
-                        username=user,
-                    )
-                elif source_roll < 0.50:
+                if source_roll < 0.25:
                     if is_dmz and rng.random() < 0.85:
                         src_ip = self._generate_external_client_ip(rng)
                         spt = rng.randint(1024, 65535)
@@ -2542,7 +2680,7 @@ class BaselineMixin:
                                 facility=0,
                                 severity=5,
                             )
-                elif source_roll < 0.65:
+                elif source_roll < 0.45:
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     if not hasattr(self, "_session_counters"):
                         self._session_counters = {}
@@ -2566,7 +2704,7 @@ class BaselineMixin:
                         message=action,
                         pid=sys_pids.get("logind", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.80:
+                elif source_roll < 0.65:
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -2637,7 +2775,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.90:
+                elif source_roll < 0.80:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -2653,7 +2791,7 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.93:
+                elif source_roll < 0.88:
                     if is_rhel_like:
                         continue  # RHEL uses chronyd, not systemd-timesyncd
                     ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
@@ -2677,86 +2815,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.95:
-                    # Package management (apt-daily / dnf-automatic)
-                    pkg_pid = rng.randint(10000, 60000)
-                    if is_rhel_like:
-                        pkg_msgs = [
-                            "Starting dnf-automatic...",
-                            "No security updates needed.",
-                            "dnf-automatic.service: Deactivated successfully.",
-                        ]
-                        pkg_app = "dnf-automatic"
-                    else:
-                        pkg_msgs = [
-                            "Starting daily apt download activities",
-                            "Checking for package updates...",
-                            "All packages are up to date.",
-                            "apt-daily.service: Deactivated successfully.",
-                        ]
-                        pkg_app = "apt-daily"
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name=pkg_app,
-                        message=rng.choice(pkg_msgs),
-                        pid=pkg_pid,
-                    )
-                elif source_roll < 0.97:
-                    # Systemd timer execution
-                    timer_services = [
-                        ("fstrim.timer", "fstrim.service", "Discard unused blocks on filesystems"),
-                        ("logrotate.timer", "logrotate.service", "Rotate log files"),
-                        (
-                            "systemd-tmpfiles-clean.timer",
-                            "systemd-tmpfiles-clean.service",
-                            "Cleanup of Temporary Directories",
-                        ),
-                    ]
-                    timer_name, svc_name, svc_desc = rng.choice(timer_services)
-                    timer_msgs = [
-                        f"{timer_name}: Triggering {svc_name}...",
-                        f"Started {svc_name} - {svc_desc}.",
-                        f"{svc_name}: Deactivated successfully.",
-                    ]
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name="systemd",
-                        message=rng.choice(timer_msgs),
-                        pid=1,
-                    )
-                elif source_roll < 0.98:
-                    # Logrotate detail messages
-                    log_files = [
-                        "/var/log/syslog",
-                        "/var/log/auth.log",
-                        "/var/log/kern.log",
-                        "/var/log/dpkg.log",
-                        "/var/log/daemon.log",
-                    ]
-                    if is_rhel_like:
-                        log_files = [
-                            "/var/log/messages",
-                            "/var/log/secure",
-                            "/var/log/cron",
-                            "/var/log/maillog",
-                            "/var/log/boot.log",
-                        ]
-                    log_file = rng.choice(log_files)
-                    rotate_msgs = [
-                        f"rotating {log_file}",
-                        f"compressing {log_file}.1 to {log_file}.1.gz",
-                        f"removing old {log_file}.7.gz",
-                    ]
-                    self.activity_generator.generate_syslog_event(
-                        system=system,
-                        time=ts,
-                        app_name="logrotate",
-                        message=rng.choice(rotate_msgs),
-                        pid=rng.randint(10000, 60000),
-                    )
-                elif source_roll < 0.99:
+                elif source_roll < 0.94:
                     # Journald runtime statistics
                     machine_id = f"{''.join(rng.choices('0123456789abcdef', k=32))}"
                     size = rng.randint(4, 128)
@@ -2814,9 +2873,9 @@ class BaselineMixin:
                         (
                             "dhclient",
                             [
-                                "DHCPREQUEST for {} on ens160 to 10.0.0.1 port 67",
-                                "DHCPACK of {} from 10.0.0.1",
-                                "bound to {} -- renewal in 3600 seconds.",
+                                "DHCPREQUEST for {ip} on ens160 to 10.0.0.1 port 67",
+                                "DHCPACK of {ip} from 10.0.0.1",
+                                "bound to {ip} -- renewal in {renewal} seconds.",
                             ],
                         ),
                         (
@@ -2869,7 +2928,6 @@ class BaselineMixin:
                             "cron",
                             [
                                 "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))",
-                                "(root) CMD (/usr/sbin/logrotate /etc/logrotate.conf)",
                             ],
                         ),
                         (
@@ -2897,7 +2955,10 @@ class BaselineMixin:
                     app, msgs = rng.choice(filtered)
                     # Format placeholders vary by daemon
                     if app == "dhclient":
-                        msg = rng.choice(msgs).format(system.ip)
+                        renewal = rng.choice([1800, 3600, 3600, 7200, 14400, 43200])
+                        jitter = int(renewal * 0.05)
+                        renewal += rng.randint(-jitter, jitter)
+                        msg = rng.choice(msgs).format(ip=system.ip, renewal=renewal)
                     elif app == "NetworkManager":
                         # NM uses monotonic kernel uptime seconds in [brackets]
                         msg = rng.choice(msgs).format(uptime)
@@ -3199,7 +3260,7 @@ class BaselineMixin:
                     "198.98.51.189",
                 ]
                 for _ in range(num_alerts):
-                    offset = rng.randint(0, 3599)
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     # Pick protocol first, then choose a matching signature
                     alert_proto = rng.choice(["tcp", "udp", "icmp"])
@@ -3274,7 +3335,7 @@ class BaselineMixin:
                 internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
                 exposure = self._get_system_exposure(sys_obj)
                 for _ in range(num_reqs):
-                    offset = rng.randint(0, 3599)
+                    offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
                     path, method, status = rng.choice(_WEB_PATHS)
                     if exposure == "external":

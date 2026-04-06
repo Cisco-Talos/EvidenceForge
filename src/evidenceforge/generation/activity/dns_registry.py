@@ -26,6 +26,7 @@ _CACHED_DATA: dict[str, Any] | None = None
 _CACHED_REVERSE_DNS: dict[str, str] | None = None
 _CACHED_FORWARD_DNS: dict[str, list[str]] | None = None
 _CACHED_TAG_INDEX: dict[str, list[dict]] | None = None
+_CACHED_DOMAIN_TAGS: dict[str, list[str]] | None = None
 
 
 def load_dns_registry() -> dict[str, Any]:
@@ -195,6 +196,21 @@ def get_ipv6_map() -> dict[str, str]:
     """Get IPv4 → IPv6 mapping for AAAA queries."""
     data = load_dns_registry()
     return data.get("ipv6_map", {})
+
+
+def get_domain_tags(domain: str) -> list[str]:
+    """Get the tags for a domain from the registry.
+
+    Builds and caches a domain→tags mapping on first call.
+    Returns empty list if domain is not in the registry.
+    """
+    global _CACHED_DOMAIN_TAGS
+    if _CACHED_DOMAIN_TAGS is None:
+        data = load_dns_registry()
+        _CACHED_DOMAIN_TAGS = {
+            entry["domain"]: entry.get("tags", []) for entry in data.get("domains", [])
+        }
+    return _CACHED_DOMAIN_TAGS.get(domain, [])
 
 
 def get_cdn_ranges() -> list[list[int]]:

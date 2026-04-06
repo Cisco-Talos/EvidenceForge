@@ -115,7 +115,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if current is None:
             # Deterministic but non-round start per sensor
             seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-            current = 100000 + (seed % 9900000)
+            current = 1_000_000 + (seed % 0xFFE00000)
         self._conn_id_counters[sensor_hostname] = current + 1
         return current
 

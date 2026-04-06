@@ -1,0 +1,166 @@
+# Real-world schedules for systemd timers and cron jobs.
+#
+# These tasks run at fixed frequencies and are generated separately from
+# the per-hour probability loop to avoid unrealistic repetition.
+#
+# Fields:
+#   service          - Service/timer unit name
+#   type             - "systemd_timer" or "cron"
+#   frequency        - "daily", "weekly", or "30min"
+#   typical_hour     - UTC hour when the task normally runs (0-23)
+#   typical_day      - Day of week for weekly tasks (monday, tuesday, etc.)
+#   jitter_minutes   - Max jitter offset in minutes (per-host deterministic)
+#   distro           - "all", "debian", or "rhel"
+#   role             - Optional role filter (e.g., "web_server")
+#   process_path     - Path to the service binary (for process create events)
+#
+# For systemd_timer type:
+#   start_message    - Syslog message when service starts
+#   finish_message   - Syslog message when service finishes
+#   timer_message    - Optional timer trigger message (logged by systemd PID 1)
+#
+# For cron type:
+#   cron_user        - User running the cron job
+#   cron_commands    - Distro-keyed command strings
+
+schedules:
+  # === Systemd timers ===
+  - service: logrotate
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 30
+    distro: all
+    process_path: "/usr/sbin/logrotate"
+    start_message: "Starting logrotate.service - Rotate log files."
+    finish_message: "Finished logrotate.service - Rotate log files."
+    timer_message: "logrotate.timer: Triggering logrotate.service..."
+    detail_messages:
+      debian:
+        - "rotating /var/log/syslog"
+        - "compressing /var/log/syslog.1 to /var/log/syslog.1.gz"
+        - "removing old /var/log/syslog.7.gz"
+        - "rotating /var/log/auth.log"
+        - "rotating /var/log/kern.log"
+      rhel:
+        - "rotating /var/log/messages"
+        - "compressing /var/log/messages.1 to /var/log/messages.1.gz"
+        - "removing old /var/log/messages.7.gz"
+        - "rotating /var/log/secure"
+        - "rotating /var/log/cron"
+
+  - service: fstrim
+    type: systemd_timer
+    frequency: weekly
+    typical_day: monday
+    typical_hour: 0
+    jitter_minutes: 60
+    distro: all
+    process_path: "/usr/sbin/fstrim"
+    start_message: "Starting fstrim.service - Discard unused blocks on filesystems."
+    finish_message: "Finished fstrim.service - Discard unused blocks on filesystems."
+    timer_message: "fstrim.timer: Triggering fstrim.service..."
+
+  - service: man-db
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 30
+    distro: debian
+    process_path: "/usr/bin/mandb"
+    start_message: "Starting man-db.service - Daily man-db regeneration."
+    finish_message: "Finished man-db.service - Daily man-db regeneration."
+
+  - service: systemd-tmpfiles-clean
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 60
+    distro: all
+    process_path: "/usr/bin/systemd-tmpfiles"
+    start_message: "Starting systemd-tmpfiles-clean.service - Cleanup of Temporary Directories."
+    finish_message: "Finished systemd-tmpfiles-clean.service - Cleanup of Temporary Directories."
+    timer_message: "systemd-tmpfiles-clean.timer: Triggering systemd-tmpfiles-clean.service..."
+
+  - service: apt-daily
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 720  # apt has RandomizedDelaySec=12h
+    distro: debian
+    process_path: "/usr/lib/apt/apt.systemd.daily"
+    start_message: "Starting apt-daily.service - Daily apt download activities."
+    finish_message: "apt-daily.service: Deactivated successfully."
+
+  - service: dnf-automatic
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 360
+    distro: rhel
+    process_path: "/usr/bin/dnf-automatic"
+    start_message: "Starting dnf-automatic.service..."
+    finish_message: "dnf-automatic.service: Deactivated successfully."
+
+  - service: motd-news
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 12
+    jitter_minutes: 60
+    distro: debian
+    process_path: "/usr/lib/ubuntu-release-upgrader/motd-news"
+    start_message: "Starting motd-news.service - Message of the Day."
+    finish_message: "Finished motd-news.service - Message of the Day."
+
+  - service: ua-timer
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 7
+    jitter_minutes: 60
+    distro: debian
+    process_path: "/usr/lib/ubuntu-advantage/ua_timer"
+    start_message: "Starting ua-timer.service - Ubuntu Advantage Timer."
+    finish_message: "Finished ua-timer.service - Ubuntu Advantage Timer."
+
+  - service: phpsessionclean
+    type: systemd_timer
+    frequency: 30min
+    typical_hour: 0
+    jitter_minutes: 5
+    distro: debian
+    role: web_server
+    process_path: "/usr/lib/php/sessionclean"
+    start_message: "Starting phpsessionclean.service - Clean PHP session files."
+    finish_message: "Finished phpsessionclean.service - Clean PHP session files."
+
+  # === Cron jobs ===
+  - service: cron-daily
+    type: cron
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 15
+    distro: all
+    cron_user: root
+    cron_commands:
+      rhel: "run-parts /etc/cron.daily"
+      debian: "test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily )"
+
+  - service: logrotate-cron
+    type: cron
+    frequency: daily
+    typical_hour: 6
+    jitter_minutes: 15
+    distro: all
+    cron_user: root
+    cron_commands:
+      all: "/usr/sbin/logrotate /etc/logrotate.conf"
+
+  - service: debian-sa1
+    type: cron
+    frequency: daily
+    typical_hour: 0
+    jitter_minutes: 10
+    distro: debian
+    cron_user: root
+    cron_commands:
+      debian: "command -v debian-sa1 > /dev/null && debian-sa1 1 1"

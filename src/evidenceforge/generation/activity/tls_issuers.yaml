@@ -15,8 +15,7 @@ issuers:
     validity_days: 90
     not_before_max_days: 60
     key_types:
-      - {type: "ecdsa", length: 256, weight: 90}
-      - {type: "rsa", length: 2048, weight: 10}
+      - {type: "ecdsa", length: 256, weight: 100}
 
   - name: "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
     weight: 15
@@ -49,8 +48,8 @@ issuers:
     validity_days: 397
     not_before_max_days: 300
     key_types:
-      - {type: "rsa", length: 2048, weight: 60}
-      - {type: "ecdsa", length: 256, weight: 40}
+      - {type: "rsa", length: 2048, weight: 85}
+      - {type: "ecdsa", length: 256, weight: 15}
 
   - name: "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
     weight: 10
@@ -74,8 +73,15 @@ issuers:
     validity_days: 397
     not_before_max_days: 300
     key_types:
-      - {type: "rsa", length: 2048, weight: 80}
-      - {type: "ecdsa", length: 256, weight: 20}
+      - {type: "rsa", length: 2048, weight: 90}
+      - {type: "ecdsa", length: 256, weight: 10}
+
+  - name: "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
+    weight: 0  # Only used via domain_ca_overrides
+    validity_days: 90
+    not_before_max_days: 60
+    key_types:
+      - {type: "ecdsa", length: 256, weight: 100}
 
 # Domain-to-CA overrides: well-known domains must use their real CA.
 # Patterns use fnmatch glob syntax. First match wins.

@@ -157,19 +157,35 @@ security:
   - "cat /var/log/fail2ban.log | tail -30"
   - "awk '{print $1}' /var/log/auth.log | sort | uniq -c | sort -rn | head -10"
 
-typos:
-  - ["ls", "sl"]
-  - ["cd ..", "cd.."]
-  - ["cat", "cta"]
-  - ["grep", "grpe"]
-  - ["systemctl", "systemclt"]
-  - ["docker", "docekr"]
-  - ["git", "gti"]
-  - ["history", "histroy"]
-  - ["clear", "claer"]
-  - ["tail", "tial"]
-  - ["vim", "vmi"]
-  - ["sudo", "suod"]
+# QWERTY keyboard adjacency map for generative typo model.
+# Each key maps to its physical neighbors on a standard US keyboard.
+keyboard_adjacency:
+  q: [w, a, "1", "2"]
+  w: [q, e, a, s, "2", "3"]
+  e: [w, r, s, d, "3", "4"]
+  r: [e, t, d, f, "4", "5"]
+  t: [r, y, f, g, "5", "6"]
+  y: [t, u, g, h, "6", "7"]
+  u: [y, i, h, j, "7", "8"]
+  i: [u, o, j, k, "8", "9"]
+  o: [i, p, k, l, "9", "0"]
+  p: [o, l, "0"]
+  a: [q, w, s, z]
+  s: [a, w, e, d, z, x]
+  d: [s, e, r, f, x, c]
+  f: [d, r, t, g, c, v]
+  g: [f, t, y, h, v, b]
+  h: [g, y, u, j, b, n]
+  j: [h, u, i, k, n, m]
+  k: [j, i, o, l, m]
+  l: [k, o, p]
+  z: [a, s, x]
+  x: [z, s, d, c]
+  c: [x, d, f, v]
+  v: [c, f, g, b]
+  b: [v, g, h, n]
+  n: [b, h, j, m]
+  m: [n, j, k]
 
 # Placeholder pools for template resolution
 params:

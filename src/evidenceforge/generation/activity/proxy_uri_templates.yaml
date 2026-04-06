@@ -1,0 +1,475 @@
+# Per-domain and per-tag URI path templates for realistic proxy log generation.
+#
+# Lookup order: exact domain match -> tag-based fallback -> generic fallback.
+# Template variables:
+#   {guid}      - random UUID (e.g., a1b2c3d4-e5f6-7890-abcd-ef1234567890)
+#   {tenant_id} - random UUID for Azure AD tenant
+#   {hex8}      - 8-char hex string
+#   {hex16}     - 16-char hex string
+
+domains:
+  # --- Windows Update / Delivery Optimization ---
+  download.windowsupdate.com:
+    paths:
+      - "/msdownload/update/v3/static/trustedr/en/{guid}.cab"
+      - "/msdownload/update/software/secu/{guid}/{guid}.cab"
+      - "/msdownload/update/software/updt/{guid}/{guid}.cab"
+      - "/filestreamingservice/files/{guid}"
+      - "/msdownload/update/v11/microsoftupdate/redir/MU{hex8}.cab"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
+  ctldl.windowsupdate.com:
+    paths:
+      - "/msdownload/update/v3/static/trustedr/en/authrootstl.cab"
+      - "/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab"
+      - "/msdownload/update/v3/static/trustedr/en/pinrulesstl.cab"
+    content_type: "application/vnd.ms-cab-compressed"
+    methods: ["GET"]
+
+  # --- Certificate / OCSP / CRL ---
+  crl.microsoft.com:
+    paths:
+      - "/pki/crl/products/MicRooCerAut2011_2011_03_22.crl"
+      - "/pki/crl/products/MicTimStaPCA_2010-07-01.crl"
+      - "/pki/mscorp/crl/Microsoft%20RSA%20TLS%20CA%2002.crl"
+      - "/pki/mscorp/crl/Microsoft%20Azure%20RSA%20TLS%20Issuing%20CA%2008.crl"
+      - "/pki/crl/products/MicCodSigPCA2011_2011-07-08.crl"
+    content_type: "application/pkix-crl"
+    methods: ["GET"]
+
+  ocsp.digicert.com:
+    paths:
+      - "/"
+    content_type: "application/ocsp-response"
+    methods: ["POST"]
+
+  # --- Microsoft Telemetry / Settings ---
+  settings-win.data.microsoft.com:
+    paths:
+      - "/OneCollector/1.0/"
+      - "/settings/v2.0/global"
+      - "/settings/v2.0/OEM"
+    content_type: "application/json"
+    methods: ["POST", "POST", "GET"]
+
+  arc.msn.com:
+    paths:
+      - "/v3/Delivery/Placement"
+      - "/v3/Delivery/Cache"
+      - "/v4/Delivery/Placement"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  # --- Azure AD / Identity ---
+  login.microsoftonline.com:
+    paths:
+      - "/common/oauth2/v2.0/token"
+      - "/common/oauth2/v2.0/authorize"
+      - "/common/discovery/instance"
+      - "/{tenant_id}/oauth2/v2.0/token"
+      - "/common/oauth2/nativeclient"
+    content_type: "application/json"
+    methods: ["POST", "GET", "GET", "POST", "POST"]
+
+  login.live.com:
+    paths:
+      - "/ppsecure/post.srf"
+      - "/oauth20_token.srf"
+      - "/oauth20_authorize.srf"
+      - "/GetSessionState.srf"
+    content_type: "application/json"
+    methods: ["POST", "POST", "GET", "GET"]
+
+  graph.microsoft.com:
+    paths:
+      - "/v1.0/me"
+      - "/v1.0/me/drive/root/children"
+      - "/v1.0/me/messages"
+      - "/v1.0/organization"
+      - "/beta/me/profile"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  # --- Microsoft Office / SaaS ---
+  www.office.com:
+    paths:
+      - "/"
+      - "/login"
+      - "/landing"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  outlook.office365.com:
+    paths:
+      - "/owa/"
+      - "/owa/service.svc?action=GetConversationItems"
+      - "/EWS/Exchange.asmx"
+      - "/autodiscover/autodiscover.json"
+      - "/api/v2.0/me/messages"
+    content_type: "application/json"
+    methods: ["GET", "POST", "POST", "GET", "GET"]
+
+  teams.microsoft.com:
+    paths:
+      - "/api/mt/part/emea-03/beta/users/fetchShortProfile"
+      - "/api/mt/part/emea-03/beta/teams/teamMembers"
+      - "/statics/scripts/teams_bundle.js"
+    content_type: "application/json"
+    methods: ["POST", "POST", "GET"]
+
+  sharepoint.com:
+    paths:
+      - "/_api/web/lists"
+      - "/_layouts/15/Doc.aspx"
+      - "/sites/intranet/SitePages/Home.aspx"
+      - "/_api/v2.0/drives"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  onedrive.live.com:
+    paths:
+      - "/redir?resid={hex16}"
+      - "/edit.aspx?resid={hex16}"
+      - "/download?resid={hex16}"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Bing / search ---
+  www.bing.com:
+    paths:
+      - "/"
+      - "/search?q={search_term}"
+      - "/images/search?q={search_term}"
+      - "/th?id=OHR.{hex8}_EN-US{hex8}_1920x1080.jpg"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Google ---
+  www.google.com:
+    paths:
+      - "/"
+      - "/search?q={search_term}"
+      - "/complete/search?q={search_term}"
+      - "/gen_204?atyp=i"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  accounts.google.com:
+    paths:
+      - "/ServiceLogin"
+      - "/o/oauth2/auth"
+      - "/signin/v2/challenge"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  drive.google.com:
+    paths:
+      - "/drive/my-drive"
+      - "/file/d/{hex16}/view"
+      - "/uc?export=download&id={hex16}"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Slack ---
+  slack.com:
+    paths:
+      - "/"
+      - "/get-started"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  api.slack.com:
+    paths:
+      - "/api/conversations.list"
+      - "/api/chat.postMessage"
+      - "/api/users.list"
+      - "/api/rtm.connect"
+    content_type: "application/json"
+    methods: ["POST"]
+
+  files.slack.com:
+    paths:
+      - "/files-tmb/{hex16}/download/image.png"
+      - "/files-pri/{hex16}/download/document.pdf"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
+  # --- Zoom ---
+  zoom.us:
+    paths:
+      - "/"
+      - "/signin"
+      - "/j/{hex8}"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  us02web.zoom.us:
+    paths:
+      - "/wc/join/{hex8}"
+      - "/web/api?type=meeting"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  us06web.zoom.us:
+    paths:
+      - "/wc/join/{hex8}"
+      - "/web/api?type=meeting"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Salesforce ---
+  login.salesforce.com:
+    paths:
+      - "/services/oauth2/token"
+      - "/"
+      - "/id/{hex16}"
+    content_type: "application/json"
+    methods: ["POST", "GET", "GET"]
+
+  na139.salesforce.com:
+    paths:
+      - "/services/data/v58.0/sobjects/Account"
+      - "/services/data/v58.0/query?q=SELECT+Id+FROM+Account"
+      - "/lightning/page/home"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  # --- GitHub / Git ---
+  github.com:
+    paths:
+      - "/"
+      - "/notifications"
+      - "/pulls"
+      - "/issues"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  api.github.com:
+    paths:
+      - "/repos/{brand}/{brand}/commits"
+      - "/user"
+      - "/rate_limit"
+      - "/repos/{brand}/{brand}/pulls"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  gitlab.com:
+    paths:
+      - "/"
+      - "/explore/projects"
+      - "/users/sign_in"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- CDN / static ---
+  cdn.jsdelivr.net:
+    paths:
+      - "/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      - "/npm/jquery@3.7.1/dist/jquery.min.js"
+      - "/npm/font-awesome@4.7.0/css/font-awesome.min.css"
+    content_type: "application/javascript"
+    methods: ["GET"]
+
+  static.akamai.net:
+    paths:
+      - "/assets/js/combined.min.js"
+      - "/assets/css/main.css"
+      - "/fonts/woff2/roboto-v30-latin.woff2"
+    content_type: "application/javascript"
+    methods: ["GET"]
+
+  pages.github.io:
+    paths:
+      - "/"
+      - "/index.html"
+      - "/assets/css/style.css"
+      - "/assets/js/main.js"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Social ---
+  www.facebook.com:
+    paths:
+      - "/"
+      - "/login"
+      - "/groups/feed/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  www.reddit.com:
+    paths:
+      - "/"
+      - "/r/popular/"
+      - "/r/technology/"
+      - "/r/netsec/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Linux background ---
+  changelogs.ubuntu.com:
+    paths:
+      - "/meta-release-lts"
+    content_type: "text/plain"
+    methods: ["GET"]
+
+  security.ubuntu.com:
+    paths:
+      - "/ubuntu/dists/jammy-security/InRelease"
+      - "/ubuntu/dists/jammy-security/main/binary-amd64/Packages.gz"
+    content_type: "application/x-gzip"
+    methods: ["GET"]
+
+  archive.ubuntu.com:
+    paths:
+      - "/ubuntu/dists/jammy/InRelease"
+      - "/ubuntu/dists/jammy-updates/InRelease"
+      - "/ubuntu/dists/jammy/main/binary-amd64/Packages.gz"
+    content_type: "application/x-gzip"
+    methods: ["GET"]
+
+  pypi.org:
+    paths:
+      - "/simple/"
+      - "/simple/requests/"
+      - "/simple/pip/"
+      - "/pypi/setuptools/json"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Cloud storage ---
+  api.pcloud.com:
+    paths:
+      - "/listfolder?folderid=0"
+      - "/uploadfile?folderid=0"
+      - "/getfilelink?fileid={hex8}"
+      - "/diff?diffid=0&limit=500"
+    content_type: "application/json"
+    methods: ["GET", "POST", "GET", "GET"]
+
+  # --- Other ---
+  stackoverflow.com:
+    paths:
+      - "/"
+      - "/questions"
+      - "/questions/tagged/python"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  registry.npmjs.org:
+    paths:
+      - "/express"
+      - "/react"
+      - "/lodash"
+      - "/-/v1/search?text=security"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  www.example.com:
+    paths:
+      - "/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+# Tag-based templates: used when a domain has no exact match.
+# Tags correspond to dns_registry.yaml tag values.
+tags:
+  background:
+    paths:
+      - "/v1/telemetry"
+      - "/api/v1/collect"
+      - "/report"
+      - "/"
+    content_type: "application/json"
+    methods: ["POST", "POST", "POST", "GET"]
+
+  saas:
+    paths:
+      - "/api/v2/data"
+      - "/api/v1/status"
+      - "/dashboard"
+      - "/home"
+      - "/app"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  web:
+    paths:
+      - "/"
+      - "/"
+      - "/"
+      - "/index.html"
+      - "/assets/main.css"
+      - "/assets/app.js"
+      - "/favicon.ico"
+      - "/robots.txt"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  git:
+    paths:
+      - "/"
+      - "/explore"
+      - "/info/refs?service=git-upload-pack"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  storage:
+    paths:
+      - "/api/file/upload"
+      - "/api/file/download"
+      - "/api/listfolder"
+    content_type: "application/json"
+    methods: ["GET", "POST", "GET"]
+
+  email:
+    paths:
+      - "/autodiscover/autodiscover.xml"
+      - "/EWS/Exchange.asmx"
+      - "/owa/"
+      - "/mapi/emsmdb/"
+    content_type: "text/xml"
+    methods: ["POST", "POST", "GET", "POST"]
+
+  internal:
+    paths:
+      - "/"
+      - "/health"
+      - "/api/v1/status"
+    content_type: "application/json"
+    methods: ["GET"]
+
+# Generic fallback for domains not in the registry at all.
+generic:
+  paths:
+    - "/"
+    - "/"
+    - "/"
+    - "/index.html"
+    - "/login"
+    - "/api/v1/status"
+    - "/api/v2/data"
+    - "/dashboard"
+    - "/assets/main.css"
+    - "/assets/app.js"
+    - "/favicon.ico"
+  content_type: "text/html"
+  methods: ["GET"]
+
+# Search terms for {search_term} substitution in Bing/Google paths.
+search_terms:
+  - "healthcare+integration"
+  - "cloud+migration+best+practices"
+  - "network+monitoring+tools"
+  - "enterprise+security+solutions"
+  - "project+management+software"
+  - "compliance+requirements+2026"
+  - "devops+pipeline+automation"
+  - "remote+desktop+setup"
+  - "office+365+admin"
+  - "azure+active+directory"
+  - "vpn+configuration"
+  - "password+policy+requirements"
+  - "incident+response+plan"
+  - "data+backup+solutions"
+  - "employee+onboarding+checklist"

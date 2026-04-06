@@ -1500,46 +1500,14 @@ class ActivityGenerator:
                 if not proxy_hostname:
                     proxy_hostname = _generate_random_hostname(_get_rng(), dst_ip)
                 schema = "https" if dst_port == 443 else "http"
-                _PROXY_PATHS = [
-                    "/",
-                    "/",
-                    "/",  # Root path is common
-                    "/index.html",
-                    "/login",
-                    "/api/v1/status",
-                    "/api/v2/data",
-                    "/dashboard",
-                    "/assets/main.css",
-                    "/assets/app.js",
-                    "/images/logo.png",
-                    "/favicon.ico",
-                    "/robots.txt",
-                    "/search?q=healthcare+integration",
-                    "/docs/api-reference",
-                    "/settings/profile",
-                    "/notifications",
-                    "/feed",
-                    "/messages",
-                ]
-                path = _get_rng().choice(_PROXY_PATHS)
+                from evidenceforge.generation.activity.dns_registry import get_domain_tags
+                from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+                domain_tags = get_domain_tags(proxy_hostname)
+                path, proxy_content_type, _method = pick_proxy_uri(
+                    _get_rng(), proxy_hostname, domain_tags
+                )
                 url = f"{schema}://{proxy_hostname}{path}"
-                # Map URI extension to MIME type
-                _EXT_MIME = {
-                    ".html": "text/html",
-                    ".css": "text/css",
-                    ".js": "application/javascript",
-                    ".png": "image/png",
-                    ".jpg": "image/jpeg",
-                    ".gif": "image/gif",
-                    ".ico": "image/x-icon",
-                    ".json": "application/json",
-                    ".xml": "text/xml",
-                    ".svg": "image/svg+xml",
-                    ".woff2": "font/woff2",
-                    ".txt": "text/plain",
-                }
-                _ext = f".{path.rsplit('.', 1)[-1]}" if "." in path.split("?")[0] else ""
-                proxy_content_type = _EXT_MIME.get(_ext, "text/html")
                 # Pick a random user from the scenario (if available)
                 _PROXY_UAS = [
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1703,18 +1671,12 @@ class ActivityGenerator:
             host = REVERSE_DNS.get(dst_ip, dst_ip)
             if dst_port not in (80, 443):
                 host = f"{host}:{dst_port}"
-            _URI_MIME_MAP = {
-                "/": "text/html",
-                "/index.html": "text/html",
-                "/api/v1/status": "application/json",
-                "/favicon.ico": "image/x-icon",
-                "/robots.txt": "text/plain",
-                "/assets/main.css": "text/css",
-                "/assets/app.js": "application/javascript",
-                "/images/logo.png": "image/png",
-            }
-            uri = rng.choice(list(_URI_MIME_MAP.keys()))
-            mime_type = _URI_MIME_MAP[uri]
+            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+            from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+            web_host = REVERSE_DNS.get(dst_ip, dst_ip)
+            web_domain_tags = get_domain_tags(web_host)
+            uri, mime_type, _method = pick_proxy_uri(rng, web_host, web_domain_tags)
             status_code, status_msg = _get_http_status(dst_ip, uri)
             resp_body_len = resp_bytes or rng.randint(200, 50000)
             if status_code in (301, 302):
@@ -2143,7 +2105,9 @@ class ActivityGenerator:
         for _ in range(n_noise):
             offset_sec = rng.uniform(-5.0, 15.0)
             noise_time = time + timedelta(seconds=offset_sec)
-            noise_cmd = pick_bash_command(rng, user.persona or "", system.hostname, system.services)
+            noise_cmd = pick_bash_command(
+                rng, user.persona or "", system.hostname, system.services, username=user.username
+            )
             self.generate_bash_command(user, system, noise_time, noise_cmd)
 
     def generate_system_process(
@@ -2437,16 +2401,17 @@ class ActivityGenerator:
             query = parts[1] if len(parts) > 1 else hostname
             answers = [f"10 mail.{query}"]
 
-        # Phase 6.0: varied TTLs with cache-aging jitter
+        # Deterministic base TTL per domain (consistent across queries) + cache aging
+        domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
         if is_internal:
-            base_ttl = rng.choice([300, 600, 1800, 3600, 7200, 86400])
+            base_ttl = domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
         else:
-            base_ttl = rng.choice([30, 60, 120, 300, 600, 1800, 3600])
+            base_ttl = domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
 
-        ttls = []
-        for _ in range(len(answers)):
-            jittered = max(1, base_ttl - rng.randint(0, base_ttl // 2))
-            ttls.append(float(jittered))
+        # All answers in one response share the same TTL (arrived together)
+        cache_age = rng.randint(0, max(1, base_ttl - 1))
+        shared_ttl = float(max(1, base_ttl - cache_age))
+        ttls = [shared_ttl] * len(answers)
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(
