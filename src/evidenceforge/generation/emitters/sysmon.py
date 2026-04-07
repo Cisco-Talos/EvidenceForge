@@ -636,6 +636,7 @@ class SysmonEventEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_counters: dict[str, int] = {}
+        self._erid_rngs: dict[str, random.Random] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         writer = self._host_writers.get(host_fqdn)
@@ -707,18 +708,15 @@ class SysmonEventEmitter(LogEmitter):
 
         self._event_dicts.sort(key=_sort_key)
 
-        # Per-host RNGs for deterministic gap generation
-        _erid_rngs: dict[str, random.Random] = {}
-
         for event in self._event_dicts:
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
-                _erid_rngs[counter_key] = random.Random(f"sysmon_erid_{counter_key}")
-                self._record_id_counters[counter_key] = _erid_rngs[counter_key].randint(
+                self._erid_rngs[counter_key] = random.Random(f"sysmon_erid_{counter_key}")
+                self._record_id_counters[counter_key] = self._erid_rngs[counter_key].randint(
                     100_000, 500_000
                 )
-            rng = _erid_rngs[counter_key]
+            rng = self._erid_rngs[counter_key]
             # Simulate gaps from event types we don't generate (3, 7, 11, 12-14, 22, etc.)
             # Real Sysmon generates ~3-8x more events than just types 1/5/8/10
             gap = rng.randint(1, 8)

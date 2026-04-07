@@ -1894,29 +1894,37 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
-    def _resolve_dest_role(self, dest_role: str, src_ip: str, rng: Any) -> str | None:
-        """Resolve a dest_role from traffic_profiles.yaml to a concrete IP.
+    def _resolve_dest_role(
+        self,
+        dest_role: str,
+        src_ip: str,
+        rng: Any,
+        os_cat: str = "windows",
+        dns_tags: list[str] | None = None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve a dest_role from traffic_profiles.yaml to (ip, hostname).
 
-        Returns None if no suitable target exists in the scenario.
+        Returns (None, None) if no suitable target exists in the scenario.
         """
         if dest_role == "_external":
             from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
 
-            _domain, ip = pick_domain_and_ip(rng, "background", "windows", src_host="")
-            return ip
+            tags = tuple(dns_tags) if dns_tags else ("background", os_cat)
+            domain, ip = pick_domain_and_ip(rng, *tags, src_host="")
+            return ip, domain
         if dest_role in ("_dc", "domain_controller"):
             dc_ips = self._infra_ips.get("dc", [])
-            return rng.choice(dc_ips) if dc_ips else None
+            return (rng.choice(dc_ips), None) if dc_ips else (None, None)
         if dest_role == "_any_server":
             servers = [
                 s.ip
                 for s in self.scenario.environment.systems
                 if s.ip != src_ip and s.type and s.type.lower() in ("server", "domain_controller")
             ]
-            return rng.choice(servers) if servers else None
+            return (rng.choice(servers), None) if servers else (None, None)
         if dest_role == "_any":
             others = [s.ip for s in self.scenario.environment.systems if s.ip != src_ip]
-            return rng.choice(others) if others else None
+            return (rng.choice(others), None) if others else (None, None)
         # Named role: find a system with that role/type
         candidates = [
             s.ip
@@ -1927,7 +1935,7 @@ class BaselineMixin:
                 or (s.roles and dest_role in [r.lower() for r in s.roles])
             )
         ]
-        return rng.choice(candidates) if candidates else None
+        return (rng.choice(candidates), None) if candidates else (None, None)
 
     def _generate_profile_traffic(
         self,
@@ -1946,10 +1954,13 @@ class BaselineMixin:
             get_role_connections,
         )
 
-        sys_type = (system.type or "workstation").lower()
+        # Build role list: system.roles first, then system.type as fallback
+        roles = [r.lower() for r in (system.roles or [])]
+        if not roles:
+            roles = [(system.type or "workstation").lower()]
 
         # --- Role traffic (system-level, 24/7) ---
-        role_conns = get_role_connections(sys_type, os_cat)
+        role_conns = get_role_connections(roles, os_cat)
         if role_conns:
             weights = [c.get("weight", 1) for c in role_conns]
             # Scale connection count by time-of-day (fewer at night)
@@ -1960,7 +1971,13 @@ class BaselineMixin:
 
             for _ in range(base_count):
                 conn = rng.choices(role_conns, weights=weights, k=1)[0]
-                dst_ip = self._resolve_dest_role(conn["dest_role"], system.ip, rng)
+                dst_ip, hostname = self._resolve_dest_role(
+                    conn["dest_role"],
+                    system.ip,
+                    rng,
+                    os_cat=os_cat,
+                    dns_tags=conn.get("dns_tags"),
+                )
                 if not dst_ip:
                     continue
                 offset = rng.uniform(0, 3599)
@@ -1978,6 +1995,7 @@ class BaselineMixin:
                     resp_bytes=rng.randint(500, 50000),
                     emit_dns=conn.get("emit_dns", False),
                     source_system=system,
+                    hostname=hostname,
                 )
 
         # --- Persona traffic (user-level, during active sessions) ---
@@ -1997,7 +2015,13 @@ class BaselineMixin:
             num_persona = rng.randint(3, 10) if is_business else 0
             for _ in range(num_persona):
                 conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
-                dst_ip = self._resolve_dest_role(conn["dest_role"], system.ip, rng)
+                dst_ip, hostname = self._resolve_dest_role(
+                    conn["dest_role"],
+                    system.ip,
+                    rng,
+                    os_cat=os_cat,
+                    dns_tags=conn.get("dns_tags"),
+                )
                 if not dst_ip:
                     continue
                 offset = rng.uniform(0, 3599)
@@ -2015,6 +2039,7 @@ class BaselineMixin:
                     resp_bytes=rng.randint(500, 80000),
                     emit_dns=conn.get("emit_dns", False),
                     source_system=system,
+                    hostname=hostname,
                 )
 
     def _generate_system_traffic(self, current_hour: datetime) -> None:

@@ -16,6 +16,8 @@
 #   weight:    relative frequency weight (higher = more connections)
 #   os:        restrict to source hosts with this OS: windows | linux (optional)
 #   emit_dns:  emit a preceding DNS lookup (default: false)
+#   dns_tags:  list of dns_registry tags for _external dest resolution (optional)
+#              Falls back to ["background", <source_os>] if omitted.
 #   description: human-readable note (optional, not used by engine)
 
 role_traffic:
@@ -25,8 +27,8 @@ role_traffic:
       - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 30, description: "AD replication"}
       - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 15, description: "Inter-DC Kerberos"}
       - {dest_role: domain_controller, port: 53, proto: tcp, service: dns, weight: 10, description: "DNS zone transfer"}
-      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 5, emit_dns: true, description: "CRL/OCSP/Windows Update"}
-      - {dest_role: _external, port: 80, proto: tcp, service: http, weight: 3, emit_dns: true, description: "CRL distribution point"}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 5, emit_dns: true, dns_tags: [background, windows], description: "CRL/OCSP/Windows Update"}
+      - {dest_role: _external, port: 80, proto: tcp, service: http, weight: 3, emit_dns: true, dns_tags: [background, windows], description: "CRL distribution point"}
       - {dest_role: _any_server, port: 0, proto: icmp, weight: 5, description: "Monitoring pings"}
 
   file_server:
@@ -82,24 +84,24 @@ persona_traffic:
 
   developer:
     connections:
-      - {dest_role: _external, port: 443, service: ssl, weight: 35, emit_dns: true, description: "git/npm/pip/cargo registries"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 35, emit_dns: true, dns_tags: [git], description: "git/npm/pip/cargo registries"}
       - {dest_role: _any_server, port: 22, service: ssh, weight: 25, description: "SSH to dev/staging servers"}
       - {dest_role: database, port: 5432, service: postgresql, weight: 15, description: "Dev DB access"}
       - {dest_role: database, port: 1433, service: mssql, weight: 10}
-      - {dest_role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, description: "Docker Hub/CI-CD"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, dns_tags: [web, saas], description: "Docker Hub/CI-CD"}
 
   sysadmin:
     connections:
       - {dest_role: _any_server, port: 22, service: ssh, weight: 30, description: "Server management"}
       - {dest_role: _any_server, port: 3389, service: rdp, weight: 20, os: windows, description: "RDP admin sessions"}
-      - {dest_role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, description: "Monitoring dashboards"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, dns_tags: [web, saas], description: "Monitoring dashboards"}
       - {dest_role: domain_controller, port: 389, service: ldap, weight: 15, description: "AD management"}
 
   security_analyst:
     connections:
       - {dest_role: _any_server, port: 22, service: ssh, weight: 20, description: "Investigation access"}
       - {dest_role: log_server, port: 443, service: ssl, weight: 30, description: "SIEM/log access"}
-      - {dest_role: _external, port: 443, service: ssl, weight: 25, emit_dns: true, description: "Threat intel feeds"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 25, emit_dns: true, dns_tags: [web], description: "Threat intel feeds"}
 
   data_analyst:
     connections:
@@ -116,17 +118,17 @@ persona_traffic:
 
   executive:
     connections:
-      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, description: "Email/calendar/news"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, dns_tags: [email, saas], description: "Email/calendar/news"}
       - {dest_role: file_server, port: 445, service: smb, weight: 20, os: windows}
 
   legal_counsel:
     connections:
-      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, description: "Legal research/email"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, dns_tags: [web, saas], description: "Legal research/email"}
       - {dest_role: file_server, port: 445, service: smb, weight: 25, os: windows, description: "Document management"}
 
   sales:
     connections:
-      - {dest_role: _external, port: 443, service: ssl, weight: 65, emit_dns: true, description: "CRM/email/web"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 65, emit_dns: true, dns_tags: [web, saas], description: "CRM/email/web"}
       - {dest_role: file_server, port: 445, service: smb, weight: 15, os: windows}
 
   marketing:

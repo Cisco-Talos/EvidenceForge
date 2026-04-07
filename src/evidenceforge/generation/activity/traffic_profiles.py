@@ -29,12 +29,14 @@ def load_traffic_profiles() -> dict[str, Any]:
     return _CACHED_DATA
 
 
-def get_role_connections(role: str, os_category: str) -> list[dict[str, Any]]:
-    """Get connection entries for a host role, filtered by OS.
+def get_role_connections(roles: list[str], os_category: str) -> list[dict[str, Any]]:
+    """Get merged connection entries for one or more host roles, filtered by OS.
+
+    Looks up each role in order and merges all matching profiles. Falls back
+    to "_default" if no role matches.
 
     Args:
-        role: Host role (e.g., "domain_controller", "workstation").
-              Falls back to "_default" if role not found.
+        roles: List of role names (e.g., ["web_server"] or ["domain_controller"]).
         os_category: Source host OS ("windows" or "linux").
 
     Returns:
@@ -42,8 +44,16 @@ def get_role_connections(role: str, os_category: str) -> list[dict[str, Any]]:
     """
     data = load_traffic_profiles()
     role_data = data.get("role_traffic", {})
-    profile = role_data.get(role) or role_data.get("_default", {})
-    connections = profile.get("connections", [])
+    connections: list[dict[str, Any]] = []
+    matched = False
+    for role in roles:
+        profile = role_data.get(role)
+        if profile:
+            matched = True
+            connections.extend(profile.get("connections", []))
+    if not matched:
+        default = role_data.get("_default", {})
+        connections = default.get("connections", [])
     return [c for c in connections if _os_matches(c, os_category)]
 
 
