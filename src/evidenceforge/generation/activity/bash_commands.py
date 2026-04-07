@@ -10,14 +10,14 @@ Follows the same data-driven pattern as spawn_rules.py.
 """
 
 import random
-from pathlib import Path
 from typing import Any
 
 import yaml
 
+from evidenceforge.config import get_activity_directory
 from evidenceforge.utils.rng import _stable_seed
 
-_COMMANDS_PATH = Path(__file__).parent / "bash_commands.yaml"
+_COMMANDS_PATH = get_activity_directory() / "bash_commands.yaml"
 _CACHED_COMMANDS: dict[str, Any] | None = None
 
 # Typo modes and their relative base weights. Per-user profiles

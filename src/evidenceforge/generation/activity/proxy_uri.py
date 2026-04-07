@@ -9,12 +9,13 @@ provides pick_proxy_uri() for context-appropriate path selection.
 
 import random
 import uuid
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-_TEMPLATES_PATH = Path(__file__).parent / "proxy_uri_templates.yaml"
+from evidenceforge.config import get_activity_directory
+
+_TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 

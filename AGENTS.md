@@ -147,14 +147,14 @@ Derived values (hostname, hash, domain) must be computed **once** and attached t
 **Correct:** Resolve hostname once in `generate_connection()`, pass to all downstream consumers.
 
 ### 2. Data-driven, not code-driven
-Enumerable pools (domains, processes, user agents, file paths, OUI prefixes, TLS issuers) belong in **YAML files** with cached loaders, not hardcoded Python lists. Follow the existing pattern:
-- `src/evidenceforge/generation/activity/spawn_rules.yaml` + `spawn_rules.py`
-- `src/evidenceforge/generation/activity/bash_commands.yaml` + `bash_commands.py`
-- `src/evidenceforge/generation/activity/tls_issuers.yaml` + `tls_issuers.py`
-- `src/evidenceforge/generation/activity/network_params.yaml`
+Enumerable pools (domains, processes, user agents, file paths, OUI prefixes, TLS issuers) belong in **YAML files** under `src/evidenceforge/config/` with cached loaders, not hardcoded Python lists. Follow the existing pattern:
+- `src/evidenceforge/config/activity/spawn_rules.yaml` + `generation/activity/spawn_rules.py`
+- `src/evidenceforge/config/activity/bash_commands.yaml` + `generation/activity/bash_commands.py`
+- `src/evidenceforge/config/activity/tls_issuers.yaml` + `generation/activity/tls_issuers.py`
+- `src/evidenceforge/config/activity/network_params.yaml`
 
 **Anti-pattern:** `_ISSUERS = ["CN=R3, O=Let's Encrypt...", ...]` hardcoded in generator.py.
-**Correct:** Load from YAML at module level, cache after first call.
+**Correct:** Load from YAML at module level, cache after first call. Use `from evidenceforge.config import get_activity_directory` for paths.
 
 ### 3. OS-aware defaults
 Every function returning a fallback/default value must check `os_category`. Grep for hardcoded Windows paths (`C:\\`, `explorer.exe`, `svchost.exe`) outside explicitly Windows-only code blocks — each one is a potential Linux data corruption.
@@ -220,7 +220,23 @@ All emitters inherit from `LogEmitter` ABC (`src/evidenceforge/generation/emitte
 
 ### Format Definitions
 
-Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, not code. Each defines fields, variants, JSON Logic validators, and Jinja2 output templates. Loaded via `formats/loader.py`. Adding a new format requires only a new YAML file.
+Format definitions are YAML files in `src/evidenceforge/config/formats/`, not code. Each defines fields, variants, JSON Logic validators, and Jinja2 output templates. Loaded via `formats/loader.py`. Adding a new format requires only a new YAML file.
+
+### YAML Data Directory Convention
+
+All YAML lookup/reference data lives in `src/evidenceforge/config/` with subdirectories:
+- `config/formats/` — format definitions (field schemas, validators, templates)
+- `config/evaluation/` — evaluation rules (causal pairs, co-occurrence, distributions)
+- `config/activity/` — activity generation data (DNS registry, spawn rules, TLS issuers, etc.)
+- `config/personas/` — pre-built persona definitions
+
+**Rule:** When adding new YAML data files, place them in the appropriate `config/` subdirectory. Never scatter YAML data files alongside Python code. Loader modules import path helpers from `evidenceforge.config` and handle caching/validation in their own domain.
+
+**Pattern for new data files:**
+1. Add the YAML file to the appropriate `config/` subdirectory
+2. Create or update a loader in the relevant domain module
+3. Use `from evidenceforge.config import get_{category}_directory` for path resolution
+4. Follow the cached-loader pattern (module-level `_CACHED_DATA`, load-on-first-call)
 
 ### Timezone Handling
 - Store all datetimes in UTC internally (`datetime.timezone.utc`)

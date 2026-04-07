@@ -68,7 +68,6 @@ packages = ["src/evidenceforge"]
 "commands/eforge/evaluate.md" = "evidenceforge/_data/commands/eforge/evaluate.md"
 "docs/reference/scenario-reference.md" = "evidenceforge/_data/references/scenario-reference.md"
 "docs/reference/EVIDENCE_FORMATS.md" = "evidenceforge/_data/references/evidence-formats.md"
-"personas" = "evidenceforge/_data/personas"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -9,12 +9,13 @@ parent processes, building realistic process trees instead of parenting
 everything from explorer.exe.
 """
 
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-_RULES_PATH = Path(__file__).parent / "spawn_rules.yaml"
+from evidenceforge.config import get_activity_directory
+
+_RULES_PATH = get_activity_directory() / "spawn_rules.yaml"
 _CACHED_RULES: dict[str, Any] | None = None
 _CACHED_REVERSE_WIN: dict[str, list[str]] | None = None
 _CACHED_REVERSE_LINUX: dict[str, list[str]] | None = None

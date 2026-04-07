@@ -277,11 +277,11 @@ class EmitterSetupMixin:
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
         # Load OUI prefixes for diverse MAC generation
-        from pathlib import Path as _Path
-
         import yaml as _yaml
 
-        _oui_path = _Path(__file__).parent.parent / "activity" / "network_params.yaml"
+        from evidenceforge.config import get_activity_directory
+
+        _oui_path = get_activity_directory() / "network_params.yaml"
         with open(_oui_path) as _f:
             _net_params = _yaml.safe_load(_f)
         _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])

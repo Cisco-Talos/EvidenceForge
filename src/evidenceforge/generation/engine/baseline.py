@@ -34,11 +34,11 @@ Contains the BaselineMixin with methods for:
 import logging
 import math
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import yaml
 
+from evidenceforge.config import get_activity_directory
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
@@ -221,7 +221,7 @@ _SYSTEM_USER = User(
 )
 
 
-_SCHEDULES_PATH = Path(__file__).parents[1] / "activity" / "systemd_schedules.yaml"
+_SCHEDULES_PATH = get_activity_directory() / "systemd_schedules.yaml"
 _CACHED_SCHEDULES: list[dict[str, Any]] | None = None
 
 _DAY_NAME_TO_INT = {

@@ -14,14 +14,14 @@ Follows the same cached-loader pattern as spawn_rules.py, bash_commands.py, etc.
 
 import hashlib
 import random
-from pathlib import Path
 from typing import Any
 
 import yaml
 
+from evidenceforge.config import get_activity_directory
 from evidenceforge.utils.rng import _stable_seed
 
-_REGISTRY_PATH = Path(__file__).parent / "dns_registry.yaml"
+_REGISTRY_PATH = get_activity_directory() / "dns_registry.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 _CACHED_REVERSE_DNS: dict[str, str] | None = None
 _CACHED_FORWARD_DNS: dict[str, list[str]] | None = None
