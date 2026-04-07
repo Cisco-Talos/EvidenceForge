@@ -725,7 +725,11 @@ class StorylineMixin:
                 (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
                 system,
             )
-            target_sid = spec.target_sid or self._make_domain_sid()
+            target_sid = (
+                spec.target_sid
+                or self._created_account_sids.get(spec.target_username)
+                or self._make_domain_sid()
+            )
             self.activity_generator.generate_account_deleted(
                 actor=actor,
                 system=dc,

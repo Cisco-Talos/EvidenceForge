@@ -130,8 +130,8 @@ PROCESS_TEMPLATES = {
     ],
     "process_build": [
         (
-            "C:\\Windows\\System32\\msbuild.exe",
-            "msbuild.exe {solution_name} /t:Build /p:Configuration={build_config}",
+            "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\MSBuild.exe",
+            "MSBuild.exe {solution_name} /t:Build /p:Configuration={build_config}",
         ),
         ("C:\\Windows\\System32\\cmd.exe", "cmd.exe /c npm run {npm_script}"),
         (
@@ -385,6 +385,17 @@ CONN_STATE_DISTRIBUTION = TCP_CONN_STATE_DISTRIBUTION
 _CONN_STATES = [s[0] for s in TCP_CONN_STATE_DISTRIBUTION]
 _CONN_WEIGHTS = _TCP_CONN_WEIGHTS
 _CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
+
+
+def _ephemeral_port(rng: random.Random, os_category: str = "windows") -> int:
+    """Generate a random ephemeral port appropriate for the OS.
+
+    Linux uses 32768-60999 (net.ipv4.ip_local_port_range default).
+    Windows uses 49152-65535 (IANA dynamic port range).
+    """
+    if os_category == "linux":
+        return rng.randint(32768, 60999)
+    return rng.randint(49152, 65535)
 
 
 def _dns_rtt(rng: random.Random) -> float:
@@ -681,7 +692,7 @@ class ActivityGenerator:
                 severity=6,
                 message=(
                     f"Accepted password for {user.username} from {source_ip} "
-                    f"port {_get_rng().randint(49152, 65535)} ssh2"
+                    f"port {_ephemeral_port(_get_rng(), 'linux')} ssh2"
                 ),
             )
 
@@ -808,7 +819,7 @@ class ActivityGenerator:
                 auth=AuthContext(
                     username=user.username,
                     user_sid=self._get_sid(user.username),
-                    logon_id="0x0",  # DC Kerberos auth doesn't have a target logon ID
+                    logon_id=self._get_user_logon_id(user.username, dc_hostname),
                     reporting_pid=self._get_system_pid(dc_hostname, "lsass", 0x2E0),
                 ),
             )
@@ -901,7 +912,7 @@ class ActivityGenerator:
                 severity=4,
                 message=(
                     f"Failed password for {effective_username} from {source_ip} "
-                    f"port {_get_rng().randint(49152, 65535)} ssh2"
+                    f"port {_ephemeral_port(_get_rng(), 'linux')} ssh2"
                 ),
             )
 
@@ -1323,7 +1334,13 @@ class ActivityGenerator:
             src_port = 0
             dst_port = 0
         elif src_port is None:
-            src_port = _get_rng().randint(49152, 65535)
+            # Determine source OS for correct ephemeral port range
+            _src_os = "windows"
+            if source_system:
+                _src_os = _get_os_category(source_system.os)
+            elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
+                _src_os = _get_os_category(self._ip_to_system[src_ip].os)
+            src_port = _ephemeral_port(_get_rng(), _src_os)
 
         # Phase 1: Allocate IDs from StateManager
         conn_id = self.state_manager.open_connection(
@@ -1876,7 +1893,10 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import NetworkContext
 
         rng = _get_rng()
-        src_port = rng.randint(49152, 65535)
+        _src_os = "windows"
+        if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+            _src_os = _get_os_category(self._ip_to_system[source_ip].os)
+        src_port = _ephemeral_port(rng, _src_os)
         duration = rng.uniform(30.0, 3600.0)
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
@@ -2341,7 +2361,10 @@ class ActivityGenerator:
         dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
         dns_server_ip = _get_rng().choice(dns_ips)
 
-        src_port = rng.randint(49152, 65535)
+        _src_os = "windows"
+        if hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
+            _src_os = _get_os_category(self._ip_to_system[src_ip].os)
+        src_port = _ephemeral_port(rng, _src_os)
 
         from evidenceforge.events.contexts import DnsContext
 
@@ -2484,7 +2507,7 @@ class ActivityGenerator:
             ]
             nx_query = rng.choice(nxdomain_queries)
             nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
-            nx_src_port = rng.randint(49152, 65535)
+            nx_src_port = _ephemeral_port(rng, _src_os)
             nx_ctx = DnsContext(
                 query=nx_query,
                 trans_id=rng.randint(1, 65535),
@@ -3040,7 +3063,7 @@ class ActivityGenerator:
                 encryption_type="0x12",
                 pre_auth_type=15,
                 source_ip=f"::ffff:{source_ip}",
-                source_port=rng.randint(49152, 65535),
+                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
             ),
         )
 
@@ -3073,7 +3096,7 @@ class ActivityGenerator:
                 ticket_options="0x2",
                 encryption_type="0x12",
                 source_ip=f"::ffff:{source_ip}",
-                source_port=rng.randint(49152, 65535),
+                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
             ),
         )
 
@@ -3108,7 +3131,7 @@ class ActivityGenerator:
                 ticket_options="0x40810000",
                 encryption_type="0x12",
                 source_ip=f"::ffff:{source_ip}",
-                source_port=rng.randint(49152, 65535),
+                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
             ),
         )
 
@@ -3340,7 +3363,7 @@ class ActivityGenerator:
                 ticket_status=status,
                 pre_auth_type=0,
                 source_ip=f"::ffff:{source_ip}" if ":" not in source_ip else source_ip,
-                source_port=rng.randint(49152, 65535),
+                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
                 reporting_pid=reporting_pid,
             ),
         )
@@ -4395,13 +4418,26 @@ class ActivityGenerator:
         cmd_templates = config.get("command_templates", [chosen_parent])
         cmd_line = rng.choice(cmd_templates)
 
-        # Determine image path
+        # Derive image path from command_templates (which have correct full paths)
+        # rather than blindly prefixing C:\Windows\System32\
+        image = None
         if os_cat == "windows":
-            image = f"C:\\Windows\\System32\\{chosen_parent}"
+            for tmpl in cmd_templates:
+                if "\\" in tmpl:
+                    cleaned = tmpl.strip('"')
+                    image = cleaned.split('" ')[0] if '" ' in cleaned else cleaned.split()[0]
+                    break
+            if not image:
+                image = f"C:\\Windows\\System32\\{chosen_parent}"
         else:
-            image = f"/usr/bin/{chosen_parent}"
-            if chosen_parent in ("bash", "sh", "zsh"):
-                image = f"/bin/{chosen_parent}"
+            for tmpl in cmd_templates:
+                if "/" in tmpl:
+                    image = tmpl.split()[0]
+                    break
+            if not image:
+                image = f"/usr/bin/{chosen_parent}"
+                if chosen_parent in ("bash", "sh", "zsh"):
+                    image = f"/bin/{chosen_parent}"
 
         # Timing: parent is created before child
         spawn_delay = config.get("spawn_delay", [0.5, 3.0])
@@ -4477,6 +4513,12 @@ class ActivityGenerator:
         # Keep only last 10 processes per user/system
         if len(self._user_process_history[key]) > 10:
             self._user_process_history[key] = self._user_process_history[key][-10:]
+
+    def _os_for_ip(self, ip: str) -> str:
+        """Look up OS category for an IP address. Defaults to 'windows'."""
+        if hasattr(self, "_ip_to_system") and ip in self._ip_to_system:
+            return _get_os_category(self._ip_to_system[ip].os)
+        return "windows"
 
     def _get_sid(self, username: str) -> str:
         """Look up Windows SID for a username.

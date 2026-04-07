@@ -459,7 +459,11 @@ class EmitterSetupMixin:
         We register them silently (no log events) so they exist as valid
         parents for child processes spawned during the scenario.
         """
+        import hashlib as _hl
+
         from evidenceforge.generation.activity import _get_os_category
+
+        self._machine_ids: dict[str, str] = {}
 
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
@@ -469,6 +473,10 @@ class EmitterSetupMixin:
                 self._seed_windows_process_tree(system, pids)
             else:
                 self._seed_linux_process_tree(system, pids)
+                # Per-host persistent machine-ID (like /etc/machine-id)
+                self._machine_ids[system.hostname] = _hl.md5(
+                    f"machine_id_{system.hostname}".encode(), usedforsecurity=False
+                ).hexdigest()
 
             self._system_pids[system.hostname] = pids
 
@@ -478,6 +486,23 @@ class EmitterSetupMixin:
 
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
+
+        # Build Zipf-weighted external scanner IP pool for realistic scanning distribution
+        from evidenceforge.utils.rng import _stable_seed
+
+        scanner_rng = random.Random(_stable_seed("external_scanners"))
+        prolific = []
+        for _ in range(scanner_rng.randint(8, 15)):
+            ip = self._generate_external_client_ip(scanner_rng)
+            weight = scanner_rng.randint(45, 2000)
+            prolific.append((ip, weight))
+        tail = [
+            (self._generate_external_client_ip(scanner_rng), 1)
+            for _ in range(scanner_rng.randint(30, 80))
+        ]
+        pool = prolific + tail
+        self._external_scanner_ips = [ip for ip, _ in pool]
+        self._external_scanner_weights = [w for _, w in pool]
 
         # Register system IP→FQDN mappings so DNS queries use correct hostnames
         # (e.g., DC-01.meridian-healthcare.com instead of host-10.corp.local)

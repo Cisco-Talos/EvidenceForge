@@ -1396,8 +1396,12 @@ class BaselineMixin:
                 # Choose deny pattern candidate
                 roll = rng.random()
                 if roll < 0.60:
-                    # External -> internal
-                    src_ip = self._generate_external_client_ip(rng)
+                    # External -> internal (use scanner pool for realistic distribution)
+                    src_ip = rng.choices(
+                        self._external_scanner_ips,
+                        weights=self._external_scanner_weights,
+                        k=1,
+                    )[0]
                     dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
                     dst_port = rng.choice(_SCAN_PORTS)
                     proto = "tcp"
@@ -1417,8 +1421,12 @@ class BaselineMixin:
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"
                 else:
-                    # ICMP ping sweep from external
-                    src_ip = self._generate_external_client_ip(rng)
+                    # ICMP ping sweep from external (use scanner pool)
+                    src_ip = rng.choices(
+                        self._external_scanner_ips,
+                        weights=self._external_scanner_weights,
+                        k=1,
+                    )[0]
                     dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
                     dst_port = 8  # ICMP echo request type
                     proto = "icmp"
@@ -2625,7 +2633,11 @@ class BaselineMixin:
                 source_roll = rng.random()
                 if source_roll < 0.25:
                     if is_dmz and rng.random() < 0.85:
-                        src_ip = self._generate_external_client_ip(rng)
+                        src_ip = rng.choices(
+                            self._external_scanner_ips,
+                            weights=self._external_scanner_weights,
+                            k=1,
+                        )[0]
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
                         msg = (
@@ -2710,12 +2722,15 @@ class BaselineMixin:
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
                     ip = rng.choice(other_ips) if other_ips else system.ip
-                    port = rng.randint(49152, 65535)
-                    # Resolve source system for WFP 5156 emission
+                    # Resolve source system for WFP 5156 emission and OS-aware port
                     src_sys_obj = next(
                         (s for s in self.scenario.environment.systems if s.ip == ip),
                         None,
                     )
+                    from evidenceforge.generation.activity.generator import _ephemeral_port
+
+                    _src_os = _get_os_category(src_sys_obj.os) if src_sys_obj else "linux"
+                    port = _ephemeral_port(rng, _src_os)
                     self.activity_generator.generate_connection(
                         src_ip=ip,
                         dst_ip=system.ip,
@@ -2818,7 +2833,7 @@ class BaselineMixin:
                     )
                 elif source_roll < 0.94:
                     # Journald runtime statistics
-                    machine_id = f"{''.join(rng.choices('0123456789abcdef', k=32))}"
+                    machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     size = rng.randint(4, 128)
                     max_size = rng.choice([256, 512, 1024, 2048, 4096])
                     free = max_size - size
@@ -3146,14 +3161,18 @@ class BaselineMixin:
                 num_alerts = rng.randint(5, 15)
                 # For IDS sensors (typically perimeter), generate alerts with
                 # external source IPs targeting monitored systems.
-                _EXTERNAL_SCAN_IPS = [
-                    "45.33.32.156",
-                    "185.220.101.34",
-                    "91.240.118.172",
-                    "194.26.192.77",
-                    "162.247.74.27",
-                    "198.98.51.189",
-                ]
+                _EXTERNAL_SCAN_IPS = getattr(
+                    self,
+                    "_external_scanner_ips",
+                    [
+                        "45.33.32.156",
+                        "185.220.101.34",
+                        "91.240.118.172",
+                        "194.26.192.77",
+                        "162.247.74.27",
+                        "198.98.51.189",
+                    ],
+                )
                 for _ in range(num_alerts):
                     offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
@@ -3163,7 +3182,11 @@ class BaselineMixin:
                     alert_dst_port = sig[4]  # port declared by signature
                     sig_direction = sig[5]  # "in" or "out"
                     local_sys = rng.choice(monitored_systems)
-                    ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
+                    _weights = getattr(self, "_external_scanner_weights", None)
+                    if _weights:
+                        ext_ip = rng.choices(_EXTERNAL_SCAN_IPS, weights=_weights, k=1)[0]
+                    else:
+                        ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
                     from evidenceforge.events.contexts import IdsContext
 
                     # Direction: "in" = external→internal, "out" = internal→external
