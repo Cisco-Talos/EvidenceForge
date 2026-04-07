@@ -1894,6 +1894,129 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
+    def _resolve_dest_role(self, dest_role: str, src_ip: str, rng: Any) -> str | None:
+        """Resolve a dest_role from traffic_profiles.yaml to a concrete IP.
+
+        Returns None if no suitable target exists in the scenario.
+        """
+        if dest_role == "_external":
+            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+            _domain, ip = pick_domain_and_ip(rng, "background", "windows", src_host="")
+            return ip
+        if dest_role in ("_dc", "domain_controller"):
+            dc_ips = self._infra_ips.get("dc", [])
+            return rng.choice(dc_ips) if dc_ips else None
+        if dest_role == "_any_server":
+            servers = [
+                s.ip
+                for s in self.scenario.environment.systems
+                if s.ip != src_ip and s.type and s.type.lower() in ("server", "domain_controller")
+            ]
+            return rng.choice(servers) if servers else None
+        if dest_role == "_any":
+            others = [s.ip for s in self.scenario.environment.systems if s.ip != src_ip]
+            return rng.choice(others) if others else None
+        # Named role: find a system with that role/type
+        candidates = [
+            s.ip
+            for s in self.scenario.environment.systems
+            if s.ip != src_ip
+            and (
+                (s.type and s.type.lower() == dest_role)
+                or (s.roles and dest_role in [r.lower() for r in s.roles])
+            )
+        ]
+        return rng.choice(candidates) if candidates else None
+
+    def _generate_profile_traffic(
+        self,
+        current_hour: datetime,
+        system: Any,
+        rng: Any,
+        os_cat: str,
+    ) -> None:
+        """Generate role-based and persona-based network connections from traffic profiles.
+
+        Role traffic runs 24/7 (system-level). Persona traffic runs only during
+        active user sessions on this host.
+        """
+        from evidenceforge.generation.activity.traffic_profiles import (
+            get_persona_connections,
+            get_role_connections,
+        )
+
+        sys_type = (system.type or "workstation").lower()
+
+        # --- Role traffic (system-level, 24/7) ---
+        role_conns = get_role_connections(sys_type, os_cat)
+        if role_conns:
+            weights = [c.get("weight", 1) for c in role_conns]
+            # Scale connection count by time-of-day (fewer at night)
+            dow = current_hour.weekday()
+            hour = current_hour.hour
+            is_business = 0 <= dow <= 4 and 7 <= hour <= 19
+            base_count = rng.randint(8, 20) if is_business else rng.randint(2, 6)
+
+            for _ in range(base_count):
+                conn = rng.choices(role_conns, weights=weights, k=1)[0]
+                dst_ip = self._resolve_dest_role(conn["dest_role"], system.ip, rng)
+                if not dst_ip:
+                    continue
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=conn["port"],
+                    proto=conn.get("proto", "tcp"),
+                    service=conn.get("service"),
+                    duration=rng.uniform(0.05, 5.0),
+                    orig_bytes=rng.randint(200, 5000),
+                    resp_bytes=rng.randint(500, 50000),
+                    emit_dns=conn.get("emit_dns", False),
+                    source_system=system,
+                )
+
+        # --- Persona traffic (user-level, during active sessions) ---
+        host_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+        for session in host_sessions:
+            persona = None
+            # Look up persona from scenario users
+            for u in self.scenario.environment.users:
+                if u.username == session.username:
+                    persona = u.persona
+                    break
+            persona_conns = get_persona_connections(persona or "_default", os_cat)
+            if not persona_conns:
+                continue
+            p_weights = [c.get("weight", 1) for c in persona_conns]
+            # Fewer persona connections than role connections; scaled by activity
+            num_persona = rng.randint(3, 10) if is_business else 0
+            for _ in range(num_persona):
+                conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
+                dst_ip = self._resolve_dest_role(conn["dest_role"], system.ip, rng)
+                if not dst_ip:
+                    continue
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+                self.activity_generator.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=dst_ip,
+                    time=ts,
+                    dst_port=conn["port"],
+                    proto=conn.get("proto", "tcp"),
+                    service=conn.get("service"),
+                    duration=rng.uniform(0.1, 10.0),
+                    orig_bytes=rng.randint(200, 8000),
+                    resp_bytes=rng.randint(500, 80000),
+                    emit_dns=conn.get("emit_dns", False),
+                    source_system=system,
+                )
+
     def _generate_system_traffic(self, current_hour: datetime) -> None:
         """Generate system-initiated background traffic for all systems.
 
@@ -2094,86 +2217,9 @@ class BaselineMixin:
                         pid=_svc_pid("lsass"),
                     )
 
-            # HTTPS background traffic — domain-first from dns_registry
-            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
-
-            if os_cat == "windows":
-                num_https = rng.randint(8, 20)
-                for _i in range(num_https):
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    bg_domain, bg_ip = pick_domain_and_ip(
-                        rng, "background", "windows", src_host=system.hostname
-                    )
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=bg_ip,
-                        time=ts,
-                        dst_port=443,
-                        proto="tcp",
-                        service="ssl",
-                        duration=rng.uniform(0.1, 5.0),
-                        orig_bytes=rng.randint(200, 5000),
-                        resp_bytes=rng.randint(500, 50000),
-                        emit_dns=True,
-                        source_system=system,
-                        pid=_svc_pid("svchost_netsvcs"),
-                        hostname=bg_domain,
-                    )
-            elif os_cat == "linux":
-                num_https = rng.randint(3, 10)
-                for _i in range(num_https):
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    bg_domain, bg_ip = pick_domain_and_ip(
-                        rng, "background", "linux", src_host=system.hostname
-                    )
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=bg_ip,
-                        time=ts,
-                        dst_port=443,
-                        proto="tcp",
-                        service="ssl",
-                        duration=rng.uniform(0.1, 3.0),
-                        orig_bytes=rng.randint(200, 3000),
-                        resp_bytes=rng.randint(500, 30000),
-                        emit_dns=True,
-                        source_system=system,
-                        pid=_svc_pid("snapd") if not is_rhel_like else -1,
-                        hostname=bg_domain,
-                    )
-
-            # Database traffic
-            db_servers = self._infra_ips.get("db_servers", [])
-            if db_servers and system.ip not in [d["ip"] for d in db_servers]:
-                sys_type = (system.type or "workstation").lower()
-                if sys_type in ("server", "domain_controller") or (
-                    sys_type == "workstation" and rng.random() < 0.2
-                ):
-                    db = rng.choice(db_servers)
-                    num_db = rng.randint(3, 10)
-                    base_interval = 3600 / (num_db + 1)
-                    for i in range(num_db):
-                        offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
-                        offset = max(0, min(3599, offset))
-                        ts = current_hour + timedelta(seconds=offset)
-                        self.state_manager.set_current_time(ts)
-                        self.activity_generator.generate_connection(
-                            src_ip=system.ip,
-                            dst_ip=db["ip"],
-                            time=ts,
-                            dst_port=db["port"],
-                            proto="tcp",
-                            service=db["service"],
-                            duration=rng.uniform(0.01, 2.0),
-                            orig_bytes=rng.randint(200, 5000),
-                            resp_bytes=rng.randint(500, 50000),
-                            emit_dns=rng.random() > 0.02,
-                            source_system=system,
-                        )
+            # Profile-driven traffic: role-based system connections + persona user connections
+            # Replaces former HTTPS background + database traffic blocks
+            self._generate_profile_traffic(current_hour, system, rng, os_cat)
 
             # Independent system service processes (not tied to user activity)
             # Windows hosts spawn 3-8 service processes per hour
@@ -2315,34 +2361,10 @@ class BaselineMixin:
                         granted_access=access,
                     )
 
-            # ICMP: monitoring pings between servers
-            sys_type = (system.type or "workstation").lower()
-            if sys_type in ("server", "domain_controller") and rng.random() < 0.7:
-                targets = [
-                    s.ip
-                    for s in self.scenario.environment.systems
-                    if s.ip != system.ip
-                    and s.type
-                    and s.type.lower() in ("server", "domain_controller")
-                ][:5]
-                if targets:
-                    target_ip = rng.choice(targets)
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=target_ip,
-                        time=ts,
-                        dst_port=0,
-                        proto="icmp",
-                        duration=rng.uniform(0.0001, 0.005),
-                        orig_bytes=64,
-                        resp_bytes=64,
-                        source_system=system,
-                    )
+            # ICMP monitoring pings are now handled by role_traffic profiles
 
             # SSH: connections to Linux servers
+            sys_type = (system.type or "workstation").lower()
             if os_cat == "linux" and sys_type == "server":
                 ssh_sources = [
                     s.ip for s in self.scenario.environment.systems if s.ip != system.ip
@@ -2614,7 +2636,6 @@ class BaselineMixin:
                 continue
 
             sys_pids = self._system_pids.get(system.hostname, {})
-            sys_type = (system.type or "server").lower()
             is_dmz = "dmz" in system.hostname.lower() or "web" in system.hostname.lower()
             is_rhel_like = any(
                 d in system.os.lower() for d in ("centos", "rhel", "red hat", "rocky", "alma")

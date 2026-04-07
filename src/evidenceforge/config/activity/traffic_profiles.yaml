@@ -1,0 +1,174 @@
+# Traffic profiles: role-based and persona-based network connection patterns.
+#
+# Two sections:
+#   role_traffic   — system-level connections that run 24/7 based on host role
+#   persona_traffic — user-initiated connections during active sessions
+#
+# Connection entry fields:
+#   dest_role: target system role, or special value:
+#     _external    — random external IP (via dns_registry domain-first selection)
+#     _any_server  — any system with type server or domain_controller
+#     _any         — any system in the scenario
+#     _dc          — alias for domain_controller
+#   port:      destination port
+#   proto:     tcp | udp (default: tcp)
+#   service:   Zeek service label (optional)
+#   weight:    relative frequency weight (higher = more connections)
+#   os:        restrict to source hosts with this OS: windows | linux (optional)
+#   emit_dns:  emit a preceding DNS lookup (default: false)
+#   description: human-readable note (optional, not used by engine)
+
+role_traffic:
+
+  domain_controller:
+    connections:
+      - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 30, description: "AD replication"}
+      - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 15, description: "Inter-DC Kerberos"}
+      - {dest_role: domain_controller, port: 53, proto: tcp, service: dns, weight: 10, description: "DNS zone transfer"}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 5, emit_dns: true, description: "CRL/OCSP/Windows Update"}
+      - {dest_role: _external, port: 80, proto: tcp, service: http, weight: 3, emit_dns: true, description: "CRL distribution point"}
+      - {dest_role: _any_server, port: 0, proto: icmp, weight: 5, description: "Monitoring pings"}
+
+  file_server:
+    connections:
+      - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 20}
+      - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 10}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 3, emit_dns: true, description: "Windows Update"}
+      - {dest_role: _any_server, port: 0, proto: icmp, weight: 3, description: "Monitoring pings"}
+
+  database:
+    connections:
+      - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 15, os: windows}
+      - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 10, os: windows}
+      - {dest_role: database, port: 1433, proto: tcp, service: mssql, weight: 20, os: windows, description: "Replication/AG"}
+      - {dest_role: database, port: 5432, proto: tcp, service: postgresql, weight: 20, os: linux, description: "Replication"}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 2, emit_dns: true, description: "Updates"}
+
+  web_server:
+    connections:
+      - {dest_role: database, port: 1433, proto: tcp, service: mssql, weight: 40, description: "App-to-DB queries"}
+      - {dest_role: database, port: 3306, proto: tcp, service: mysql, weight: 40}
+      - {dest_role: database, port: 5432, proto: tcp, service: postgresql, weight: 40}
+      - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 10, description: "Auth lookups"}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 5, emit_dns: true, description: "Outbound API calls"}
+
+  app_server:
+    connections:
+      - {dest_role: database, port: 1433, proto: tcp, service: mssql, weight: 35}
+      - {dest_role: database, port: 5432, proto: tcp, service: postgresql, weight: 35}
+      - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 15}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 10, emit_dns: true, description: "APIs/webhooks"}
+
+  log_server:
+    connections:
+      - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 10, os: windows}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 2, emit_dns: true, description: "Package updates only"}
+
+  workstation:
+    connections:
+      - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 15, os: windows}
+      - {dest_role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 10, os: windows}
+      - {dest_role: file_server, port: 445, proto: tcp, service: smb, weight: 20, os: windows}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 30, emit_dns: true, description: "General browsing/SaaS"}
+
+  # Fallback for roles not explicitly listed
+  _default:
+    connections:
+      - {dest_role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 10, os: windows}
+      - {dest_role: _external, port: 443, proto: tcp, service: ssl, weight: 15, emit_dns: true}
+
+
+persona_traffic:
+
+  developer:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 35, emit_dns: true, description: "git/npm/pip/cargo registries"}
+      - {dest_role: _any_server, port: 22, service: ssh, weight: 25, description: "SSH to dev/staging servers"}
+      - {dest_role: database, port: 5432, service: postgresql, weight: 15, description: "Dev DB access"}
+      - {dest_role: database, port: 1433, service: mssql, weight: 10}
+      - {dest_role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, description: "Docker Hub/CI-CD"}
+
+  sysadmin:
+    connections:
+      - {dest_role: _any_server, port: 22, service: ssh, weight: 30, description: "Server management"}
+      - {dest_role: _any_server, port: 3389, service: rdp, weight: 20, os: windows, description: "RDP admin sessions"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, description: "Monitoring dashboards"}
+      - {dest_role: domain_controller, port: 389, service: ldap, weight: 15, description: "AD management"}
+
+  security_analyst:
+    connections:
+      - {dest_role: _any_server, port: 22, service: ssh, weight: 20, description: "Investigation access"}
+      - {dest_role: log_server, port: 443, service: ssl, weight: 30, description: "SIEM/log access"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 25, emit_dns: true, description: "Threat intel feeds"}
+
+  data_analyst:
+    connections:
+      - {dest_role: database, port: 1433, service: mssql, weight: 30, description: "Data warehouse queries"}
+      - {dest_role: database, port: 5432, service: postgresql, weight: 25}
+      - {dest_role: _external, port: 443, service: ssl, weight: 30, emit_dns: true, description: "BI tools/dashboards"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 15, os: windows}
+
+  analyst:
+    connections:
+      - {dest_role: database, port: 1433, service: mssql, weight: 25, description: "Report queries"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 40, emit_dns: true, description: "Dashboards/SaaS"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 15, os: windows}
+
+  executive:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, description: "Email/calendar/news"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 20, os: windows}
+
+  legal_counsel:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, description: "Legal research/email"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 25, os: windows, description: "Document management"}
+
+  sales:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 65, emit_dns: true, description: "CRM/email/web"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 15, os: windows}
+
+  marketing:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, description: "Social media/analytics"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 20, os: windows}
+
+  hr:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 55, emit_dns: true, description: "HRIS/email"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 25, os: windows}
+
+  accountant:
+    connections:
+      - {dest_role: database, port: 1433, service: mssql, weight: 20, description: "Financial systems"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 45, emit_dns: true, description: "Banking/ERP"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 20, os: windows}
+
+  help_desk:
+    connections:
+      - {dest_role: _any_server, port: 3389, service: rdp, weight: 25, os: windows, description: "Remote support"}
+      - {dest_role: _external, port: 443, service: ssl, weight: 40, emit_dns: true, description: "Ticketing/KB"}
+      - {dest_role: domain_controller, port: 389, service: ldap, weight: 15, description: "AD password resets"}
+
+  project_manager:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, description: "PM tools/email"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 20, os: windows}
+
+  intern:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 55, emit_dns: true, description: "Web/email"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 15, os: windows}
+
+  receptionist:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 50, emit_dns: true, description: "Calendar/email"}
+      - {dest_role: file_server, port: 445, service: smb, weight: 10, os: windows}
+
+  # Fallback for personas not explicitly listed
+  _default:
+    connections:
+      - {dest_role: _external, port: 443, service: ssl, weight: 50, emit_dns: true}
+      - {dest_role: file_server, port: 445, service: smb, weight: 25, os: windows}
+      - {dest_role: domain_controller, port: 389, service: ldap, weight: 10, os: windows}

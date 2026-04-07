@@ -2851,10 +2851,8 @@ class ActivityGenerator:
                                 parent_pid=pid,
                             )
 
-                # Generate correlated network connections for processes
-                self._emit_process_network_correlation(
-                    system, process_name, command_line, time, pid, rng
-                )
+                # Network connections are now driven by persona_traffic profiles
+                # instead of process-to-network correlation
 
             elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
                 # Phase 5.6: Per-persona app pool for Linux user diversity
@@ -2874,10 +2872,7 @@ class ActivityGenerator:
                 )
                 self._record_user_process(system, user, pid, process_name)
 
-                # Generate correlated network connections for processes
-                self._emit_process_network_correlation(
-                    system, process_name, command_line, time, pid, rng
-                )
+                # Network connections are now driven by persona_traffic profiles
 
                 # Also generate bash history for Linux
                 self.generate_bash_command(user, system, time, activity_type)

@@ -23,6 +23,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
 | `extra_syslog_messages.yaml` | `extra_syslog.py` | Role/distro-tagged syslog program messages for baseline diversity. |
 | `app_child_processes.yaml` | `app_child_processes.py` | Child/utility processes spawned by main applications (browser renderers, etc.). |
+| `traffic_profiles.yaml` | `traffic_profiles.py` | Role-based and persona-based network traffic profiles. See `docs/design/traffic-profiles-design.md`. |
 
 ## Adding a New Data File
 
