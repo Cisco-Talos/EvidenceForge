@@ -1958,7 +1958,14 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
-            session_id = rng.randint(100, 99999)
+            # Monotonically incrementing per-host session counter (like real systemd-logind)
+            hostname = target_system.hostname
+            if not hasattr(self, "_session_counters"):
+                self._session_counters: dict[str, int] = {}
+            if hostname not in self._session_counters:
+                self._session_counters[hostname] = rng.randint(50, 500)
+            self._session_counters[hostname] += 1
+            session_id = self._session_counters[hostname]
 
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(

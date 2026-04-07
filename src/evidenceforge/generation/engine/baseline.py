@@ -1415,8 +1415,16 @@ class BaselineMixin:
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"
                 elif roll < 0.90:
-                    # Outbound blocked
-                    src_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    # Outbound blocked — only workstations generate suspicious outbound;
+                    # servers never initiate random connections on scanning ports
+                    workstation_ips = [
+                        s.ip
+                        for s in self.scenario.environment.systems
+                        if (s.type or "workstation").lower() == "workstation" and s.ip
+                    ]
+                    if not workstation_ips:
+                        continue
+                    src_ip = rng.choice(workstation_ips)
                     dst_ip = self._generate_external_client_ip(rng)
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"

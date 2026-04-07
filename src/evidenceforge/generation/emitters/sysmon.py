@@ -377,16 +377,24 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
+        The first DWORD is a stable machine-specific value (same for all
+        processes on a given host), matching real Sysmon behavior. The
+        remaining segments are per-process unique.
+
         The timestamp should be the process creation time, not the event time.
         This ensures the same PID produces the same GUID across all Sysmon
         events (Event 1, 8, 10) referencing that process.
         """
-        # Truncate to second precision so minor timestamp variations don't
-        # produce different GUIDs for the same process
+        # Machine-specific first DWORD (stable across all processes on this host)
+        machine_prefix = hashlib.md5(
+            f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
+        ).hexdigest()[:8]
+
+        # Per-process uniqueness from remaining hash segments
         ts_key = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
         seed = f"{hostname}:{pid}:{ts_key}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        return f"{{{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
+        return f"{{{machine_prefix}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
 
     @staticmethod
     def _generate_hashes(image: str, hostname: str) -> str:
@@ -699,13 +707,22 @@ class SysmonEventEmitter(LogEmitter):
 
         self._event_dicts.sort(key=_sort_key)
 
+        # Per-host RNGs for deterministic gap generation
+        _erid_rngs: dict[str, random.Random] = {}
+
         for event in self._event_dicts:
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
-                rng = random.Random(f"sysmon_erid_{counter_key}")
-                self._record_id_counters[counter_key] = rng.randint(100_000, 500_000)
-            self._record_id_counters[counter_key] += 1
+                _erid_rngs[counter_key] = random.Random(f"sysmon_erid_{counter_key}")
+                self._record_id_counters[counter_key] = _erid_rngs[counter_key].randint(
+                    100_000, 500_000
+                )
+            rng = _erid_rngs[counter_key]
+            # Simulate gaps from event types we don't generate (3, 7, 11, 12-14, 22, etc.)
+            # Real Sysmon generates ~3-8x more events than just types 1/5/8/10
+            gap = rng.randint(1, 8)
+            self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
         for event in self._event_dicts:
