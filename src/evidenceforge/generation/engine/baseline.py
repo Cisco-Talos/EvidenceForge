@@ -39,6 +39,7 @@ from typing import Any
 import yaml
 
 from evidenceforge.config import get_activity_directory
+from evidenceforge.generation.activity.generator import _dns_rtt
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
@@ -1082,7 +1083,7 @@ class BaselineMixin:
                         rcode_num=0,
                         answers=[f"198.51.100.{rng.randint(1, 254)}"],
                         TTLs=[float(rng.randint(30, 300))],
-                        rtt=rng.uniform(0.005, 0.1),
+                        rtt=_dns_rtt(rng),
                     )
                     dns_server_ips = getattr(
                         self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
@@ -2835,121 +2836,15 @@ class BaselineMixin:
                         pid=sys_pids.get("journald", rng.randint(200, 500)),
                     )
                 else:
-                    # Additional diverse syslog programs for realism.
-                    # Entries tagged with _ubuntu or _web are filtered below.
-                    _EXTRA_SYSLOG = [
-                        (
-                            "NetworkManager",
-                            [
-                                "<info>  [{}] dhcp4 (ens160): state changed bound -> bound",
-                                "<info>  [{}] device (ens160): state change: activated -> activated",
-                                "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL",
-                            ],
-                        ),
-                        (
-                            "dbus-daemon",
-                            [
-                                "[system] Activating via systemd: service name='org.freedesktop.hostname1'",
-                                "[system] Successfully activated service 'org.freedesktop.resolve1'",
-                                "[system] Activating via systemd: service name='org.freedesktop.timedate1'",
-                            ],
-                        ),
-                        (
-                            "rsyslogd",
-                            [
-                                '[origin software="rsyslogd" swVersion="8.2112.0"] start',
-                                "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog'",
-                                '[origin software="rsyslogd"] rsyslogd was HUPed',
-                            ],
-                        ),
-                        (
-                            "sudo",
-                            [
-                                "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status",
-                                "root : TTY=pts/1 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/apt update",
-                                "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/bin/cat /etc/shadow",
-                            ],
-                        ),
-                        (
-                            "dhclient",
-                            [
-                                "DHCPREQUEST for {ip} on ens160 to 10.0.0.1 port 67",
-                                "DHCPACK of {ip} from 10.0.0.1",
-                                "bound to {ip} -- renewal in {renewal} seconds.",
-                            ],
-                        ),
-                        (
-                            "polkitd",
-                            [
-                                "Registered Authentication Agent for unix-process",
-                                "Unregistered Authentication Agent for unix-process",
-                                "Operator of unix-process:{} successfully authenticated as 'root'",
-                            ],
-                        ),
-                        (
-                            "multipathd",
-                            [
-                                "daemon started",
-                                "sda: add missing path",
-                                "sda: remaining active paths: 1",
-                            ],
-                        ),
-                        (
-                            "accounts-daemon",
-                            [
-                                "started daemon version 22.08.8",
-                                "user 'admin' has logged in",
-                            ],
-                        ),
-                        (
-                            "packagekitd",
-                            [
-                                "daemon start",
-                                "search-names transaction /{}",
-                            ],
-                        ),
-                        (
-                            "unattended-upgr",
-                            [
-                                "Allowed origins are: o=Ubuntu,a=jammy",
-                                "No packages found that can be upgraded unattended",
-                                "dpkg --status-fd: processing triggers for man-db",
-                            ],
-                        ),
-                        (
-                            "systemd-resolved",
-                            [
-                                "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.0.0.1.",
-                                "Grace period over, resuming full feature set for DNS server 10.0.0.1.",
-                                "Positive Trust Anchors: . IN DS 20326",
-                            ],
-                        ),
-                        (
-                            "cron",
-                            [
-                                "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))",
-                            ],
-                        ),
-                        (
-                            "thermald",
-                            [
-                                "Unsupported cpu model, use default config",
-                                "cooling device 0 intel_powerclamp type: 0x02",
-                            ],
-                        ),
-                        (
-                            "irqbalance",
-                            [
-                                "Balancing is ineffective IRQs are pinned and balanced",
-                            ],
-                        ),
-                    ]
-                    # Filter by distro and role
-                    _UBUNTU_ONLY = {"snapd", "unattended-upgr", "systemd-resolved"}
-                    _WEB_ONLY = {"cron"}  # www-data cron is web-specific
-                    filtered = [
-                        (a, m) for a, m in _EXTRA_SYSLOG if not (is_rhel_like and a in _UBUNTU_ONLY)
-                    ]
+                    # Additional diverse syslog programs — loaded from YAML with
+                    # role/distro tags for data-driven filtering.
+                    from evidenceforge.generation.activity.extra_syslog import (
+                        filter_syslog_messages,
+                        load_extra_syslog_messages,
+                    )
+
+                    _all_programs = load_extra_syslog_messages()
+                    filtered = filter_syslog_messages(_all_programs, is_rhel_like, system.roles)
                     if not filtered:
                         continue
                     app, msgs = rng.choice(filtered)

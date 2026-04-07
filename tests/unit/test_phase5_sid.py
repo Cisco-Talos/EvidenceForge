@@ -102,7 +102,7 @@ class TestSIDRegistry:
 
     def test_get_sid_unknown_user_returns_fallback(self, activity_gen):
         sid = activity_gen._get_sid("unknown.user")
-        assert sid == "S-1-5-21-0-0-0-0"
+        assert sid == "S-1-0-0"
 
     def test_sid_format_valid(self, sid_registry):
         for username, sid in sid_registry.items():
@@ -187,7 +187,7 @@ class TestSIDInWindowsEvents:
         # Logon dispatched via SecurityEvent
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.subject_sid == "S-1-5-18"  # SYSTEM always known
-        assert event.auth.user_sid == "S-1-5-21-0-0-0-0"  # Fallback
+        assert event.auth.user_sid == "S-1-0-0"  # Fallback
 
 
 class TestEngineSIDRegistry:

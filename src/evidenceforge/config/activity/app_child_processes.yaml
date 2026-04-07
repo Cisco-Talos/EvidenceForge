@@ -1,0 +1,38 @@
+# Child/utility processes spawned by main applications.
+#
+# Used to generate realistic multi-level process trees where renderers,
+# GPU processes, and utility subprocesses are children of their main
+# application — not explorer.exe.
+#
+# Structure: os -> parent_exe -> list of {image, command_line}
+# The parent_exe key is matched case-insensitively against the basename
+# of the spawned main application process.
+
+windows:
+  chrome.exe:
+    - image: chrome.exe
+      command_line: "chrome.exe --type=renderer --enable-features=NetworkService"
+    - image: chrome.exe
+      command_line: "chrome.exe --type=gpu-process"
+    - image: chrome.exe
+      command_line: "chrome.exe --type=utility --utility-sub-type=network.mojom.NetworkService"
+
+  msedge.exe:
+    - image: msedge.exe
+      command_line: "msedge.exe --type=renderer"
+    - image: msedge.exe
+      command_line: "msedge.exe --type=gpu-process"
+
+  firefox.exe:
+    - image: firefox.exe
+      command_line: "firefox.exe -contentproc -childID 3 -isForBrowser"
+    - image: firefox.exe
+      command_line: "firefox.exe -contentproc -childID 5 -isForBrowser"
+
+  teams.exe:
+    - image: Teams.exe
+      command_line: "Teams.exe --type=utility"
+
+  onedrive.exe:
+    - image: OneDrive.exe
+      command_line: "OneDrive.exe /background"

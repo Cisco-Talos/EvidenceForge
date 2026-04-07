@@ -1,0 +1,97 @@
+# Extra syslog program messages for baseline diversity.
+#
+# Each entry has:
+#   app: syslog app_name
+#   messages: list of message templates ({} placeholders filled at generation time)
+#   distro: optional - "ubuntu" to restrict to Debian/Ubuntu (excluded on RHEL-like)
+#   roles: optional - list of required host roles (any match = include)
+#   transient: optional - true if the process forks per invocation (random PID)
+#
+# If distro/roles are omitted, the entry appears on all Linux hosts.
+
+programs:
+  - app: NetworkManager
+    messages:
+      - "<info>  [{}] dhcp4 (ens160): state changed bound -> bound"
+      - "<info>  [{}] device (ens160): state change: activated -> activated"
+      - "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL"
+
+  - app: dbus-daemon
+    messages:
+      - "[system] Activating via systemd: service name='org.freedesktop.hostname1'"
+      - "[system] Successfully activated service 'org.freedesktop.resolve1'"
+      - "[system] Activating via systemd: service name='org.freedesktop.timedate1'"
+
+  - app: rsyslogd
+    messages:
+      - '[origin software="rsyslogd" swVersion="8.2112.0"] start'
+      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog'"
+      - '[origin software="rsyslogd"] rsyslogd was HUPed'
+
+  - app: sudo
+    transient: true
+    messages:
+      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status"
+      - "root : TTY=pts/1 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/apt update"
+
+  - app: sudo
+    transient: true
+    roles: [web_server, forward_proxy]
+    messages:
+      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/bin/cat /etc/shadow"
+
+  - app: dhclient
+    messages:
+      - "DHCPREQUEST for {ip} on ens160 to 10.0.0.1 port 67"
+      - "DHCPACK of {ip} from 10.0.0.1"
+      - "bound to {ip} -- renewal in {renewal} seconds."
+
+  - app: polkitd
+    messages:
+      - "Registered Authentication Agent for unix-process"
+      - "Unregistered Authentication Agent for unix-process"
+      - "Operator of unix-process:{} successfully authenticated as 'root'"
+
+  - app: multipathd
+    messages:
+      - "daemon started"
+      - "sda: add missing path"
+      - "sda: remaining active paths: 1"
+
+  - app: accounts-daemon
+    messages:
+      - "started daemon version 22.08.8"
+      - "user 'admin' has logged in"
+
+  - app: packagekitd
+    messages:
+      - "daemon start"
+      - "search-names transaction /{}"
+
+  - app: unattended-upgr
+    distro: ubuntu
+    messages:
+      - "Allowed origins are: o=Ubuntu,a=jammy"
+      - "No packages found that can be upgraded unattended"
+      - "dpkg --status-fd: processing triggers for man-db"
+
+  - app: systemd-resolved
+    distro: ubuntu
+    messages:
+      - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.0.0.1."
+      - "Grace period over, resuming full feature set for DNS server 10.0.0.1."
+      - "Positive Trust Anchors: . IN DS 20326"
+
+  - app: cron
+    transient: true
+    messages:
+      - "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))"
+
+  - app: thermald
+    messages:
+      - "Unsupported cpu model, use default config"
+      - "cooling device 0 intel_powerclamp type: 0x02"
+
+  - app: irqbalance
+    messages:
+      - "Balancing is ineffective IRQs are pinned and balanced"

@@ -164,33 +164,37 @@ PROCESS_TEMPLATES = {
         ),
     ],
     "process_user_apps": [
-        (
-            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-            "chrome.exe --type=renderer --enable-features=NetworkService",
-        ),
-        ("C:\\Program Files\\Mozilla Firefox\\firefox.exe", "firefox.exe -contentproc -childID 3"),
+        # Index 0: Chrome main process (child renderers spawned separately)
+        ("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "chrome.exe"),
+        # Index 1: Firefox main process (child content procs spawned separately)
+        ("C:\\Program Files\\Mozilla Firefox\\firefox.exe", "firefox.exe"),
+        # Index 2: Outlook
         ("C:\\Program Files\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE", "OUTLOOK.EXE"),
+        # Index 3: Word
         (
             "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
             'WINWORD.EXE /n "{doc_path}"',
         ),
+        # Index 4: Excel
         (
             "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE",
             'EXCEL.EXE "{spreadsheet_path}"',
         ),
-        (
-            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-            "msedge.exe --type=renderer",
-        ),
+        # Index 5: Edge main process (child renderers spawned separately)
+        ("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "msedge.exe"),
+        # Index 6: Teams main process (utility procs spawned separately)
         (
             "C:\\Users\\{username}\\AppData\\Local\\Microsoft\\Teams\\current\\Teams.exe",
-            "Teams.exe --type=utility",
+            "Teams.exe",
         ),
+        # Index 7: OneDrive main process (background proc spawned separately)
         (
             "C:\\Users\\{username}\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe",
-            "OneDrive.exe /background",
+            "OneDrive.exe",
         ),
+        # Index 8: Acrobat
         ("C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe", "Acrobat.exe"),
+        # Index 9: 7-Zip
         ("C:\\Program Files\\7-Zip\\7zFM.exe", "7zFM.exe"),
     ],
     "process_system": [
@@ -381,6 +385,29 @@ CONN_STATE_DISTRIBUTION = TCP_CONN_STATE_DISTRIBUTION
 _CONN_STATES = [s[0] for s in TCP_CONN_STATE_DISTRIBUTION]
 _CONN_WEIGHTS = _TCP_CONN_WEIGHTS
 _CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
+
+
+def _dns_rtt(rng: random.Random) -> float:
+    """Generate a realistic DNS round-trip time using a mixture model.
+
+    Models real DNS traffic distribution:
+    - ~60% cache hits (sub-1ms)
+    - ~25% local resolver responses (1-10ms)
+    - ~12% recursive lookups (10-80ms)
+    - ~3% slow/distant servers (80-250ms)
+
+    Returns:
+        RTT in seconds.
+    """
+    roll = rng.random()
+    if roll < 0.60:
+        return rng.uniform(0.0001, 0.001)  # Cache hit: 0.1-1ms
+    elif roll < 0.85:
+        return rng.uniform(0.001, 0.010)  # Local resolver: 1-10ms
+    elif roll < 0.97:
+        return rng.uniform(0.010, 0.080)  # Recursive lookup: 10-80ms
+    else:
+        return rng.uniform(0.080, 0.250)  # Slow/distant: 80-250ms
 
 
 class ActivityGenerator:
@@ -2423,7 +2450,7 @@ class ActivityGenerator:
             rcode_num=0,
             answers=answers,
             TTLs=ttls,
-            rtt=rng.uniform(0.0005, 0.1),
+            rtt=_dns_rtt(rng),
             AA=is_internal,
             RD=True,
             RA=True,
@@ -2770,6 +2797,29 @@ class ActivityGenerator:
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
                 self._record_user_process(system, user, pid, process_name)
+
+                # Spawn child/utility processes for apps that have them
+                # (browser renderers, GPU procs, etc.)
+                if activity_type == "process_user_apps":
+                    from evidenceforge.generation.activity.app_child_processes import (
+                        get_child_processes,
+                    )
+
+                    exe_lower = process_name.rsplit("\\", 1)[-1].lower()
+                    child_entries = get_child_processes("windows", exe_lower)
+                    if child_entries:
+                        num_children = rng.randint(1, min(3, len(child_entries)))
+                        for entry in rng.sample(child_entries, num_children):
+                            child_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
+                            self.generate_process(
+                                user,
+                                system,
+                                child_time,
+                                logon_id,
+                                process_name,
+                                entry["command_line"],
+                                parent_pid=pid,
+                            )
 
                 # Generate correlated network connections for processes
                 self._emit_process_network_correlation(
@@ -4441,7 +4491,7 @@ class ActivityGenerator:
             return self.sid_registry[username]
         if username in self._WELL_KNOWN_SIDS:
             return self._WELL_KNOWN_SIDS[username]
-        return "S-1-5-21-0-0-0-0"
+        return "S-1-0-0"
 
     # Phase 5.2: EDR object type diversity data pools
     _EDR_FILE_PATHS_WIN = [

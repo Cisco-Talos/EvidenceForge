@@ -266,7 +266,7 @@ class WindowsEventEmitter(LogEmitter):
                 "ExecutionThreadID": rng.randint(100, 500),
                 "SubjectUserSid": auth.user_sid,
                 "SubjectUserName": auth.username,
-                "SubjectDomainName": host.netbios_domain,
+                "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
                 "SubjectLogonId": auth.logon_id,
                 "PrivilegeList": privs,
             }
@@ -312,7 +312,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.user_sid,
             "SubjectUserName": auth.username,
-            "SubjectDomainName": host.netbios_domain,
+            "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
             "SubjectLogonId": auth.logon_id or "0x0",
             "PrivilegeList": privs,
         }
@@ -421,7 +421,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.user_sid,
             "SubjectUserName": auth.username,
-            "SubjectDomainName": host.netbios_domain,
+            "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
             "SubjectLogonId": proc.logon_id,
             "Status": "0x0",
             "ProcessId": f"0x{proc.pid:x}",
@@ -520,7 +520,7 @@ class WindowsEventEmitter(LogEmitter):
                 "ExecutionThreadID": rng.randint(100, 500),
                 "SubjectUserSid": auth.user_sid,
                 "SubjectUserName": auth.username,
-                "SubjectDomainName": host.netbios_domain,
+                "SubjectDomainName": _subject_domain(auth.username, host.netbios_domain),
                 "SubjectLogonId": auth.logon_id,
                 "PrivilegeList": (
                     "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"

@@ -21,6 +21,8 @@ caches data after first load. Two files (`network_params.yaml`,
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `engine/emitter_setup.py` | MAC address OUI prefixes (Dell, HP, VMware, etc.) for realistic MAC generation. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
+| `extra_syslog_messages.yaml` | `extra_syslog.py` | Role/distro-tagged syslog program messages for baseline diversity. |
+| `app_child_processes.yaml` | `app_child_processes.py` | Child/utility processes spawned by main applications (browser renderers, etc.). |
 
 ## Adding a New Data File
 
