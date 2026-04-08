@@ -1958,16 +1958,16 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
-            # Derive session ID from timestamp so sorted output preserves monotonicity.
-            # Real systemd-logind assigns IDs sequentially in time — by using
-            # base + minutes_since_midnight, later timestamps always get higher IDs.
+            # Per-host monotonic counter for session IDs (like real systemd-logind).
+            # Callers MUST pass timestamps in sorted order within each hour
+            # to ensure monotonic output after syslog sorting.
             hostname = target_system.hostname
-            if not hasattr(self, "_session_base_ids"):
-                self._session_base_ids: dict[str, int] = {}
-            if hostname not in self._session_base_ids:
-                self._session_base_ids[hostname] = rng.randint(50, 500)
-            minutes_since_midnight = time.hour * 60 + time.minute
-            session_id = self._session_base_ids[hostname] + minutes_since_midnight
+            if not hasattr(self, "_session_counters"):
+                self._session_counters: dict[str, int] = {}
+            if hostname not in self._session_counters:
+                self._session_counters[hostname] = rng.randint(50, 500)
+            self._session_counters[hostname] += 1
+            session_id = self._session_counters[hostname]
 
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(
@@ -2595,35 +2595,8 @@ class ActivityGenerator:
 
         return pattern
 
-    # Process→network correlation: maps executable names to connection parameters.
-    # When a baseline process is generated, the engine checks if the executable
-    # normally generates network traffic and emits corresponding connections.
-    _PROCESS_NETWORK_MAP = {
-        # Browsers → HTTPS to external
-        "chrome.exe": {"dst_port": 443, "service": "ssl", "external": True},
-        "msedge.exe": {"dst_port": 443, "service": "ssl", "external": True},
-        "firefox.exe": {"dst_port": 443, "service": "ssl", "external": True},
-        "firefox": {"dst_port": 443, "service": "ssl", "external": True},
-        # Office → HTTPS to O365/cloud
-        "OUTLOOK.EXE": {"dst_port": 443, "service": "ssl", "external": True},
-        "Teams.exe": {"dst_port": 443, "service": "ssl", "external": True},
-        "OneDrive.exe": {"dst_port": 443, "service": "ssl", "external": True},
-        # Dev tools → external endpoints
-        "Code.exe": {"dst_port": 443, "service": "ssl", "external": True},  # extensions, telemetry
-        "git": {"dst_port": 443, "service": "ssl", "external": True},
-        "npm": {"dst_port": 443, "service": "ssl", "external": True},
-        "cargo": {"dst_port": 443, "service": "ssl", "external": True},
-        "docker": {"dst_port": 443, "service": "ssl", "external": True},
-        "kubectl": {"dst_port": 443, "service": "ssl", "external": True},
-        # DB clients → internal database
-        "sqlcmd.exe": {"dst_port": 1433, "service": "mssql", "external": False},
-        "mysql": {"dst_port": 3306, "service": "mysql", "external": False},
-        "psql": {"dst_port": 5432, "service": "postgresql", "external": False},
-        # SSH clients
-        "ssh": {"dst_port": 22, "service": "ssh", "external": False},
-        # curl/wget → external
-        "curl": {"dst_port": 443, "service": "ssl", "external": True},
-    }
+    # Process→network correlation loaded from config/activity/process_network_map.yaml.
+    # See generation/activity/process_network.py for the loader.
 
     def _emit_process_network_correlation(
         self,
@@ -2645,7 +2618,10 @@ class ActivityGenerator:
         # Strip .exe for Linux lookups
         exe_base = exe.replace(".exe", "") if exe.endswith(".exe") else exe
 
-        conn_info = self._PROCESS_NETWORK_MAP.get(exe) or self._PROCESS_NETWORK_MAP.get(exe_base)
+        from evidenceforge.generation.activity.process_network import get_exe_to_service
+
+        _exe_map = get_exe_to_service()
+        conn_info = _exe_map.get(exe) or _exe_map.get(exe_base)
         if conn_info is None:
             return
 
@@ -3188,8 +3164,7 @@ class ActivityGenerator:
         if user.username in _CANONICAL_LOGON_IDS:
             subject_logon_id = _CANONICAL_LOGON_IDS[user.username]
         else:
-            sessions = self.state_manager.get_sessions_for_user(user.username)
-            subject_logon_id = sessions[0].logon_id if sessions else "0x3e7"
+            subject_logon_id = self._get_user_logon_id(user.username, system.hostname)
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",

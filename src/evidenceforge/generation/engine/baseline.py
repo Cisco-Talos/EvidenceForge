@@ -2031,12 +2031,15 @@ class BaselineMixin:
             p_weights = [c.get("weight", 1) for c in persona_conns]
             # Fewer persona connections than role connections; scaled by activity
             num_persona = rng.randint(3, 10) if is_business else 0
-            # Look up a recent user process for PID attribution
-            _history_key = (system.hostname, session.username)
-            _proc_history = self.activity_generator._user_process_history.get(_history_key, [])
-            persona_pid = _proc_history[-1][0] if _proc_history else -1
             # Clamp timestamps to session lifetime within this hour
             session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
+
+            from evidenceforge.generation.activity.process_network import get_service_to_exes
+
+            _svc_to_exes = get_service_to_exes()
+            _history_key = (system.hostname, session.username)
+            _proc_history = self.activity_generator._user_process_history.get(_history_key, [])
+
             for _ in range(num_persona):
                 conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
                 dst_ip, hostname = self._resolve_dest_role(
@@ -2048,6 +2051,17 @@ class BaselineMixin:
                 )
                 if not dst_ip:
                     continue
+
+                # Attribute connection to a compatible live user process
+                service = conn.get("service", "")
+                compatible_exes = _svc_to_exes.get(service, [])
+                persona_pid = -1
+                for pid, name in reversed(_proc_history):
+                    exe = name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                    if exe in compatible_exes:
+                        persona_pid = pid
+                        break
+
                 offset = rng.uniform(session_start_sec, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
@@ -2421,9 +2435,10 @@ class BaselineMixin:
                 ][:10]
                 if ssh_sources:
                     num_ssh = rng.randint(1, 3)
-                    for _ in range(num_ssh):
+                    # Sort offsets so session counter increments in time order
+                    ssh_offsets = sorted(rng.uniform(0, 3599) for _ in range(num_ssh))
+                    for offset in ssh_offsets:
                         src_ip = rng.choice(ssh_sources)
-                        offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         # Resolve source system for WFP 5156 emission
