@@ -2111,6 +2111,9 @@ class BaselineMixin:
                         if proc and proc.start_time <= ts:
                             persona_pid = pid
                             break
+                if persona_pid == -1 and compatible_exes:
+                    continue  # No compatible process running — skip this connection
+
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,

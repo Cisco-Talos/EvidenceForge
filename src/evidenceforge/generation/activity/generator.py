@@ -1958,16 +1958,18 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
-            # Derive session ID from timestamp so monotonicity is guaranteed
-            # regardless of call order. Later timestamps always produce higher IDs.
+            # Session ID: monotonic + unique per host. Derived from epoch seconds
+            # for call-order independence, with collision handling for same-second sessions.
             hostname = target_system.hostname
-            if not hasattr(self, "_session_base_ids"):
-                self._session_base_ids: dict[str, int] = {}
-            if hostname not in self._session_base_ids:
-                self._session_base_ids[hostname] = rng.randint(50, 500)
-            base = self._session_base_ids[hostname]
-            epoch_offset = int(time.timestamp()) - 1700000000
-            session_id = base + (epoch_offset // 60)
+            if not hasattr(self, "_session_id_state"):
+                self._session_id_state: dict[str, tuple[int, int]] = {}
+            if hostname not in self._session_id_state:
+                self._session_id_state[hostname] = (0, rng.randint(50, 500))
+            _last_epoch, _last_id = self._session_id_state[hostname]
+            _epoch_sec = int(time.timestamp())
+            _candidate = rng.randint(50, 500) + (_epoch_sec - 1700000000)
+            session_id = max(_candidate, _last_id + 1)
+            self._session_id_state[hostname] = (_epoch_sec, session_id)
 
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(
