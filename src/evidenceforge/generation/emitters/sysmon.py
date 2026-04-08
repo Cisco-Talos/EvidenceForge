@@ -330,10 +330,20 @@ class SysmonEventEmitter(LogEmitter):
 
     @classmethod
     def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
-        """Look up PE metadata for a Windows binary by image path or name."""
+        """Look up PE metadata for a Windows binary by image path or name.
+
+        Checks the built-in OS binary table first, then falls back to the
+        application catalog for user-installed apps (Chrome, Firefox, etc.).
+        """
         # Handle Windows paths on any OS (backslash is not a separator on Unix)
         basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        return cls._PE_METADATA.get(basename, ("-", "-", "-", "-", "-"))
+        result = cls._PE_METADATA.get(basename)
+        if result:
+            return result
+        # Fall back to application catalog for user-installed apps
+        from evidenceforge.generation.activity.application_catalog import get_pe_metadata
+
+        return get_pe_metadata(basename)
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.

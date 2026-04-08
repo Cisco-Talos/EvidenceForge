@@ -195,6 +195,7 @@ class ScenarioValidator:
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
         self._validate_expansion_redundancy()
+        self._validate_process_network_pairing()
         self._validate_firewall_config()
         self._sort_issues()
         return self.issues
@@ -1281,6 +1282,41 @@ class ScenarioValidator:
                         suggestion=(
                             "Use either rdp_session (which auto-generates connection + logon) "
                             "or manually specify the connection and logon separately, not both."
+                        ),
+                    )
+                )
+
+    def _validate_process_network_pairing(self) -> None:
+        """Warn when process commands contain URLs without sibling connection events.
+
+        A process event whose command line references a domain (e.g.,
+        Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...') should
+        be accompanied by a connection event with ``hostname`` set so that
+        DNS, SSL, and proxy logs are generated for that domain.
+        """
+        from evidenceforge.validation.url_extractor import extract_hostnames_from_command
+
+        for step_idx, entry in enumerate(self.scenario.storyline):
+            process_domains: set[str] = set()
+            connection_hostnames: set[str] = set()
+            for event in entry.events:
+                if event.type == "process" and getattr(event, "command_line", None):
+                    process_domains |= extract_hostnames_from_command(event.command_line)
+                if event.type == "connection" and getattr(event, "hostname", None):
+                    connection_hostnames.add(event.hostname.lower())
+            missing = process_domains - connection_hostnames
+            for domain in sorted(missing):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{step_idx}.events",
+                        message=(
+                            f"Process command references '{domain}' but no sibling "
+                            f"connection event has hostname: {domain}"
+                        ),
+                        suggestion=(
+                            "Add a connection event with hostname set to ensure "
+                            "the domain appears in DNS, SSL, HTTP, and proxy logs."
                         ),
                     )
                 )

@@ -1706,7 +1706,11 @@ class ActivityGenerator:
             key_type, key_length = pick_key_type(rng, issuer_cfg)
             is_ecdsa = key_type == "ecdsa"
             now_epoch = int(event.timestamp.timestamp())
-            validity_days = issuer_cfg.get("validity_days", 397)
+            # Support validity_days_min/max ranges; fall back to scalar validity_days
+            _vd_fallback = issuer_cfg.get("validity_days", 397)
+            _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
+            _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
+            validity_days = rng.randint(_vd_min, _vd_max)
             not_before_max = issuer_cfg.get("not_before_max_days", 300)
             not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
             remaining_days = validity_days - not_before_days
@@ -2886,72 +2890,95 @@ class ActivityGenerator:
 
             # Phase 2.10: OS-aware process template selection
             os_category = _get_os_category(system.os)
-            if os_category == "windows" and activity_type in PROCESS_TEMPLATES:
-                # Phase 5.6: Per-persona app pool for user diversity
-                pool = PROCESS_TEMPLATES[activity_type]
-                if activity_type == "process_user_apps":
-                    persona_key = (user.persona or "default").lower()
-                    indices = PERSONA_APP_INDICES.get(persona_key, PERSONA_APP_INDICES["default"])
-                    pool = [pool[i] for i in indices if i < len(pool)]
+
+            # Map activity_type to catalog category
+            _CATEGORY_MAP = {
+                "process_user_apps": "user_app",
+                "process_code": "code",
+                "process_build": "build",
+                "process_query": "query",
+            }
+            catalog_category = _CATEGORY_MAP.get(activity_type)
+
+            # Try unified application catalog first (persona-aware, PE-metadata-rich)
+            if catalog_category:
+                from evidenceforge.generation.activity.application_catalog import (
+                    pick_app_and_command,
+                )
+
                 rng = _get_rng()
-                process_name, command_line = rng.choice(pool)
-                # Phase 5.1: Substitute username placeholder in paths
+                result = pick_app_and_command(
+                    rng,
+                    user.persona or "default",
+                    os_category,
+                    catalog_category,
+                    username=user.username,
+                )
+                if result:
+                    process_name, command_line = result
+                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    pid = self.generate_process(
+                        user,
+                        system,
+                        time,
+                        logon_id,
+                        process_name,
+                        command_line,
+                        parent_pid=parent_pid,
+                    )
+                    self._record_user_process(system, user, pid, process_name)
+
+                    # Spawn child/utility processes for apps that have them
+                    if activity_type == "process_user_apps":
+                        from evidenceforge.generation.activity.app_child_processes import (
+                            get_child_processes,
+                        )
+
+                        exe_lower = process_name.rsplit("\\", 1)[-1].lower()
+                        if "/" in process_name:
+                            exe_lower = process_name.rsplit("/", 1)[-1].lower()
+                        child_entries = get_child_processes(os_category, exe_lower)
+                        if child_entries:
+                            num_children = rng.randint(1, min(3, len(child_entries)))
+                            for entry in rng.sample(child_entries, num_children):
+                                child_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
+                                self.generate_process(
+                                    user,
+                                    system,
+                                    child_time,
+                                    logon_id,
+                                    process_name,
+                                    entry["command_line"],
+                                    parent_pid=pid,
+                                )
+
+                    # Also generate bash history for Linux processes
+                    if os_category == "linux":
+                        self.generate_bash_command(user, system, time, activity_type)
+
+            # Fallback to legacy PROCESS_TEMPLATES for system processes and
+            # any activity types not yet in the catalog
+            elif os_category == "windows" and activity_type in PROCESS_TEMPLATES:
+                rng = _get_rng()
+                process_name, command_line = rng.choice(PROCESS_TEMPLATES[activity_type])
                 process_name = process_name.replace("{username}", user.username)
-                # Parameterize command templates (all categories — queries, paths, docs)
                 command_line = _parameterize_command(rng, command_line, username=user.username)
                 parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
                 self._record_user_process(system, user, pid, process_name)
-
-                # Spawn child/utility processes for apps that have them
-                # (browser renderers, GPU procs, etc.)
-                if activity_type == "process_user_apps":
-                    from evidenceforge.generation.activity.app_child_processes import (
-                        get_child_processes,
-                    )
-
-                    exe_lower = process_name.rsplit("\\", 1)[-1].lower()
-                    child_entries = get_child_processes("windows", exe_lower)
-                    if child_entries:
-                        num_children = rng.randint(1, min(3, len(child_entries)))
-                        for entry in rng.sample(child_entries, num_children):
-                            child_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
-                            self.generate_process(
-                                user,
-                                system,
-                                child_time,
-                                logon_id,
-                                process_name,
-                                entry["command_line"],
-                                parent_pid=pid,
-                            )
-
-                # Network connections are now driven by persona_traffic profiles
-                # instead of process-to-network correlation
 
             elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
-                # Phase 5.6: Per-persona app pool for Linux user diversity
-                pool = PROCESS_TEMPLATES_LINUX[activity_type]
-                if activity_type == "process_user_apps":
-                    persona_key = (user.persona or "default").lower()
-                    indices = PERSONA_APP_INDICES_LINUX.get(
-                        persona_key, PERSONA_APP_INDICES_LINUX["default"]
-                    )
-                    pool = [pool[i] for i in indices if i < len(pool)]
                 rng = _get_rng()
-                process_name, command_line = rng.choice(pool)
+                process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])
                 command_line = _parameterize_command(rng, command_line, username=user.username)
                 parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                 pid = self.generate_process(
                     user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
                 )
                 self._record_user_process(system, user, pid, process_name)
-
-                # Network connections are now driven by persona_traffic profiles
-
-                # Also generate bash history for Linux
                 self.generate_bash_command(user, system, time, activity_type)
 
         # Connection activities

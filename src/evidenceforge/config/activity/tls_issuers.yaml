@@ -1,10 +1,12 @@
 # TLS certificate issuer configurations for realistic x509 generation.
 # Each issuer has validity parameters matching real CA practices.
+# validity_days_min/max define a range; the engine picks uniformly within it.
 
 issuers:
   - name: "CN=R3, O=Let's Encrypt, C=US"
     weight: 30
-    validity_days: 90
+    validity_days_min: 89
+    validity_days_max: 90
     not_before_max_days: 60
     key_types:
       - {type: "ecdsa", length: 256, weight: 70}
@@ -12,14 +14,16 @@ issuers:
 
   - name: "CN=E1, O=Let's Encrypt, C=US"
     weight: 10
-    validity_days: 90
+    validity_days_min: 89
+    validity_days_max: 90
     not_before_max_days: 60
     key_types:
       - {type: "ecdsa", length: 256, weight: 100}
 
   - name: "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
     weight: 15
-    validity_days: 397
+    validity_days_min: 365
+    validity_days_max: 397
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 50}
@@ -28,7 +32,8 @@ issuers:
 
   - name: "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, L=Salford, ST=Greater Manchester, C=GB"
     weight: 10
-    validity_days: 397
+    validity_days_min: 90
+    validity_days_max: 397
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 70}
@@ -37,7 +42,8 @@ issuers:
 
   - name: "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
     weight: 15
-    validity_days: 90
+    validity_days_min: 89
+    validity_days_max: 90
     not_before_max_days: 60
     key_types:
       - {type: "ecdsa", length: 256, weight: 80}
@@ -45,7 +51,8 @@ issuers:
 
   - name: "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
     weight: 10
-    validity_days: 397
+    validity_days_min: 365
+    validity_days_max: 397
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 85}
@@ -53,7 +60,8 @@ issuers:
 
   - name: "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
     weight: 10
-    validity_days: 397
+    validity_days_min: 90
+    validity_days_max: 397
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 50}
@@ -61,7 +69,8 @@ issuers:
 
   - name: "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
     weight: 0  # Only used via domain_ca_overrides
-    validity_days: 397
+    validity_days_min: 365
+    validity_days_max: 397
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 60}
@@ -70,7 +79,8 @@ issuers:
 
   - name: "CN=Microsoft Azure RSA TLS Issuing CA 08, O=Microsoft Corporation, C=US"
     weight: 0  # Only used via domain_ca_overrides
-    validity_days: 397
+    validity_days_min: 365
+    validity_days_max: 397
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 90}
@@ -78,10 +88,20 @@ issuers:
 
   - name: "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
     weight: 0  # Only used via domain_ca_overrides
-    validity_days: 90
+    validity_days_min: 14
+    validity_days_max: 90
     not_before_max_days: 60
     key_types:
       - {type: "ecdsa", length: 256, weight: 100}
+
+  - name: "CN=Apple Public EV Server ECC CA 1 - G1, O=Apple Inc., C=US"
+    weight: 0  # Only used via domain_ca_overrides
+    validity_days_min: 365
+    validity_days_max: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "ecdsa", length: 256, weight: 80}
+      - {type: "rsa", length: 2048, weight: 20}
 
 # Domain-to-CA overrides: well-known domains must use their real CA.
 # Patterns use fnmatch glob syntax. First match wins.
@@ -96,6 +116,9 @@ domain_ca_overrides:
   "*.microsoftonline.com": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
   "*.live.com": "CN=Microsoft Azure RSA TLS Issuing CA 08, O=Microsoft Corporation, C=US"
   "*.bing.com": "CN=Microsoft Azure RSA TLS Issuing CA 08, O=Microsoft Corporation, C=US"
+  "*.windowsupdate.com": "CN=Microsoft Azure RSA TLS Issuing CA 08, O=Microsoft Corporation, C=US"
+  "*.windows.net": "CN=Microsoft Azure RSA TLS Issuing CA 08, O=Microsoft Corporation, C=US"
+  "*.azure.com": "CN=Microsoft Azure RSA TLS Issuing CA 08, O=Microsoft Corporation, C=US"
   "*.facebook.com": "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
   "*.github.com": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
   "*.github.io": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
@@ -105,4 +128,11 @@ domain_ca_overrides:
   "*.cloudflare.com": "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
   "*.reddit.com": "CN=R3, O=Let's Encrypt, C=US"
   "*.amazonaws.com": "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
+  "*.amazon.com": "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
   "*.cloudfront.net": "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
+  "*.apple.com": "CN=Apple Public EV Server ECC CA 1 - G1, O=Apple Inc., C=US"
+  "*.icloud.com": "CN=Apple Public EV Server ECC CA 1 - G1, O=Apple Inc., C=US"
+  "*.twitter.com": "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
+  "*.x.com": "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
+  "*.linkedin.com": "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
+  "*.dropbox.com": "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"

@@ -350,6 +350,7 @@ class ConnectionEventSpec(_EventSpecBase):
     type: Literal["connection"] = "connection"
     dst_ip: str
     dst_port: int = 443
+    hostname: str | None = None  # Domain name for DNS/SSL SNI (omit for raw-IP C2)
     service: str | None = None  # ssl, http, etc.
     source_ip: str | None = None
     # HTTP fields (when service=http, produces correlated web_access + zeek_http)

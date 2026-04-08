@@ -310,7 +310,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `logon` | 4624, 4672, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
-| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
+| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
 | `ssh_session` | Zeek conn + syslog sshd + eCAR | | `source_ip` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -395,6 +395,8 @@ The generation engine automatically provides several layers of realism in baseli
 **Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
 
 **Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.
+
+**Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` events tells the engine which domain name the client resolved to reach that IP. Omit `hostname` for raw-IP C2 (no DNS lookup expected). The validator will warn about unmatched domains.
 
 **Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
 

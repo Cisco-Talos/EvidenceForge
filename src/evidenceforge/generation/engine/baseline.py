@@ -2244,11 +2244,14 @@ class BaselineMixin:
                     pid=ntp_pid,
                 )
 
-            # DHCP lease renewal at T/2 of lease duration
+            # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
             if dhcp_state and "zeek_dhcp" in self.emitters:
                 lease_time = dhcp_state["lease_time"]
-                renewal_interval = lease_time / 2  # Renew at T/2
+                # RFC 2131: renew at T1 ≈ T/2, with ±10% jitter per renewal
+                base_renewal = lease_time / 2
+                jitter_factor = 1.0 + rng.uniform(-0.10, 0.10)
+                renewal_interval = base_renewal * jitter_factor
                 last_renewal = dhcp_state["last_renewal"]
                 hour_end_epoch = (current_hour + timedelta(hours=1)).timestamp()
                 # Check if a renewal falls within this hour
@@ -2257,6 +2260,8 @@ class BaselineMixin:
                     from evidenceforge.utils.ids import generate_zeek_uid
 
                     renewal_ts = datetime.fromtimestamp(next_renewal, tz=current_hour.tzinfo)
+                    # Randomize fractional seconds (OS timer imprecision)
+                    renewal_ts = renewal_ts.replace(microsecond=rng.randint(0, 999999))
                     self.state_manager.set_current_time(renewal_ts)
                     self.activity_generator.generate_dhcp_lease(
                         system=dhcp_state["system"],
