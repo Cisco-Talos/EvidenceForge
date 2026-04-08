@@ -1958,16 +1958,16 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
-            # Per-host monotonic counter for session IDs (like real systemd-logind).
-            # Callers MUST pass timestamps in sorted order within each hour
-            # to ensure monotonic output after syslog sorting.
+            # Derive session ID from timestamp so monotonicity is guaranteed
+            # regardless of call order. Later timestamps always produce higher IDs.
             hostname = target_system.hostname
-            if not hasattr(self, "_session_counters"):
-                self._session_counters: dict[str, int] = {}
-            if hostname not in self._session_counters:
-                self._session_counters[hostname] = rng.randint(50, 500)
-            self._session_counters[hostname] += 1
-            session_id = self._session_counters[hostname]
+            if not hasattr(self, "_session_base_ids"):
+                self._session_base_ids: dict[str, int] = {}
+            if hostname not in self._session_base_ids:
+                self._session_base_ids[hostname] = rng.randint(50, 500)
+            base = self._session_base_ids[hostname]
+            epoch_offset = int(time.timestamp()) - 1700000000
+            session_id = base + (epoch_offset // 60)
 
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(

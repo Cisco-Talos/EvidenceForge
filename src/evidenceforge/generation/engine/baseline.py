@@ -2025,6 +2025,9 @@ class BaselineMixin:
                     break
             if persona is None:
                 continue  # Not a scenario user — skip service/machine accounts
+            # Only interactive sessions generate user-driven persona traffic
+            if session.logon_type not in (2, 10, 11):
+                continue
             persona_conns = get_persona_connections(persona, os_cat)
             if not persona_conns:
                 continue
@@ -2059,8 +2062,10 @@ class BaselineMixin:
                 for pid, name in reversed(_proc_history):
                     exe = name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
                     if exe in compatible_exes:
-                        persona_pid = pid
-                        break
+                        # Verify process is still running
+                        if self.state_manager.get_process(system.hostname, pid):
+                            persona_pid = pid
+                            break
 
                 offset = rng.uniform(session_start_sec, 3599)
                 ts = current_hour + timedelta(seconds=offset)
@@ -2435,10 +2440,9 @@ class BaselineMixin:
                 ][:10]
                 if ssh_sources:
                     num_ssh = rng.randint(1, 3)
-                    # Sort offsets so session counter increments in time order
-                    ssh_offsets = sorted(rng.uniform(0, 3599) for _ in range(num_ssh))
-                    for offset in ssh_offsets:
+                    for _ in range(num_ssh):
                         src_ip = rng.choice(ssh_sources)
+                        offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         # Resolve source system for WFP 5156 emission
