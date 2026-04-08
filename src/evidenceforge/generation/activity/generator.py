@@ -1958,14 +1958,16 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
-            # Monotonically incrementing per-host session counter (like real systemd-logind)
+            # Derive session ID from timestamp so sorted output preserves monotonicity.
+            # Real systemd-logind assigns IDs sequentially in time — by using
+            # base + minutes_since_midnight, later timestamps always get higher IDs.
             hostname = target_system.hostname
-            if not hasattr(self, "_session_counters"):
-                self._session_counters: dict[str, int] = {}
-            if hostname not in self._session_counters:
-                self._session_counters[hostname] = rng.randint(50, 500)
-            self._session_counters[hostname] += 1
-            session_id = self._session_counters[hostname]
+            if not hasattr(self, "_session_base_ids"):
+                self._session_base_ids: dict[str, int] = {}
+            if hostname not in self._session_base_ids:
+                self._session_base_ids[hostname] = rng.randint(50, 500)
+            minutes_since_midnight = time.hour * 60 + time.minute
+            session_id = self._session_base_ids[hostname] + minutes_since_midnight
 
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(
@@ -4534,16 +4536,34 @@ class ActivityGenerator:
     def _get_sid(self, username: str) -> str:
         """Look up Windows SID for a username.
 
+        For unknown principals (stale accounts, attacker-created accounts),
+        generates a deterministic synthetic SID using the domain prefix from
+        the existing registry and a stable RID derived from the username.
+
         Args:
             username: Username to look up
 
         Returns:
-            SID string, or a fallback SID if username not in registry
+            SID string — from registry, well-known, or deterministic synthetic
         """
         if username in self.sid_registry:
             return self.sid_registry[username]
         if username in self._WELL_KNOWN_SIDS:
             return self._WELL_KNOWN_SIDS[username]
+        # Generate deterministic synthetic SID for unknown principals
+        if not hasattr(self, "_domain_sid_prefix"):
+            self._domain_sid_prefix: str | None = None
+            for sid in self.sid_registry.values():
+                if sid.startswith("S-1-5-21-") and sid.count("-") == 7:
+                    self._domain_sid_prefix = "-".join(sid.split("-")[:7])
+                    break
+        if self._domain_sid_prefix:
+            from evidenceforge.utils.rng import _stable_seed
+
+            rid = 7000 + (_stable_seed(f"unknown_sid_{username}") % 3000)
+            synthetic = f"{self._domain_sid_prefix}-{rid}"
+            self.sid_registry[username] = synthetic  # Cache for consistency
+            return synthetic
         return "S-1-0-0"
 
     # Phase 5.2: EDR object type diversity data pools

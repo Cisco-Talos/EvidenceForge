@@ -2031,6 +2031,10 @@ class BaselineMixin:
             p_weights = [c.get("weight", 1) for c in persona_conns]
             # Fewer persona connections than role connections; scaled by activity
             num_persona = rng.randint(3, 10) if is_business else 0
+            # Look up a recent user process for PID attribution
+            _history_key = (system.hostname, session.username)
+            _proc_history = self.activity_generator._user_process_history.get(_history_key, [])
+            persona_pid = _proc_history[-1][0] if _proc_history else -1
             # Clamp timestamps to session lifetime within this hour
             session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
             for _ in range(num_persona):
@@ -2060,6 +2064,7 @@ class BaselineMixin:
                     emit_dns=conn.get("emit_dns", False),
                     source_system=system,
                     hostname=hostname,
+                    pid=persona_pid,
                 )
 
     def _generate_system_traffic(self, current_hour: datetime) -> None:
