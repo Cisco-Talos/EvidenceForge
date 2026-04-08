@@ -80,11 +80,16 @@ class _SingleHistoryWriter:
         # Sort entries by timestamp to ensure monotonic ordering
         # Bash history format: #<epoch>\n<command>\n — sort by epoch line
         self._sort_by_timestamp()
-        self._apply_history_clearing()
+        cleared = self._apply_history_clearing()
         if not self.buffer:
+            # Clearing command was the last thing — truncate file
+            if cleared and self.output_path.exists():
+                self.output_path.write_text("")
             return
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.output_path, "a", encoding="utf-8") as f:
+        # If history was cleared, truncate file (discard prior flushes)
+        mode = "w" if cleared else "a"
+        with open(self.output_path, mode, encoding="utf-8") as f:
             for entry in self.buffer:
                 f.write(entry)
                 if not entry.endswith("\n"):
@@ -102,12 +107,15 @@ class _SingleHistoryWriter:
 
         self.buffer.sort(key=_extract_ts)
 
-    def _apply_history_clearing(self) -> None:
+    def _apply_history_clearing(self) -> bool:
         """Remove entries that would have been cleared by a history-clearing command.
 
         Scans for commands matching _CLEAR_PATTERNS. If found, discards all
         entries at or before the last clearing command (including the command
         itself), keeping only entries that came after.
+
+        Returns:
+            True if a clearing command was found (caller should truncate file).
         """
         last_clear_idx = -1
         for i, entry in enumerate(self.buffer):
@@ -123,6 +131,8 @@ class _SingleHistoryWriter:
         if last_clear_idx >= 0:
             # Discard everything up to and including the clearing command
             self.buffer = self.buffer[last_clear_idx + 1 :]
+            return True
+        return False
 
 
 class BashHistoryEmitter(LogEmitter):

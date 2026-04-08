@@ -2031,6 +2031,8 @@ class BaselineMixin:
             p_weights = [c.get("weight", 1) for c in persona_conns]
             # Fewer persona connections than role connections; scaled by activity
             num_persona = rng.randint(3, 10) if is_business else 0
+            # Clamp timestamps to session lifetime within this hour
+            session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
             for _ in range(num_persona):
                 conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
                 dst_ip, hostname = self._resolve_dest_role(
@@ -2042,7 +2044,7 @@ class BaselineMixin:
                 )
                 if not dst_ip:
                     continue
-                offset = rng.uniform(0, 3599)
+                offset = rng.uniform(session_start_sec, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(

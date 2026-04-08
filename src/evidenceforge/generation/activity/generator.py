@@ -1548,7 +1548,7 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
                 domain_tags = get_domain_tags(proxy_hostname)
-                path, proxy_content_type, _method = pick_proxy_uri(
+                path, proxy_content_type, proxy_method = pick_proxy_uri(
                     _get_rng(), proxy_hostname, domain_tags
                 )
                 url = f"{schema}://{proxy_hostname}{path}"
@@ -1573,7 +1573,7 @@ class ActivityGenerator:
                     cache_result = "DENIED"
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
-                    method="GET",
+                    method=proxy_method,
                     url=url,
                     host=hostname,
                     status_code=200 if cache_result != "DENIED" else 403,
@@ -1720,7 +1720,7 @@ class ActivityGenerator:
 
             web_host = REVERSE_DNS.get(dst_ip, dst_ip)
             web_domain_tags = get_domain_tags(web_host)
-            uri, mime_type, _method = pick_proxy_uri(rng, web_host, web_domain_tags)
+            uri, mime_type, http_method = pick_proxy_uri(rng, web_host, web_domain_tags)
             status_code, status_msg = _get_http_status(dst_ip, uri)
             resp_body_len = resp_bytes or rng.randint(200, 50000)
             if status_code in (301, 302):
@@ -1728,12 +1728,12 @@ class ActivityGenerator:
             elif status_code == 304:
                 resp_body_len = 0
             event.http = HttpContext(
-                method="GET",
+                method=http_method,
                 host=host,
                 uri=uri,
                 version="1.1",
                 user_agent=ua,
-                request_body_len=0,
+                request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
                 response_body_len=resp_body_len,
                 status_code=status_code,
                 status_msg=status_msg,
