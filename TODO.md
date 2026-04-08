@@ -40,7 +40,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### World Model Refactor
 
-- [ ] **IN PROGRESS** Commit, push, and open a draft PR from `world-model` into `dev`
+- [x] Open the draft PR from `world-model` into `dev`
 Compiled `WorldModel` / `WorldPlanner` behavior is now the shared planning layer for persona placement, host capabilities, proxy/infrastructure routing, and interactive/network/SSH/RDP session bootstrap across baseline and storyline generation.
 Runtime ownership state was expanded to track exact session/process/connection provenance, the remaining `hash()`-based realism-critical derivations were replaced with `_stable_seed(...)`, and the contributor/docs/skill guidance was updated to match the new contract.
 Verification is complete: dedicated `tests/unit/test_world_model.py` coverage was added and `uv run pytest -v --include-slow` passed (`1483 passed`).
