@@ -110,31 +110,21 @@ class StateManager:
             if self.state.current_time is None:
                 raise StateError("Cannot create session: current_time not set")
 
-            # Well-known system accounts have fixed LogonIds per Windows spec
-            _SYSTEM_LOGON_IDS = {
-                "SYSTEM": 0x3E7,
-                "LOCAL SERVICE": 0x3E5,
-                "NETWORK SERVICE": 0x3E4,
-            }
-            if username in _SYSTEM_LOGON_IDS:
-                val = _SYSTEM_LOGON_IDS[username]
-                logon_id = f"0x{val:x}"
-            else:
-                # Generate high-entropy LogonID (real LSASS uses random 32-bit values)
-                # Per-host RNG ensures different hosts produce different LogonID sequences
-                if system not in self._logon_id_rngs:
-                    from evidenceforge.utils.rng import _stable_seed
+            # Generate high-entropy LogonID (real LSASS uses random 32-bit values)
+            # Per-host RNG ensures different hosts produce different LogonID sequences
+            if system not in self._logon_id_rngs:
+                from evidenceforge.utils.rng import _stable_seed
 
-                    self._logon_id_rngs[system] = random.Random(_stable_seed(f"logon_ids_{system}"))
-                host_rng = self._logon_id_rngs[system]
-                for _ in range(100):
-                    val = host_rng.randint(0x10000, 0xFFFFFFFF)
-                    if val not in self._used_logon_ids and val not in self._reserved_logon_ids:
-                        break
-                else:
-                    raise StateError("LogonID generation exhausted (100 collisions)")
-                self._used_logon_ids.add(val)
-                logon_id = f"0x{val:x}"
+                self._logon_id_rngs[system] = random.Random(_stable_seed(f"logon_ids_{system}"))
+            host_rng = self._logon_id_rngs[system]
+            for _ in range(100):
+                val = host_rng.randint(0x10000, 0xFFFFFFFF)
+                if val not in self._used_logon_ids and val not in self._reserved_logon_ids:
+                    break
+            else:
+                raise StateError("LogonID generation exhausted (100 collisions)")
+            self._used_logon_ids.add(val)
+            logon_id = f"0x{val:x}"
 
             # Create session
             session = ActiveSession(

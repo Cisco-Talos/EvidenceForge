@@ -3177,8 +3177,17 @@ class ActivityGenerator:
         or other explicit credential usage.
         """
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
-        sessions = self.state_manager.get_sessions_for_user(user.username)
-        subject_logon_id = sessions[0].logon_id if sessions else "0x3e7"
+        # System accounts have canonical LogonIds — don't look up sessions
+        _CANONICAL_LOGON_IDS = {
+            "SYSTEM": "0x3e7",
+            "LOCAL SERVICE": "0x3e5",
+            "NETWORK SERVICE": "0x3e4",
+        }
+        if user.username in _CANONICAL_LOGON_IDS:
+            subject_logon_id = _CANONICAL_LOGON_IDS[user.username]
+        else:
+            sessions = self.state_manager.get_sessions_for_user(user.username)
+            subject_logon_id = sessions[0].logon_id if sessions else "0x3e7"
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",

@@ -1943,6 +1943,7 @@ class BaselineMixin:
         system: Any,
         rng: Any,
         os_cat: str,
+        sys_pids: dict[str, int] | None = None,
     ) -> None:
         """Generate role-based and persona-based network connections from traffic profiles.
 
@@ -1983,6 +1984,19 @@ class BaselineMixin:
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
+                # Resolve initiating PID from the system process that handles this service
+                _SERVICE_TO_PID_KEY = {
+                    "kerberos": "lsass",
+                    "ldap": "lsass",
+                    "dns": "svchost_net_svc",
+                    "smb": "svchost_netsvcs",
+                    "ssl": "svchost_netsvcs",
+                    "http": "svchost_netsvcs",
+                }
+                _pids = sys_pids or {}
+                pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
+                conn_pid = _pids.get(pid_key, -1) if pid_key else -1
+
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
                     dst_ip=dst_ip,
@@ -1996,18 +2010,22 @@ class BaselineMixin:
                     emit_dns=conn.get("emit_dns", False),
                     source_system=system,
                     hostname=hostname,
+                    pid=conn_pid,
                 )
 
         # --- Persona traffic (user-level, during active sessions) ---
+        # Only real interactive user sessions get persona traffic — skip
+        # SYSTEM, LOCAL SERVICE, NETWORK SERVICE, machine accounts, etc.
         host_sessions = self.state_manager.get_sessions_on_system(system.hostname)
         for session in host_sessions:
             persona = None
-            # Look up persona from scenario users
             for u in self.scenario.environment.users:
                 if u.username == session.username:
                     persona = u.persona
                     break
-            persona_conns = get_persona_connections(persona or "_default", os_cat)
+            if persona is None:
+                continue  # Not a scenario user — skip service/machine accounts
+            persona_conns = get_persona_connections(persona, os_cat)
             if not persona_conns:
                 continue
             p_weights = [c.get("weight", 1) for c in persona_conns]
@@ -2244,7 +2262,7 @@ class BaselineMixin:
 
             # Profile-driven traffic: role-based system connections + persona user connections
             # Replaces former HTTPS background + database traffic blocks
-            self._generate_profile_traffic(current_hour, system, rng, os_cat)
+            self._generate_profile_traffic(current_hour, system, rng, os_cat, sys_pids)
 
             # Independent system service processes (not tied to user activity)
             # Windows hosts spawn 3-8 service processes per hour
