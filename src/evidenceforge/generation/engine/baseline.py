@@ -482,7 +482,10 @@ class BaselineMixin:
                 for event_time in event_times:
                     self._generate_user_activity(user, event_time)
 
-        self._generate_system_traffic(current_hour)
+        # Pre-decide logoffs so profile traffic can bound persona timestamps
+        planned_logoffs = self._plan_logoffs_for_hour(enabled_users, current_hour)
+
+        self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
         self._generate_stale_account_noise(current_hour)
         self._generate_lateral_movement_noise(current_hour)
         self._generate_suspicious_noise(current_hour)
@@ -501,7 +504,7 @@ class BaselineMixin:
                     self._red_herring_executed.add(event_idx)
 
         self._terminate_stale_processes(current_hour)
-        self._generate_logoffs_for_hour(enabled_users, current_hour)
+        self._generate_logoffs_for_hour(enabled_users, current_hour, planned_logoffs)
 
         if flush_emitters:
             self._barrier_flush_all_emitters()
@@ -1474,12 +1477,20 @@ class BaselineMixin:
                 )
                 generated += 1
 
-    def _generate_logoffs_for_hour(
+    def _plan_logoffs_for_hour(
         self,
         users: list[User],
         current_hour: datetime,
-    ) -> None:
-        """Generate logoff events for sessions that should end this hour."""
+    ) -> dict[tuple[str, str], float]:
+        """Pre-decide which sessions log off this hour and at what offset.
+
+        Called before system traffic so profile traffic can bound persona
+        connection timestamps to before the planned logoff.
+
+        Returns:
+            Dict mapping (system_hostname, logon_id) → offset_seconds within hour.
+        """
+        planned: dict[tuple[str, str], float] = {}
         for user in users:
             sessions = self.state_manager.get_sessions_for_user(user.username)
             if not sessions:
@@ -1492,23 +1503,7 @@ class BaselineMixin:
                     "hours", range(24)
                 )
 
-            system = None
-            if user.primary_system:
-                systems = [
-                    s
-                    for s in self.scenario.environment.systems
-                    if s.hostname == user.primary_system
-                ]
-                if systems:
-                    system = systems[0]
-            if not system:
-                assigned = [
-                    s for s in self.scenario.environment.systems if s.assigned_user == user.username
-                ]
-                system = assigned[0] if assigned else self.scenario.environment.systems[0]
-
             for session in list(sessions):
-                # Normalize timezone awareness for subtraction
                 sess_start = session.start_time
                 hour_ts = current_hour
                 if sess_start.tzinfo is not None and hour_ts.tzinfo is None:
@@ -1525,15 +1520,52 @@ class BaselineMixin:
                 )
                 if rng.random() < logoff_probability:
                     logoff_offset = rng.uniform(0, 3599)
-                    logoff_time = current_hour + timedelta(seconds=logoff_offset)
-                    self.state_manager.set_current_time(logoff_time)
-                    self.activity_generator.generate_logoff(
-                        user=user,
-                        system=system,
-                        time=logoff_time,
-                        logon_id=session.logon_id,
-                        logon_type=session.logon_type,
-                    )
+                    planned[(session.system, session.logon_id)] = logoff_offset
+        return planned
+
+    def _generate_logoffs_for_hour(
+        self,
+        users: list[User],
+        current_hour: datetime,
+        planned_logoffs: dict[tuple[str, str], float],
+    ) -> None:
+        """Execute pre-planned logoff events for sessions ending this hour."""
+        # Build user/system lookup for logoff emission
+        user_map = {u.username: u for u in users}
+        for (_system_hostname, logon_id), offset in planned_logoffs.items():
+            # Find the session to get username and logon_type
+            session = self.state_manager.get_session(logon_id)
+            if not session:
+                continue
+            user = user_map.get(session.username)
+            if not user:
+                continue
+
+            # Resolve system for this session
+            system = None
+            if user.primary_system:
+                systems = [
+                    s
+                    for s in self.scenario.environment.systems
+                    if s.hostname == user.primary_system
+                ]
+                if systems:
+                    system = systems[0]
+            if not system:
+                assigned = [
+                    s for s in self.scenario.environment.systems if s.assigned_user == user.username
+                ]
+                system = assigned[0] if assigned else self.scenario.environment.systems[0]
+
+            logoff_time = current_hour + timedelta(seconds=offset)
+            self.state_manager.set_current_time(logoff_time)
+            self.activity_generator.generate_logoff(
+                user=user,
+                system=system,
+                time=logoff_time,
+                logon_id=session.logon_id,
+                logon_type=session.logon_type,
+            )
 
     def _barrier_flush_all_emitters(self) -> None:
         """Flush all emitters and wait for completion (hour-level barrier).
@@ -1944,6 +1976,8 @@ class BaselineMixin:
         rng: Any,
         os_cat: str,
         sys_pids: dict[str, int] | None = None,
+        local_dt: Any = None,
+        planned_logoffs: dict[tuple[str, str], float] | None = None,
     ) -> None:
         """Generate role-based and persona-based network connections from traffic profiles.
 
@@ -1965,8 +1999,10 @@ class BaselineMixin:
         if role_conns:
             weights = [c.get("weight", 1) for c in role_conns]
             # Scale connection count by time-of-day (fewer at night)
-            dow = current_hour.weekday()
-            hour = current_hour.hour
+            # Use scenario-local time for business-hour gating, not UTC
+            _local = local_dt if local_dt is not None else current_hour
+            dow = _local.weekday()
+            hour = _local.hour
             is_business = 0 <= dow <= 4 and 7 <= hour <= 19
             base_count = rng.randint(8, 20) if is_business else rng.randint(2, 6)
 
@@ -2043,6 +2079,10 @@ class BaselineMixin:
             _history_key = (system.hostname, session.username)
             _proc_history = self.activity_generator._user_process_history.get(_history_key, [])
 
+            # Bound persona timestamps by planned logoff time (if any)
+            _logoff_key = (system.hostname, session.logon_id)
+            _max_offset = planned_logoffs.get(_logoff_key, 3599) if planned_logoffs else 3599
+
             for _ in range(num_persona):
                 conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
                 dst_ip, hostname = self._resolve_dest_role(
@@ -2055,20 +2095,22 @@ class BaselineMixin:
                 if not dst_ip:
                     continue
 
+                # Compute timestamp first (needed for PID start_time check)
+                offset = rng.uniform(session_start_sec, _max_offset)
+                ts = current_hour + timedelta(seconds=offset)
+
                 # Attribute connection to a compatible live user process
+                # that started before this connection timestamp
                 service = conn.get("service", "")
                 compatible_exes = _svc_to_exes.get(service, [])
                 persona_pid = -1
                 for pid, name in reversed(_proc_history):
                     exe = name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
                     if exe in compatible_exes:
-                        # Verify process is still running
-                        if self.state_manager.get_process(system.hostname, pid):
+                        proc = self.state_manager.get_process(system.hostname, pid)
+                        if proc and proc.start_time <= ts:
                             persona_pid = pid
                             break
-
-                offset = rng.uniform(session_start_sec, 3599)
-                ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
@@ -2086,7 +2128,11 @@ class BaselineMixin:
                     pid=persona_pid,
                 )
 
-    def _generate_system_traffic(self, current_hour: datetime) -> None:
+    def _generate_system_traffic(
+        self,
+        current_hour: datetime,
+        planned_logoffs: dict[tuple[str, str], float] | None = None,
+    ) -> None:
         """Generate system-initiated background traffic for all systems.
 
         Called once per hour. Generates DNS lookups, NTP syncs, SMB browsing,
@@ -2098,6 +2144,13 @@ class BaselineMixin:
         from evidenceforge.generation.activity import _get_os_category
 
         rng = _get_rng()
+
+        # Compute scenario-local time for business-hour gating
+        if hasattr(self, "_scenario_tz") and self._scenario_tz:
+            local_dt = current_hour.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+        else:
+            local_dt = current_hour
+
         dns_ips = self._infra_ips.get("dns", ["10.0.0.1"])
         if isinstance(dns_ips, str):
             dns_ips = [dns_ips]
@@ -2288,7 +2341,15 @@ class BaselineMixin:
 
             # Profile-driven traffic: role-based system connections + persona user connections
             # Replaces former HTTPS background + database traffic blocks
-            self._generate_profile_traffic(current_hour, system, rng, os_cat, sys_pids)
+            self._generate_profile_traffic(
+                current_hour,
+                system,
+                rng,
+                os_cat,
+                sys_pids,
+                local_dt=local_dt,
+                planned_logoffs=planned_logoffs,
+            )
 
             # Independent system service processes (not tied to user activity)
             # Windows hosts spawn 3-8 service processes per hour
