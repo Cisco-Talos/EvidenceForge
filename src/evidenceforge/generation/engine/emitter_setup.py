@@ -204,6 +204,17 @@ class EmitterSetupMixin:
         forward_proxy in the scenario. With multiple proxies, internal segments
         route through the first proxy found, which may chain to another.
         """
+        if hasattr(self, "world_model"):
+            self._proxy_routes = dict(self.world_model.proxy_routes)
+            if self._proxy_routes:
+                proxy = next(iter(self._proxy_routes.values()))[0]
+                logger.info(
+                    "Proxy routing: %d systems -> %s",
+                    len(self._proxy_routes),
+                    proxy.hostname,
+                )
+            return
+
         proxies = [
             s for s in self.scenario.environment.systems if "forward_proxy" in (s.roles or [])
         ]
@@ -381,6 +392,9 @@ class EmitterSetupMixin:
         Scans system hostnames/types/services for role hints and
         maps them to IPs. Falls back to defaults for missing roles.
         """
+        if hasattr(self, "world_model"):
+            return self.world_model.to_infrastructure_ips()
+
         infra: dict[str, str | list] = {
             "dns": [],
             "ntp": ["129.6.15.28", "132.163.97.1"],
@@ -429,6 +443,12 @@ class EmitterSetupMixin:
 
     def _build_service_defaults(self) -> dict[str, list[str]]:
         """Build per-system service lists, auto-populating defaults if empty."""
+        if hasattr(self, "world_model"):
+            return {
+                hostname: list(services)
+                for hostname, services in self.world_model.service_defaults_by_host.items()
+            }
+
         from evidenceforge.generation.activity import _get_os_category
 
         defaults: dict[str, list[str]] = {}

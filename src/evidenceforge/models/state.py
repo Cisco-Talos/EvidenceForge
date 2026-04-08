@@ -62,6 +62,9 @@ class ActiveSession:
     explorer_pid: int | None = None
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
+    source_port: int = 0
+    session_kind: str = "logon"
+    transport_pid: int | None = None
     ecar_object_id: str = ""
 
 
@@ -91,6 +94,7 @@ class RunningProcess:
     system: str
     start_time: datetime
     integrity_level: str
+    logon_id: str = ""
     ecar_object_id: str = ""
     story_created: bool = False
 
@@ -110,10 +114,11 @@ class OpenConnection:
         dst_ip: Destination IP address
         dst_port: Destination port number
         protocol: Network protocol ("tcp", "udp", etc.)
-        state: Connection state ("established", "closed", "time_wait", etc.)
-        start_time: When the connection opened
-        bytes_sent: Bytes sent (cumulative)
-        bytes_received: Bytes received (cumulative)
+    state: Connection state ("established", "closed", "time_wait", etc.)
+    start_time: When the connection opened
+    close_time: When the connection closed (if known)
+    bytes_sent: Bytes sent (cumulative)
+    bytes_received: Bytes received (cumulative)
     """
 
     conn_id: str
@@ -125,6 +130,11 @@ class OpenConnection:
     protocol: str
     state: str
     start_time: datetime
+    source_system: str = ""
+    source_hostname: str = ""
+    hostname: str = ""
+    initiating_pid: int = -1
+    close_time: datetime | None = None
     bytes_sent: int = 0
     bytes_received: int = 0
 

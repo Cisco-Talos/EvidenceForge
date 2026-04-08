@@ -75,6 +75,7 @@ class StateManager:
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
+        self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._connection_id_counter = 0
         self._lock = RLock()  # Reentrant lock for thread safety
 
@@ -91,6 +92,9 @@ class StateManager:
         system: str,
         logon_type: int,
         source_ip: str,
+        source_port: int = 0,
+        session_kind: str = "logon",
+        transport_pid: int | None = None,
     ) -> str:
         """Create a new active session.
 
@@ -134,6 +138,9 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=self.state.current_time,
                 source_ip=source_ip,
+                source_port=source_port,
+                session_kind=session_kind,
+                transport_pid=transport_pid,
                 ecar_object_id=str(uuid.uuid4()),
             )
 
@@ -177,6 +184,66 @@ class StateManager:
         with self._lock:
             return [s for s in self.state.active_sessions.values() if s.system == system]
 
+    def register_session(
+        self,
+        logon_id: str,
+        username: str,
+        system: str,
+        logon_type: int,
+        source_ip: str,
+        start_time: datetime,
+        source_port: int = 0,
+        session_kind: str = "logon",
+        transport_pid: int | None = None,
+    ) -> ActiveSession:
+        """Register a pre-existing session in state.
+
+        This is primarily used by compatibility paths where a mocked or
+        external generator returns a LogonID without recording the session
+        through ``create_session()``.
+        """
+        with self._lock:
+            existing = self.state.active_sessions.get(logon_id)
+            if existing is not None:
+                return existing
+
+            session = ActiveSession(
+                logon_id=logon_id,
+                username=username,
+                system=system,
+                logon_type=logon_type,
+                start_time=start_time,
+                source_ip=source_ip,
+                source_port=source_port,
+                session_kind=session_kind,
+                transport_pid=transport_pid,
+                ecar_object_id=str(uuid.uuid4()),
+            )
+            self.state.active_sessions[logon_id] = session
+            logger.debug("Registered external session %s for %s@%s", logon_id, username, system)
+            return session
+
+    def update_session_metadata(
+        self,
+        logon_id: str,
+        *,
+        source_port: int | None = None,
+        session_kind: str | None = None,
+        transport_pid: int | None = None,
+    ) -> bool:
+        """Update mutable metadata on an existing session."""
+        with self._lock:
+            session = self.state.active_sessions.get(logon_id)
+            if session is None:
+                return False
+            if source_port is not None:
+                session.source_port = source_port
+            if session_kind is not None:
+                session.session_kind = session_kind
+            if transport_pid is not None:
+                session.transport_pid = transport_pid
+            return True
+
     def end_session(self, logon_id: str) -> bool:
         """End an active session.
 
@@ -214,6 +281,7 @@ class StateManager:
         command_line: str,
         username: str,
         integrity_level: str,
+        logon_id: str = "",
     ) -> int:
         """Create a new running process.
 
@@ -247,37 +315,42 @@ class StateManager:
 
             # Allocate PID for this system — OS-aware allocation (Phase 6.0)
             if system not in self._pid_counters:
-                import random as _rng
+                from evidenceforge.utils.rng import _stable_seed
 
+                self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
+                pid_rng = self._pid_rngs[system]
                 # Detect OS from image path: backslash = Windows, forward slash = Linux
                 is_windows = "\\" in image
                 if is_windows:
                     # Windows: PIDs are multiples of 4, start in realistic range
-                    start = _rng.randint(2000, 6000)
+                    start = pid_rng.randint(2000, 6000)
                     start = start - (start % 4)  # Align to multiple of 4
                     self._pid_counters[system] = start
                     self._pid_os[system] = "windows"
                 else:
                     # Linux: PIDs increment by 1, start after boot processes
-                    self._pid_counters[system] = _rng.randint(500, 2000)
+                    self._pid_counters[system] = pid_rng.randint(500, 2000)
                     self._pid_os[system] = "linux"
 
             pid = self._pid_counters[system]
 
             # Increment with OS-aware gaps
-            import random as _rng
+            if system not in self._pid_rngs:
+                from evidenceforge.utils.rng import _stable_seed
 
+                self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
+            pid_rng = self._pid_rngs[system]
             if self._pid_os.get(system) == "windows":
                 # Windows: multiples of 4 with lognormal gap distribution.
                 # Lognormal produces mostly small gaps (4-20) with a heavy tail
                 # (occasionally 100-800+) simulating background process churn
                 # that consumes PIDs between our emitted events.
-                gap = max(1, int(_rng.lognormvariate(1.2, 0.8)))
+                gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
                 self._pid_counters[system] += 4 * gap
             else:
                 # Linux: lognormal with smaller parameters — mostly +1 with
                 # occasional larger jumps from background daemon activity.
-                gap = max(1, int(_rng.lognormvariate(0.5, 0.6)))
+                gap = max(1, int(pid_rng.lognormvariate(0.5, 0.6)))
                 self._pid_counters[system] += gap
 
             # Check for PID exhaustion — wrap around to a safe range,
@@ -305,6 +378,7 @@ class StateManager:
                 system=system,
                 start_time=self.state.current_time,
                 integrity_level=integrity_level,
+                logon_id=logon_id,
                 ecar_object_id=str(uuid.uuid4()),
             )
 
@@ -416,6 +490,11 @@ class StateManager:
         dst_ip: str,
         dst_port: int,
         protocol: str,
+        source_system: str = "",
+        source_hostname: str = "",
+        hostname: str = "",
+        initiating_pid: int = -1,
+        close_time: datetime | None = None,
     ) -> str:
         """Open a new network connection.
 
@@ -455,6 +534,11 @@ class StateManager:
                 protocol=protocol,
                 state="established",
                 start_time=self.state.current_time,
+                source_system=source_system,
+                source_hostname=source_hostname,
+                hostname=hostname,
+                initiating_pid=initiating_pid,
+                close_time=close_time,
                 bytes_sent=0,
                 bytes_received=0,
             )
@@ -722,9 +806,25 @@ class StateManager:
             elif event.event_type == "process_terminate" and event.process and event.src_host:
                 self.end_process(event.src_host.hostname, event.process.pid)
             elif event.event_type == "connection" and event.network:
-                if event.network.conn_id and (event.network.orig_bytes or event.network.resp_bytes):
-                    self.update_connection_bytes(
-                        event.network.conn_id,
-                        event.network.orig_bytes,
-                        event.network.resp_bytes,
-                    )
+                if event.network.conn_id:
+                    conn = self.state.open_connections.get(event.network.conn_id)
+                    if conn is not None:
+                        if event.network.orig_bytes is not None:
+                            conn.bytes_sent = event.network.orig_bytes
+                        if event.network.resp_bytes is not None:
+                            conn.bytes_received = event.network.resp_bytes
+                        conn.initiating_pid = event.network.initiating_pid
+                        if event.src_host is not None:
+                            conn.source_system = event.src_host.hostname
+                            conn.source_hostname = event.src_host.fqdn or event.src_host.hostname
+                        if event.http is not None and event.http.host:
+                            conn.hostname = event.http.host
+                        if event.ssl is not None and event.ssl.server_name:
+                            conn.hostname = event.ssl.server_name
+                        if event.network.duration is not None:
+                            conn.close_time = event.timestamp + timedelta(
+                                seconds=event.network.duration
+                            )
+                            conn.state = "closed"
+                        elif event.network.conn_state:
+                            conn.state = event.network.conn_state

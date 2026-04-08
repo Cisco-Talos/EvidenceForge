@@ -200,7 +200,7 @@ environment:
       full_name: string
       email: string
       persona: string        # Optional: Reference to persona definition; if omitted, user generates no activity
-      primary_system: string # Optional: Reference to system hostname
+      primary_system: string # Required in current implementation: reference to system hostname
       groups: list[string]   # List of group names
       enabled: boolean       # If false, user exists in environment but generates no activity
 
@@ -211,10 +211,12 @@ environment:
       type: string           # workstation|server|domain_controller
       assigned_user: string  # Optional, for workstations
       services: list[string] # Optional: Service names like "IIS", "SSH", "SQL Server" (not ports)
+      roles: list[string]    # Optional but strongly recommended for servers/proxies (drives world-model host capabilities)
                              # If omitted, auto-populated from OS type:
                              #   Windows: ["dns-client", "ntp-client", "smb", "windows-update"]
                              #   Linux: ["dns-client", "ntp-client", "syslog"]
-                             # Server roles auto-detected from hostname hints (e.g., "dc-*" → add "active-directory")
+                             # Roles and services feed the compiled world model used for realistic session routing,
+                             # baseline lateral movement, and infrastructure selection
                              # Explicit values override auto-population entirely (no merge)
 
   groups:
@@ -972,8 +974,8 @@ evidenceforge/
 - Log original vs adjusted time
 
 **User activity on unassigned system:**
-- If user has primary_system: Warn but allow
-- If system doesn't exist: Error
+- If user has no `primary_system` and no assigned workstation: Error
+- If user activity needs to occur on another host, model it explicitly through storyline events or remote-session behavior rather than relying on implicit placement
 
 **Process tree inconsistencies:**
 - Parent PID doesn't exist: Use reasonable default (explorer.exe, init)

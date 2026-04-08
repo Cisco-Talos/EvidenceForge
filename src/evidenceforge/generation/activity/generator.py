@@ -616,11 +616,15 @@ class ActivityGenerator:
         time: datetime,
         logon_type: int = 2,
         source_ip: str | None = None,
+        source_port: int | None = None,
+        emit_transport_syslog: bool = True,
+        logon_id: str | None = None,
     ) -> str:
         """Generate logon event across all applicable log formats.
 
-        Creates session in StateManager, builds a SecurityEvent, and dispatches
-        to matching emitters (Windows 4624 + optional 4672, syslog auth, eCAR).
+        Creates or reuses a session in StateManager, builds a SecurityEvent,
+        and dispatches to matching emitters (Windows 4624 + optional 4672,
+        syslog auth, eCAR).
 
         Args:
             user: User logging on
@@ -636,13 +640,36 @@ class ActivityGenerator:
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
 
-        # Phase 1: Allocate IDs from StateManager
-        logon_id = self.state_manager.create_session(
-            username=user.username,
-            system=system.hostname,
-            logon_type=logon_type,
-            source_ip=source_ip,
-        )
+        session_kind = {
+            3: "network",
+            10: "rdp",
+        }.get(logon_type, "interactive")
+
+        # Phase 1: Allocate or resolve IDs from StateManager
+        if logon_id is None:
+            logon_id = self.state_manager.create_session(
+                username=user.username,
+                system=system.hostname,
+                logon_type=logon_type,
+                source_ip=source_ip,
+                source_port=source_port or 0,
+                session_kind=session_kind,
+            )
+        else:
+            existing_session = self.state_manager.get_session(logon_id)
+            if existing_session is None:
+                self.state_manager.register_session(
+                    logon_id=logon_id,
+                    username=user.username,
+                    system=system.hostname,
+                    logon_type=logon_type,
+                    source_ip=source_ip,
+                    start_time=time,
+                    source_port=source_port or 0,
+                    session_kind=session_kind,
+                )
+            elif source_port is not None:
+                self.state_manager.update_session_metadata(logon_id, source_port=source_port)
 
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
@@ -681,10 +708,21 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts (sshd logon message)
-        if event.dst_host and event.dst_host.os_category == "linux":
+        if event.dst_host and event.dst_host.os_category == "linux" and emit_transport_syslog:
             from evidenceforge.events.contexts import SyslogContext
 
-            sshd_pid = 1000 + (hash(logon_id) % 59000)
+            session = self.state_manager.get_session(logon_id)
+            effective_source_port = source_port or (session.source_port if session else 0)
+            sshd_pid = (
+                session.transport_pid
+                if session and session.transport_pid is not None
+                else 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
+            )
+            self.state_manager.update_session_metadata(
+                logon_id,
+                source_port=effective_source_port,
+                transport_pid=sshd_pid,
+            )
             event.syslog = SyslogContext(
                 app_name="sshd",
                 pid=sshd_pid,
@@ -692,7 +730,7 @@ class ActivityGenerator:
                 severity=6,
                 message=(
                     f"Accepted password for {user.username} from {source_ip} "
-                    f"port {_ephemeral_port(_get_rng(), 'linux')} ssh2"
+                    f"port {effective_source_port or _ephemeral_port(_get_rng(), 'linux')} ssh2"
                 ),
             )
 
@@ -735,6 +773,7 @@ class ActivityGenerator:
                             "explorer.exe",
                             user.username,
                             "Medium",
+                            logon_id=logon_id,
                         )
                         session.explorer_pid = explorer_pid
                         session.process_tree_root = explorer_pid
@@ -1009,13 +1048,25 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            sshd_pid = 1000 + (hash(logon_id) % 59000)
+            sshd_pid = (
+                session.transport_pid
+                if session and session.transport_pid is not None
+                else 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
+            )
+            source_port = session.source_port if session else 0
             event.syslog = SyslogContext(
                 app_name="sshd",
                 pid=sshd_pid,
                 facility=10,
                 severity=6,
-                message=f"pam_unix(sshd:session): session closed for user {user.username}",
+                message=(
+                    f"pam_unix(sshd:session): session closed for user {user.username}"
+                    if source_port == 0
+                    else (
+                        f"Received disconnect from {session.source_ip} port {source_port}:11: "
+                        "disconnected by user"
+                    )
+                ),
             )
 
         # Phase 3: Dispatch to matching emitters
@@ -1068,6 +1119,7 @@ class ActivityGenerator:
             command_line=command_line,
             username=user.username,
             integrity_level="Medium",
+            logon_id=logon_id,
         )
 
         # Phase 2: Build SecurityEvent
@@ -1342,9 +1394,28 @@ class ActivityGenerator:
                 _src_os = _get_os_category(self._ip_to_system[src_ip].os)
             src_port = _ephemeral_port(_get_rng(), _src_os)
 
+        state_source_system = source_system.hostname if source_system else ""
+        state_source_hostname = ""
+        if source_system:
+            state_source_hostname = self._build_host_context(source_system).fqdn
+        elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
+            _src_system = self._ip_to_system[src_ip]
+            state_source_system = _src_system.hostname
+            state_source_hostname = self._build_host_context(_src_system).fqdn
+        close_time = time + timedelta(seconds=duration) if duration is not None else None
+
         # Phase 1: Allocate IDs from StateManager
         conn_id = self.state_manager.open_connection(
-            src_ip=src_ip, src_port=src_port, dst_ip=dst_ip, dst_port=dst_port, protocol=proto
+            src_ip=src_ip,
+            src_port=src_port,
+            dst_ip=dst_ip,
+            dst_port=dst_port,
+            protocol=proto,
+            source_system=state_source_system,
+            source_hostname=state_source_hostname,
+            hostname=hostname or "",
+            initiating_pid=pid,
+            close_time=close_time,
         )
         uid = self.state_manager.get_zeek_uid(conn_id)
         if orig_bytes is not None and resp_bytes is not None:
@@ -1872,6 +1943,11 @@ class ActivityGenerator:
         target_system: System,
         time: datetime,
         source_ip: str,
+        source_system: Optional["System"] = None,
+        source_port: int | None = None,
+        sshd_pid: int | None = None,
+        logon_id: str = "",
+        session_obj_id: str = "",
     ) -> str:
         """Generate an SSH session as a compound event (Zeek conn + syslog auth + eCAR).
 
@@ -1894,12 +1970,32 @@ class ActivityGenerator:
 
         rng = _get_rng()
         _src_os = "windows"
-        if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+        if source_system is not None:
+            _src_os = _get_os_category(source_system.os)
+        elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
             _src_os = _get_os_category(self._ip_to_system[source_ip].os)
-        src_port = _ephemeral_port(rng, _src_os)
+        src_port = source_port or _ephemeral_port(rng, _src_os)
         duration = rng.uniform(30.0, 3600.0)
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
+
+        src_host_ctx = None
+        if source_system is not None:
+            src_host_ctx = self._build_host_context(source_system)
+        elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
+            src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
+
+        if sshd_pid is None:
+            sshd_key = logon_id or f"{user.username}_{target_system.hostname}_{time.isoformat()}"
+            sshd_pid = 1000 + (_stable_seed(f"sshd_pid_{sshd_key}") % 59000)
+        if logon_id and not session_obj_id:
+            session_obj_id = self.state_manager.get_session_object_id(logon_id)
+            self.state_manager.update_session_metadata(
+                logon_id,
+                source_port=src_port,
+                session_kind="ssh",
+                transport_pid=sshd_pid,
+            )
 
         # Allocate connection in StateManager
         conn_id = self.state_manager.open_connection(
@@ -1908,17 +2004,16 @@ class ActivityGenerator:
             dst_ip=target_system.ip,
             dst_port=22,
             protocol="tcp",
+            source_system=src_host_ctx.hostname if src_host_ctx else "",
+            source_hostname=src_host_ctx.fqdn if src_host_ctx else "",
+            hostname=self._build_host_context(target_system).fqdn,
+            close_time=time + timedelta(seconds=duration),
         )
         uid = self.state_manager.get_zeek_uid(conn_id)
         self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
         # Emit DNS for SSH target
         self._emit_dns_lookup(source_ip, target_system.ip, time)
-
-        # Resolve source host context (SSH client)
-        src_host_ctx = None
-        if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
-            src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
         # Build compound SSH session event
         event = SecurityEvent(
@@ -1930,6 +2025,8 @@ class ActivityGenerator:
                 username=user.username,
                 source_ip=source_ip,
                 source_port=src_port,
+                logon_id=logon_id,
+                logon_type=10,
             ),
             network=NetworkContext(
                 src_ip=source_ip,
@@ -1951,13 +2048,13 @@ class ActivityGenerator:
                 local_resp=_is_private_ip(target_system.ip),
                 ip_proto=6,
             ),
+            edr=EdrContext(object_id=session_obj_id),
         )
 
         # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            sshd_pid = 1000 + (hash(f"{user.username}{time}") % 59000)
             # Session ID: monotonic + unique per host. Derived from epoch seconds
             # for call-order independence, with collision handling for same-second sessions.
             hostname = target_system.hostname
@@ -2013,7 +2110,7 @@ class ActivityGenerator:
                 src_host=event.dst_host,
                 syslog=SyslogContext(
                     app_name="systemd-logind",
-                    pid=1000 + (hash("logind") % 59000),
+                    pid=1000 + (_stable_seed("logind_pid") % 59000),
                     facility=10,
                     severity=6,
                     message=f"New session {session_id} of user {user.username}.",
@@ -3237,6 +3334,8 @@ class ActivityGenerator:
         time: datetime,
         source_ip: str,
         source_system: Optional["System"] = None,
+        source_pid: int = -1,
+        logon_id: str | None = None,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
@@ -3254,12 +3353,14 @@ class ActivityGenerator:
             dst_ip=target_system.ip,
             time=time,
             dst_port=3389,
+            proto="tcp",
             service="rdp",
             duration=rng.uniform(60.0, 3600.0),
             orig_bytes=rng.randint(50000, 500000),
             resp_bytes=rng.randint(100000, 2000000),
             emit_dns=True,
             source_system=source_system,
+            pid=source_pid,
         )
 
         # 2. Host logon on target (4624 type 10 + 4672 if elevated)
@@ -3270,6 +3371,7 @@ class ActivityGenerator:
             time=logon_time,
             logon_type=10,
             source_ip=source_ip,
+            logon_id=logon_id,
         )
 
         return uid
@@ -4442,6 +4544,7 @@ class ActivityGenerator:
             command_line=cmd_line,
             username=user.username,
             integrity_level="System" if user.username == "SYSTEM" else "Medium",
+            logon_id=logon_id,
         )
 
         # Determine if this is a pre-existing process (no creation event)

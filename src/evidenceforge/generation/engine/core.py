@@ -41,6 +41,7 @@ from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import parse_duration, resolve_time_window
@@ -303,6 +304,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._netbios_domain = self._ad_domain.split(".")[0].upper() if self._ad_domain else "CORP"
         self.activity_generator._ad_domain = self._ad_domain
         self.activity_generator._netbios_domain = self._netbios_domain
+        self.world_model = WorldModel(self.scenario, self._ad_domain)
+        self.activity_generator._world_model = self.world_model
+        self.activity_generator._ip_to_system = dict(self.world_model.systems_by_ip)
 
         # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
         self._infra_ips = self._detect_infrastructure_ips()
@@ -314,9 +318,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._kernel_boot_uptimes: dict[str, float] = {}
         self._audit_serials: dict[str, int] = {}  # per-host monotonic audit serial
         for system in self.scenario.environment.systems:
-            boot_days = (hash(system.hostname) % 28) + 3  # 3-30 days
+            boot_days = (_stable_seed(f"boot_days_{system.hostname}") % 28) + 3  # 3-30 days
             self._kernel_boot_uptimes[system.hostname] = boot_days * 86400.0
-            self._audit_serials[system.hostname] = (hash(system.hostname) % 5000) + 1000
+            self._audit_serials[system.hostname] = (
+                _stable_seed(f"audit_serial_{system.hostname}") % 5000
+            ) + 1000
 
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
@@ -351,6 +357,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._proxy_routes: dict[str, list] = {}
         self._build_proxy_routes()
         self.activity_generator._proxy_routes = self._proxy_routes
+        self.world_planner = WorldPlanner(
+            world_model=self.world_model,
+            state_manager=self.state_manager,
+            activity_generator=self.activity_generator,
+        )
 
         logger.info("Initialization complete")
 

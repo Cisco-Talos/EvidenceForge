@@ -39,6 +39,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class SysmonEventEmitter(LogEmitter):
@@ -456,7 +457,9 @@ class SysmonEventEmitter(LogEmitter):
             "User": user,
             "LogonGuid": self._generate_process_guid(
                 host.hostname,
-                int(logon_id, 16) if logon_id.startswith("0x") else hash(logon_id) & 0xFFFFFFFF,
+                int(logon_id, 16)
+                if logon_id.startswith("0x")
+                else _stable_seed(f"sysmon_logon_{logon_id}") & 0xFFFFFFFF,
                 event.timestamp,
             ),
             "LogonId": logon_id,

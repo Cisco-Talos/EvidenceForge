@@ -75,6 +75,8 @@ users:
     primary_system: WS-01      # Required: reference to system hostname
 ```
 
+`primary_system` is operationally important, not just descriptive. The compiled world model uses it to place the user's interactive activity, choose realistic remote-admin source hosts, and decide when server activity should be modeled as SSH/RDP/network access instead of a local console session.
+
 ### Systems
 
 ```yaml
@@ -88,6 +90,8 @@ systems:
     roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, mail_server
 ```
 
+`roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
+
 ### System Roles
 
 The `roles` field declares a system's function in the network. The engine uses roles for traffic routing decisions:
@@ -96,6 +100,8 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
 - `dns_server` — DNS resolution target
 - `mail_server` — mail relay/server
+
+For server and infrastructure hosts, pair `roles` with realistic `services` whenever possible. `roles` tell the engine what the host is for; `services` help the world model infer concrete protocols and destinations (for example, PostgreSQL vs MSSQL, web stack vs proxy stack, SSH-capable Linux admin targets, and so on).
 
 ### Network Segment Exposure
 
@@ -381,6 +387,8 @@ The generation engine automatically provides several layers of realism in baseli
 **Stale account evidence:** Stale accounts defined in `environment.stale_accounts` generate not just failed logons but also Kerberos pre-auth failures (4771, status 0x12) on DCs, scheduled task failures (batch logon type 4), and service startup failures (service logon type 5, first hour only).
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
+
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 

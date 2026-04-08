@@ -713,7 +713,7 @@ class BaselineMixin:
             """Helper: emit a connection with hash-based periodic offset."""
             # Deterministic phase per (pattern, src, dst) triple for reproducibility
             phase_seed = f"lat_{pattern_key}_{src_sys.hostname}_{dst_sys.hostname}_{port}"
-            phase = hash(phase_seed) % 3600
+            phase = _stable_seed(phase_seed) % 3600
             jitter = rng.gauss(0, 60)  # ~1min jitter
             offset = max(0, min(3599, phase + jitter))
             ts = current_hour + timedelta(seconds=offset)
@@ -965,6 +965,10 @@ class BaselineMixin:
         this specific system, creates a logon with an appropriate type
         (interactive for workstations, network/RDP for servers).
         """
+        if hasattr(self, "world_planner"):
+            session = self.world_planner.ensure_user_session(user, system, time, rng)
+            return session.logon_id
+
         sessions = self.state_manager.get_sessions_for_user(user.username)
         session_on_system = next((s for s in sessions if s.system == system.hostname), None)
         if session_on_system:
@@ -972,15 +976,21 @@ class BaselineMixin:
 
         logon_time = time - timedelta(seconds=rng.randint(1, 5))
         self.state_manager.set_current_time(logon_time)
-
         sys_type = (system.type or "workstation").lower()
-        if sys_type in ("server", "domain_controller"):
-            logon_type = rng.choices([3, 10], weights=[70, 30], k=1)[0]
-        else:
-            logon_type = 2  # Interactive
-
+        logon_type = (
+            rng.choices([3, 10], weights=[70, 30], k=1)[0]
+            if sys_type
+            in (
+                "server",
+                "domain_controller",
+            )
+            else 2
+        )
         return self.activity_generator.generate_logon(
-            user=user, system=system, time=logon_time, logon_type=logon_type
+            user=user,
+            system=system,
+            time=logon_time,
+            logon_type=logon_type,
         )
 
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
@@ -1253,8 +1263,18 @@ class BaselineMixin:
                     if not actor:
                         continue
 
-                    sessions = self.state_manager.get_sessions_for_user(proc.username)
-                    logon_id = sessions[0].logon_id if sessions else "0x0"
+                    logon_id = proc.logon_id
+                    if not logon_id:
+                        sessions = self.state_manager.get_sessions_for_user(proc.username)
+                        session = next(
+                            (
+                                candidate
+                                for candidate in sessions
+                                if candidate.system == system.hostname
+                            ),
+                            None,
+                        )
+                        logon_id = session.logon_id if session else "0x0"
 
                     term_offset = rng.uniform(0, 3599)
                     term_time = current_hour + timedelta(seconds=term_offset)
@@ -1792,7 +1812,9 @@ class BaselineMixin:
     def _generate_user_activity(self, user: User, event_time: datetime) -> None:
         """Generate activity for user at specified time."""
         rng = _get_rng()
-        if user.primary_system:
+        if hasattr(self, "world_model"):
+            system = self.world_model.pick_activity_system(user, rng)
+        elif user.primary_system:
             systems = [
                 s for s in self.scenario.environment.systems if s.hostname == user.primary_system
             ]
@@ -1827,25 +1849,10 @@ class BaselineMixin:
         sessions = self.state_manager.get_sessions_for_user(user.username)
         has_session_on_system = any(s.system == system.hostname for s in sessions)
         if not has_session_on_system and activities:
-            logon_time = event_time - timedelta(seconds=rng.uniform(1.0, 5.0))
-            self.state_manager.set_current_time(logon_time)
-
-            # Pick logon type based on context: primary system → interactive,
-            # server → network/RDP, non-primary workstation → interactive
-            sys_type = (system.type or "workstation").lower()
-            if system.hostname == user.primary_system:
-                logon_type = 2  # Interactive — user at their own desk
-            elif sys_type in ("server", "domain_controller"):
-                logon_type = rng.choices([3, 10], weights=[70, 30], k=1)[0]
+            if hasattr(self, "world_planner"):
+                self.world_planner.ensure_user_session(user, system, event_time, rng)
             else:
-                logon_type = 2  # Interactive — walked up to another workstation
-
-            self.activity_generator.generate_logon(
-                user=user,
-                system=system,
-                time=logon_time,
-                logon_type=logon_type,
-            )
+                self._ensure_session_on_system(user, system, event_time, rng)
 
         for activity_type in activities:
             jitter = timedelta(seconds=rng.randint(0, 55))
@@ -1862,6 +1869,9 @@ class BaselineMixin:
         server role (determined from services and hostname). Workstations
         return only their assigned user. Results are cached per hostname.
         """
+        if hasattr(self, "world_model"):
+            return self.world_model.get_remote_admin_users(system)
+
         if not hasattr(self, "_ssh_user_roster_cache"):
             self._ssh_user_roster_cache: dict[str, list] = {}
         if system.hostname in self._ssh_user_roster_cache:
@@ -1930,6 +1940,20 @@ class BaselineMixin:
 
         Returns (None, None) if no suitable target exists in the scenario.
         """
+        if hasattr(self, "world_model"):
+            src_system = next(
+                (system for system in self.scenario.environment.systems if system.ip == src_ip),
+                None,
+            )
+            if src_system is not None:
+                return self.world_model.resolve_destination(
+                    dest_role=dest_role,
+                    src_system=src_system,
+                    rng=rng,
+                    os_category=os_cat,
+                    dns_tags=dns_tags,
+                )
+
         if dest_role == "_external":
             from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
 
@@ -2067,12 +2091,6 @@ class BaselineMixin:
             # Clamp timestamps to session lifetime within this hour
             session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
 
-            from evidenceforge.generation.activity.process_network import get_service_to_exes
-
-            _svc_to_exes = get_service_to_exes()
-            _history_key = (system.hostname, session.username)
-            _proc_history = self.activity_generator._user_process_history.get(_history_key, [])
-
             # Bound persona timestamps by planned logoff time (if any)
             _logoff_key = (system.hostname, session.logon_id)
             _max_offset = planned_logoffs.get(_logoff_key, 3599) if planned_logoffs else 3599
@@ -2093,41 +2111,15 @@ class BaselineMixin:
                 offset = rng.uniform(session_start_sec, _max_offset)
                 ts = current_hour + timedelta(seconds=offset)
 
-                # Attribute connection to a compatible live user process
-                # that started before this connection timestamp
-                service = conn.get("service", "")
-                compatible_exes = _svc_to_exes.get(service, [])
                 persona_pid = -1
-                for pid, name in reversed(_proc_history):
-                    exe = name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-                    if exe in compatible_exes:
-                        proc = self.state_manager.get_process(system.hostname, pid)
-                        if proc and proc.start_time <= ts:
-                            persona_pid = pid
-                            break
-                if persona_pid == -1 and compatible_exes and user_obj:
-                    # Spawn a short-lived client process for this connection
-                    target_exe = compatible_exes[0]
-                    if os_cat == "windows":
-                        image = f"C:\\Windows\\System32\\{target_exe}"
-                    else:
-                        image = f"/usr/bin/{target_exe}"
-                    proc_time = ts - timedelta(seconds=rng.uniform(0.5, 3.0))
-                    self.state_manager.set_current_time(proc_time)
-                    parent_pid = self.activity_generator._resolve_parent(
-                        system, user_obj, proc_time, session.logon_id, image
-                    )
-                    persona_pid = self.activity_generator.generate_process(
-                        user_obj,
-                        system,
-                        proc_time,
-                        session.logon_id,
-                        image,
-                        target_exe,
-                        parent_pid=parent_pid,
-                    )
-                    self.activity_generator._record_user_process(
-                        system, user_obj, persona_pid, image
+                if user_obj and conn.get("service"):
+                    persona_pid = self.world_planner.ensure_connection_process(
+                        user=user_obj,
+                        system=system,
+                        session=session,
+                        time=ts,
+                        service=conn["service"],
+                        rng=rng,
                     )
 
                 self.state_manager.set_current_time(ts)
@@ -2194,8 +2186,8 @@ class BaselineMixin:
 
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
-                dns_interval = 600 + (hash(f"dns_iv_{system.hostname}") % 1200)
-                dns_phase = hash(f"dns_ph_{system.hostname}") % dns_interval
+                dns_interval = 600 + (_stable_seed(f"dns_iv_{system.hostname}") % 1200)
+                dns_phase = _stable_seed(f"dns_ph_{system.hostname}") % dns_interval
                 hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = dns_phase
                 while t < hour_start_sec:
@@ -2228,7 +2220,7 @@ class BaselineMixin:
 
             # NTP sync: 1 per hour
             if "ntp-client" in services:
-                offset = (hash(system.hostname) % 3600) + rng.gauss(0, 5)
+                offset = (_stable_seed(f"ntp_phase_{system.hostname}") % 3600) + rng.gauss(0, 5)
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
@@ -2283,8 +2275,8 @@ class BaselineMixin:
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
 
             if "smb-client" in services and os_cat == "windows" and dc_targets:
-                smb_interval = 1200 + (hash(f"smb_iv_{system.hostname}") % 1800)
-                smb_phase = hash(f"smb_ph_{system.hostname}") % smb_interval
+                smb_interval = 1200 + (_stable_seed(f"smb_iv_{system.hostname}") % 1800)
+                smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
                 hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = smb_phase
                 while t < hour_start_sec:
@@ -2422,7 +2414,9 @@ class BaselineMixin:
                             "/usr/lib/update-notifier/apt-check --human-readable",
                         ),
                     ]
-                task_name, task_cmd = linux_tasks[hash(system.hostname) % len(linux_tasks)]
+                task_name, task_cmd = linux_tasks[
+                    _stable_seed(f"linux_task_{system.hostname}") % len(linux_tasks)
+                ]
 
             # Randomize scheduled task count per hour (2-5) with per-host variation
             num_tasks = rng.randint(2, 5)
@@ -2515,66 +2509,45 @@ class BaselineMixin:
             # SSH: connections to Linux servers
             sys_type = (system.type or "workstation").lower()
             if os_cat == "linux" and sys_type == "server":
-                ssh_sources = [
-                    s.ip for s in self.scenario.environment.systems if s.ip != system.ip
-                ][:10]
-                if ssh_sources:
+                roster = self._get_server_ssh_users(system)
+                if roster:
+                    from evidenceforge.generation.activity.bash_commands import pick_bash_command
+
                     num_ssh = rng.randint(1, 3)
                     for _ in range(num_ssh):
-                        src_ip = rng.choice(ssh_sources)
+                        ssh_user = rng.choice(roster)
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
-                        # Resolve source system for WFP 5156 emission
-                        src_sys_obj = next(
-                            (s for s in self.scenario.environment.systems if s.ip == src_ip),
-                            None,
-                        )
-                        self.activity_generator.generate_connection(
-                            src_ip=src_ip,
-                            dst_ip=system.ip,
+                        self.world_planner.bootstrap_user_session(
+                            user=ssh_user,
+                            target_system=system,
                             time=ts,
-                            dst_port=22,
-                            proto="tcp",
-                            service="ssh",
-                            duration=rng.uniform(30.0, 3600.0),
-                            orig_bytes=rng.randint(2000, 50000),
-                            resp_bytes=rng.randint(5000, 200000),
-                            pid=_svc_pid("sshd"),
-                            source_system=src_sys_obj,
+                            rng=rng,
+                            session_kind="ssh",
+                            allow_existing=True,
                         )
 
-                        # Generate bash history for the admin who SSH'd in.
-                        # User roster is role-based: sysadmins on all servers,
-                        # role-specific users on matching servers.
-                        from evidenceforge.generation.activity.bash_commands import (
-                            pick_bash_command,
-                        )
-
-                        roster = self._get_server_ssh_users(system)
-                        if roster:
-                            ssh_user = rng.choice(roster)
-                            # Vary command count by persona
-                            persona_lower = (ssh_user.persona or "").lower()
-                            if persona_lower == "sysadmin":
-                                n_cmds = rng.randint(3, 8)
-                            elif persona_lower == "developer":
-                                n_cmds = rng.randint(2, 6)
-                            else:
-                                n_cmds = rng.randint(1, 4)
-                            for cmd_i in range(n_cmds):
-                                cmd_offset = rng.randint(30, 600)
-                                cmd_time = ts + timedelta(seconds=cmd_offset + cmd_i * 5)
-                                cmd = pick_bash_command(
-                                    rng,
-                                    ssh_user.persona or "",
-                                    system.hostname,
-                                    system.services,
-                                    username=ssh_user.username,
-                                )
-                                self.activity_generator.generate_bash_command(
-                                    ssh_user, system, cmd_time, cmd
-                                )
+                        persona_lower = (ssh_user.persona or "").lower()
+                        if persona_lower == "sysadmin":
+                            n_cmds = rng.randint(3, 8)
+                        elif persona_lower == "developer":
+                            n_cmds = rng.randint(2, 6)
+                        else:
+                            n_cmds = rng.randint(1, 4)
+                        for cmd_i in range(n_cmds):
+                            cmd_offset = rng.randint(30, 600)
+                            cmd_time = ts + timedelta(seconds=cmd_offset + cmd_i * 5)
+                            cmd = pick_bash_command(
+                                rng,
+                                ssh_user.persona or "",
+                                system.hostname,
+                                system.services,
+                                username=ssh_user.username,
+                            )
+                            self.activity_generator.generate_bash_command(
+                                ssh_user, system, cmd_time, cmd
+                            )
 
         # RDP: IT admin connections to Windows servers/DCs
         for system in self.scenario.environment.systems:
@@ -2587,47 +2560,29 @@ class BaselineMixin:
             if rng.random() > 0.60:
                 continue
 
-            # Source is a workstation (IT admin) or another server
-            rdp_sources = [
-                s
+            if not any(
+                s.ip != system.ip and _get_os_category(s.os) == "windows"
                 for s in self.scenario.environment.systems
-                if s.ip != system.ip and _get_os_category(s.os) == "windows"
-            ][:10]
-            if not rdp_sources:
+            ):
                 continue
 
             num_rdp = rng.randint(1, 3)
+            roster = self._get_server_ssh_users(system)
+            if not roster:
+                continue
             for _ in range(num_rdp):
-                src_sys = rng.choice(rdp_sources)
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
-
-                # Seed short-lived mstsc.exe on the source workstation
-                src_pids = self._system_pids.get(src_sys.hostname, {})
-                explorer_pid = src_pids.get("explorer", 4)
-                mstsc_pid = self.state_manager.create_process(
-                    system=src_sys.hostname,
-                    parent_pid=explorer_pid,
-                    image=r"C:\Windows\System32\mstsc.exe",
-                    command_line=f"mstsc.exe /v:{system.hostname}",
-                    username="SYSTEM",
-                    integrity_level="Medium",
-                )
-                self.activity_generator.generate_connection(
-                    src_ip=src_sys.ip,
-                    dst_ip=system.ip,
+                rdp_user = rng.choice(roster)
+                self.world_planner.bootstrap_user_session(
+                    user=rdp_user,
+                    target_system=system,
                     time=ts,
-                    dst_port=3389,
-                    proto="tcp",
-                    service="rdp",
-                    duration=rng.uniform(60.0, 1800.0),
-                    orig_bytes=rng.randint(50000, 500000),
-                    resp_bytes=rng.randint(100000, 2000000),
-                    source_system=src_sys,
-                    pid=mstsc_pid,
+                    rng=rng,
+                    session_kind="rdp",
+                    allow_existing=True,
                 )
-                self.state_manager.end_process(src_sys.hostname, mstsc_pid)
 
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
