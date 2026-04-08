@@ -188,20 +188,28 @@ Use `_stable_seed(f"context_{scope_key}")` for all deterministic derivation. **N
 
 ## Key Architecture Patterns
 
+### World Model Planning
+
+`WorldModel` / `WorldPlanner` (`src/evidenceforge/generation/world_model.py`) sit above the canonical event model and compile environment intent into operational decisions:
+
+- `WorldModel` resolves canonical host/user capabilities once from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
+- `WorldPlanner` owns session bootstrap semantics (interactive, network, SSH, RDP) and may allocate session state in `StateManager` before `ActivityGenerator` emits the correlated host/network evidence
+- Baseline and storyline code should call this layer for persona placement, remote admin source selection, and shared session bootstrap instead of re-implementing heuristics locally
+
 ### Canonical Event Model
 
 The generation engine uses a canonical event model — an intermediate representation between activity generation and log rendering. ActivityGenerator builds `SecurityEvent` objects carrying composable context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`, `SyslogContext`). An `EventDispatcher` routes each event to `StateManager.apply()` and to matching emitters based on `can_handle()` and network visibility.
 
 **Core principle: consistency by construction, not by coordination.** Two emitters cannot disagree about a port number because there is only one port number — on the event object.
 
-**Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively — including baseline IDS alerts, web access, syslog daemon messages, DHCP leases, anomaly records, anonymous logons, and sensor startup.
+**Two-phase build + dispatch:** (1) Allocate IDs from StateManager in the responsible planning/generation layer (`WorldPlanner` for planner-owned sessions, `ActivityGenerator` for processes/connections and direct logons), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively — including baseline IDS alerts, web access, syslog daemon messages, DHCP leases, anomaly records, anonymous logons, and sensor startup.
 
 Full design details: `docs/design/event-model-prd.md`. Key types: `src/evidenceforge/events/`.
 
 ### State Management
 
 `StateManager` (`src/evidenceforge/generation/state_manager.py`) is the single source of truth for runtime state:
-- **ActivityGenerator writes state** — allocates IDs via `create_session()`, `create_process()`, `open_connection()` before building SecurityEvents
+- **Planning/generation layers write state** — `WorldPlanner` may allocate/register sessions; `ActivityGenerator` allocates processes/connections and may emit against preallocated sessions
 - **Emitters only read state** — to get LogonIDs, PIDs for rendered events; never mutate StateManager
 - **`apply(event)`** records state from a fully-constructed SecurityEvent — handles teardown (logoff, process termination) and updates (connection bytes); does NOT allocate IDs
 - Events are transient (GC'd after dispatch); StateManager owns durable state

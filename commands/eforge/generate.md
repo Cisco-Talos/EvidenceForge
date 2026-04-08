@@ -128,6 +128,8 @@ Common simple fixes:
 
 For structural problems that require rethinking the scenario design — like a fundamentally broken network topology, missing personas that need custom definitions, or a storyline that references systems/users that don't exist and can't be trivially added — advise the user to revisit with `/eforge scenario` to rework that section.
 
+If generation succeeds but the output looks implausible, inspect the environment metadata before blaming the engine. Missing or vague `user.primary_system`, `system.roles`, and `system.services` often degrade session placement, infrastructure selection, and remote-session realism even when validation passes.
+
 Read the full error output — validation issues include the field path and often a suggestion for how to fix it.
 
 **Exit 1 — Input Error:**

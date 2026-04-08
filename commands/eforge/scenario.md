@@ -54,6 +54,8 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **System roles** — Assign `roles` to systems in the environment to enable automatic lateral movement patterns in the baseline. Roles like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` trigger corresponding service account traffic (backup agents, monitoring, AD replication, app→DB connections, etc.). These patterns create realistic background lateral movement that analysts must distinguish from malicious activity.
 
+`roles` and `services` now do more than flavor the baseline. The compiled world model uses them to decide what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, ask for both whenever the user can provide them.
+
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
 **Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
@@ -184,7 +186,8 @@ environment:
       os: "Windows 10"           # OS determines which log formats are generated
       type: workstation           # workstation | server | domain_controller
       assigned_user: marcus.chen  # Optional
-      services: []               # Optional
+      services: []               # Optional, but valuable for server realism
+      roles: []                  # Optional, but strongly recommended for servers/proxies
 
   service_accounts: []             # Optional: custom service/system accounts valid as storyline actors
 
@@ -314,6 +317,8 @@ The `os` field on systems determines which native log formats are generated:
 - **web_access** → Generated for systems with `roles: [web_server]`
 - **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
 
+For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
+
 See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each log format.
 
 ### Validation Rules
@@ -328,6 +333,8 @@ The scenario is validated before generation. Common issues to avoid:
 - Usernames, hostnames, and IPs must all be unique
 - Network segment `systems` must reference existing hostnames
 - Network sensor `monitoring_segments` must reference existing segment names
+
+Even when validation passes, weak host metadata can still reduce realism. If a dataset needs believable server-to-server traffic or admin pivots, make sure important hosts have meaningful `roles` and `services`, and every user has the right `primary_system`.
 
 ## Building the Storyline
 

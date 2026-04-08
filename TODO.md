@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-02
+**Last Updated:** 2026-04-08
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -37,6 +37,13 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
+
+### World Model Refactor
+
+- [x] Open the draft PR from `world-model` into `dev`
+Compiled `WorldModel` / `WorldPlanner` behavior is now the shared planning layer for persona placement, host capabilities, proxy/infrastructure routing, and interactive/network/SSH/RDP session bootstrap across baseline and storyline generation.
+Runtime ownership state was expanded to track exact session/process/connection provenance, the remaining `hash()`-based realism-critical derivations were replaced with `_stable_seed(...)`, and the contributor/docs/skill guidance was updated to match the new contract.
+Verification is complete: dedicated `tests/unit/test_world_model.py` coverage was added and `uv run pytest -v --include-slow` passed (`1483 passed`).
 
 ### Recently Resolved
 

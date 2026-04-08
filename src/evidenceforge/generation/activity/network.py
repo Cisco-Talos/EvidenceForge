@@ -149,7 +149,9 @@ def _generate_internal_hostname(rng, ip: str, domain: str = "corp.local") -> str
     prefixes = ["srv", "app", "db", "web", "print", "nas", "mgmt", "mon", "backup"]
     suffixes = ["01", "02", "03", "04", "05"]
     # Deterministic selection based on IP hash
-    ip_hash = hash(ip)
+    from evidenceforge.utils.rng import _stable_seed
+
+    ip_hash = _stable_seed(f"internal_hostname_{ip}")
     prefix = prefixes[ip_hash % len(prefixes)]
     suffix = suffixes[(ip_hash >> 8) % len(suffixes)]
     return f"{prefix}-{suffix}.{domain}"

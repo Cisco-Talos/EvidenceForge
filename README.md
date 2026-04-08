@@ -195,6 +195,9 @@ Validation (Pydantic schema + cross-reference checks)
 GenerationEngine (hour-by-hour orchestration)
     |
     v
+WorldModel / WorldPlanner (compile host roles, user placement, session bootstrap)
+    |
+    v
 ActivityGenerator (builds SecurityEvents with composable contexts)
     |
     v
@@ -211,7 +214,9 @@ EventDispatcher (routes to StateManager + matching emitters)
     +---> ProxyEmitter ----------> proxy_access.log
 ```
 
-See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive including the SecurityEvent model, state management, and emitter system.
+`WorldModel` compiles authoritative host and user capabilities from scenario fields like `primary_system`, `roles`, `services`, and workstation assignments. `WorldPlanner` then chooses realistic interactive, network, SSH, and RDP session paths before `ActivityGenerator` emits the correlated evidence.
+
+See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive including the world-model layer, SecurityEvent model, state management, and emitter system.
 
 ## Development
 
@@ -219,7 +224,7 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive in
 # Install dependencies
 uv sync
 
-# Run tests (1100+ tests)
+# Run tests (1400+ tests)
 uv run pytest
 
 # Run specific test suite
@@ -236,7 +241,7 @@ uv run ruff format src/ tests/
 - Pydantic v2 for schema validation
 - Jinja2 for log format templates
 - Typer + Rich for CLI
-- pytest (1100+ tests)
+- pytest (1400+ tests)
 
 ## Documentation
 
