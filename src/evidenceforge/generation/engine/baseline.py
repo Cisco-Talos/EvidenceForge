@@ -1541,21 +1541,13 @@ class BaselineMixin:
             if not user:
                 continue
 
-            # Resolve system for this session
-            system = None
-            if user.primary_system:
-                systems = [
-                    s
-                    for s in self.scenario.environment.systems
-                    if s.hostname == user.primary_system
-                ]
-                if systems:
-                    system = systems[0]
+            # Resolve system from the session's host, not the user's primary system
+            system = next(
+                (s for s in self.scenario.environment.systems if s.hostname == session.system),
+                None,
+            )
             if not system:
-                assigned = [
-                    s for s in self.scenario.environment.systems if s.assigned_user == user.username
-                ]
-                system = assigned[0] if assigned else self.scenario.environment.systems[0]
+                continue
 
             logoff_time = current_hour + timedelta(seconds=offset)
             self.state_manager.set_current_time(logoff_time)
@@ -2055,9 +2047,11 @@ class BaselineMixin:
         host_sessions = self.state_manager.get_sessions_on_system(system.hostname)
         for session in host_sessions:
             persona = None
+            user_obj = None
             for u in self.scenario.environment.users:
                 if u.username == session.username:
                     persona = u.persona
+                    user_obj = u
                     break
             if persona is None:
                 continue  # Not a scenario user — skip service/machine accounts
@@ -2111,8 +2105,30 @@ class BaselineMixin:
                         if proc and proc.start_time <= ts:
                             persona_pid = pid
                             break
-                if persona_pid == -1 and compatible_exes:
-                    continue  # No compatible process running — skip this connection
+                if persona_pid == -1 and compatible_exes and user_obj:
+                    # Spawn a short-lived client process for this connection
+                    target_exe = compatible_exes[0]
+                    if os_cat == "windows":
+                        image = f"C:\\Windows\\System32\\{target_exe}"
+                    else:
+                        image = f"/usr/bin/{target_exe}"
+                    proc_time = ts - timedelta(seconds=rng.uniform(0.5, 3.0))
+                    self.state_manager.set_current_time(proc_time)
+                    parent_pid = self.activity_generator._resolve_parent(
+                        system, user_obj, proc_time, session.logon_id, image
+                    )
+                    persona_pid = self.activity_generator.generate_process(
+                        user_obj,
+                        system,
+                        proc_time,
+                        session.logon_id,
+                        image,
+                        target_exe,
+                        parent_pid=parent_pid,
+                    )
+                    self.activity_generator._record_user_process(
+                        system, user_obj, persona_pid, image
+                    )
 
                 self.state_manager.set_current_time(ts)
                 self.activity_generator.generate_connection(
