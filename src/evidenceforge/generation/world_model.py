@@ -590,9 +590,16 @@ class WorldModel:
                 source_system=None,
             )
 
+        # If the caller specified a source IP that doesn't belong to the
+        # auto-selected source system, don't attach internal host evidence
+        # to the external IP — that creates impossible host↔network correlation.
+        effective_source = source
+        if source_ip_override and source is not None and source_ip_override != source.ip:
+            effective_source = None
+
         return SessionPlan(
             target_system=target_system,
-            source_system=source,
+            source_system=effective_source,
             source_ip=source_ip_override or source.ip,
             logon_type=10,
             session_kind=kind,

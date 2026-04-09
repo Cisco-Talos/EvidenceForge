@@ -2101,6 +2101,11 @@ class BaselineMixin:
             if not allows_external:
                 inbound_conns = [c for c in inbound_conns if c["role"] != "_external"]
 
+            # For external inbound traffic, use the public VIP (static NAT
+            # mapped_ip) when available so the NAT pipeline correctly
+            # translates outside→inside addresses.
+            nat_vip = self._get_static_nat_vip(system.ip)
+
             if not inbound_conns:
                 pass  # All entries were external and host is internal-only
             else:
@@ -2108,6 +2113,7 @@ class BaselineMixin:
                 num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
                 for _ in range(num_inbound):
                     conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
+                    is_external_src = conn["role"] == "_external"
                     src_ip, hostname = self._resolve_role(
                         conn["role"],
                         system.ip,
@@ -2135,9 +2141,13 @@ class BaselineMixin:
                     if is_internal_src and hasattr(self, "world_model"):
                         dst_hostname = self.world_model.fqdn_for_system(system)
 
+                    # External clients address the public VIP; NAT pipeline
+                    # translates to real_ip for inside-facing sensors.
+                    dst_ip = nat_vip if (is_external_src and nat_vip) else system.ip
+
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
-                        dst_ip=system.ip,
+                        dst_ip=dst_ip,
                         time=ts,
                         dst_port=conn["port"],
                         proto=conn.get("proto", "tcp"),
