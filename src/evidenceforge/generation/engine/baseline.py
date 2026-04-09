@@ -2011,10 +2011,15 @@ class BaselineMixin:
             get_role_connections,
         )
 
-        # Build role list: system.roles first, then system.type as fallback
-        roles = [r.lower() for r in (system.roles or [])]
-        if not roles:
-            roles = [(system.type or "workstation").lower()]
+        # Use compiled world-model canonical roles (includes service/hostname-inferred
+        # roles like 'database' from services=['postgresql']). Falls back to raw
+        # scenario fields for engines without a world model.
+        if hasattr(self, "world_model") and system.hostname in self.world_model.hosts:
+            roles = list(self.world_model.hosts[system.hostname].canonical_roles)
+        else:
+            roles = [r.lower() for r in (system.roles or [])]
+            if not roles:
+                roles = [(system.type or "workstation").lower()]
 
         # --- Role traffic (system-level, 24/7) ---
         role_conns = get_role_connections(roles, os_cat)
