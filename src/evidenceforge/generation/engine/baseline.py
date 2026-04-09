@@ -2134,20 +2134,10 @@ class BaselineMixin:
                     s for s in self.scenario.environment.network.sensors if s.type == "firewall"
                 ]
 
-            # Resolve a public-facing hostname for external inbound traffic.
-            # Without this, HTTP Host / TLS SNI falls back to internal FQDNs.
-            _external_dst_hostname = None
-            if allows_external and hasattr(self, "world_model"):
-                # Check for static NAT mapped hostname or use system hostname
-                for sensor in _inbound_fw_sensors:
-                    for rule in sensor.nat_rules:
-                        if rule.type == "static" and rule.real_ip == system.ip:
-                            _external_dst_hostname = rule.mapped_ip
-                            break
-                    if _external_dst_hostname:
-                        break
-                if not _external_dst_hostname:
-                    _external_dst_hostname = self.world_model.fqdn_for_system(system)
+            # External inbound traffic: leave hostname=None.  We don't model
+            # public DNS names for server services, and using NAT VIPs or
+            # internal FQDNs as hostname would produce impossible TLS SNI
+            # and HTTP Host values in the generated evidence.
 
             # Pre-resolve firewall interface names for deny records
             _fw_iface_resolve = None
@@ -2216,7 +2206,7 @@ class BaselineMixin:
                     # internal clients use the internal FQDN.
                     dst_hostname = None
                     if is_external_src:
-                        dst_hostname = _external_dst_hostname
+                        pass  # No hostname for external clients (see comment above)
                     elif is_internal_src and hasattr(self, "world_model"):
                         dst_hostname = self.world_model.fqdn_for_system(system)
 
@@ -2273,6 +2263,12 @@ class BaselineMixin:
                 continue  # Not a scenario user — skip service/machine accounts
             # Only interactive sessions generate user-driven persona traffic
             if session.logon_type not in (2, 10, 11):
+                continue
+            # Don't generate workstation-style persona traffic (Outlook, Teams,
+            # Chrome) for remote admin sessions on servers — those produce
+            # impossible SaaS app behavior on server infrastructure.
+            is_server_host = system.type in ("server", "domain_controller")
+            if is_server_host and session.logon_type in (10, 11):
                 continue
             persona_conns = get_persona_connections(persona, os_cat)
             if not persona_conns:
@@ -2597,52 +2593,25 @@ class BaselineMixin:
                         username="SYSTEM",
                     )
 
-            # Scheduled tasks — diverse per-hour selection from YAML
-            from evidenceforge.generation.activity.system_processes import (
-                pick_scheduled_task,
-            )
-
-            host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
+            # Windows scheduled tasks — diverse per-hour selection from YAML.
+            # Linux scheduled tasks are handled by _generate_scheduled_tasks()
+            # which uses realistic daily/weekly frequencies instead of the
+            # legacy 2-5 per hour approach.
             if os_cat == "windows":
-                pass  # Tasks selected per-iteration below
-            else:
-                os_str = (system.os or "").lower()
-                is_rhel_task = any(
-                    d in os_str for d in ("centos", "rhel", "red hat", "rocky", "alma")
+                from evidenceforge.generation.activity.system_processes import (
+                    pick_scheduled_task,
                 )
-                if is_rhel_task:
-                    linux_tasks = [
-                        ("/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                        ("/usr/bin/dnf", "/usr/bin/dnf -y makecache --timer"),
-                        ("/usr/bin/needs-restarting", "/usr/bin/needs-restarting -r"),
-                    ]
-                else:
-                    linux_tasks = [
-                        ("/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                        ("/usr/bin/apt-get", "/usr/bin/apt-get -qq update"),
-                        (
-                            "/usr/lib/update-notifier/apt-check",
-                            "/usr/lib/update-notifier/apt-check --human-readable",
-                        ),
-                    ]
-                task_name, task_cmd = linux_tasks[
-                    _stable_seed(f"linux_task_{system.hostname}") % len(linux_tasks)
-                ]
 
-            # Randomize scheduled task count per hour (2-5) with per-host variation
-            num_tasks = rng.randint(2, 5)
-            slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
-            for slot_base in slot_bases:
-                offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
-                offset = max(0, min(3599, offset))
-                ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
-
-                if os_cat == "windows":
-                    # Pick a diverse task each iteration (not deterministic per host)
+                host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
+                num_tasks = rng.randint(2, 5)
+                slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
+                for slot_base in slot_bases:
+                    offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
+                    offset = max(0, min(3599, offset))
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
                     parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
-                    # 4648 explicit credentials for scheduled task execution
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
                         user=_SYSTEM_USER,
@@ -2660,16 +2629,6 @@ class BaselineMixin:
                         command_line=task_cmd,
                         parent_pid=parent_pid,
                         username="SYSTEM",
-                    )
-                else:
-                    parent_pid = sys_pids.get("cron", 0)
-                    self.activity_generator.generate_system_process(
-                        system=system,
-                        time=ts,
-                        process_name=task_name,
-                        command_line=task_cmd,
-                        parent_pid=parent_pid,
-                        username="root",
                     )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
