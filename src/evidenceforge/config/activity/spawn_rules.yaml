@@ -64,14 +64,14 @@ windows:
 
   teams.exe:
     command_templates:
-      - "Teams.exe"
+      - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe"'
     lifetime: long
     children:
       - teams.exe
 
   onedrive.exe:
     command_templates:
-      - "OneDrive.exe"
+      - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
     lifetime: long
     children:
       - onedrive.exe
@@ -148,7 +148,7 @@ windows:
 
   code.exe:
     command_templates:
-      - "Code.exe"
+      - '"C:\Program Files\Microsoft VS Code\Code.exe"'
     lifetime: long
     spawn_delay: [1.0, 5.0]
     children:
@@ -160,7 +160,7 @@ windows:
 
   idea64.exe:
     command_templates:
-      - "idea64.exe"
+      - '"C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe"'
     lifetime: long
     spawn_delay: [1.0, 5.0]
     children:

@@ -22,7 +22,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `network_params.yaml` | `engine/emitter_setup.py` | MAC address OUI prefixes (Dell, HP, VMware, etc.) for realistic MAC generation. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
 | `extra_syslog_messages.yaml` | `extra_syslog.py` | Role/distro-tagged syslog program messages for baseline diversity. |
-| `app_child_processes.yaml` | `app_child_processes.py` | Child/utility processes spawned by main applications (browser renderers, etc.). |
+| `application_catalog.yaml` | `application_catalog.py` | Unified app definitions: image paths, PE metadata, command templates, persona filtering, child processes. |
 | `traffic_profiles.yaml` | `traffic_profiles.py` | Role-based and persona-based network traffic profiles. See `docs/design/traffic-profiles-design.md`. |
 | `process_network_map.yaml` | `process_network.py` | Process-to-network service mappings for PID attribution and process-network correlation. |
 

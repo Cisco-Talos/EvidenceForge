@@ -2540,9 +2540,20 @@ class BaselineMixin:
                             n_cmds = rng.randint(2, 6)
                         else:
                             n_cmds = rng.randint(1, 4)
-                        for cmd_i in range(n_cmds):
+                        hour_end = current_hour + timedelta(hours=1)
+                        cumulative_gap = 0
+                        for _cmd_i in range(n_cmds):
                             cmd_offset = rng.randint(30, 600)
-                            cmd_time = ts + timedelta(seconds=cmd_offset + cmd_i * 5)
+                            # Human typing: variable think time between commands
+                            gap = rng.choices(
+                                [rng.randint(3, 10), rng.randint(12, 45), rng.randint(60, 300)],
+                                weights=[45, 35, 20],
+                                k=1,
+                            )[0]
+                            cumulative_gap += gap
+                            cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
+                            if cmd_time >= hour_end:
+                                break
                             cmd = pick_bash_command(
                                 rng,
                                 ssh_user.persona or "",

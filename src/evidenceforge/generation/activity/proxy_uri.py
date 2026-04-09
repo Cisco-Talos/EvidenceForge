@@ -57,17 +57,41 @@ def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str
     return path
 
 
+# Extension-based MIME type inference (universal standards, not configurable)
+_EXT_MIME: dict[str, str] = {
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".txt": "text/plain",
+    ".xml": "application/xml",
+    ".pdf": "application/pdf",
+    ".ico": "image/x-icon",
+    ".webp": "image/webp",
+    ".map": "application/json",
+}
+
+
 def pick_proxy_uri(
     rng: random.Random,
     hostname: str,
     domain_tags: list[str],
-) -> tuple[str, str, str]:
-    """Pick a URI path, content type, and HTTP method for a proxy log entry.
+) -> tuple[str, str, str, str | None]:
+    """Pick a URI path, content type, HTTP method, and optional user-agent override.
 
     Lookup order: exact domain match -> first matching tag -> generic fallback.
+    MIME type is inferred from path extension when possible, overriding the
+    domain default.
 
     Returns:
-        (path, content_type, method) tuple.
+        (path, content_type, method, user_agent_override) tuple.
+        user_agent_override is None for normal browser traffic.
     """
     data = load_proxy_uri_templates()
 
@@ -90,11 +114,27 @@ def pick_proxy_uri(
     paths = entry.get("paths", ["/"])
     content_type = entry.get("content_type", "text/html")
     methods = entry.get("methods", ["GET"])
+    user_agent = entry.get("user_agent")
+
+    # Per-path content_types override (parallel list alongside paths)
+    content_types = entry.get("content_types")
 
     idx = rng.randrange(len(paths))
     path = paths[idx]
     method = methods[idx] if idx < len(methods) else methods[-1] if methods else "GET"
 
+    # Per-path content type (if the YAML provides parallel content_types list)
+    if content_types and idx < len(content_types):
+        content_type = content_types[idx]
+
     path = _substitute_vars(rng, path, data)
 
-    return path, content_type, method
+    # Extension-based MIME inference overrides domain default
+    ext_lower = ""
+    clean_path = path.split("?")[0]  # Strip query string
+    if "." in clean_path.rsplit("/", 1)[-1]:
+        ext_lower = "." + clean_path.rsplit(".", 1)[-1].lower()
+    if ext_lower in _EXT_MIME:
+        content_type = _EXT_MIME[ext_lower]
+
+    return path, content_type, method, user_agent

@@ -113,6 +113,39 @@ def _build_pe_index() -> dict[str, tuple[str, str, str, str, str]]:
     return index
 
 
+def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str]]:
+    """Get child process definitions for a given parent executable.
+
+    Children inherit the parent's image_path from the catalog.
+
+    Args:
+        os_category: "windows" or "linux"
+        parent_exe: Parent executable basename (e.g., "chrome.exe")
+
+    Returns:
+        List of dicts with "image" and "command_line" keys, or empty list.
+    """
+    data = load_catalog()
+    parent_lower = parent_exe.lower()
+    for app in data["applications"]:
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        image_path = platform.get("image_path", "")
+        # Match basename from image_path
+        if os_category == "windows":
+            basename = image_path.rsplit("\\", 1)[-1].lower()
+        else:
+            basename = image_path.rsplit("/", 1)[-1].lower()
+        if basename != parent_lower:
+            continue
+        children = platform.get("children", [])
+        if not children:
+            return []
+        return [{"image": image_path, "command_line": cmd} for cmd in children]
+    return []
+
+
 def pick_app_and_command(
     rng: random.Random,
     persona: str,

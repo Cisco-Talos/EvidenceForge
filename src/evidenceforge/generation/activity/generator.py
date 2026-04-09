@@ -1471,6 +1471,15 @@ class ActivityGenerator:
                 elif conn_state == "REJ":
                     # REJ = SYN then RST; orig_bytes is just the SYN packet(s)
                     orig_bytes = rng.choice([0, 40, 44, 48])
+            elif conn_state in ("S1", "SH", "SHR"):
+                # S1/SH/SHR = partial handshake, no application data transferred.
+                # Zeek orig_bytes/resp_bytes are payload bytes (always 0 for
+                # handshake-only states); IP-byte totals are computed from packet
+                # counts + header overhead downstream.
+                orig_bytes = 0
+                resp_bytes = 0
+                if duration is not None:
+                    duration = rng.uniform(0.0, 0.5)
             elif conn_state in ("RSTO", "RSTR"):
                 if duration is not None:
                     duration = duration * rng.uniform(0.1, 0.5)
@@ -1505,8 +1514,10 @@ class ActivityGenerator:
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
         overhead = 28 if proto == "udp" else _get_rng().randint(52, 72)
-        orig_ip_bytes = (orig_bytes + orig_pkts * overhead) if orig_bytes and orig_pkts else None
-        resp_ip_bytes = (resp_bytes + resp_pkts * overhead) if resp_bytes and resp_pkts else None
+        # IP bytes = payload + (packets * header overhead). Handshake-only states
+        # have 0 payload bytes but still have packet-level IP bytes from SYN/SYN-ACK.
+        orig_ip_bytes = ((orig_bytes or 0) + orig_pkts * overhead) if orig_pkts else None
+        resp_ip_bytes = ((resp_bytes or 0) + resp_pkts * overhead) if resp_pkts else None
 
         ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
 
@@ -1619,7 +1630,7 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
                 domain_tags = get_domain_tags(proxy_hostname)
-                path, proxy_content_type, proxy_method = pick_proxy_uri(
+                path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                     _get_rng(), proxy_hostname, domain_tags
                 )
                 url = f"{schema}://{proxy_hostname}{path}"
@@ -1634,7 +1645,7 @@ class ActivityGenerator:
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
                     "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
                 ]
-                user_agent = _get_rng().choice(_PROXY_UAS)
+                user_agent = proxy_ua_override or _get_rng().choice(_PROXY_UAS)
                 cache_roll = _get_rng().random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
@@ -1795,7 +1806,11 @@ class ActivityGenerator:
 
             web_host = REVERSE_DNS.get(dst_ip, dst_ip)
             web_domain_tags = get_domain_tags(web_host)
-            uri, mime_type, http_method = pick_proxy_uri(rng, web_host, web_domain_tags)
+            uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
+                rng, web_host, web_domain_tags
+            )
+            if http_ua_override:
+                ua = http_ua_override
             status_code, status_msg = _get_http_status(dst_ip, uri)
             resp_body_len = resp_bytes or rng.randint(200, 50000)
             if status_code in (301, 302):
@@ -2931,7 +2946,7 @@ class ActivityGenerator:
 
                     # Spawn child/utility processes for apps that have them
                     if activity_type == "process_user_apps":
-                        from evidenceforge.generation.activity.app_child_processes import (
+                        from evidenceforge.generation.activity.application_catalog import (
                             get_child_processes,
                         )
 
@@ -2943,13 +2958,19 @@ class ActivityGenerator:
                             num_children = rng.randint(1, min(3, len(child_entries)))
                             for entry in rng.sample(child_entries, num_children):
                                 child_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
+                                child_image = entry["image"]
+                                child_cmd = entry["command_line"]
+                                if "{username}" in child_image:
+                                    child_image = child_image.replace("{username}", user.username)
+                                if "{username}" in child_cmd:
+                                    child_cmd = child_cmd.replace("{username}", user.username)
                                 self.generate_process(
                                     user,
                                     system,
                                     child_time,
                                     logon_id,
-                                    process_name,
-                                    entry["command_line"],
+                                    child_image,
+                                    child_cmd,
                                     parent_pid=pid,
                                 )
 

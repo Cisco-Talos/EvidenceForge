@@ -30,6 +30,10 @@ applications:
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument {internal_url}'
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --lang=en-US'
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --no-startup-window /prefetch:8'
+        children:
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --enable-features=NetworkService'
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=gpu-process'
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=utility --utility-sub-type=network.mojom.NetworkService'
       linux:
         image_path: "/usr/bin/google-chrome"
         command_templates:
@@ -52,6 +56,9 @@ applications:
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc --channel={small_int}.0.1'
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -new-window {internal_url}'
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url {internal_url}'
+        children:
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc -childID 3 -isForBrowser'
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc -childID 5 -isForBrowser'
       linux:
         image_path: "/usr/bin/firefox"
         command_templates:
@@ -125,6 +132,9 @@ applications:
         command_templates:
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --single-argument {internal_url}'
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer --lang=en-US'
+        children:
+          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer'
+          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=gpu-process'
     categories: [user_app, browser]
     personas: [executive, sysadmin, analyst, hr, finance, help_desk, default]
 
@@ -142,6 +152,8 @@ applications:
         command_templates:
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=renderer'
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --processStart Teams.exe'
+        children:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, finance, intern, help_desk, default]
 
@@ -157,6 +169,8 @@ applications:
           company: "Microsoft Corporation"
           original_filename: "OneDrive.exe"
         command_templates:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
+        children:
           - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, executive, hr, finance, intern, help_desk, default]
