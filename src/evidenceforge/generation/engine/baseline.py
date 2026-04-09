@@ -1934,59 +1934,65 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
-    def _resolve_dest_role(
+    def _resolve_role(
         self,
-        dest_role: str,
-        src_ip: str,
+        role: str,
+        exclude_ip: str,
         rng: Any,
         os_cat: str = "windows",
         dns_tags: list[str] | None = None,
     ) -> tuple[str | None, str | None]:
-        """Resolve a dest_role from traffic_profiles.yaml to (ip, hostname).
+        """Resolve a role name to (ip, hostname), excluding a specific IP.
 
-        Returns (None, None) if no suitable target exists in the scenario.
+        Works for both outbound (exclude_ip = source) and inbound
+        (exclude_ip = destination). Returns (None, None) if no suitable
+        system exists in the scenario.
         """
+        if role == "_external":
+            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+            tags = tuple(dns_tags) if dns_tags else ("background", os_cat)
+            domain, ip = pick_domain_and_ip(rng, *tags, src_host="")
+            return ip, domain
+
         if hasattr(self, "world_model"):
             src_system = next(
-                (system for system in self.scenario.environment.systems if system.ip == src_ip),
+                (system for system in self.scenario.environment.systems if system.ip == exclude_ip),
                 None,
             )
             if src_system is not None:
                 return self.world_model.resolve_destination(
-                    dest_role=dest_role,
+                    dest_role=role,
                     src_system=src_system,
                     rng=rng,
                     os_category=os_cat,
                     dns_tags=dns_tags,
                 )
 
-        if dest_role == "_external":
-            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
-
-            tags = tuple(dns_tags) if dns_tags else ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host="")
-            return ip, domain
-        if dest_role in ("_dc", "domain_controller"):
+        if role in ("_dc", "domain_controller"):
             dc_ips = self._infra_ips.get("dc", [])
-            return (rng.choice(dc_ips), None) if dc_ips else (None, None)
-        if dest_role == "_any_server":
+            candidates = [ip for ip in dc_ips if ip != exclude_ip]
+            return (rng.choice(candidates), None) if candidates else (None, None)
+        if role == "_any_server":
             servers = [
                 s.ip
                 for s in self.scenario.environment.systems
-                if s.ip != src_ip and s.type and s.type.lower() in ("server", "domain_controller")
+                if s.ip != exclude_ip
+                and s.type
+                and s.type.lower() in ("server", "domain_controller")
             ]
             return (rng.choice(servers), None) if servers else (None, None)
-        if dest_role == "_any":
-            others = [s.ip for s in self.scenario.environment.systems if s.ip != src_ip]
+        if role == "_any":
+            others = [s.ip for s in self.scenario.environment.systems if s.ip != exclude_ip]
             return (rng.choice(others), None) if others else (None, None)
         # Named role: find a system with that role/type
         candidates = [
             s.ip
             for s in self.scenario.environment.systems
-            if s.ip != src_ip
+            if s.ip != exclude_ip
             and (
-                (s.type and s.type.lower() == dest_role)
-                or (s.roles and dest_role in [r.lower() for r in s.roles])
+                (s.type and s.type.lower() == role)
+                or (s.roles and role in [r.lower() for r in s.roles])
             )
         ]
         return (rng.choice(candidates), None) if candidates else (None, None)
@@ -2035,8 +2041,8 @@ class BaselineMixin:
 
             for _ in range(base_count):
                 conn = rng.choices(role_conns, weights=weights, k=1)[0]
-                dst_ip, hostname = self._resolve_dest_role(
-                    conn["dest_role"],
+                dst_ip, hostname = self._resolve_role(
+                    conn["role"],
                     system.ip,
                     rng,
                     os_cat=os_cat,
@@ -2074,6 +2080,50 @@ class BaselineMixin:
                     source_system=system,
                     hostname=hostname,
                     pid=conn_pid,
+                )
+
+        # --- Inbound traffic (connections TO this host from other roles/external) ---
+        from evidenceforge.generation.activity.traffic_profiles import (
+            get_role_inbound_connections,
+        )
+
+        inbound_conns = get_role_inbound_connections(roles, os_cat)
+        if inbound_conns:
+            inbound_weights = [c.get("weight", 1) for c in inbound_conns]
+            num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
+            for _ in range(num_inbound):
+                conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
+                src_ip, hostname = self._resolve_role(
+                    conn["role"],
+                    system.ip,
+                    rng,
+                    os_cat,
+                )
+                if not src_ip:
+                    continue
+
+                offset = rng.uniform(0, 3599)
+                ts = current_hour + timedelta(seconds=offset)
+                self.state_manager.set_current_time(ts)
+
+                # Resolve source system object (None for external IPs)
+                src_sys = None
+                if hasattr(self, "activity_generator"):
+                    ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+                    src_sys = ip_map.get(src_ip)
+
+                self.activity_generator.generate_connection(
+                    src_ip=src_ip,
+                    dst_ip=system.ip,
+                    time=ts,
+                    dst_port=conn["port"],
+                    proto=conn.get("proto", "tcp"),
+                    service=conn.get("service"),
+                    duration=rng.uniform(0.05, 5.0),
+                    orig_bytes=rng.randint(200, 5000),
+                    resp_bytes=rng.randint(500, 50000),
+                    source_system=src_sys,
+                    emit_dns=False,
                 )
 
         # --- Persona traffic (user-level, during active sessions) ---
@@ -2114,8 +2164,8 @@ class BaselineMixin:
                 # SSH/RDP generation paths instead.
                 if conn.get("service") in ("ssh", "rdp"):
                     continue
-                dst_ip, hostname = self._resolve_dest_role(
-                    conn["dest_role"],
+                dst_ip, hostname = self._resolve_role(
+                    conn["role"],
                     system.ip,
                     rng,
                     os_cat=os_cat,
