@@ -663,10 +663,20 @@ class WorldPlanner:
     ) -> SessionBootstrapResult:
         existing = self._find_user_session(user.username, target_system.hostname)
         if allow_existing and existing is not None:
-            existing.last_activity_time = time
-            if storyline_protected:
-                existing.storyline_protected = True
-            return SessionBootstrapResult(session=existing, network_uid=None)
+            # Only reuse if transport-compatible: don't satisfy an SSH/RDP
+            # request with a generic network session (no transport evidence).
+            transport_compatible = True
+            if session_kind in ("ssh", "rdp") and existing.session_kind not in (
+                session_kind,
+                "ssh",
+                "rdp",
+            ):
+                transport_compatible = False
+            if transport_compatible:
+                existing.last_activity_time = time
+                if storyline_protected:
+                    existing.storyline_protected = True
+                return SessionBootstrapResult(session=existing, network_uid=None)
 
         plan = self.world_model.plan_session(
             user=user,
@@ -757,10 +767,10 @@ class WorldPlanner:
             if has_catalog_entry(e, os_cat) and is_persona_allowed(e, os_cat, persona)
         ]
         if not os_exes:
-            # Relax to OS-only filter
-            os_exes = [e for e in compatible_exes if has_catalog_entry(e, os_cat)]
-        if not os_exes:
-            os_exes = compatible_exes
+            # No persona-approved executable for this service — don't
+            # relax past the allowlist (that would spawn forbidden tools
+            # like sqlcmd.exe for accountants).  Return -1 (no owning process).
+            return -1
         target_exe = rng.choice(os_exes)
         image = resolve_image_path(target_exe, os_cat, username=user.username)
 
