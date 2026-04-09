@@ -499,8 +499,16 @@ class WorldModel:
         rng: random.Random,
         session_kind: str | None = None,
         source_system: System | None = None,
+        source_ip_override: str | None = None,
     ) -> SessionPlan:
-        """Plan how a user should reach a target host."""
+        """Plan how a user should reach a target host.
+
+        Args:
+            source_ip_override: Explicit source IP from the scenario
+                storyline. When set and the IP doesn't map to a scenario
+                system, we preserve it in the plan instead of inventing
+                a different source.
+        """
         host = self.hosts[target_system.hostname]
         kind = session_kind
 
@@ -525,7 +533,7 @@ class WorldModel:
             return SessionPlan(
                 target_system=target_system,
                 source_system=None,
-                source_ip=target_system.ip,
+                source_ip=source_ip_override or target_system.ip,
                 logon_type=2,
                 session_kind="interactive",
                 requires_transport=False,
@@ -533,7 +541,9 @@ class WorldModel:
 
         if kind == "network":
             source = source_system or self.pick_remote_source_system(user, target_system, rng)
-            source_ip = source.ip if source is not None else target_system.ip
+            source_ip = source_ip_override or (
+                source.ip if source is not None else target_system.ip
+            )
             return SessionPlan(
                 target_system=target_system,
                 source_system=source,
@@ -544,7 +554,29 @@ class WorldModel:
             )
 
         source = source_system or self.pick_remote_source_system(user, target_system, rng)
+
+        # RDP requires a Windows source — mstsc.exe can't exist on Linux.
+        # If the selected source is non-Windows, downgrade to SSH or network.
+        if kind == "rdp" and source is not None:
+            source_host = self.hosts.get(source.hostname)
+            if source_host and source_host.os_category != "windows":
+                if host.supports_ssh:
+                    kind = "ssh"
+                else:
+                    source = None  # will trigger fallback below
+
         if source is None:
+            # No suitable source system — if we have an explicit IP from
+            # the storyline, use it directly with a network logon.
+            if source_ip_override:
+                return SessionPlan(
+                    target_system=target_system,
+                    source_system=None,
+                    source_ip=source_ip_override,
+                    logon_type=10,
+                    session_kind=kind,
+                    requires_transport=True,
+                )
             fallback_kind = "network" if host.is_server else "interactive"
             return self.plan_session(
                 user=user,
@@ -557,7 +589,7 @@ class WorldModel:
         return SessionPlan(
             target_system=target_system,
             source_system=source,
-            source_ip=source.ip,
+            source_ip=source_ip_override or source.ip,
             logon_type=10,
             session_kind=kind,
             requires_transport=True,
@@ -606,6 +638,7 @@ class WorldPlanner:
         session_kind: str | None = None,
         source_system: System | None = None,
         allow_existing: bool = True,
+        source_ip_override: str | None = None,
     ) -> SessionBootstrapResult:
         existing = self._find_user_session(user.username, target_system.hostname)
         if allow_existing and existing is not None:
@@ -618,6 +651,7 @@ class WorldPlanner:
             rng=rng,
             session_kind=session_kind,
             source_system=source_system,
+            source_ip_override=source_ip_override,
         )
         logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
         self.state_manager.set_current_time(logon_time)

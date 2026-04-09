@@ -705,6 +705,7 @@ class StorylineMixin:
                     session_kind="ssh",
                     source_system=source_system,
                     allow_existing=False,
+                    source_ip_override=spec.source_ip,
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -739,6 +740,7 @@ class StorylineMixin:
                     session_kind="rdp",
                     source_system=source_system,
                     allow_existing=False,
+                    source_ip_override=spec.source_ip,
                 )
             else:
                 source_ip = spec.source_ip or system.ip

@@ -2089,51 +2089,61 @@ class BaselineMixin:
 
         inbound_conns = get_role_inbound_connections(roles, os_cat)
         if inbound_conns:
-            inbound_weights = [c.get("weight", 1) for c in inbound_conns]
-            num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
-            for _ in range(num_inbound):
-                conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
-                src_ip, hostname = self._resolve_role(
-                    conn["role"],
-                    system.ip,
-                    rng,
-                    os_cat,
-                )
-                if not src_ip:
-                    continue
+            # Gate external inbound on segment exposure — internal-only
+            # hosts must not receive internet client traffic.
+            exposure = self._get_system_exposure(system)
+            allows_external = exposure in ("external", "both")
+            if not allows_external:
+                inbound_conns = [c for c in inbound_conns if c["role"] != "_external"]
 
-                offset = rng.uniform(0, 3599)
-                ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
+            if not inbound_conns:
+                pass  # All entries were external and host is internal-only
+            else:
+                inbound_weights = [c.get("weight", 1) for c in inbound_conns]
+                num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
+                for _ in range(num_inbound):
+                    conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
+                    src_ip, hostname = self._resolve_role(
+                        conn["role"],
+                        system.ip,
+                        rng,
+                        os_cat,
+                    )
+                    if not src_ip:
+                        continue
 
-                # Resolve source system object (None for external IPs)
-                src_sys = None
-                if hasattr(self, "activity_generator"):
-                    ip_map = getattr(self.activity_generator, "_ip_to_system", {})
-                    src_sys = ip_map.get(src_ip)
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
 
-                # Internal clients emit DNS before connecting (just like
-                # outbound traffic).  External sources don't — we can't see
-                # their resolver queries.
-                is_internal_src = src_sys is not None
-                dst_hostname = None
-                if is_internal_src and hasattr(self, "world_model"):
-                    dst_hostname = self.world_model.fqdn_for_system(system)
+                    # Resolve source system object (None for external IPs)
+                    src_sys = None
+                    if hasattr(self, "activity_generator"):
+                        ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+                        src_sys = ip_map.get(src_ip)
 
-                self.activity_generator.generate_connection(
-                    src_ip=src_ip,
-                    dst_ip=system.ip,
-                    time=ts,
-                    dst_port=conn["port"],
-                    proto=conn.get("proto", "tcp"),
-                    service=conn.get("service"),
-                    duration=rng.uniform(0.05, 5.0),
-                    orig_bytes=rng.randint(200, 5000),
-                    resp_bytes=rng.randint(500, 50000),
-                    source_system=src_sys,
-                    emit_dns=is_internal_src,
-                    hostname=dst_hostname,
-                )
+                    # Internal clients emit DNS before connecting (just like
+                    # outbound traffic).  External sources don't — we can't see
+                    # their resolver queries.
+                    is_internal_src = src_sys is not None
+                    dst_hostname = None
+                    if is_internal_src and hasattr(self, "world_model"):
+                        dst_hostname = self.world_model.fqdn_for_system(system)
+
+                    self.activity_generator.generate_connection(
+                        src_ip=src_ip,
+                        dst_ip=system.ip,
+                        time=ts,
+                        dst_port=conn["port"],
+                        proto=conn.get("proto", "tcp"),
+                        service=conn.get("service"),
+                        duration=rng.uniform(0.05, 5.0),
+                        orig_bytes=rng.randint(200, 5000),
+                        resp_bytes=rng.randint(500, 50000),
+                        source_system=src_sys,
+                        emit_dns=is_internal_src,
+                        hostname=dst_hostname,
+                    )
 
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
