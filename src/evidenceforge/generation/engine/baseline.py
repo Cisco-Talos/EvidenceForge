@@ -2224,25 +2224,33 @@ class BaselineMixin:
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
-                ntp_ip = rng.choice(ntp_ips)
-                ntp_pid = (
-                    _svc_pid("svchost_local_svc")
-                    if os_cat == "windows"
-                    else _svc_pid("chronyd", "timesyncd")
+                # Deterministic NTP source per host (stable across hours)
+                # Exclude the host's own IP — DCs don't NTP-sync to themselves
+                ntp_candidates = [ip for ip in ntp_ips if ip != system.ip]
+                ntp_ip = (
+                    ntp_candidates[_stable_seed(f"ntp_src_{system.hostname}") % len(ntp_candidates)]
+                    if ntp_candidates
+                    else None  # This host IS the NTP server; skip NTP client traffic only
                 )
-                self.activity_generator.generate_connection(
-                    src_ip=system.ip,
-                    dst_ip=ntp_ip,
-                    time=ts,
-                    dst_port=123,
-                    proto="udp",
-                    service="ntp",
-                    duration=rng.uniform(0.01, 0.1),
-                    orig_bytes=48,
-                    resp_bytes=48,
-                    source_system=system,
-                    pid=ntp_pid,
-                )
+                if ntp_ip:
+                    ntp_pid = (
+                        _svc_pid("svchost_local_svc")
+                        if os_cat == "windows"
+                        else _svc_pid("chronyd", "timesyncd")
+                    )
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=ntp_ip,
+                        time=ts,
+                        dst_port=123,
+                        proto="udp",
+                        service="ntp",
+                        duration=rng.uniform(0.01, 0.1),
+                        orig_bytes=48,
+                        resp_bytes=48,
+                        source_system=system,
+                        pid=ntp_pid,
+                    )
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
@@ -2546,8 +2554,8 @@ class BaselineMixin:
                             cmd_offset = rng.randint(30, 600)
                             # Human typing: variable think time between commands
                             gap = rng.choices(
-                                [rng.randint(3, 10), rng.randint(12, 45), rng.randint(60, 300)],
-                                weights=[45, 35, 20],
+                                [rng.randint(8, 20), rng.randint(25, 60), rng.randint(90, 300)],
+                                weights=[40, 35, 25],
                                 k=1,
                             )[0]
                             cumulative_gap += gap
@@ -2959,18 +2967,28 @@ class BaselineMixin:
                 elif source_roll < 0.88:
                     if is_rhel_like:
                         continue  # RHEL uses chronyd, not systemd-timesyncd
-                    ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
+                    # Use the same deterministic NTP source as network-level NTP
+                    ntp_candidates = [
+                        ip
+                        for ip in self._infra_ips.get("ntp", ["91.189.89.198"])
+                        if ip != system.ip
+                    ]
+                    if not ntp_candidates:
+                        continue  # This host IS the NTP server; skip timesyncd messages
+                    ntp_ip = ntp_candidates[
+                        _stable_seed(f"ntp_src_{system.hostname}") % len(ntp_candidates)
+                    ]
                     if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
                     if system.hostname not in self._timesyncd_first_seen:
-                        msg = f"Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com)."
+                        msg = f"Synchronized to time server for the first time {ntp_ip}:123."
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
                         msg = rng.choice(
                             [
-                                f"Initial synchronization to time server {ntp_ip}:123 (ntp.ubuntu.com).",
-                                f"Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).",
-                                f"Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).",
+                                f"Initial synchronization to time server {ntp_ip}:123.",
+                                f"Timed out waiting for reply from {ntp_ip}:123.",
+                                f"Synchronized to time server {ntp_ip}:123.",
                             ]
                         )
                     self.activity_generator.generate_syslog_event(

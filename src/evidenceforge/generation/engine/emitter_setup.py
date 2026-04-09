@@ -397,7 +397,7 @@ class EmitterSetupMixin:
 
         infra: dict[str, str | list] = {
             "dns": [],
-            "ntp": ["129.6.15.28", "132.163.97.1"],
+            "ntp": [],  # Populated from DCs (AD) or external (non-domain)
             "dc": [],
             "dc_hostnames": [],
             "db_servers": [],
@@ -438,6 +438,14 @@ class EmitterSetupMixin:
         if not infra["dc"]:
             infra["dc"] = [infra["dns"][0]]
             infra["dc_hostnames"] = ["DC-01"]
+
+        # AD environments: workstations sync NTP from the DC (W32Time service).
+        # Only use external NIST servers for non-domain environments.
+        if not infra["ntp"]:
+            if infra["dc"]:
+                infra["ntp"] = list(infra["dc"])
+            else:
+                infra["ntp"] = ["129.6.15.28", "132.163.97.1"]
 
         return infra
 

@@ -398,6 +398,10 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` events tells the engine which domain name the client resolved to reach that IP. Omit `hostname` for raw-IP C2 (no DNS lookup expected). The validator will warn about unmatched domains.
 
+**NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
+
+**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records have a deterministic propagation delay (100-500 microseconds) based on the sensor's position. Sensors farther from the packet source see events slightly later. Byte and packet counts are identical across sensors (both see the same packets on the wire), but timestamps and durations differ.
+
 **Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
 
 **Command diversification:** Baseline process commands are parameterized with varied project paths, document names, build configurations, and per-user file references instead of fixed strings.

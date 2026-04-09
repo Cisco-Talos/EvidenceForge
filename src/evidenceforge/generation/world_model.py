@@ -313,6 +313,9 @@ class WorldModel:
         ]
         if ntp_hosts:
             return [system.ip for system in ntp_hosts]
+        # AD environments: workstations sync NTP from the DC (W32Time service)
+        if self.domain_controllers:
+            return [dc.ip for dc in self.domain_controllers]
         return ["129.6.15.28", "132.163.97.1"]
 
     def to_infrastructure_ips(self) -> dict[str, str | list[Any]]:
@@ -672,11 +675,18 @@ class WorldPlanner:
             if exe in compatible_exes:
                 return pid
 
-        target_exe = rng.choice(compatible_exes)
-        if self.world_model.hosts[system.hostname].os_category == "windows":
-            image = f"C:\\Windows\\System32\\{target_exe}"
-        else:
-            image = f"/usr/bin/{target_exe}"
+        from evidenceforge.generation.activity.application_catalog import (
+            has_catalog_entry,
+            resolve_image_path,
+        )
+
+        os_cat = self.world_model.hosts[system.hostname].os_category
+        # Filter to executables that exist in the catalog for this OS
+        os_exes = [e for e in compatible_exes if has_catalog_entry(e, os_cat)]
+        if not os_exes:
+            os_exes = compatible_exes
+        target_exe = rng.choice(os_exes)
+        image = resolve_image_path(target_exe, os_cat, username=user.username)
         proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
         self.state_manager.set_current_time(proc_time)
         parent_pid = self.activity_generator._resolve_parent(

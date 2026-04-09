@@ -480,7 +480,7 @@ class ActivityGenerator:
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
-        self._expanding: bool = False
+        self._expanding_types: set[str] = set()
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build a HostContext from a System model object.
@@ -579,13 +579,14 @@ class ActivityGenerator:
 
         This is a no-op if:
         - No causal engine is configured.
-        - We are already inside an expansion (recursion guard).
+        - We are already expanding the same event type (prevents same-type recursion).
 
-        For each expanded event, computes a randomized timestamp offset from the
-        trigger event's timestamp, then calls the corresponding generate_* method
-        on this ActivityGenerator instance.
+        Cross-type expansion is allowed: a process_create expansion can trigger
+        a connection expansion (which triggers DNS), but connection cannot
+        recursively trigger another connection expansion.
         """
-        if self._expanding:
+        if event_type in self._expanding_types:
+            logger.debug("Skipping nested %s expansion (already expanding)", event_type)
             return
 
         ctx = self._build_expansion_context(event_type, timestamp, **kwargs)
@@ -594,7 +595,7 @@ class ActivityGenerator:
             return
 
         rng = _get_rng()
-        self._expanding = True
+        self._expanding_types.add(event_type)
         try:
             for ev in expanded:
                 offset_ms = rng.randint(ev.timing.min_ms, ev.timing.max_ms)
@@ -607,7 +608,7 @@ class ActivityGenerator:
                 method = getattr(self, ev.method)
                 method(**ev.kwargs)
         finally:
-            self._expanding = False
+            self._expanding_types.discard(event_type)
 
     def generate_logon(
         self,
@@ -1889,7 +1890,7 @@ class ActivityGenerator:
             event.ntp = NtpContext(
                 version=ntp_rng.choice([3, 4]),
                 mode=3,  # client
-                stratum=ntp_rng.randint(1, 4),
+                stratum=(_stable_seed(f"ntp_stratum_{dst_ip}") % 3) + 1,  # Stable per server
                 poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
                 precision=ntp_rng.uniform(-25.0, -18.0),
                 root_delay=ntp_rng.uniform(0.0, 0.1),
@@ -2978,29 +2979,40 @@ class ActivityGenerator:
                     if os_category == "linux":
                         self.generate_bash_command(user, system, time, activity_type)
 
-            # Fallback to legacy PROCESS_TEMPLATES for system processes and
-            # any activity types not yet in the catalog
-            elif os_category == "windows" and activity_type in PROCESS_TEMPLATES:
-                rng = _get_rng()
-                process_name, command_line = rng.choice(PROCESS_TEMPLATES[activity_type])
-                process_name = process_name.replace("{username}", user.username)
-                command_line = _parameterize_command(rng, command_line, username=user.username)
-                parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
-                pid = self.generate_process(
-                    user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
-                )
-                self._record_user_process(system, user, pid, process_name)
-
-            elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
-                rng = _get_rng()
-                process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])
-                command_line = _parameterize_command(rng, command_line, username=user.username)
-                parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
-                pid = self.generate_process(
-                    user, system, time, logon_id, process_name, command_line, parent_pid=parent_pid
-                )
-                self._record_user_process(system, user, pid, process_name)
-                self.generate_bash_command(user, system, time, activity_type)
+            # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
+            elif activity_type == "process_system":
+                if os_category == "windows" and activity_type in PROCESS_TEMPLATES:
+                    rng = _get_rng()
+                    process_name, command_line = rng.choice(PROCESS_TEMPLATES[activity_type])
+                    process_name = process_name.replace("{username}", user.username)
+                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    pid = self.generate_process(
+                        user,
+                        system,
+                        time,
+                        logon_id,
+                        process_name,
+                        command_line,
+                        parent_pid=parent_pid,
+                    )
+                    self._record_user_process(system, user, pid, process_name)
+                elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
+                    rng = _get_rng()
+                    process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])
+                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    pid = self.generate_process(
+                        user,
+                        system,
+                        time,
+                        logon_id,
+                        process_name,
+                        command_line,
+                        parent_pid=parent_pid,
+                    )
+                    self._record_user_process(system, user, pid, process_name)
+                    self.generate_bash_command(user, system, time, activity_type)
 
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
@@ -4561,6 +4573,8 @@ class ActivityGenerator:
         # Derive image path from command_templates (which have correct full paths)
         # rather than blindly prefixing C:\Windows\System32\
         image = None
+        from evidenceforge.generation.activity.application_catalog import resolve_image_path
+
         if os_cat == "windows":
             for tmpl in cmd_templates:
                 if "\\" in tmpl:
@@ -4568,14 +4582,14 @@ class ActivityGenerator:
                     image = cleaned.split('" ')[0] if '" ' in cleaned else cleaned.split()[0]
                     break
             if not image:
-                image = f"C:\\Windows\\System32\\{chosen_parent}"
+                image = resolve_image_path(chosen_parent, "windows", username=user.username)
         else:
             for tmpl in cmd_templates:
                 if "/" in tmpl:
                     image = tmpl.split()[0]
                     break
             if not image:
-                image = f"/usr/bin/{chosen_parent}"
+                image = resolve_image_path(chosen_parent, "linux")
                 if chosen_parent in ("bash", "sh", "zsh"):
                     image = f"/bin/{chosen_parent}"
 

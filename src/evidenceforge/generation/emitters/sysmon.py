@@ -523,14 +523,19 @@ class SysmonEventEmitter(LogEmitter):
         self.emit_event(event_data)
 
     @staticmethod
-    def _resolve_full_image_path(image: str) -> str:
+    def _resolve_full_image_path(image: str, username: str = "") -> str:
         """Ensure a Windows image path is fully qualified.
 
-        Sysmon always logs full paths. If only a bare filename is provided
-        (e.g., 'lsass.exe'), prepend the standard System32 directory.
+        Sysmon always logs full paths. If only a bare filename is provided,
+        resolve it via the application catalog (user apps get Program Files,
+        system binaries get System32).
         """
         if "\\" not in image and "/" not in image:
-            return rf"C:\Windows\System32\{image}"
+            from evidenceforge.generation.activity.application_catalog import (
+                resolve_image_path,
+            )
+
+            return resolve_image_path(image, "windows", username=username)
         return image
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
@@ -547,8 +552,10 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (target_server=target_image, process_name=unused)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
+        target_username = auth.username if auth else ""
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe"
+            auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe",
+            username=target_username,
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
 
@@ -588,8 +595,10 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (same pattern as create_remote_thread)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
+        target_username = auth.username if auth else ""
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe"
+            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe",
+            username=target_username,
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
 

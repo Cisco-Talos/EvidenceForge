@@ -20,6 +20,82 @@ from evidenceforge.config import get_activity_directory
 _CATALOG_PATH = get_activity_directory() / "application_catalog.yaml"
 _CACHED_CATALOG: dict[str, Any] | None = None
 _CACHED_PE: dict[str, tuple[str, str, str, str, str]] | None = None
+_CACHED_PATH_INDEX: dict[str, dict[str, str]] | None = None
+
+# Windows system binaries that correctly live in System32 or Windows\.
+# Only these should get the System32 prefix when resolved from a bare name.
+_SYSTEM_BINARIES = frozenset(
+    {
+        "cmd.exe",
+        "powershell.exe",
+        "svchost.exe",
+        "lsass.exe",
+        "services.exe",
+        "taskhostw.exe",
+        "conhost.exe",
+        "dllhost.exe",
+        "sihost.exe",
+        "searchindexer.exe",
+        "runtimebroker.exe",
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "winlogon.exe",
+        "dwm.exe",
+        "taskmgr.exe",
+        "mmc.exe",
+        "msiexec.exe",
+        "regsvr32.exe",
+        "rundll32.exe",
+        "sc.exe",
+        "net.exe",
+        "net1.exe",
+        "netsh.exe",
+        "wmic.exe",
+        "whoami.exe",
+        "ipconfig.exe",
+        "ping.exe",
+        "tracert.exe",
+        "nslookup.exe",
+        "certutil.exe",
+        "bitsadmin.exe",
+        "cscript.exe",
+        "wscript.exe",
+        "mshta.exe",
+        "reg.exe",
+        "schtasks.exe",
+        "tasklist.exe",
+        "systeminfo.exe",
+        "findstr.exe",
+        "attrib.exe",
+        "xcopy.exe",
+        "robocopy.exe",
+        "icacls.exe",
+        "takeown.exe",
+        "fsutil.exe",
+        "bcdedit.exe",
+        "wmiprvse.exe",
+        "spoolsv.exe",
+        "searchprotocolhost.exe",
+        "searchfilterhost.exe",
+        "usoclient.exe",
+        "tiworker.exe",
+        "cleanmgr.exe",
+        "wsqmcons.exe",
+        "backgroundtaskhost.exe",
+        "compattelrunner.exe",
+        "mstsc.exe",
+        "notepad.exe",
+        "msedge.exe",  # Edge has moved to Program Files but System32 stub exists
+        "msmpeng.exe",
+        "mpcmdrun.exe",
+        "ismserv.exe",
+        "dns.exe",
+        "dfsr.exe",
+        "ntdsutil.exe",
+        "msdtc.exe",
+    }
+)
 
 
 def load_catalog() -> dict[str, Any]:
@@ -110,6 +186,107 @@ def _build_pe_index() -> dict[str, tuple[str, str, str, str, str]]:
                 pe.get("company", "-"),
                 pe.get("original_filename", "-"),
             )
+    return index
+
+
+def has_catalog_entry(exe_basename: str, os_category: str) -> bool:
+    """Check whether an executable has a catalog entry for the given OS."""
+    global _CACHED_PATH_INDEX
+    if _CACHED_PATH_INDEX is None:
+        _CACHED_PATH_INDEX = _build_path_index()
+
+    lower = exe_basename.lower()
+    os_index = _CACHED_PATH_INDEX.get(os_category, {})
+    if lower in os_index:
+        return True
+    # Try with .exe for extensionless Windows lookups
+    if os_category == "windows" and not lower.endswith(".exe"):
+        return f"{lower}.exe" in os_index
+    return False
+
+
+def resolve_image_path(exe_basename: str, os_category: str = "windows", username: str = "") -> str:
+    """Resolve a bare executable name to its correct full filesystem path.
+
+    Lookup order:
+    1. Application catalog (user-installed apps like Chrome, Firefox, etc.)
+    2. Known system binaries with special paths (explorer.exe → C:\\Windows\\)
+    3. Known system binaries (System32 is correct for these)
+    4. Last-resort fallback (System32 for Windows, /usr/bin for Linux)
+
+    Args:
+        exe_basename: Bare executable name (e.g., "chrome.exe", "git")
+        os_category: "windows" or "linux"
+        username: Optional username for profile-scoped apps (Teams, OneDrive).
+            If empty and the path contains {username}, the bare basename is
+            returned unchanged to avoid fabricating paths.
+    """
+    global _CACHED_PATH_INDEX
+    if _CACHED_PATH_INDEX is None:
+        _CACHED_PATH_INDEX = _build_path_index()
+
+    lower = exe_basename.lower()
+    key = lower
+
+    # Also try with .exe appended for extensionless Windows lookups
+    key_with_ext = f"{lower}.exe" if os_category == "windows" and not lower.endswith(".exe") else ""
+
+    # 1. Check catalog
+    os_index = _CACHED_PATH_INDEX.get(os_category, {})
+    path = os_index.get(key) or (os_index.get(key_with_ext) if key_with_ext else None)
+    if path:
+        if "{username}" in path:
+            if username:
+                path = path.replace("{username}", username)
+            else:
+                # No username context — return basename to avoid fabricating paths
+                return exe_basename
+        return path
+
+    # 2. Known system binaries with non-System32 paths
+    _SPECIAL_PATHS = {
+        "explorer.exe": r"C:\Windows\explorer.exe",
+        "dwm.exe": r"C:\Windows\System32\dwm.exe",
+    }
+    if os_category == "windows" and lower in _SPECIAL_PATHS:
+        return _SPECIAL_PATHS[lower]
+
+    # 3. Known system binaries → System32 is correct
+    if os_category == "windows" and lower in _SYSTEM_BINARIES:
+        return rf"C:\Windows\System32\{exe_basename}"
+
+    # 3. Last resort
+    if os_category == "linux":
+        return f"/usr/bin/{exe_basename}"
+    return rf"C:\Windows\System32\{exe_basename}"
+
+
+def _build_path_index() -> dict[str, dict[str, str]]:
+    """Build basename → full path indexes for each OS from the catalog.
+
+    Indexes both with and without .exe extension so that bare names
+    like 'git' and 'git.exe' both resolve to the catalog path.
+    """
+    data = load_catalog()
+    index: dict[str, dict[str, str]] = {"windows": {}, "linux": {}}
+    for app in data["applications"]:
+        for os_cat in ("windows", "linux"):
+            platform = app.get("platforms", {}).get(os_cat)
+            if not platform:
+                continue
+            image_path = platform["image_path"]
+            if os_cat == "windows":
+                basename = image_path.rsplit("\\", 1)[-1].lower()
+            else:
+                basename = image_path.rsplit("/", 1)[-1].lower()
+            if basename and basename not in index[os_cat]:
+                index[os_cat][basename] = image_path
+                # Also index extensionless form (git.exe → git) for callers
+                # that use bare names from process_network_map.yaml
+                if basename.endswith(".exe"):
+                    no_ext = basename[:-4]
+                    if no_ext and no_ext not in index[os_cat]:
+                        index[os_cat][no_ext] = image_path
     return index
 
 
