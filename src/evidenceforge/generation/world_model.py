@@ -566,13 +566,11 @@ class WorldModel:
                     source = None  # will trigger fallback below
 
         if source is None:
-            # No suitable source system — if we have an explicit IP from
-            # the storyline, use it directly with a network logon.
-            # RDP without a Windows source_system is impossible (no mstsc.exe),
-            # so coerce to SSH or network.
-            if kind == "rdp":
-                kind = "ssh" if host.supports_ssh else "network"
             if source_ip_override:
+                # Explicit source IP from storyline but no modeled source
+                # host.  Keep the session kind so the transport connection
+                # (port 22 / 3389) is still generated — we just won't have
+                # source-side process evidence (mstsc.exe / ssh client).
                 return SessionPlan(
                     target_system=target_system,
                     source_system=None,
@@ -581,7 +579,16 @@ class WorldModel:
                     session_kind=kind,
                     requires_transport=True,
                 )
-            fallback_kind = "network" if host.is_server else "interactive"
+            # No explicit IP and no suitable source — fall back.
+            # RDP without a Windows source is impossible (no mstsc.exe),
+            # so coerce for auto-selected sessions only.
+            if kind == "rdp":
+                kind = "ssh" if host.supports_ssh else "network"
+            fallback_kind = (
+                kind
+                if kind in ("ssh", "network")
+                else ("network" if host.is_server else "interactive")
+            )
             return self.plan_session(
                 user=user,
                 target_system=target_system,
