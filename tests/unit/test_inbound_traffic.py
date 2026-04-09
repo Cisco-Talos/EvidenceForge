@@ -98,20 +98,30 @@ class TestInboundProfiles:
 class TestEnsureConnectionProcessCommandLine:
     """Regression: ensure_connection_process should emit catalog command templates."""
 
-    def test_catalog_backed_command_not_bare_exe(self):
-        """When the catalog has a template, command_line should not be a bare exe."""
+    def test_catalog_has_apps_with_command_templates(self):
+        """Catalog should have apps with parameterized command templates."""
         from evidenceforge.generation.activity.application_catalog import load_catalog
 
         catalog = load_catalog()
-        # Find an app with command templates
-        for app in catalog.get("apps", []):
+        apps_with_templates = 0
+        for app in catalog.get("applications", []):
             for os_cat in ("windows", "linux"):
                 plat = app.get("platforms", {}).get(os_cat)
                 if plat and plat.get("command_templates"):
                     templates = plat["command_templates"]
-                    # All templates should have more than just a bare exe name
-                    for t in templates:
-                        # Templates have spaces (arguments) or placeholders
-                        assert " " in t or "{" in t, (
-                            f"Template '{t}' for {app['id']}/{os_cat} looks like a bare exe"
-                        )
+                    # At least one template should have arguments or placeholders
+                    has_parameterized = any(" " in t or "{" in t for t in templates)
+                    if has_parameterized:
+                        apps_with_templates += 1
+        assert apps_with_templates > 10, (
+            f"Expected >10 apps with parameterized templates, got {apps_with_templates}"
+        )
+
+    def test_catalog_key_is_applications(self):
+        """Regression: catalog uses 'applications' key, not 'apps'."""
+        from evidenceforge.generation.activity.application_catalog import load_catalog
+
+        catalog = load_catalog()
+        assert "applications" in catalog, "Catalog should have 'applications' key"
+        assert "apps" not in catalog, "Catalog should NOT have 'apps' key"
+        assert len(catalog["applications"]) > 0

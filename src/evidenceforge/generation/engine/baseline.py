@@ -2083,6 +2083,11 @@ class BaselineMixin:
                 )
 
         # --- Inbound traffic (connections TO this host from other roles/external) ---
+        # Inbound profile traffic generates permitted connections that match
+        # the host's role.  Exposure gating below ensures external traffic
+        # only reaches hosts on externally-exposed segments.  Denied traffic
+        # (port scans, blocked probes) is handled by _generate_firewall_deny_baseline()
+        # which already evaluates policy rules and emits ASA Deny / REJ records.
         from evidenceforge.generation.activity.traffic_profiles import (
             get_role_inbound_connections,
         )

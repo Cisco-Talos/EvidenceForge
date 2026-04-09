@@ -568,6 +568,10 @@ class WorldModel:
         if source is None:
             # No suitable source system — if we have an explicit IP from
             # the storyline, use it directly with a network logon.
+            # RDP without a Windows source_system is impossible (no mstsc.exe),
+            # so coerce to SSH or network.
+            if kind == "rdp":
+                kind = "ssh" if host.supports_ssh else "network"
             if source_ip_override:
                 return SessionPlan(
                     target_system=target_system,
@@ -737,7 +741,7 @@ class WorldPlanner:
         # available, instead of emitting the bare executable name.
         command_line = target_exe
         catalog = load_catalog()
-        for app in catalog.get("apps", []):
+        for app in catalog.get("applications", []):
             plat = app.get("platforms", {}).get(os_cat)
             if not plat:
                 continue
