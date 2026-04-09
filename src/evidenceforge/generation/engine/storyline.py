@@ -502,14 +502,22 @@ class StorylineMixin:
 
         elif spec.type == "process":
             if hasattr(self, "world_planner"):
-                # Let the planner choose session kind based on host/user
-                # relationship (interactive for own workstation, SSH/RDP
-                # for servers, network for remote access)
+                # Bare process steps use "network" session kind for servers
+                # to avoid injecting unsolicited SSH/RDP transport evidence.
+                # Explicit ssh_session/rdp_session storyline events handle
+                # transport when the scenario actually wants it.
+                host_info = self.world_model.hosts.get(system.hostname)
+                is_own_workstation = system.assigned_user == actor.username
+                auto_kind = None  # let planner decide for own workstation
+                if not is_own_workstation and host_info and host_info.is_server:
+                    auto_kind = "network"
                 target_session = self.world_planner.ensure_user_session(
                     actor,
                     system,
                     time,
                     rng,
+                    session_kind=auto_kind,
+                    storyline_protected=True,
                 )
                 logon_id = target_session.logon_id
             else:
@@ -710,6 +718,7 @@ class StorylineMixin:
                     source_system=source_system,
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
+                    storyline_protected=True,
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -745,6 +754,7 @@ class StorylineMixin:
                     source_system=source_system,
                     allow_existing=False,
                     source_ip_override=spec.source_ip,
+                    storyline_protected=True,
                 )
             else:
                 source_ip = spec.source_ip or system.ip

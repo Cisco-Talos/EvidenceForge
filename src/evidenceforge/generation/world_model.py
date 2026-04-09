@@ -636,6 +636,7 @@ class WorldPlanner:
         session_kind: str | None = None,
         source_system: System | None = None,
         allow_existing: bool = True,
+        storyline_protected: bool = False,
     ) -> ActiveSession:
         return self.bootstrap_user_session(
             user=user,
@@ -645,6 +646,7 @@ class WorldPlanner:
             session_kind=session_kind,
             source_system=source_system,
             allow_existing=allow_existing,
+            storyline_protected=storyline_protected,
         ).session
 
     def bootstrap_user_session(
@@ -657,10 +659,13 @@ class WorldPlanner:
         source_system: System | None = None,
         allow_existing: bool = True,
         source_ip_override: str | None = None,
+        storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
         existing = self._find_user_session(user.username, target_system.hostname)
         if allow_existing and existing is not None:
             existing.last_activity_time = time
+            if storyline_protected:
+                existing.storyline_protected = True
             return SessionBootstrapResult(session=existing, network_uid=None)
 
         plan = self.world_model.plan_session(
@@ -675,9 +680,15 @@ class WorldPlanner:
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
-            return self._bootstrap_ssh_session(user, plan, logon_time, time, rng)
+            result = self._bootstrap_ssh_session(user, plan, logon_time, time, rng)
+            if storyline_protected and result.session:
+                result.session.storyline_protected = True
+            return result
         if plan.session_kind == "rdp":
-            return self._bootstrap_rdp_session(user, plan, logon_time, time, rng)
+            result = self._bootstrap_rdp_session(user, plan, logon_time, time, rng)
+            if storyline_protected and result.session:
+                result.session.storyline_protected = True
+            return result
 
         logon_id = self.state_manager.create_session(
             username=user.username,
@@ -698,6 +709,8 @@ class WorldPlanner:
         if session is None:
             raise RuntimeError(f"Failed to resolve planned session {logon_id} on {target_system}")
         session.last_activity_time = time
+        if storyline_protected:
+            session.storyline_protected = True
         return SessionBootstrapResult(session=session, network_uid=None)
 
     def ensure_connection_process(
