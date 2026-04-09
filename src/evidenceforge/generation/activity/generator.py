@@ -2997,6 +2997,12 @@ class ActivityGenerator:
                                     parent_pid=pid,
                                 )
 
+                    # Emit correlated network connection for network-active apps
+                    # (tight PID+timestamp coupling alongside profile-driven volume)
+                    self._emit_process_network_correlation(
+                        system, process_name, command_line, time, pid, rng
+                    )
+
                     # Also generate bash history for Linux processes
                     if os_category == "linux":
                         self.generate_bash_command(user, system, time, activity_type)
