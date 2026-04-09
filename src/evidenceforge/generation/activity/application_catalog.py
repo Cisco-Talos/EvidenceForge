@@ -142,9 +142,16 @@ def get_apps_for_persona(
             continue
         results.append(app)
 
-    # If no apps matched for this persona, try "default" as fallback
+    # Only fall back to "default" if the persona is truly unknown
+    # (not listed in ANY app's persona allowlist). Known personas with
+    # no apps in a category should return empty — the caller skips
+    # that activity type, preventing role-inappropriate tools.
     if not results and persona_lower != "default":
-        return get_apps_for_persona("default", os_category, category)
+        known_personas = set()
+        for app in data["applications"]:
+            known_personas.update(app.get("personas", []))
+        if persona_lower not in known_personas:
+            return get_apps_for_persona("default", os_category, category)
 
     return results
 

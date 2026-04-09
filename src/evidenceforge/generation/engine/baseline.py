@@ -1519,7 +1519,13 @@ class BaselineMixin:
             persona = self._get_user_persona(user)
             is_outside_work_hours = False
             if persona and persona.work_hours_parsed:
-                is_outside_work_hours = current_hour.hour not in persona.work_hours_parsed.get(
+                # Use scenario-local time for work-hour checks, not UTC
+                _local_hour = (
+                    current_hour.astimezone(self._scenario_tz)
+                    if hasattr(self, "_scenario_tz") and self._scenario_tz
+                    else current_hour
+                )
+                is_outside_work_hours = _local_hour.hour not in persona.work_hours_parsed.get(
                     "hours", range(24)
                 )
 
