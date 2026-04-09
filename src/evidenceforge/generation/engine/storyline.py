@@ -498,12 +498,14 @@ class StorylineMixin:
 
         elif spec.type == "process":
             if hasattr(self, "world_planner"):
+                # Let the planner choose session kind based on host/user
+                # relationship (interactive for own workstation, SSH/RDP
+                # for servers, network for remote access)
                 target_session = self.world_planner.ensure_user_session(
                     actor,
                     system,
                     time,
                     rng,
-                    session_kind="network",
                 )
                 logon_id = target_session.logon_id
             else:
@@ -636,7 +638,7 @@ class StorylineMixin:
                 resp_bytes = rng.randint(5000, 50000)
                 http_ctx = HttpContext(
                     method=spec.method or "GET",
-                    host=dst_ip,
+                    host=spec.hostname or dst_ip,
                     uri=spec.uri or "/",
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
