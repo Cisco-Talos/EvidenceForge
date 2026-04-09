@@ -725,23 +725,6 @@ class EmitterSetupMixin:
                 return seg.exposure
         return "internal"
 
-    def _get_static_nat_vip(self, real_ip: str) -> str | None:
-        """Return the public VIP for a host behind static NAT, or None.
-
-        Scans firewall sensors for a static NAT rule whose real_ip matches
-        the given internal IP.  Used by inbound traffic generation so that
-        external clients address the public VIP instead of the private IP.
-        """
-        if not self.scenario.environment.network:
-            return None
-        for sensor in self.scenario.environment.network.sensors:
-            if sensor.type != "firewall":
-                continue
-            for rule in sensor.nat_rules:
-                if rule.type == "static" and rule.real_ip == real_ip:
-                    return rule.mapped_ip
-        return None
-
     @staticmethod
     def _generate_external_client_ip(rng) -> str:
         """Generate a random external (non-RFC1918) IP for web server clients."""

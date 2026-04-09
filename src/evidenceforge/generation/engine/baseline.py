@@ -2084,10 +2084,10 @@ class BaselineMixin:
 
         # --- Inbound traffic (connections TO this host from other roles/external) ---
         # Inbound profile traffic generates permitted connections that match
-        # the host's role.  Exposure gating below ensures external traffic
-        # only reaches hosts on externally-exposed segments.  Denied traffic
-        # (port scans, blocked probes) is handled by _generate_firewall_deny_baseline()
-        # which already evaluates policy rules and emits ASA Deny / REJ records.
+        # the host's role.  Each candidate connection is checked against
+        # firewall policy — denied flows are skipped here because the deny
+        # baseline (_generate_firewall_deny_baseline) already generates
+        # ASA Deny / REJ records independently.
         from evidenceforge.generation.activity.traffic_profiles import (
             get_role_inbound_connections,
         )
@@ -2100,6 +2100,23 @@ class BaselineMixin:
             allows_external = exposure in ("external", "both")
             if not allows_external:
                 inbound_conns = [c for c in inbound_conns if c["role"] != "_external"]
+
+            # Pre-compute firewall policy context for per-connection checks
+            import ipaddress as _ipa_inbound
+
+            _inbound_segment_cidrs: dict = {}
+            _inbound_fw_sensors: list = []
+            if self.scenario.environment.network:
+                for seg in self.scenario.environment.network.segments:
+                    try:
+                        _inbound_segment_cidrs[seg.name] = _ipa_inbound.ip_network(
+                            seg.cidr, strict=False
+                        )
+                    except ValueError:
+                        continue
+                _inbound_fw_sensors = [
+                    s for s in self.scenario.environment.network.sensors if s.type == "firewall"
+                ]
 
             if not inbound_conns:
                 pass  # All entries were external and host is internal-only
@@ -2116,6 +2133,24 @@ class BaselineMixin:
                     )
                     if not src_ip:
                         continue
+
+                    # Evaluate firewall policy — skip connections that any
+                    # firewall would deny.  The deny baseline handles those.
+                    if _inbound_fw_sensors:
+                        denied = False
+                        for fw_sensor in _inbound_fw_sensors:
+                            action = self._evaluate_firewall_policy(
+                                src_ip,
+                                system.ip,
+                                conn["port"],
+                                fw_sensor,
+                                _inbound_segment_cidrs,
+                            )
+                            if action == "deny":
+                                denied = True
+                                break
+                        if denied:
+                            continue
 
                     offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
