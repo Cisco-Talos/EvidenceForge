@@ -2206,9 +2206,12 @@ class BaselineMixin:
                     # internal clients use the internal FQDN.
                     dst_hostname = None
                     if is_external_src:
-                        # Suppress hostname resolution — external clients
-                        # shouldn't get internal FQDNs from REVERSE_DNS.
-                        dst_hostname = ""
+                        # Use public hostname if configured, otherwise suppress
+                        # REVERSE_DNS to avoid leaking internal FQDNs.
+                        if system.public_hostnames:
+                            dst_hostname = rng.choice(system.public_hostnames)
+                        else:
+                            dst_hostname = ""
                     elif is_internal_src and hasattr(self, "world_model"):
                         dst_hostname = self.world_model.fqdn_for_system(system)
 
@@ -2266,13 +2269,13 @@ class BaselineMixin:
             # Only interactive sessions generate user-driven persona traffic
             if session.logon_type not in (2, 10, 11):
                 continue
-            # Don't generate workstation-style persona traffic (Outlook, Teams,
-            # Chrome) for remote admin sessions on servers — those produce
-            # impossible SaaS app behavior on server infrastructure.
-            is_server_host = system.type in ("server", "domain_controller")
-            if is_server_host and session.logon_type in (10, 11):
-                continue
-            persona_conns = get_persona_connections(persona, os_cat)
+            # Remote admin sessions on other machines use _server_admin profile
+            # instead of the user's normal persona (no Outlook/Teams on servers).
+            is_own_workstation = system.assigned_user == session.username
+            if not is_own_workstation and session.logon_type in (10, 11):
+                persona_conns = get_persona_connections("_server_admin", os_cat)
+            else:
+                persona_conns = get_persona_connections(persona, os_cat)
             if not persona_conns:
                 continue
             p_weights = [c.get("weight", 1) for c in persona_conns]

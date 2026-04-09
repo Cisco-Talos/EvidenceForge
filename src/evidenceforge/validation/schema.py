@@ -486,6 +486,34 @@ class ScenarioValidator:
                             )
                         )
 
+        # Warn if externally exposed systems lack public_hostnames
+        for segment in self.scenario.environment.network.segments:
+            if segment.exposure not in ("external", "both"):
+                continue
+            for hostname in segment.systems:
+                system = next(
+                    (s for s in self.scenario.environment.systems if s.hostname == hostname),
+                    None,
+                )
+                if system and not system.public_hostnames:
+                    has_inbound_role = system.type in ("server", "domain_controller") or any(
+                        r in (system.roles or [])
+                        for r in ("web_server", "mail_server", "app_server")
+                    )
+                    if has_inbound_role:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="info",
+                                field_path=f"environment.systems[{hostname}].public_hostnames",
+                                message=(
+                                    f"Server '{hostname}' is on externally exposed segment "
+                                    f"'{segment.name}' but has no public_hostnames. "
+                                    f"Inbound HTTPS will have no TLS SNI or HTTP Host header."
+                                ),
+                                suggestion="Add public_hostnames for realistic external traffic",
+                            )
+                        )
+
     def _validate_network_sensors(self) -> None:
         """Validate network sensor cross-references."""
         if not self.scenario.environment.network:

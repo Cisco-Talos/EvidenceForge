@@ -180,6 +180,11 @@ class System(BaseModel):
         default_factory=list,
         description="System roles: forward_proxy, web_server, dns_server, mail_server, etc.",
     )
+    public_hostnames: list[str] = Field(
+        default_factory=list,
+        description="Public DNS names for internet-facing services (e.g., 'ehr-portal.example.com'). "
+        "Used for TLS SNI / HTTP Host in external inbound traffic.",
+    )
 
     @field_validator("ip")
     @classmethod

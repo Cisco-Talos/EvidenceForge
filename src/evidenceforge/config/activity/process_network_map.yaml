@@ -61,3 +61,21 @@ mappings:
     service: ssh
     port: 22
     external: false
+
+  # SMB file access → internal file servers (Windows only)
+  - exe: [explorer.exe]
+    service: smb
+    port: 445
+    external: false
+
+  # RDP clients → internal servers (Windows only)
+  - exe: [mstsc.exe]
+    service: rdp
+    port: 3389
+    external: false
+
+  # LDAP/AD tools → domain controllers
+  - exe: [dsquery.exe, ldapsearch]
+    service: ldap
+    port: 389
+    external: false

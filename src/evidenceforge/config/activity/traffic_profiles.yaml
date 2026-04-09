@@ -207,6 +207,24 @@ persona_traffic:
       - {role: _external, port: 443, service: ssl, weight: 50, emit_dns: true, description: "Calendar/email"}
       - {role: file_server, port: 445, service: smb, weight: 10, os: windows}
 
+  # Server-admin profile for remote admin sessions (RDP/SSH) on machines
+  # that aren't the user's own workstation.  Used instead of the user's
+  # regular persona profile to avoid generating workstation-style SaaS
+  # traffic (Outlook, Teams, Chrome) on servers or other users' machines.
+  _server_admin:
+    outbound:
+      # Windows server admin
+      - {role: domain_controller, port: 389, service: ldap, weight: 20, os: windows, description: "AD queries/diagnostics"}
+      - {role: domain_controller, port: 88, service: kerberos, weight: 10, os: windows, description: "Kerberos service ticket"}
+      - {role: _any_server, port: 445, service: smb, weight: 15, os: windows, description: "Admin share access (C$/ADMIN$)"}
+      # Linux server admin
+      - {role: _any_server, port: 22, service: ssh, weight: 15, os: linux, description: "SSH to other servers"}
+      - {role: _external, port: 443, service: ssl, weight: 10, os: linux, emit_dns: true, dns_tags: [background, linux], description: "apt/yum repos, package updates"}
+      # Cross-platform
+      - {role: log_server, port: 443, service: ssl, weight: 15, description: "Check centralized logs/SIEM"}
+      - {role: _external, port: 443, service: ssl, weight: 10, emit_dns: true, dns_tags: [background], description: "Monitoring dashboards/patch checks"}
+      - {role: _any_server, port: 0, proto: icmp, weight: 5, description: "Diagnostic pings"}
+
   # Fallback for personas not explicitly listed
   _default:
     outbound:

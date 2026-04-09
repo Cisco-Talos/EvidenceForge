@@ -125,7 +125,14 @@ class TestResolveImagePath:
             basename = win["image_path"].rsplit("\\", 1)[-1]
             resolved = resolve_image_path(basename, "windows")
             # These legitimately live under System32 or System32 subdirs
-            _SYSTEM32_OK = {"msedge.exe", "wmic.exe", "powershell.exe", "ssh.exe"}
+            _SYSTEM32_OK = {
+                "msedge.exe",
+                "wmic.exe",
+                "powershell.exe",
+                "ssh.exe",
+                "mstsc.exe",
+                "dsquery.exe",
+            }
             if basename.lower() not in _SYSTEM32_OK:
                 assert "System32" not in resolved, (
                     f"{app['id']} ({basename}) resolved to System32: {resolved}"
