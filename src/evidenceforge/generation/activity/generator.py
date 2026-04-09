@@ -1381,7 +1381,11 @@ class ActivityGenerator:
             return ""
 
         # Phase 2.5: Check network topology visibility (skip for local-only)
-        if not local_only:
+        # Firewall-denied connections bypass this check — the dispatcher
+        # handles source-only visibility for denied traffic (packets never
+        # reach the destination, so only source-side sensors see the attempt).
+        is_fw_deny = firewall is not None and firewall.action == "deny"
+        if not local_only and not is_fw_deny:
             visibility = self._network_visibility or (
                 self.dispatcher.visibility_engine if self.dispatcher else None
             )

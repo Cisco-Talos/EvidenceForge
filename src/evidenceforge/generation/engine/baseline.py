@@ -1530,6 +1530,10 @@ class BaselineMixin:
                 )
 
             for session in list(sessions):
+                # Never baseline-close a storyline-created session — the
+                # storyline controls when these sessions end.
+                if session.storyline_protected:
+                    continue
                 sess_start = session.start_time
                 hour_ts = current_hour
                 if sess_start.tzinfo is not None and hour_ts.tzinfo is None:

@@ -467,6 +467,10 @@ class StorylineMixin:
                 logon_type=spec.logon_type,
                 source_ip=source_ip,
             )
+            # Protect storyline-created sessions from baseline logoff
+            session = self.state_manager.get_session(logon_id)
+            if session:
+                session.storyline_protected = True
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
 
@@ -905,10 +909,14 @@ class StorylineMixin:
             )
             from evidenceforge.utils.ids import generate_zeek_uid
 
+            # Use DC as DHCP server (common in AD environments)
+            dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
+            dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=time,
                 mac=mac,
+                server_addr=dhcp_server,
                 lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
                 uid=generate_zeek_uid("C"),
             )
