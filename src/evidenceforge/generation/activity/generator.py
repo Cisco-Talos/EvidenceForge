@@ -1635,15 +1635,27 @@ class ActivityGenerator:
                     proxy_hostname = REVERSE_DNS.get(dst_ip)
                 if not proxy_hostname:
                     proxy_hostname = _generate_random_hostname(_get_rng(), dst_ip)
-                schema = "https" if dst_port == 443 else "http"
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-                domain_tags = get_domain_tags(proxy_hostname)
-                path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                    _get_rng(), proxy_hostname, domain_tags
-                )
-                url = f"{schema}://{proxy_hostname}{path}"
+                # HTTPS: forward proxies log CONNECT tunnels, not decrypted content
+                # HTTP: proxies log full URL with verb
+                if dst_port == 443:
+                    proxy_method = "CONNECT"
+                    proxy_host_port = (
+                        proxy_hostname if ":" in proxy_hostname else f"{proxy_hostname}:443"
+                    )
+                    url = proxy_host_port
+                    domain_tags = get_domain_tags(proxy_hostname)
+                    _, proxy_content_type, _, proxy_ua_override = pick_proxy_uri(
+                        _get_rng(), proxy_hostname, domain_tags
+                    )
+                else:
+                    domain_tags = get_domain_tags(proxy_hostname)
+                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
+                        _get_rng(), proxy_hostname, domain_tags
+                    )
+                    url = f"http://{proxy_hostname}{path}"
                 # Pick a random user from the scenario (if available)
                 _PROXY_UAS = [
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

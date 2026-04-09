@@ -2097,6 +2097,12 @@ class BaselineMixin:
 
             for _ in range(num_persona):
                 conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
+                # Skip SSH/RDP — these require compound session evidence
+                # (sshd syslog, 4624 type 10, bash history) that bare
+                # connections don't provide. They're handled by dedicated
+                # SSH/RDP generation paths instead.
+                if conn.get("service") in ("ssh", "rdp"):
+                    continue
                 dst_ip, hostname = self._resolve_dest_role(
                     conn["dest_role"],
                     system.ip,

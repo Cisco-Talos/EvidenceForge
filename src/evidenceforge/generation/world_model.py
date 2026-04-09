@@ -450,8 +450,7 @@ class WorldModel:
                 for system in self.domain_controllers
                 if system.hostname != src_system.hostname
             ]
-            if not dc_candidates and self.domain_controllers:
-                dc_candidates = list(self.domain_controllers)
+            # Single-DC: no peer exists — skip rather than self-target
             if dc_candidates:
                 target = rng.choice(dc_candidates)
                 return target.ip, self.fqdn_for_system(target)
