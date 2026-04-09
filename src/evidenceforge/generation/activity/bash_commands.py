@@ -174,6 +174,52 @@ def _generate_typo(rng: random.Random, username: str, commands: dict[str, Any]) 
     return "sl"
 
 
+_USER_TOOL_AFFINITY: dict[str, list[str]] = {}
+
+
+def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
+    """Return a user-specific subset of the command pool for tool affinity.
+
+    Each user gets 1-2 primary tool "families" (deterministic by username).
+    80% of role-specific commands come from the primary tools, 20% from
+    the full pool — so users have consistent tooling preferences.
+    """
+    if username in _USER_TOOL_AFFINITY:
+        return _USER_TOOL_AFFINITY[username]
+
+    # Identify tool families by prefix keywords
+    _TOOL_FAMILIES = {
+        "python": ["python", "pip", "pytest", "venv"],
+        "node": ["npm", "node", "yarn", "webpack"],
+        "docker": ["docker"],
+        "go": ["go "],
+        "rust": ["cargo"],
+        "c_cpp": ["gcc", "make", "cmake", "g++"],
+        "git": ["git "],
+        "k8s": ["kubectl", "helm"],
+    }
+
+    # Pick 1-2 primary families seeded by username
+    seed = _stable_seed(f"tool_affinity_{username}")
+    family_names = list(_TOOL_FAMILIES.keys())
+    affinity_rng = random.Random(seed)
+    n_primary = affinity_rng.choice([1, 1, 2])  # Favor 1 primary
+    primary_families = affinity_rng.sample(family_names, min(n_primary, len(family_names)))
+
+    # Filter pool to commands matching primary families
+    primary_keywords: list[str] = []
+    for fam in primary_families:
+        primary_keywords.extend(_TOOL_FAMILIES[fam])
+
+    primary_pool = [cmd for cmd in full_pool if any(kw in cmd.lower() for kw in primary_keywords)]
+    # If we filtered too aggressively, keep the full pool
+    if len(primary_pool) < 3:
+        primary_pool = full_pool
+
+    _USER_TOOL_AFFINITY[username] = primary_pool
+    return primary_pool
+
+
 def pick_bash_command(
     rng: random.Random,
     persona: str,
@@ -184,7 +230,8 @@ def pick_bash_command(
     """Pick a bash command appropriate for the user's role on this server.
 
     Distribution: 60% common, 35% role-specific, 5% typo.
-    Templates with {placeholder} tokens are resolved from the params section.
+    Role-specific commands use per-user tool affinity (80% primary tools,
+    20% full pool) for consistent user behavior.
     """
     commands = load_bash_commands()
     params = commands.get("params", {})
@@ -197,9 +244,11 @@ def pick_bash_command(
         return _generate_typo(rng, username, commands)
 
     if roll < 0.40:
-        # Role-specific command
+        # Role-specific command with per-user tool affinity
         pool_key = _get_role_pool(persona, server_role)
         pool = commands.get(pool_key, commands.get("common", ["ls"]))
+        if username and rng.random() < 0.80:
+            pool = _get_user_pool(username, pool)
         template = rng.choice(pool)
         return _resolve_template(template, rng, params)
 

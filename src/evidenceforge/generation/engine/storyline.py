@@ -786,8 +786,10 @@ class StorylineMixin:
                 target_username=spec.target_username,
                 target_sid=target_sid,
             )
-            # Store SID for later reuse by group_member_added
+            # Store SID for later reuse by group_member_added, account_deleted,
+            # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
+            self.activity_generator.sid_registry[spec.target_username] = target_sid
             malicious_event["target_username"] = spec.target_username
 
         elif spec.type == "account_deleted":
@@ -980,13 +982,15 @@ class StorylineMixin:
 
                     from evidenceforge.events.contexts import FirewallContext
 
+                    # ICMP is connectionless — don't pass TCP conn_state
+                    scan_conn_state = None if spec.protocol == "icmp" else conn_state
                     self.activity_generator.generate_connection(
                         src_ip=scan_src_ip,
                         dst_ip=target_ip,
                         time=scan_time,
                         dst_port=port,
                         proto=spec.protocol,
-                        conn_state=conn_state,
+                        conn_state=scan_conn_state,
                         firewall=FirewallContext(
                             action="deny",
                             msg_id=106023,

@@ -2712,18 +2712,26 @@ class BaselineMixin:
                             n_cmds = rng.randint(1, 4)
                         hour_end = current_hour + timedelta(hours=1)
                         cumulative_gap = 0
+                        _SLOW_CMD_KEYWORDS = frozenset(
+                            [
+                                "build",
+                                "make",
+                                "pytest",
+                                "cargo",
+                                "docker",
+                                "npm run",
+                                "go build",
+                                "gcc",
+                                "compile",
+                                "install",
+                                "apt",
+                                "yum",
+                                "dnf",
+                                "pip install",
+                            ]
+                        )
                         for _cmd_i in range(n_cmds):
                             cmd_offset = rng.randint(30, 600)
-                            # Human typing: variable think time between commands
-                            gap = rng.choices(
-                                [rng.randint(8, 20), rng.randint(25, 60), rng.randint(90, 300)],
-                                weights=[40, 35, 25],
-                                k=1,
-                            )[0]
-                            cumulative_gap += gap
-                            cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
-                            if cmd_time >= hour_end:
-                                break
                             cmd = pick_bash_command(
                                 rng,
                                 ssh_user.persona or "",
@@ -2731,6 +2739,25 @@ class BaselineMixin:
                                 system.services,
                                 username=ssh_user.username,
                             )
+                            # Complexity-aware timing: build/install commands
+                            # take longer than simple lookups (ls, cat, pwd)
+                            is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)
+                            if is_slow:
+                                gap = rng.randint(30, 180)
+                            else:
+                                gap = rng.choices(
+                                    [
+                                        rng.randint(8, 25),
+                                        rng.randint(30, 90),
+                                        rng.randint(120, 300),
+                                    ],
+                                    weights=[35, 40, 25],
+                                    k=1,
+                                )[0]
+                            cumulative_gap += gap
+                            cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
+                            if cmd_time >= hour_end:
+                                break
                             self.activity_generator.generate_bash_command(
                                 ssh_user, system, cmd_time, cmd
                             )

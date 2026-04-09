@@ -357,6 +357,11 @@ def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str
     return []
 
 
+_USER_BROWSER_AFFINITY: dict[str, str] = {}
+
+_BROWSER_IDS = frozenset({"chrome", "firefox", "edge"})
+
+
 def pick_app_and_command(
     rng: random.Random,
     persona: str,
@@ -368,12 +373,35 @@ def pick_app_and_command(
 
     Returns None if no apps are available for this persona/OS/category.
     The command_template still contains {placeholders} for _parameterize_command().
+
+    For browser-category apps, applies per-user browser affinity: each user
+    has a primary browser (90% of the time) with occasional secondary use (10%).
     """
     apps = get_apps_for_persona(persona, os_category, category)
     if not apps:
         return None
 
-    app = rng.choice(apps)
+    # Per-user browser affinity: same user mostly uses the same browser
+    browser_apps = [a for a in apps if a.get("id", "").lower() in _BROWSER_IDS]
+    if browser_apps and len(browser_apps) > 1 and username and category == "browser":
+        if username not in _USER_BROWSER_AFFINITY:
+            # Deterministic primary browser per user
+            from evidenceforge.utils.rng import _stable_seed
+
+            idx = _stable_seed(f"browser_{username}") % len(browser_apps)
+            _USER_BROWSER_AFFINITY[username] = browser_apps[idx]["id"]
+
+        primary_id = _USER_BROWSER_AFFINITY[username]
+        if rng.random() < 0.90:
+            # Use primary browser
+            app = next((a for a in browser_apps if a["id"] == primary_id), rng.choice(apps))
+        else:
+            # Occasionally use a different browser
+            others = [a for a in browser_apps if a["id"] != primary_id]
+            app = rng.choice(others) if others else rng.choice(apps)
+    else:
+        app = rng.choice(apps)
+
     platform = app["platforms"][os_category]
     image_path = platform["image_path"]
     if "{username}" in image_path:

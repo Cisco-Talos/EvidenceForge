@@ -1448,20 +1448,21 @@ class ActivityGenerator:
         # Protocol-aware connection state selection
         rng = _get_rng()
 
-        # If caller provides explicit conn_state (e.g., UFW BLOCK → REJ), skip probabilistic selection
-        if conn_state is not None:
+        # ICMP is connectionless — always OTH regardless of what the caller passed
+        if proto == "icmp":
+            conn_state = "OTH"
+            history = "-"
+            src_port = 0  # ICMP has no ports; Zeek emits 0
+            dst_port = 0
+        elif conn_state is not None:
+            # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
             history = {"REJ": "Sr", "S0": "S", "SF": "ShADadfF", "OTH": "Cc"}.get(
                 conn_state, "ShADadfF"
             )
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
-                orig_bytes = rng.choice([0, 40, 44, 48])
-        elif proto == "icmp":
-            conn_state = "OTH"
-            history = "-"
-            src_port = 0  # ICMP has no ports; Zeek emits 0
-            dst_port = 0
+                orig_bytes = 0
         elif proto == "udp":
             # DNS connections with responses must not be S0 (no-response)
             if service == "dns" and resp_bytes and resp_bytes > 0:
@@ -1489,12 +1490,9 @@ class ActivityGenerator:
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
-                # S0 = SYN only, no handshake completed — orig_bytes is just the SYN packet
-                if conn_state == "S0":
-                    orig_bytes = rng.choice([0, 40, 44, 48, 60])
-                elif conn_state == "REJ":
-                    # REJ = SYN then RST; orig_bytes is just the SYN packet(s)
-                    orig_bytes = rng.choice([0, 40, 44, 48])
+                # S0/REJ: Zeek orig_bytes/resp_bytes are payload (application
+                # data), not packet overhead.  No handshake completed → zero payload.
+                orig_bytes = 0
             elif conn_state in ("S1", "SH", "SHR"):
                 # S1/SH/SHR = partial handshake, no application data transferred.
                 # Zeek orig_bytes/resp_bytes are payload bytes (always 0 for
@@ -1928,7 +1926,7 @@ class ActivityGenerator:
                 mode=3,  # client
                 stratum=(_stable_seed(f"ntp_stratum_{dst_ip}") % 3) + 1,  # Stable per server
                 poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
-                precision=ntp_rng.uniform(-25.0, -18.0),
+                precision=float(ntp_rng.randint(-25, -18)),
                 root_delay=ntp_rng.uniform(0.0, 0.1),
                 root_disp=ntp_rng.uniform(0.0, 0.05),
                 ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
@@ -3061,41 +3059,33 @@ class ActivityGenerator:
             rng = _get_rng()
             conn_hostname = None  # Domain name for DNS/SNI consistency
 
-            # Domain-first selection for web/SaaS: pick a domain, resolve to IP.
-            # This matches real-world flow (user visits domain → DNS → connection)
-            # and ensures DNS query, SNI, and proxy hostname are all consistent.
+            # Domain-first selection: pick a domain, resolve to its IP.
+            # Uses pick_domain_and_ip() which maintains correct per-domain IP
+            # pools and per-host deterministic selection (simulates DNS cache).
+            from evidenceforge.generation.activity.dns_registry import (
+                _domain_to_ip,
+                generate_long_tail_domain,
+                pick_domain_and_ip,
+            )
+
+            _tag_for_activity = {
+                "connection_web": "web",
+                "connection_saas": "saas",
+                "connection_email": "email",
+                "connection_git": "git",
+                "connection_db": "internal",
+            }
+            tag = _tag_for_activity.get(activity_type, "web")
+
             if activity_type in ("connection_web", "connection_saas") and rng.random() < 0.30:
                 # 30% chance: long-tail domain for CDN/SaaS/analytics diversity
-                from evidenceforge.generation.activity.dns_registry import (
-                    _domain_to_ip,
-                    generate_long_tail_domain,
-                )
-
                 conn_hostname = generate_long_tail_domain(rng)
                 dst_ip = _domain_to_ip(conn_hostname)
-            elif activity_type in ("connection_web", "connection_saas"):
-                # 70%: pick a known domain, resolve to its IP
-                from evidenceforge.generation.activity.network import FORWARD_DNS
-
-                # Filter to domains whose IPs are in the activity type's pool
-                web_ips = set(EXTERNAL_IPS[activity_type])
-                web_domains = [d for d, ip in FORWARD_DNS.items() if ip in web_ips]
-                if web_domains:
-                    conn_hostname = rng.choice(web_domains)
-                    dst_ip = FORWARD_DNS[conn_hostname]
-                else:
-                    dst_ip = rng.choice(EXTERNAL_IPS[activity_type])
             else:
-                available_destinations = [
-                    ip for ip in EXTERNAL_IPS[activity_type] if ip != system.ip
-                ]
-                if not available_destinations:
-                    logger.debug(
-                        f"Skipping {activity_type} for {system.hostname}: "
-                        f"no valid destination IPs (all match source {system.ip})"
-                    )
-                    return
-                dst_ip = rng.choice(available_destinations)
+                # Known domain with correct per-domain IP pairing
+                conn_hostname, dst_ip = pick_domain_and_ip(rng, tag, src_host=system.hostname)
+                if dst_ip == system.ip:
+                    return  # Skip self-connections
 
             # Set service and port based on activity type
             if activity_type in ("connection_web", "connection_saas"):
