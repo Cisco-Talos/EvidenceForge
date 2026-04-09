@@ -677,8 +677,10 @@ class WorldPlanner:
         from evidenceforge.generation.activity.application_catalog import (
             has_catalog_entry,
             is_persona_allowed,
+            load_catalog,
             resolve_image_path,
         )
+        from evidenceforge.generation.activity.helpers import _parameterize_command
 
         os_cat = self.world_model.hosts[system.hostname].os_category
         persona = (user.persona or "default").lower()
@@ -696,6 +698,24 @@ class WorldPlanner:
             os_exes = compatible_exes
         target_exe = rng.choice(os_exes)
         image = resolve_image_path(target_exe, os_cat, username=user.username)
+
+        # Build a realistic command line from the catalog template when
+        # available, instead of emitting the bare executable name.
+        command_line = target_exe
+        catalog = load_catalog()
+        for app in catalog.get("apps", []):
+            plat = app.get("platforms", {}).get(os_cat)
+            if not plat:
+                continue
+            plat_image = plat.get("image_path", "")
+            plat_exe = plat_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if plat_exe == target_exe.lower() or plat_exe.replace(".exe", "") == target_exe.lower():
+                templates = plat.get("command_templates", [])
+                if templates:
+                    command_line = rng.choice(templates)
+                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                break
+
         proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
         self.state_manager.set_current_time(proc_time)
         parent_pid = self.activity_generator._resolve_parent(
@@ -707,7 +727,7 @@ class WorldPlanner:
             time=proc_time,
             logon_id=session.logon_id,
             process_name=image,
-            command_line=target_exe,
+            command_line=command_line,
             parent_pid=parent_pid,
         )
         self.activity_generator._record_user_process(system, user, pid, image)

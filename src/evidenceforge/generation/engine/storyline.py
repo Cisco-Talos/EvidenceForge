@@ -664,11 +664,10 @@ class StorylineMixin:
                 src_sys = ip_map[source_ip]
             elif source_ip == system.ip:
                 src_sys = system
-            # Use explicit hostname from scenario, fall back to reverse DNS registry.
-            # Raw IP connections (typical for C2/exfil) have no hostname → no DNS.
-            from evidenceforge.generation.activity.network import REVERSE_DNS
-
-            conn_hostname = spec.hostname or REVERSE_DNS.get(dst_ip)
+            # Only use explicit hostname from scenario.  Do NOT fall back to
+            # reverse-DNS: raw-IP storyline connections (C2, exfil) must stay
+            # IP-only so they don't sprout fabricated DNS/SNI/proxy domains.
+            conn_hostname = spec.hostname
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,

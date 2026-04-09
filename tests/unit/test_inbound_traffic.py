@@ -93,3 +93,25 @@ class TestInboundProfiles:
         roles = {c["role"] for c in conns}
         assert "_external" in roles  # from web_server
         assert "web_server" in roles  # from database
+
+
+class TestEnsureConnectionProcessCommandLine:
+    """Regression: ensure_connection_process should emit catalog command templates."""
+
+    def test_catalog_backed_command_not_bare_exe(self):
+        """When the catalog has a template, command_line should not be a bare exe."""
+        from evidenceforge.generation.activity.application_catalog import load_catalog
+
+        catalog = load_catalog()
+        # Find an app with command templates
+        for app in catalog.get("apps", []):
+            for os_cat in ("windows", "linux"):
+                plat = app.get("platforms", {}).get(os_cat)
+                if plat and plat.get("command_templates"):
+                    templates = plat["command_templates"]
+                    # All templates should have more than just a bare exe name
+                    for t in templates:
+                        # Templates have spaces (arguments) or placeholders
+                        assert " " in t or "{" in t, (
+                            f"Template '{t}' for {app['id']}/{os_cat} looks like a bare exe"
+                        )

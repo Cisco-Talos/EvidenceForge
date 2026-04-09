@@ -2112,6 +2112,14 @@ class BaselineMixin:
                     ip_map = getattr(self.activity_generator, "_ip_to_system", {})
                     src_sys = ip_map.get(src_ip)
 
+                # Internal clients emit DNS before connecting (just like
+                # outbound traffic).  External sources don't — we can't see
+                # their resolver queries.
+                is_internal_src = src_sys is not None
+                dst_hostname = None
+                if is_internal_src and hasattr(self, "world_model"):
+                    dst_hostname = self.world_model.fqdn_for_system(system)
+
                 self.activity_generator.generate_connection(
                     src_ip=src_ip,
                     dst_ip=system.ip,
@@ -2123,7 +2131,8 @@ class BaselineMixin:
                     orig_bytes=rng.randint(200, 5000),
                     resp_bytes=rng.randint(500, 50000),
                     source_system=src_sys,
-                    emit_dns=False,
+                    emit_dns=is_internal_src,
+                    hostname=dst_hostname,
                 )
 
         # --- Persona traffic (user-level, during active sessions) ---

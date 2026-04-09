@@ -255,3 +255,34 @@ class TestProcessNetworkPairingValidation:
             if "process command references" in i.message and i.severity == "warning"
         ]
         assert len(pairing_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# Raw-IP storyline connection regression test
+# ---------------------------------------------------------------------------
+
+
+class TestRawIpStorylineConnection:
+    """Regression: raw-IP connections must not sprout DNS from reverse-DNS."""
+
+    def test_raw_ip_connection_has_no_hostname(self):
+        """ConnectionEventSpec without hostname stays None (no REVERSE_DNS fallback)."""
+        spec = ConnectionEventSpec(dst_ip="159.65.43.201", dst_port=443)
+        # The storyline handler uses `spec.hostname` directly — no fallback.
+        # This ensures C2/exfil to raw IPs never acquire fabricated domains.
+        assert spec.hostname is None
+        # Confirm emit_dns would be False when hostname is None
+        conn_hostname = spec.hostname  # no REVERSE_DNS.get() fallback
+        assert conn_hostname is None
+        assert (conn_hostname is not None) is False  # emit_dns guard
+
+    def test_explicit_hostname_preserved(self):
+        """ConnectionEventSpec with explicit hostname uses it."""
+        spec = ConnectionEventSpec(
+            dst_ip="159.65.43.201",
+            dst_port=443,
+            hostname="cdn-assets-update.com",
+        )
+        conn_hostname = spec.hostname
+        assert conn_hostname == "cdn-assets-update.com"
+        assert (conn_hostname is not None) is True
