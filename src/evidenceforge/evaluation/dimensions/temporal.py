@@ -548,11 +548,35 @@ class TemporalRealismScorer(DimensionScorer):
                     )
                     if any_before_earlier:
                         rule_correct += 1
-                    elif len(failures) < 10:
-                        failures.append(
-                            f"Rule '{rule['name']}': after event at line {rec.line_number} "
-                            f"precedes all matching before events"
+                    else:
+                        # All matching "before" events are AFTER this "after"
+                        # event.  Distinguish two cases:
+                        #
+                        # (a) Real violation: the login and process are close
+                        #     together (within 30min) — a genuine ordering bug
+                        #     where the process was emitted before its login.
+                        #
+                        # (b) Warm-up session: the login in the index is a
+                        #     LATER re-logon far from the process.  The real
+                        #     login pre-dates the collection window.  This is
+                        #     expected — analysts see processes for sessions
+                        #     that started before the SIEM began collecting.
+                        earliest_before = min(
+                            (b.timestamp for b in matching_befores if b.timestamp),
+                            default=None,
                         )
+                        # If the earliest login is close to the process (within
+                        # grace period duration), it's a real ordering violation.
+                        if earliest_before and (earliest_before - rec_ts) <= grace_td:
+                            if len(failures) < 10:
+                                failures.append(
+                                    f"Rule '{rule['name']}': after event at line "
+                                    f"{rec.line_number} precedes all matching before events"
+                                )
+                        else:
+                            # Login is far from the process — likely a re-logon,
+                            # not the session that owns this process.
+                            rule_correct += 1
 
             # Apply per-rule tolerance: if failure rate is within tolerance,
             # treat all pairs as correct for this rule
