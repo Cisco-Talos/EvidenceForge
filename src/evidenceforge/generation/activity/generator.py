@@ -708,8 +708,17 @@ class ActivityGenerator:
             edr=EdrContext(object_id=session_obj_id),
         )
 
-        # Attach SyslogContext for Linux hosts (sshd logon message)
-        if event.dst_host and event.dst_host.os_category == "linux" and emit_transport_syslog:
+        # Attach SyslogContext for Linux SSH sessions only (not network/interactive)
+        session_for_syslog = self.state_manager.get_session(logon_id) if logon_id else None
+        is_ssh_session = (
+            session_for_syslog and getattr(session_for_syslog, "session_kind", None) == "ssh"
+        ) or logon_type == 10  # logon_type 10 = remote (SSH on Linux)
+        if (
+            event.dst_host
+            and event.dst_host.os_category == "linux"
+            and emit_transport_syslog
+            and is_ssh_session
+        ):
             from evidenceforge.events.contexts import SyslogContext
 
             session = self.state_manager.get_session(logon_id)
@@ -1658,7 +1667,7 @@ class ActivityGenerator:
                     client_ip=src_ip,
                     method=proxy_method,
                     url=url,
-                    host=hostname,
+                    host=hostname or dst_ip,
                     status_code=200 if cache_result != "DENIED" else 403,
                     sc_bytes=resp_bytes or 0,
                     cs_bytes=orig_bytes or 0,
@@ -1799,13 +1808,14 @@ class ActivityGenerator:
                 ua = rng.choice(_USER_AGENTS_LINUX)
             else:
                 ua = rng.choice(_USER_AGENTS_WINDOWS)
-            host = REVERSE_DNS.get(dst_ip, dst_ip)
+            # Use the already-resolved hostname for HTTP Host header and URI templates
+            host = hostname or REVERSE_DNS.get(dst_ip, dst_ip)
             if dst_port not in (80, 443):
                 host = f"{host}:{dst_port}"
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
             from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-            web_host = REVERSE_DNS.get(dst_ip, dst_ip)
+            web_host = hostname or REVERSE_DNS.get(dst_ip, dst_ip)
             web_domain_tags = get_domain_tags(web_host)
             uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
                 rng, web_host, web_domain_tags
