@@ -149,6 +149,33 @@ def get_apps_for_persona(
     return results
 
 
+def is_persona_allowed(exe_basename: str, os_category: str, persona: str) -> bool:
+    """Check if a persona is allowed to use an application.
+
+    Looks up the exe in the catalog and checks if the persona appears
+    in its personas list. Returns True if the exe is not in the catalog
+    (unknown apps are not restricted).
+    """
+    data = load_catalog()
+    lower = exe_basename.lower()
+    for app in data["applications"]:
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        path = platform["image_path"]
+        if os_category == "windows":
+            basename = path.rsplit("\\", 1)[-1].lower()
+        else:
+            basename = path.rsplit("/", 1)[-1].lower()
+        if (
+            basename == lower
+            or (lower + ".exe") == basename
+            or basename.replace(".exe", "") == lower
+        ):
+            return persona.lower() in app.get("personas", [])
+    return True  # Unknown apps are unrestricted
+
+
 def get_pe_metadata(exe_basename: str) -> tuple[str, str, str, str, str]:
     """Look up PE metadata for a user-installed application by exe basename.
 

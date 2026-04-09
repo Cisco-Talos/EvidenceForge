@@ -676,12 +676,22 @@ class WorldPlanner:
 
         from evidenceforge.generation.activity.application_catalog import (
             has_catalog_entry,
+            is_persona_allowed,
             resolve_image_path,
         )
 
         os_cat = self.world_model.hosts[system.hostname].os_category
-        # Filter to executables that exist in the catalog for this OS
-        os_exes = [e for e in compatible_exes if has_catalog_entry(e, os_cat)]
+        persona = (user.persona or "default").lower()
+        # Filter to executables that exist in the catalog for this OS AND
+        # are allowed for this user's persona (prevents dev tools on HR)
+        os_exes = [
+            e
+            for e in compatible_exes
+            if has_catalog_entry(e, os_cat) and is_persona_allowed(e, os_cat, persona)
+        ]
+        if not os_exes:
+            # Relax to OS-only filter
+            os_exes = [e for e in compatible_exes if has_catalog_entry(e, os_cat)]
         if not os_exes:
             os_exes = compatible_exes
         target_exe = rng.choice(os_exes)
