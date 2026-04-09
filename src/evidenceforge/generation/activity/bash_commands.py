@@ -10,13 +10,19 @@ Follows the same data-driven pattern as spawn_rules.py.
 """
 
 import random
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-_COMMANDS_PATH = Path(__file__).parent / "bash_commands.yaml"
+from evidenceforge.config import get_activity_directory
+from evidenceforge.utils.rng import _stable_seed
+
+_COMMANDS_PATH = get_activity_directory() / "bash_commands.yaml"
 _CACHED_COMMANDS: dict[str, Any] | None = None
+
+# Typo modes and their relative base weights. Per-user profiles
+# re-weight these deterministically so each user has a "typo fingerprint".
+_TYPO_MODES = ["adjacent_key", "transposition", "omission", "doubling"]
 
 
 def load_bash_commands() -> dict[str, Any]:
@@ -87,11 +93,93 @@ def _get_role_pool(persona: str, server_role: str) -> str:
     return "sysadmin"  # Default for unknown admin personas
 
 
+def _apply_typo_mode(
+    word: str, mode: str, adjacency: dict[str, list[str]], rng: random.Random
+) -> str | None:
+    """Apply a single typo mode to a word. Returns None if mode can't apply."""
+    if len(word) < 2:
+        return None
+
+    if mode == "adjacent_key":
+        # Replace one alpha char with an adjacent key
+        alpha_indices = [i for i, c in enumerate(word) if c.isalpha() and c.lower() in adjacency]
+        if not alpha_indices:
+            return None
+        idx = rng.choice(alpha_indices)
+        neighbors = adjacency.get(word[idx].lower(), [])
+        alpha_neighbors = [n for n in neighbors if n.isalpha()]
+        if not alpha_neighbors:
+            return None
+        return word[:idx] + rng.choice(alpha_neighbors) + word[idx + 1 :]
+
+    elif mode == "transposition":
+        # Swap two adjacent characters
+        idx = rng.randint(0, len(word) - 2)
+        return word[:idx] + word[idx + 1] + word[idx] + word[idx + 2 :]
+
+    elif mode == "omission":
+        # Drop one non-first character
+        if len(word) < 3:
+            return None
+        idx = rng.randint(1, len(word) - 1)
+        return word[:idx] + word[idx + 1 :]
+
+    elif mode == "doubling":
+        # Double one character
+        idx = rng.randint(0, len(word) - 1)
+        return word[:idx] + word[idx] + word[idx:]
+
+    return None
+
+
+def _generate_typo(rng: random.Random, username: str, commands: dict[str, Any]) -> str:
+    """Generate a per-user typo using their deterministic typo fingerprint.
+
+    Each user gets a characteristic distribution of typo modes (adjacent_key,
+    transposition, omission, doubling) so that different users produce
+    different typo patterns.
+    """
+    adjacency = commands.get("keyboard_adjacency", {})
+
+    # Per-user typo profile: deterministic mode weights
+    user_seed = _stable_seed(f"typo_profile_{username}")
+    user_rng = random.Random(user_seed)
+    # Shuffle base weights to create a unique profile per user
+    weights = [user_rng.randint(10, 70) for _ in _TYPO_MODES]
+
+    # Pick a common command as the "intended" command
+    common = commands.get("common", ["ls", "cd", "pwd"])
+    intended = rng.choice(common)
+    # Extract just the first word (the command name) for typo application
+    parts = intended.split()
+    target_word = parts[0]
+
+    # Try modes in weighted-random order until one produces a change
+    mode_order = rng.choices(_TYPO_MODES, weights=weights, k=len(_TYPO_MODES))
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_modes = []
+    for m in mode_order:
+        if m not in seen:
+            seen.add(m)
+            unique_modes.append(m)
+
+    for mode in unique_modes:
+        result = _apply_typo_mode(target_word, mode, adjacency, rng)
+        if result is not None and result != target_word:
+            # Return just the corrupted command name (not the full command with args)
+            return result
+
+    # All modes failed (very rare) — return a simple transposition of "ls"
+    return "sl"
+
+
 def pick_bash_command(
     rng: random.Random,
     persona: str,
     system_hostname: str,
     system_services: list[str],
+    username: str = "",
 ) -> str:
     """Pick a bash command appropriate for the user's role on this server.
 
@@ -105,13 +193,8 @@ def pick_bash_command(
     roll = rng.random()
 
     if roll < 0.05:
-        # Typo: return a corrupted common command
-        typos = commands.get("typos", [])
-        if typos:
-            _original, typo = rng.choice(typos)
-            return typo
-        # Fallback if no typos defined
-        return "sl"
+        # Typo: generate a per-user corrupted command
+        return _generate_typo(rng, username, commands)
 
     if roll < 0.40:
         # Role-specific command

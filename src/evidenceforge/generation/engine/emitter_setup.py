@@ -204,6 +204,17 @@ class EmitterSetupMixin:
         forward_proxy in the scenario. With multiple proxies, internal segments
         route through the first proxy found, which may chain to another.
         """
+        if hasattr(self, "world_model"):
+            self._proxy_routes = dict(self.world_model.proxy_routes)
+            if self._proxy_routes:
+                proxy = next(iter(self._proxy_routes.values()))[0]
+                logger.info(
+                    "Proxy routing: %d systems -> %s",
+                    len(self._proxy_routes),
+                    proxy.hostname,
+                )
+            return
+
         proxies = [
             s for s in self.scenario.environment.systems if "forward_proxy" in (s.roles or [])
         ]
@@ -277,11 +288,11 @@ class EmitterSetupMixin:
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
         # Load OUI prefixes for diverse MAC generation
-        from pathlib import Path as _Path
-
         import yaml as _yaml
 
-        _oui_path = _Path(__file__).parent.parent / "activity" / "network_params.yaml"
+        from evidenceforge.config import get_activity_directory
+
+        _oui_path = get_activity_directory() / "network_params.yaml"
         with open(_oui_path) as _f:
             _net_params = _yaml.safe_load(_f)
         _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])
@@ -381,6 +392,9 @@ class EmitterSetupMixin:
         Scans system hostnames/types/services for role hints and
         maps them to IPs. Falls back to defaults for missing roles.
         """
+        if hasattr(self, "world_model"):
+            return self.world_model.to_infrastructure_ips()
+
         infra: dict[str, str | list] = {
             "dns": [],
             "ntp": ["129.6.15.28", "132.163.97.1"],
@@ -429,6 +443,12 @@ class EmitterSetupMixin:
 
     def _build_service_defaults(self) -> dict[str, list[str]]:
         """Build per-system service lists, auto-populating defaults if empty."""
+        if hasattr(self, "world_model"):
+            return {
+                hostname: list(services)
+                for hostname, services in self.world_model.service_defaults_by_host.items()
+            }
+
         from evidenceforge.generation.activity import _get_os_category
 
         defaults: dict[str, list[str]] = {}
@@ -459,7 +479,11 @@ class EmitterSetupMixin:
         We register them silently (no log events) so they exist as valid
         parents for child processes spawned during the scenario.
         """
+        import hashlib as _hl
+
         from evidenceforge.generation.activity import _get_os_category
+
+        self._machine_ids: dict[str, str] = {}
 
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
@@ -469,6 +493,10 @@ class EmitterSetupMixin:
                 self._seed_windows_process_tree(system, pids)
             else:
                 self._seed_linux_process_tree(system, pids)
+                # Per-host persistent machine-ID (like /etc/machine-id)
+                self._machine_ids[system.hostname] = _hl.md5(
+                    f"machine_id_{system.hostname}".encode(), usedforsecurity=False
+                ).hexdigest()
 
             self._system_pids[system.hostname] = pids
 
@@ -478,6 +506,23 @@ class EmitterSetupMixin:
 
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
+
+        # Build Zipf-weighted external scanner IP pool for realistic scanning distribution
+        from evidenceforge.utils.rng import _stable_seed
+
+        scanner_rng = random.Random(_stable_seed("external_scanners"))
+        prolific = []
+        for _ in range(scanner_rng.randint(8, 15)):
+            ip = self._generate_external_client_ip(scanner_rng)
+            weight = scanner_rng.randint(45, 2000)
+            prolific.append((ip, weight))
+        tail = [
+            (self._generate_external_client_ip(scanner_rng), 1)
+            for _ in range(scanner_rng.randint(30, 80))
+        ]
+        pool = prolific + tail
+        self._external_scanner_ips = [ip for ip, _ in pool]
+        self._external_scanner_weights = [w for _, w in pool]
 
         # Register system IP→FQDN mappings so DNS queries use correct hostnames
         # (e.g., DC-01.meridian-healthcare.com instead of host-10.corp.local)

@@ -33,6 +33,15 @@ common:
   - "cat /etc/os-release"
   - "ll"
   - "exit"
+  - "cat /etc/resolv.conf"
+  - "cat /proc/cpuinfo | grep 'model name' | head -1"
+  - "echo $SHELL"
+  - "env | head -20"
+  - "which python3"
+  - "file /usr/bin/ls"
+  - "ls -ltr /var/log/ | tail -10"
+  - "journalctl --no-pager -n 5"
+  - "journalctl -p err --no-pager -n 10"
 
 sysadmin:
   - "systemctl status sshd"
@@ -66,6 +75,16 @@ sysadmin:
   - "lsblk"
   - "ip addr show"
   - "ip route"
+  - "timedatectl"
+  - "hostnamectl"
+  - "cat /etc/crontab"
+  - "crontab -l"
+  - "find /var/log -name '*.gz' -mtime +30 | wc -l"
+  - "systemctl list-timers"
+  - "ss -s"
+  - "ss -ltnp | grep {service}"
+  - "sysctl -a 2>/dev/null | grep net.ipv4.ip_forward"
+  - "journalctl -u {service} --since '30 min ago' --no-pager | tail -20"
 
 dba:
   - "mysql -u root -p -e 'SHOW DATABASES'"
@@ -135,6 +154,16 @@ developer:
   - "tail -f /var/log/app/application.log"
   - "cat {config_file}"
   - "env | grep -i path"
+  - "git remote -v"
+  - "git log --oneline --graph -15"
+  - "docker stats --no-stream"
+  - "docker system df"
+  - "python3 --version"
+  - "node --version"
+  - "npm outdated"
+  - "cargo build 2>&1 | tail -5"
+  - "go build ./..."
+  - "find . -name '*.py' | xargs wc -l | tail -1"
 
 security:
   - "tail -500 /var/log/auth.log | grep 'Failed'"
@@ -156,20 +185,44 @@ security:
   - "rpm -Va 2>/dev/null | head -20"
   - "cat /var/log/fail2ban.log | tail -30"
   - "awk '{print $1}' /var/log/auth.log | sort | uniq -c | sort -rn | head -10"
+  - "grep -c 'session opened' /var/log/auth.log"
+  - "cat /etc/pam.d/sshd"
+  - "getent passwd | wc -l"
+  - "awk -F: '$3 >= 1000 {print $1}' /etc/passwd"
+  - "find /home -name '.ssh' -type d -ls 2>/dev/null"
+  - "md5sum /usr/bin/sudo"
+  - "sha256sum /usr/bin/ssh"
+  - "stat /etc/shadow"
 
-typos:
-  - ["ls", "sl"]
-  - ["cd ..", "cd.."]
-  - ["cat", "cta"]
-  - ["grep", "grpe"]
-  - ["systemctl", "systemclt"]
-  - ["docker", "docekr"]
-  - ["git", "gti"]
-  - ["history", "histroy"]
-  - ["clear", "claer"]
-  - ["tail", "tial"]
-  - ["vim", "vmi"]
-  - ["sudo", "suod"]
+# QWERTY keyboard adjacency map for generative typo model.
+# Each key maps to its physical neighbors on a standard US keyboard.
+keyboard_adjacency:
+  q: [w, a, "1", "2"]
+  w: [q, e, a, s, "2", "3"]
+  e: [w, r, s, d, "3", "4"]
+  r: [e, t, d, f, "4", "5"]
+  t: [r, y, f, g, "5", "6"]
+  y: [t, u, g, h, "6", "7"]
+  u: [y, i, h, j, "7", "8"]
+  i: [u, o, j, k, "8", "9"]
+  o: [i, p, k, l, "9", "0"]
+  p: [o, l, "0"]
+  a: [q, w, s, z]
+  s: [a, w, e, d, z, x]
+  d: [s, e, r, f, x, c]
+  f: [d, r, t, g, c, v]
+  g: [f, t, y, h, v, b]
+  h: [g, y, u, j, b, n]
+  j: [h, u, i, k, n, m]
+  k: [j, i, o, l, m]
+  l: [k, o, p]
+  z: [a, s, x]
+  x: [z, s, d, c]
+  c: [x, d, f, v]
+  v: [c, f, g, b]
+  b: [v, g, h, n]
+  n: [b, h, j, m]
+  m: [n, j, k]
 
 # Placeholder pools for template resolution
 params:

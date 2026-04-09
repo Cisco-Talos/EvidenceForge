@@ -56,20 +56,20 @@ class TestGetDefinitionsDirectory:
         result = get_definitions_directory()
         assert result.is_absolute()
 
-    def test_path_ends_with_definitions(self):
-        """Test that path ends with formats/definitions."""
+    def test_path_ends_with_formats(self):
+        """Test that path ends with config/formats."""
         result = get_definitions_directory()
-        assert result.name == "definitions"
-        assert result.parent.name == "formats"
+        assert result.name == "formats"
+        assert result.parent.name == "config"
 
     def test_raises_error_if_not_exists(self, tmp_path):
         """Test that error is raised if directory doesn't exist."""
-        # Point __file__ at a fake location where formats/definitions/ doesn't exist
-        fake_loader = tmp_path / "evidenceforge" / "formats" / "loader.py"
-        fake_loader.parent.mkdir(parents=True)
-        fake_loader.touch()
+        fake_dir = tmp_path / "nonexistent"
 
-        with patch("evidenceforge.formats.loader.__file__", str(fake_loader)):
+        with patch(
+            "evidenceforge.formats.loader.get_formats_directory",
+            side_effect=ConfigurationError(f"Format definitions directory not found: {fake_dir}"),
+        ):
             with pytest.raises(ConfigurationError, match="not found"):
                 get_definitions_directory()
 

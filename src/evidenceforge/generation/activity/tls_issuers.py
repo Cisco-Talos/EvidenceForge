@@ -8,12 +8,13 @@ for weighted issuer selection with per-issuer validity and key type parameters.
 """
 
 import random
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-_ISSUERS_PATH = Path(__file__).parent / "tls_issuers.yaml"
+from evidenceforge.config import get_activity_directory
+
+_ISSUERS_PATH = get_activity_directory() / "tls_issuers.yaml"
 _CACHED_ISSUERS: dict[str, Any] | None = None
 
 

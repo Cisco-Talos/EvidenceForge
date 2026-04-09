@@ -23,14 +23,14 @@
 """Format definition loader for EvidenceForge.
 
 This module provides functions to load and cache format definitions from YAML files
-in the formats/definitions/ directory.
+in the config/formats/ directory.
 """
 
 import logging
-from pathlib import Path
 
 from pydantic import ValidationError
 
+from evidenceforge.config import get_formats_directory
 from evidenceforge.models.exceptions import ConfigurationError
 from evidenceforge.utils.files import load_yaml
 
@@ -42,23 +42,16 @@ logger = logging.getLogger(__name__)
 _format_cache: dict[str, FormatDefinition] = {}
 
 
-def get_definitions_directory() -> Path:
+def get_definitions_directory():
     """Get the path to the format definitions directory.
 
     Returns:
-        Absolute path to formats/definitions/ directory
+        Absolute path to config/formats/ directory
 
     Raises:
         ConfigurationError: If definitions directory does not exist
     """
-    # Get package root (src/evidenceforge)
-    package_root = Path(__file__).parent.parent
-    definitions_dir = package_root / "formats" / "definitions"
-
-    if not definitions_dir.exists():
-        raise ConfigurationError(f"Format definitions directory not found: {definitions_dir}")
-
-    return definitions_dir
+    return get_formats_directory()
 
 
 def load_format(name: str, force_reload: bool = False) -> FormatDefinition:

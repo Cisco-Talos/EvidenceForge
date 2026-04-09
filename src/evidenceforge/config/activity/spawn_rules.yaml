@@ -40,6 +40,42 @@ windows:
       - regedit.exe
       - notepad.exe
 
+  # Applications that spawn child/utility subprocesses of the same exe name
+  chrome.exe:
+    command_templates:
+      - '"C:\Program Files\Google\Chrome\Application\chrome.exe"'
+    lifetime: long
+    children:
+      - chrome.exe
+
+  msedge.exe:
+    command_templates:
+      - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"'
+    lifetime: long
+    children:
+      - msedge.exe
+
+  firefox.exe:
+    command_templates:
+      - '"C:\Program Files\Mozilla Firefox\firefox.exe"'
+    lifetime: long
+    children:
+      - firefox.exe
+
+  teams.exe:
+    command_templates:
+      - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe"'
+    lifetime: long
+    children:
+      - teams.exe
+
+  onedrive.exe:
+    command_templates:
+      - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
+    lifetime: long
+    children:
+      - onedrive.exe
+
   cmd.exe:
     command_templates:
       - "cmd.exe"
@@ -112,7 +148,7 @@ windows:
 
   code.exe:
     command_templates:
-      - "Code.exe"
+      - '"C:\Program Files\Microsoft VS Code\Code.exe"'
     lifetime: long
     spawn_delay: [1.0, 5.0]
     children:
@@ -124,7 +160,7 @@ windows:
 
   idea64.exe:
     command_templates:
-      - "idea64.exe"
+      - '"C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe"'
     lifetime: long
     spawn_delay: [1.0, 5.0]
     children:

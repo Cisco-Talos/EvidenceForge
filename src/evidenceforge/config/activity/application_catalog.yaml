@@ -1,0 +1,588 @@
+# Unified application catalog for process generation.
+# Consolidates image paths, PE metadata, command-line templates,
+# and persona-based filtering into a single data source.
+#
+# Fields:
+#   id: Unique stable identifier
+#   display_name: Human-readable name
+#   platforms: Per-OS config (windows and/or linux)
+#     image_path: Fully qualified executable path (no bare filenames)
+#     pe_metadata: Windows PE header fields (windows only)
+#     command_templates: List of realistic command lines with {placeholder} support
+#   categories: List of category tags matching PERSONA_PROCESS_WEIGHTS keys
+#     (user_app, code, build, query, browser, office)
+#   personas: Which persona names may spawn this app (others never see it)
+
+applications:
+  # ===== Windows User Apps (process_user_apps) =====
+  - id: chrome
+    display_name: "Google Chrome"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+        pe_metadata:
+          file_version: "125.0.6422.112"
+          description: "Google Chrome"
+          product: "Google Chrome"
+          company: "Google LLC"
+          original_filename: "chrome.exe"
+        command_templates:
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument {internal_url}'
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --lang=en-US'
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --no-startup-window /prefetch:8'
+        children:
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --enable-features=NetworkService'
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=gpu-process'
+          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=utility --utility-sub-type=network.mojom.NetworkService'
+      linux:
+        image_path: "/usr/bin/google-chrome"
+        command_templates:
+          - "google-chrome --new-tab {internal_url}"
+    categories: [user_app, browser]
+    personas: [developer, analyst, sysadmin, security_analyst, hr, finance, intern, help_desk, default]
+
+  - id: firefox
+    display_name: "Mozilla Firefox"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Mozilla Firefox\firefox.exe'
+        pe_metadata:
+          file_version: "126.0"
+          description: "Firefox"
+          product: "Firefox"
+          company: "Mozilla Corporation"
+          original_filename: "firefox.exe"
+        command_templates:
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc --channel={small_int}.0.1'
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -new-window {internal_url}'
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url {internal_url}'
+        children:
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc -childID 3 -isForBrowser'
+          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc -childID 5 -isForBrowser'
+      linux:
+        image_path: "/usr/bin/firefox"
+        command_templates:
+          - "firefox --new-tab {internal_url}"
+          - "firefox -P default"
+    categories: [user_app, browser]
+    personas: [developer, analyst, sysadmin, security_analyst, hr, finance, intern, help_desk, default]
+
+  - id: outlook
+    display_name: "Microsoft Outlook"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE'
+        pe_metadata:
+          file_version: "16.0.17628.20006"
+          description: "Microsoft Outlook"
+          product: "Microsoft Office"
+          company: "Microsoft Corporation"
+          original_filename: "OUTLOOK.EXE"
+        command_templates:
+          - '"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"'
+          - 'OUTLOOK.EXE /recycle'
+    categories: [user_app, office]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, finance, intern, help_desk, default]
+
+  - id: word
+    display_name: "Microsoft Word"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
+        pe_metadata:
+          file_version: "16.0.17628.20006"
+          description: "Microsoft Word"
+          product: "Microsoft Office"
+          company: "Microsoft Corporation"
+          original_filename: "WINWORD.EXE"
+        command_templates:
+          - 'WINWORD.EXE /n "{doc_path}"'
+          - '"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE" /t "Normal.dotm"'
+    categories: [user_app, office]
+    personas: [executive, analyst, hr, finance, intern, help_desk, default]
+
+  - id: excel
+    display_name: "Microsoft Excel"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
+        pe_metadata:
+          file_version: "16.0.17628.20006"
+          description: "Microsoft Excel"
+          product: "Microsoft Office"
+          company: "Microsoft Corporation"
+          original_filename: "EXCEL.EXE"
+        command_templates:
+          - 'EXCEL.EXE "{spreadsheet_path}"'
+          - '"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE" /e'
+    categories: [user_app, office]
+    personas: [analyst, executive, hr, finance, intern, help_desk, default]
+
+  - id: edge
+    display_name: "Microsoft Edge"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+        pe_metadata:
+          file_version: "125.0.2535.51"
+          description: "Microsoft Edge"
+          product: "Microsoft Edge"
+          company: "Microsoft Corporation"
+          original_filename: "msedge.exe"
+        command_templates:
+          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --single-argument {internal_url}'
+          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer --lang=en-US'
+        children:
+          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer'
+          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=gpu-process'
+    categories: [user_app, browser]
+    personas: [executive, sysadmin, analyst, hr, finance, help_desk, default]
+
+  - id: teams
+    display_name: "Microsoft Teams"
+    platforms:
+      windows:
+        image_path: 'C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe'
+        pe_metadata:
+          file_version: "24124.2315.3009.6699"
+          description: "Microsoft Teams"
+          product: "Microsoft Teams"
+          company: "Microsoft Corporation"
+          original_filename: "Teams.exe"
+        command_templates:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=renderer'
+          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --processStart Teams.exe'
+        children:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, finance, intern, help_desk, default]
+
+  - id: onedrive
+    display_name: "Microsoft OneDrive"
+    platforms:
+      windows:
+        image_path: 'C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe'
+        pe_metadata:
+          file_version: "24.070.0407.0003"
+          description: "Microsoft OneDrive"
+          product: "Microsoft OneDrive"
+          company: "Microsoft Corporation"
+          original_filename: "OneDrive.exe"
+        command_templates:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
+        children:
+          - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, executive, hr, finance, intern, help_desk, default]
+
+  - id: acrobat
+    display_name: "Adobe Acrobat"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe'
+        pe_metadata:
+          file_version: "24.002.20759"
+          description: "Adobe Acrobat"
+          product: "Adobe Acrobat"
+          company: "Adobe Systems Incorporated"
+          original_filename: "Acrobat.exe"
+        command_templates:
+          - '"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"'
+    categories: [user_app, office]
+    personas: [executive, analyst, hr, finance, help_desk, default]
+
+  - id: 7zip
+    display_name: "7-Zip"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\7-Zip\7zFM.exe'
+        pe_metadata:
+          file_version: "23.01"
+          description: "7-Zip File Manager"
+          product: "7-Zip"
+          company: "Igor Pavlov"
+          original_filename: "7zFM.exe"
+        command_templates:
+          - '"C:\Program Files\7-Zip\7zFM.exe"'
+    categories: [user_app]
+    personas: [developer, sysadmin, default]
+
+  # ===== Windows Code Editors (process_code) =====
+  - id: vscode
+    display_name: "Visual Studio Code"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Microsoft VS Code\Code.exe'
+        pe_metadata:
+          file_version: "1.89.1"
+          description: "Visual Studio Code"
+          product: "Visual Studio Code"
+          company: "Microsoft Corporation"
+          original_filename: "Code.exe"
+        command_templates:
+          - 'Code.exe --folder-uri {project_path}'
+          - '"C:\Program Files\Microsoft VS Code\Code.exe" --unity-launch'
+      linux:
+        image_path: "/usr/bin/code"
+        command_templates:
+          - "code --no-sandbox {linux_project}"
+    categories: [code]
+    personas: [developer, sysadmin, analyst, default]
+
+  - id: notepadpp
+    display_name: "Notepad++"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files (x86)\Notepad++\notepad++.exe'
+        pe_metadata:
+          file_version: "8.6.4"
+          description: "Notepad++ : a free (GNU) source code editor"
+          product: "Notepad++"
+          company: "Don HO don.h@free.fr"
+          original_filename: "notepad++.exe"
+        command_templates:
+          - 'notepad++ {source_file}'
+          - '"C:\Program Files (x86)\Notepad++\notepad++.exe" -multiInst {source_file}'
+    categories: [code]
+    personas: [developer, sysadmin, analyst, default]
+
+  - id: intellij
+    display_name: "IntelliJ IDEA"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe'
+        pe_metadata:
+          file_version: "2024.1.1"
+          description: "IntelliJ IDEA"
+          product: "IntelliJ IDEA"
+          company: "JetBrains s.r.o."
+          original_filename: "idea64.exe"
+        command_templates:
+          - 'idea64.exe {project_path}'
+    categories: [code]
+    personas: [developer]
+
+  - id: sublimetext
+    display_name: "Sublime Text"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Sublime Text\sublime_text.exe'
+        pe_metadata:
+          file_version: "4169"
+          description: "Sublime Text"
+          product: "Sublime Text"
+          company: "Sublime HQ Pty Ltd"
+          original_filename: "sublime_text.exe"
+        command_templates:
+          - 'sublime_text.exe {source_file}'
+    categories: [code]
+    personas: [developer, sysadmin]
+
+  # ===== Windows Build Tools (process_build) =====
+  - id: msbuild
+    display_name: "MSBuild"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe'
+        pe_metadata:
+          file_version: "4.8.9232.0"
+          description: "MSBuild.exe"
+          product: "Microsoft .NET Framework"
+          company: "Microsoft Corporation"
+          original_filename: "MSBuild.exe"
+        command_templates:
+          - 'MSBuild.exe {solution_name} /t:Build /p:Configuration={build_config}'
+    categories: [build]
+    personas: [developer]
+
+  - id: dotnet
+    display_name: ".NET CLI"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\dotnet\dotnet.exe'
+        pe_metadata:
+          file_version: "8.0.4.24212"
+          description: ".NET Host"
+          product: "Microsoft .NET"
+          company: "Microsoft Corporation"
+          original_filename: "dotnet.exe"
+        command_templates:
+          - 'dotnet.exe build -c {build_config}'
+          - 'dotnet.exe test --logger "console;verbosity=normal"'
+    categories: [build]
+    personas: [developer]
+
+  - id: nodejs
+    display_name: "Node.js"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\nodejs\node.exe'
+        pe_metadata:
+          file_version: "20.12.2"
+          description: "Node.js JavaScript Runtime"
+          product: "Node.js"
+          company: "Node.js"
+          original_filename: "node.exe"
+        command_templates:
+          - 'node.exe scripts/build.js'
+          - 'node.exe --max-old-space-size=4096 node_modules/.bin/webpack'
+    categories: [build]
+    personas: [developer]
+
+  # ===== Linux-Only User Apps =====
+  - id: thunderbird
+    display_name: "Mozilla Thunderbird"
+    platforms:
+      linux:
+        image_path: "/usr/bin/thunderbird"
+        command_templates:
+          - "thunderbird"
+    categories: [user_app, office]
+    personas: [executive, hr, finance, default]
+
+  - id: git
+    display_name: "Git"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Git\cmd\git.exe'
+        pe_metadata:
+          file_version: "2.45.1"
+          description: "Git for Windows"
+          product: "Git"
+          company: "The Git Development Community"
+          original_filename: "git.exe"
+        command_templates:
+          - 'git.exe pull origin {git_branch}'
+          - 'git.exe status'
+          - 'git.exe log --oneline -10'
+      linux:
+        image_path: "/usr/bin/git"
+        command_templates:
+          - "git pull origin {git_branch}"
+          - "git status"
+          - "git log --oneline -10"
+    categories: [user_app, build]
+    personas: [developer, sysadmin]
+
+  - id: docker
+    display_name: "Docker"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
+        pe_metadata:
+          file_version: "26.1.1"
+          description: "Docker Client"
+          product: "Docker Desktop"
+          company: "Docker Inc."
+          original_filename: "docker.exe"
+        command_templates:
+          - 'docker.exe ps'
+          - 'docker.exe images --format "table {{{{.Repository}}}}\t{{{{.Tag}}}}\t{{{{.Size}}}}"'
+      linux:
+        image_path: "/usr/bin/docker"
+        command_templates:
+          - "docker ps"
+          - "docker images"
+          - "docker logs --tail=50 {docker_container}"
+    categories: [user_app, build]
+    personas: [developer, sysadmin]
+
+  - id: kubectl
+    display_name: "Kubernetes CLI"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\kubectl\kubectl.exe'
+        pe_metadata:
+          file_version: "1.30.0"
+          description: "Kubernetes Command Line Tool"
+          product: "Kubernetes"
+          company: "The Kubernetes Authors"
+          original_filename: "kubectl.exe"
+        command_templates:
+          - 'kubectl.exe get pods -n {k8s_namespace}'
+          - 'kubectl.exe logs {k8s_pod} --tail=100'
+          - 'kubectl.exe describe node {k8s_node}'
+      linux:
+        image_path: "/usr/bin/kubectl"
+        command_templates:
+          - "kubectl get pods -n {k8s_namespace}"
+          - "kubectl logs {k8s_pod} --tail=100"
+          - "kubectl get nodes -o wide"
+    categories: [user_app]
+    personas: [developer, sysadmin]
+
+  - id: ssh
+    display_name: "OpenSSH Client"
+    platforms:
+      linux:
+        image_path: "/usr/bin/ssh"
+        command_templates:
+          - "ssh {username}@{ssh_target}"
+          - "ssh -i ~/.ssh/id_rsa {username}@{ssh_target}"
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, default]
+
+  - id: curl
+    display_name: "curl"
+    platforms:
+      linux:
+        image_path: "/usr/bin/curl"
+        command_templates:
+          - "curl -s https://api.example.com/status"
+          - "curl -sS -o /dev/null -w '%{{http_code}}' {internal_url}"
+          - "curl -X GET {internal_url} -H 'Accept: application/json'"
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, default]
+
+  - id: pytest
+    display_name: "pytest"
+    platforms:
+      linux:
+        image_path: "/usr/bin/python3"
+        command_templates:
+          - "python3 -m pytest tests/"
+          - "python3 -m pytest tests/ -v --tb=short"
+          - "python3 -m pytest tests/unit/ -x"
+    categories: [build]
+    personas: [developer]
+
+  # ===== Linux Code Editors =====
+  - id: vim
+    display_name: "Vim"
+    platforms:
+      linux:
+        image_path: "/usr/bin/vim"
+        command_templates:
+          - "vim {linux_project}/{linux_source_file}"
+    categories: [code]
+    personas: [developer, sysadmin, default]
+
+  - id: nano
+    display_name: "GNU nano"
+    platforms:
+      linux:
+        image_path: "/usr/bin/nano"
+        command_templates:
+          - "nano {linux_project}/{linux_source_file}"
+    categories: [code]
+    personas: [developer, sysadmin, analyst, default]
+
+  - id: emacs
+    display_name: "GNU Emacs"
+    platforms:
+      linux:
+        image_path: "/usr/bin/emacs"
+        command_templates:
+          - "emacs -nw {linux_project}/{linux_source_file}"
+    categories: [code]
+    personas: [developer]
+
+  # ===== Linux Build Tools =====
+  - id: make
+    display_name: "GNU Make"
+    platforms:
+      linux:
+        image_path: "/usr/bin/make"
+        command_templates:
+          - "make -j4 -C {linux_project}"
+          - "make clean && make all"
+    categories: [build]
+    personas: [developer, sysadmin]
+
+  - id: gcc
+    display_name: "GCC"
+    platforms:
+      linux:
+        image_path: "/usr/bin/gcc"
+        command_templates:
+          - "gcc -o output {linux_source_file}"
+          - "gcc -Wall -O2 -o output {linux_source_file}"
+    categories: [build]
+    personas: [developer]
+
+  - id: npm
+    display_name: "npm"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\nodejs\npm.cmd'
+        pe_metadata:
+          file_version: "10.5.0"
+          description: "npm"
+          product: "npm"
+          company: "npm, Inc."
+          original_filename: "npm.cmd"
+        command_templates:
+          - 'cmd.exe /c npm run {npm_script}'
+      linux:
+        image_path: "/usr/bin/npm"
+        command_templates:
+          - "npm run {npm_script}"
+          - "npm install"
+    categories: [build]
+    personas: [developer]
+
+  - id: cargo
+    display_name: "Rust Cargo"
+    platforms:
+      windows:
+        image_path: 'C:\Users\{username}\.cargo\bin\cargo.exe'
+        pe_metadata:
+          file_version: "1.78.0"
+          description: "Rust Package Manager"
+          product: "Cargo"
+          company: "The Rust Project Developers"
+          original_filename: "cargo.exe"
+        command_templates:
+          - 'cargo.exe build --release'
+          - 'cargo.exe test'
+          - 'cargo.exe clippy'
+      linux:
+        image_path: "/usr/bin/cargo"
+        command_templates:
+          - "cargo build --release"
+          - "cargo test"
+          - "cargo clippy"
+    categories: [build]
+    personas: [developer]
+
+  - id: pip
+    display_name: "pip"
+    platforms:
+      linux:
+        image_path: "/usr/bin/python3"
+        command_templates:
+          - "python3 -m pip install -e {linux_project}"
+          - "python3 -m pip install -r requirements.txt"
+    categories: [build]
+    personas: [developer]
+
+  # ===== Linux Query Tools =====
+  - id: mysql
+    display_name: "MySQL Client"
+    platforms:
+      linux:
+        image_path: "/usr/bin/mysql"
+        command_templates:
+          - "mysql -u root -p {mysql_db}"
+    categories: [query]
+    personas: [developer, analyst, sysadmin]
+
+  - id: psql
+    display_name: "PostgreSQL Client"
+    platforms:
+      linux:
+        image_path: "/usr/bin/psql"
+        command_templates:
+          - "psql -U postgres -d {psql_db}"
+    categories: [query]
+    personas: [developer, analyst, sysadmin]
+
+  - id: redis_cli
+    display_name: "Redis CLI"
+    platforms:
+      linux:
+        image_path: "/usr/bin/redis-cli"
+        command_templates:
+          - "{redis_cmd}"
+    categories: [query]
+    personas: [developer, sysadmin]

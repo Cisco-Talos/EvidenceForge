@@ -39,6 +39,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class SysmonEventEmitter(LogEmitter):
@@ -329,10 +330,20 @@ class SysmonEventEmitter(LogEmitter):
 
     @classmethod
     def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
-        """Look up PE metadata for a Windows binary by image path or name."""
+        """Look up PE metadata for a Windows binary by image path or name.
+
+        Checks the built-in OS binary table first, then falls back to the
+        application catalog for user-installed apps (Chrome, Firefox, etc.).
+        """
         # Handle Windows paths on any OS (backslash is not a separator on Unix)
         basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        return cls._PE_METADATA.get(basename, ("-", "-", "-", "-", "-"))
+        result = cls._PE_METADATA.get(basename)
+        if result:
+            return result
+        # Fall back to application catalog for user-installed apps
+        from evidenceforge.generation.activity.application_catalog import get_pe_metadata
+
+        return get_pe_metadata(basename)
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
@@ -377,16 +388,24 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
+        The first DWORD is a stable machine-specific value (same for all
+        processes on a given host), matching real Sysmon behavior. The
+        remaining segments are per-process unique.
+
         The timestamp should be the process creation time, not the event time.
         This ensures the same PID produces the same GUID across all Sysmon
         events (Event 1, 8, 10) referencing that process.
         """
-        # Truncate to second precision so minor timestamp variations don't
-        # produce different GUIDs for the same process
+        # Machine-specific first DWORD (stable across all processes on this host)
+        machine_prefix = hashlib.md5(
+            f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
+        ).hexdigest()[:8]
+
+        # Per-process uniqueness from remaining hash segments
         ts_key = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
         seed = f"{hostname}:{pid}:{ts_key}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        return f"{{{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
+        return f"{{{machine_prefix}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
 
     @staticmethod
     def _generate_hashes(image: str, hostname: str) -> str:
@@ -448,7 +467,9 @@ class SysmonEventEmitter(LogEmitter):
             "User": user,
             "LogonGuid": self._generate_process_guid(
                 host.hostname,
-                int(logon_id, 16) if logon_id.startswith("0x") else hash(logon_id) & 0xFFFFFFFF,
+                int(logon_id, 16)
+                if logon_id.startswith("0x")
+                else _stable_seed(f"sysmon_logon_{logon_id}") & 0xFFFFFFFF,
                 event.timestamp,
             ),
             "LogonId": logon_id,
@@ -628,6 +649,7 @@ class SysmonEventEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_counters: dict[str, int] = {}
+        self._erid_rngs: dict[str, random.Random] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         writer = self._host_writers.get(host_fqdn)
@@ -703,9 +725,15 @@ class SysmonEventEmitter(LogEmitter):
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
-                rng = random.Random(f"sysmon_erid_{counter_key}")
-                self._record_id_counters[counter_key] = rng.randint(100_000, 500_000)
-            self._record_id_counters[counter_key] += 1
+                self._erid_rngs[counter_key] = random.Random(f"sysmon_erid_{counter_key}")
+                self._record_id_counters[counter_key] = self._erid_rngs[counter_key].randint(
+                    100_000, 500_000
+                )
+            rng = self._erid_rngs[counter_key]
+            # Simulate gaps from event types we don't generate (3, 7, 11, 12-14, 22, etc.)
+            # Real Sysmon generates ~3-8x more events than just types 1/5/8/10
+            gap = rng.randint(1, 8)
+            self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
         for event in self._event_dicts:

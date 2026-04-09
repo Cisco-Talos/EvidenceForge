@@ -25,12 +25,13 @@
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.config import get_evaluation_directory
 from evidenceforge.utils.files import load_yaml
 
 
 def get_rules_directory() -> Path:
     """Get the path to the evaluation rules directory."""
-    return Path(__file__).parent
+    return get_evaluation_directory()
 
 
 def load_rules_file(name: str) -> dict[str, Any]:

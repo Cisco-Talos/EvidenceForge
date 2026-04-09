@@ -318,6 +318,9 @@ class EcarEmitter(HostMultiplexEmitter):
         target_pid = int(auth.source_port) if auth and auth.source_port else -1
         src_tid = rng_mod.randint(1000, 9999)
         tgt_tid = rng_mod.randint(1000, 9999)
+        # x86-64 canonical addresses: page-aligned, proper ranges
+        _kstack_base = 0xFFFFF80000000000 + (rng_mod.randint(0, 0xFFFFF) << 12)
+        _ustack_base = 0x000000C0000000 + (rng_mod.randint(0, 0xFFF) << 12)
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
@@ -333,11 +336,11 @@ class EcarEmitter(HostMultiplexEmitter):
             "tgt_pid": str(target_pid),
             "tgt_pid_uuid": str(uuid.uuid4()),
             "tgt_tid": str(tgt_tid),
-            "start_address": f"{rng_mod.randint(0x7FF700000000, 0x7FFF00000000):x}",
-            "stack_base": f"ffff{rng_mod.randint(0x800000000000, 0x900000000000):012x}",
-            "stack_limit": f"ffff{rng_mod.randint(0x800000000000, 0x900000000000):012x}",
-            "user_stack_base": f"{rng_mod.randint(0x0000000000, 0xFF00000000):010x}",
-            "user_stack_limit": f"{rng_mod.randint(0x0000000000, 0xFF00000000):010x}",
+            "start_address": f"00007ff{rng_mod.randint(0x0, 0xF):x}{rng_mod.randint(0x0000, 0xFFFF):04x}0000",
+            "stack_base": f"{_kstack_base:016x}",
+            "stack_limit": f"{_kstack_base - 0x6000:016x}",
+            "user_stack_base": f"{_ustack_base:016x}",
+            "user_stack_limit": f"{_ustack_base - 0x100000:016x}",
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)

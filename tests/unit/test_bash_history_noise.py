@@ -172,9 +172,9 @@ class TestBaselineLinuxBashHistory:
             pool = commands.get(role, [])
             assert len(pool) >= 5, f"{role} command pool has only {len(pool)} commands"
 
-        # Typos should exist
-        typos = commands.get("typos", [])
-        assert len(typos) >= 5, f"Typo pool has only {len(typos)} entries"
+        # Keyboard adjacency map should exist for generative typos
+        adjacency = commands.get("keyboard_adjacency", {})
+        assert len(adjacency) >= 20, f"Keyboard adjacency map has only {len(adjacency)} keys"
 
 
 class TestBashHistoryChronological:

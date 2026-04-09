@@ -112,9 +112,17 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
         elif dev_ref.exists():
             manifest[f"references/{ref_name}"] = dev_ref
 
-    # Persona files — installed: _data/personas/, dev: personas/
+    # Persona files — installed: _data/personas/, dev: config/personas/
     personas_dir = data_root / "personas"
-    if personas_dir.is_dir():
+    if not personas_dir.is_dir():
+        # Dev-mode: personas live in src/evidenceforge/config/personas/
+        from evidenceforge.config import get_personas_directory
+
+        try:
+            personas_dir = get_personas_directory()
+        except Exception:
+            personas_dir = None
+    if personas_dir and personas_dir.is_dir():
         for yaml_file in sorted(personas_dir.glob("*.yaml")):
             rel_path = f"personas/{yaml_file.name}"
             manifest[rel_path] = yaml_file

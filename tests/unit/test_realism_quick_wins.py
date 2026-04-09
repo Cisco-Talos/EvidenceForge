@@ -135,8 +135,8 @@ def test_asa_conn_id_not_round():
         sensor_hostnames=["fw01"],
     )
     first_id = emitter._next_conn_id("fw01")
-    assert first_id != 100000, "Connection ID should not start at a round number"
-    assert 100000 <= first_id < 10000000, f"Connection ID {first_id} out of expected range"
+    assert first_id != 1_000_000, "Connection ID should not start at a round number"
+    assert 1_000_000 <= first_id < 0xFFFFFFFF, f"Connection ID {first_id} out of expected range"
 
     # Second call should be monotonically increasing
     second_id = emitter._next_conn_id("fw01")

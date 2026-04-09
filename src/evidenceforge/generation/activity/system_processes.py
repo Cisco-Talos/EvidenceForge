@@ -8,12 +8,13 @@ scheduled tasks and system service processes by host role.
 """
 
 import random
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-_PROCESSES_PATH = Path(__file__).parent / "system_processes.yaml"
+from evidenceforge.config import get_activity_directory
+
+_PROCESSES_PATH = get_activity_directory() / "system_processes.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 

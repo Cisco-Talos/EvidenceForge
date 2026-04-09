@@ -34,9 +34,10 @@ import base64
 import logging
 import re
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _get_rng
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
@@ -496,15 +497,25 @@ class StorylineMixin:
                 )
 
         elif spec.type == "process":
-            sessions = self.state_manager.get_sessions_for_user(actor.username)
-            target_session = next((s for s in sessions if s.system == system.hostname), None)
-            if not target_session:
-                logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
-                logon_id = self.activity_generator.generate_logon(
-                    actor, system, logon_time, logon_type=3
+            if hasattr(self, "world_planner"):
+                target_session = self.world_planner.ensure_user_session(
+                    actor,
+                    system,
+                    time,
+                    rng,
+                    session_kind="network",
                 )
-            else:
                 logon_id = target_session.logon_id
+            else:
+                sessions = self.state_manager.get_sessions_for_user(actor.username)
+                target_session = next((s for s in sessions if s.system == system.hostname), None)
+                if not target_session:
+                    logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
+                    logon_id = self.activity_generator.generate_logon(
+                        actor, system, logon_time, logon_type=3
+                    )
+                else:
+                    logon_id = target_session.logon_id
 
             from evidenceforge.generation.activity import _get_os_category
 
@@ -520,7 +531,9 @@ class StorylineMixin:
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(
                     "<base64_encoded_command>",
-                    self._generate_encoded_powershell(hash(f"{time}_{actor.username}")),
+                    self._generate_encoded_powershell(
+                        _stable_seed(f"storyline_ps_{time.isoformat()}_{actor.username}")
+                    ),
                 )
 
             parent_pid = self.activity_generator._resolve_parent(
@@ -649,11 +662,11 @@ class StorylineMixin:
                 src_sys = ip_map[source_ip]
             elif source_ip == system.ip:
                 src_sys = system
-            # Only emit DNS if the destination has a known domain name.
-            # Raw IP connections (typical for C2/exfil) don't have DNS lookups.
+            # Use explicit hostname from scenario, fall back to reverse DNS registry.
+            # Raw IP connections (typical for C2/exfil) have no hostname → no DNS.
             from evidenceforge.generation.activity.network import REVERSE_DNS
 
-            conn_hostname = REVERSE_DNS.get(dst_ip)
+            conn_hostname = spec.hostname or REVERSE_DNS.get(dst_ip)
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -674,34 +687,72 @@ class StorylineMixin:
             malicious_event["uid"] = uid if uid else "(filtered by sensor placement)"
 
         elif spec.type == "ssh_session":
-            source_ip = spec.source_ip or system.ip
             target = next(
                 (s for s in self.scenario.environment.systems if s.ip == system.ip), system
             )
-            uid = self.activity_generator.generate_ssh_session(
-                user=actor,
-                target_system=target,
-                time=time,
-                source_ip=source_ip,
-            )
+            if hasattr(self, "world_planner"):
+                source_system = (
+                    self.world_model.system_for_ip(spec.source_ip)
+                    if spec.source_ip and hasattr(self, "world_model")
+                    else None
+                )
+                result = self.world_planner.bootstrap_user_session(
+                    user=actor,
+                    target_system=target,
+                    time=time,
+                    rng=rng,
+                    session_kind="ssh",
+                    source_system=source_system,
+                    allow_existing=False,
+                )
+            else:
+                source_ip = spec.source_ip or system.ip
+                uid = self.activity_generator.generate_ssh_session(
+                    user=actor,
+                    target_system=target,
+                    time=time,
+                    source_ip=source_ip,
+                )
+                result = SimpleNamespace(network_uid=uid)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
-            malicious_event["uid"] = uid if uid else "(filtered by sensor placement)"
+            malicious_event["uid"] = (
+                result.network_uid if result.network_uid else "(filtered by sensor placement)"
+            )
 
         elif spec.type == "rdp_session":
-            source_ip = spec.source_ip or system.ip
             target = next(
                 (s for s in self.scenario.environment.systems if s.ip == system.ip), system
             )
-            uid = self.activity_generator.generate_rdp_session(
-                user=actor,
-                target_system=target,
-                time=time,
-                source_ip=source_ip,
-            )
+            if hasattr(self, "world_planner"):
+                source_system = (
+                    self.world_model.system_for_ip(spec.source_ip)
+                    if spec.source_ip and hasattr(self, "world_model")
+                    else None
+                )
+                result = self.world_planner.bootstrap_user_session(
+                    user=actor,
+                    target_system=target,
+                    time=time,
+                    rng=rng,
+                    session_kind="rdp",
+                    source_system=source_system,
+                    allow_existing=False,
+                )
+            else:
+                source_ip = spec.source_ip or system.ip
+                uid = self.activity_generator.generate_rdp_session(
+                    user=actor,
+                    target_system=target,
+                    time=time,
+                    source_ip=source_ip,
+                )
+                result = SimpleNamespace(network_uid=uid)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 3389
-            malicious_event["uid"] = uid if uid else "(filtered by sensor placement)"
+            malicious_event["uid"] = (
+                result.network_uid if result.network_uid else "(filtered by sensor placement)"
+            )
 
         elif spec.type == "account_created":
             dc = next(
@@ -725,7 +776,11 @@ class StorylineMixin:
                 (s for s in self.scenario.environment.systems if s.type == "domain_controller"),
                 system,
             )
-            target_sid = spec.target_sid or self._make_domain_sid()
+            target_sid = (
+                spec.target_sid
+                or self._created_account_sids.get(spec.target_username)
+                or self._make_domain_sid()
+            )
             self.activity_generator.generate_account_deleted(
                 actor=actor,
                 system=dc,
@@ -840,7 +895,7 @@ class StorylineMixin:
             malicious_event["target_process"] = spec.target_process
 
         elif spec.type == "dhcp_lease":
-            ip_hash = hash(f"mac_{spec.requested_ip or system.ip}")
+            ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")
             mac = spec.mac_address or (
                 f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
                 f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"

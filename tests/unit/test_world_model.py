@@ -1,0 +1,318 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# SPDX-License-Identifier: MIT
+
+"""Unit tests for the compiled world model and planner layer."""
+
+import random
+from datetime import UTC, datetime
+from unittest.mock import Mock
+
+import pytest
+
+from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.world_model import WorldModel, WorldPlanner
+from evidenceforge.models.scenario import (
+    BaselineActivity,
+    Environment,
+    OutputSpec,
+    Scenario,
+    System,
+    TimeWindow,
+    User,
+)
+
+
+def _make_scenario() -> Scenario:
+    """Create a scenario with enough topology to exercise world-model planning."""
+    return Scenario(
+        name="world-model-test",
+        description="World model coverage scenario",
+        environment=Environment(
+            description="Mixed environment",
+            users=[
+                User(
+                    username="alice.admin",
+                    full_name="Alice Admin",
+                    email="alice@corp.local",
+                    persona="sysadmin",
+                    primary_system="WKS-01",
+                ),
+                User(
+                    username="dev.user",
+                    full_name="Dev User",
+                    email="dev@corp.local",
+                    persona="developer",
+                    primary_system="WKS-02",
+                ),
+            ],
+            systems=[
+                System(
+                    hostname="WKS-01",
+                    ip="10.10.10.50",
+                    os="Windows 11",
+                    type="workstation",
+                    assigned_user="alice.admin",
+                ),
+                System(
+                    hostname="WKS-02",
+                    ip="10.10.10.51",
+                    os="Windows 11",
+                    type="workstation",
+                    assigned_user="dev.user",
+                ),
+                System(
+                    hostname="APP-01",
+                    ip="10.10.20.10",
+                    os="Windows Server 2019",
+                    type="server",
+                    roles=["application"],
+                ),
+                System(
+                    hostname="DB-01",
+                    ip="10.10.30.10",
+                    os="Ubuntu 22.04",
+                    type="server",
+                    services=["postgresql"],
+                ),
+                System(
+                    hostname="PROXY-01",
+                    ip="10.10.40.10",
+                    os="Ubuntu 22.04",
+                    type="server",
+                    roles=["proxy"],
+                    services=["squid"],
+                ),
+                System(
+                    hostname="DC-01",
+                    ip="10.10.100.10",
+                    os="Windows Server 2019",
+                    type="domain_controller",
+                ),
+            ],
+        ),
+        time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC), duration="2h"),
+        baseline_activity=BaselineActivity(description="Normal", intensity="low", variation="low"),
+        output=OutputSpec(logs=[{"format": "windows"}, {"format": "zeek"}], destination="./out"),
+    )
+
+
+@pytest.fixture
+def scenario() -> Scenario:
+    """Scenario fixture for world-model tests."""
+    return _make_scenario()
+
+
+@pytest.fixture
+def systems(scenario: Scenario) -> dict[str, System]:
+    """Systems indexed by hostname."""
+    return {system.hostname: system for system in scenario.environment.systems}
+
+
+@pytest.fixture
+def users(scenario: Scenario) -> dict[str, User]:
+    """Users indexed by username."""
+    return {user.username: user for user in scenario.environment.users}
+
+
+@pytest.fixture
+def world_model(scenario: Scenario) -> WorldModel:
+    """Compiled world model for the scenario."""
+    return WorldModel(scenario, "corp.local")
+
+
+@pytest.fixture
+def state_manager() -> StateManager:
+    """Fresh state manager."""
+    return StateManager()
+
+
+@pytest.fixture
+def mock_emitters() -> dict[str, Mock]:
+    """Mock emitters that accept all dispatched events."""
+    windows = Mock()
+    windows.can_handle.return_value = True
+    zeek = Mock()
+    zeek.can_handle.return_value = True
+    return {"windows_event_security": windows, "zeek_conn": zeek}
+
+
+@pytest.fixture
+def activity_generator(
+    state_manager: StateManager,
+    mock_emitters: dict[str, Mock],
+    world_model: WorldModel,
+) -> ActivityGenerator:
+    """ActivityGenerator wired similarly to the generation engine."""
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    generator._ad_domain = world_model.ad_domain
+    generator._ip_to_system = dict(world_model.systems_by_ip)
+    generator._all_system_ips = [system.ip for system in world_model.scenario.environment.systems]
+    return generator
+
+
+@pytest.fixture
+def planner(
+    world_model: WorldModel,
+    state_manager: StateManager,
+    activity_generator: ActivityGenerator,
+) -> WorldPlanner:
+    """World planner backed by the real ActivityGenerator."""
+    return WorldPlanner(world_model, state_manager, activity_generator)
+
+
+def test_world_model_compiles_roles_and_infrastructure(
+    world_model: WorldModel,
+    systems: dict[str, System],
+) -> None:
+    """WorldModel should normalize roles and infer infrastructure endpoints once."""
+    db_host = world_model.hosts["DB-01"]
+    proxy_host = world_model.hosts["PROXY-01"]
+    dc_host = world_model.hosts["DC-01"]
+
+    assert "database" in db_host.canonical_roles
+    assert db_host.supports_ssh is True
+    assert "forward_proxy" in proxy_host.canonical_roles
+    assert "dns_server" in dc_host.canonical_roles
+
+    infra = world_model.to_infrastructure_ips()
+    assert infra["dc"] == [systems["DC-01"].ip]
+    assert infra["db_servers"] == [
+        {"ip": systems["DB-01"].ip, "port": 5432, "service": "postgresql"}
+    ]
+    assert world_model.proxy_routes[systems["WKS-01"].ip][0].hostname == "PROXY-01"
+
+
+def test_world_model_plan_session_selects_interactive_ssh_and_rdp(
+    world_model: WorldModel,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Session planning should pick the right access mode for each host type."""
+    rng = random.Random(42)
+    user = users["alice.admin"]
+
+    workstation_plan = world_model.plan_session(user, systems["WKS-01"], rng)
+    assert workstation_plan.session_kind == "interactive"
+    assert workstation_plan.logon_type == 2
+    assert workstation_plan.source_ip == systems["WKS-01"].ip
+
+    ssh_plan = world_model.plan_session(user, systems["DB-01"], rng)
+    assert ssh_plan.session_kind == "ssh"
+    assert ssh_plan.logon_type == 10
+    assert ssh_plan.source_system is not None
+    assert ssh_plan.source_system.hostname == "WKS-01"
+    assert ssh_plan.source_ip == systems["WKS-01"].ip
+
+    rdp_plan = world_model.plan_session(user, systems["APP-01"], rng)
+    assert rdp_plan.session_kind == "rdp"
+    assert rdp_plan.logon_type == 10
+    assert rdp_plan.source_system is not None
+    assert rdp_plan.source_system.hostname == "WKS-01"
+
+
+def test_world_planner_preallocates_sessions_before_logon_emission(
+    world_model: WorldModel,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Planner-owned session state should not depend on generator side effects."""
+    activity_generator = Mock()
+    activity_generator.generate_logon.return_value = "0xdeadbeef"
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC),
+        rng=random.Random(7),
+        session_kind="interactive",
+        allow_existing=False,
+    )
+
+    assert result.session.logon_id != "0xdeadbeef"
+    assert state_manager.get_session(result.session.logon_id) is result.session
+    call_kwargs = activity_generator.generate_logon.call_args.kwargs
+    assert call_kwargs["logon_id"] == result.session.logon_id
+    assert call_kwargs["logon_type"] == 2
+
+
+def test_world_planner_bootstraps_ssh_session(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """SSH bootstrap should create a durable session plus correlated network metadata."""
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["DB-01"],
+        time=datetime(2024, 1, 15, 10, 15, 0, tzinfo=UTC),
+        rng=random.Random(9),
+        session_kind="ssh",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+
+    session = state_manager.get_session(result.session.logon_id)
+    assert session is not None
+    assert session.session_kind == "ssh"
+    assert session.source_ip == systems["WKS-01"].ip
+    assert session.source_port > 0
+    assert session.transport_pid is not None
+    assert result.network_uid
+
+
+def test_world_planner_bootstraps_rdp_session_with_owned_state(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """RDP bootstrap should keep session and connection ownership aligned."""
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["APP-01"],
+        time=datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC),
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+
+    session = state_manager.get_session(result.session.logon_id)
+    assert session is not None
+    assert session.logon_type == 10
+    assert session.session_kind == "rdp"
+    assert session.source_ip == systems["WKS-01"].ip
+    assert result.network_uid
+
+    rdp_connections = [
+        conn for conn in state_manager.list_open_connections() if conn.dst_port == 3389
+    ]
+    assert len(rdp_connections) == 1
+    assert rdp_connections[0].protocol == "tcp"
+    assert rdp_connections[0].initiating_pid > 0
+    assert rdp_connections[0].source_system == "WKS-01"

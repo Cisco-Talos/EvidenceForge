@@ -147,14 +147,14 @@ Derived values (hostname, hash, domain) must be computed **once** and attached t
 **Correct:** Resolve hostname once in `generate_connection()`, pass to all downstream consumers.
 
 ### 2. Data-driven, not code-driven
-Enumerable pools (domains, processes, user agents, file paths, OUI prefixes, TLS issuers) belong in **YAML files** with cached loaders, not hardcoded Python lists. Follow the existing pattern:
-- `src/evidenceforge/generation/activity/spawn_rules.yaml` + `spawn_rules.py`
-- `src/evidenceforge/generation/activity/bash_commands.yaml` + `bash_commands.py`
-- `src/evidenceforge/generation/activity/tls_issuers.yaml` + `tls_issuers.py`
-- `src/evidenceforge/generation/activity/network_params.yaml`
+Enumerable pools (domains, processes, user agents, file paths, OUI prefixes, TLS issuers) belong in **YAML files** under `src/evidenceforge/config/` with cached loaders, not hardcoded Python lists. Follow the existing pattern:
+- `src/evidenceforge/config/activity/spawn_rules.yaml` + `generation/activity/spawn_rules.py`
+- `src/evidenceforge/config/activity/bash_commands.yaml` + `generation/activity/bash_commands.py`
+- `src/evidenceforge/config/activity/tls_issuers.yaml` + `generation/activity/tls_issuers.py`
+- `src/evidenceforge/config/activity/network_params.yaml`
 
 **Anti-pattern:** `_ISSUERS = ["CN=R3, O=Let's Encrypt...", ...]` hardcoded in generator.py.
-**Correct:** Load from YAML at module level, cache after first call.
+**Correct:** Load from YAML at module level, cache after first call. Use `from evidenceforge.config import get_activity_directory` for paths.
 
 ### 3. OS-aware defaults
 Every function returning a fallback/default value must check `os_category`. Grep for hardcoded Windows paths (`C:\\`, `explorer.exe`, `svchost.exe`) outside explicitly Windows-only code blocks — each one is a potential Linux data corruption.
@@ -188,20 +188,28 @@ Use `_stable_seed(f"context_{scope_key}")` for all deterministic derivation. **N
 
 ## Key Architecture Patterns
 
+### World Model Planning
+
+`WorldModel` / `WorldPlanner` (`src/evidenceforge/generation/world_model.py`) sit above the canonical event model and compile environment intent into operational decisions:
+
+- `WorldModel` resolves canonical host/user capabilities once from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
+- `WorldPlanner` owns session bootstrap semantics (interactive, network, SSH, RDP) and may allocate session state in `StateManager` before `ActivityGenerator` emits the correlated host/network evidence
+- Baseline and storyline code should call this layer for persona placement, remote admin source selection, and shared session bootstrap instead of re-implementing heuristics locally
+
 ### Canonical Event Model
 
 The generation engine uses a canonical event model — an intermediate representation between activity generation and log rendering. ActivityGenerator builds `SecurityEvent` objects carrying composable context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`, `SyslogContext`). An `EventDispatcher` routes each event to `StateManager.apply()` and to matching emitters based on `can_handle()` and network visibility.
 
 **Core principle: consistency by construction, not by coordination.** Two emitters cannot disagree about a port number because there is only one port number — on the event object.
 
-**Two-phase build + dispatch:** (1) Allocate IDs from StateManager (`create_session()`, `create_process()`, `open_connection()`), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively — including baseline IDS alerts, web access, syslog daemon messages, DHCP leases, anomaly records, anonymous logons, and sensor startup.
+**Two-phase build + dispatch:** (1) Allocate IDs from StateManager in the responsible planning/generation layer (`WorldPlanner` for planner-owned sessions, `ActivityGenerator` for processes/connections and direct logons), (2) build a complete `SecurityEvent` with those IDs, (3) dispatch to emitters. `StateManager.apply()` records state from a fully-constructed event — it does NOT allocate IDs. `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively — including baseline IDS alerts, web access, syslog daemon messages, DHCP leases, anomaly records, anonymous logons, and sensor startup.
 
 Full design details: `docs/design/event-model-prd.md`. Key types: `src/evidenceforge/events/`.
 
 ### State Management
 
 `StateManager` (`src/evidenceforge/generation/state_manager.py`) is the single source of truth for runtime state:
-- **ActivityGenerator writes state** — allocates IDs via `create_session()`, `create_process()`, `open_connection()` before building SecurityEvents
+- **Planning/generation layers write state** — `WorldPlanner` may allocate/register sessions; `ActivityGenerator` allocates processes/connections and may emit against preallocated sessions
 - **Emitters only read state** — to get LogonIDs, PIDs for rendered events; never mutate StateManager
 - **`apply(event)`** records state from a fully-constructed SecurityEvent — handles teardown (logoff, process termination) and updates (connection bytes); does NOT allocate IDs
 - Events are transient (GC'd after dispatch); StateManager owns durable state
@@ -220,7 +228,23 @@ All emitters inherit from `LogEmitter` ABC (`src/evidenceforge/generation/emitte
 
 ### Format Definitions
 
-Format definitions are YAML files in `src/evidenceforge/formats/definitions/`, not code. Each defines fields, variants, JSON Logic validators, and Jinja2 output templates. Loaded via `formats/loader.py`. Adding a new format requires only a new YAML file.
+Format definitions are YAML files in `src/evidenceforge/config/formats/`, not code. Each defines fields, variants, JSON Logic validators, and Jinja2 output templates. Loaded via `formats/loader.py`. Adding a new format requires only a new YAML file.
+
+### YAML Data Directory Convention
+
+All YAML lookup/reference data lives in `src/evidenceforge/config/` with subdirectories:
+- `config/formats/` — format definitions (field schemas, validators, templates)
+- `config/evaluation/` — evaluation rules (causal pairs, co-occurrence, distributions)
+- `config/activity/` — activity generation data (DNS registry, spawn rules, TLS issuers, etc.)
+- `config/personas/` — pre-built persona definitions
+
+**Rule:** When adding new YAML data files, place them in the appropriate `config/` subdirectory. Never scatter YAML data files alongside Python code. Loader modules import path helpers from `evidenceforge.config` and handle caching/validation in their own domain.
+
+**Pattern for new data files:**
+1. Add the YAML file to the appropriate `config/` subdirectory
+2. Create or update a loader in the relevant domain module
+3. Use `from evidenceforge.config import get_{category}_directory` for path resolution
+4. Follow the cached-loader pattern (module-level `_CACHED_DATA`, load-on-first-call)
 
 ### Timezone Handling
 - Store all datetimes in UTC internally (`datetime.timezone.utc`)

@@ -4,6 +4,18 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## Pre-MVP Quality Fixes
+
+### World Model Refactor (2026-04-08)
+
+- Added a compiled `WorldModel` / `WorldPlanner` layer above the canonical event model to unify user placement, host capability inference, infrastructure discovery, proxy routing, and shared session bootstrap across baseline and storyline paths.
+- Centralized interactive/network/SSH/RDP session planning so planner-owned sessions are allocated in `StateManager` before `ActivityGenerator` emits correlated host and network evidence, eliminating duplicated remote-session logic and brittle mock-only assumptions.
+- Extended runtime ownership state to carry session/process/connection provenance (`logon_id`, `session_kind`, `source_port`, `transport_pid`, initiating PID, close time, source host metadata) and aligned process-first connection attribution with the new layer.
+- Completed a realism cleanup sweep replacing remaining `hash()`-based derivation in critical generation paths with `_stable_seed(...)`.
+- Added dedicated unit coverage in `tests/unit/test_world_model.py` and reran full verification with `uv run pytest -v --include-slow` (`1483 passed`).
+
+---
+
 ## Phase 1: Core Generation (COMPLETE)
 
 **Goal:** Prove the concept with basic functionality, simplified schema, 2-3 log formats, small datasets (<10K events).

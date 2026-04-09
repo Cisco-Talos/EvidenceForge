@@ -56,8 +56,18 @@ This separation means scenario creation benefits from LLM reasoning about attack
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
+          │ WorldModel / WorldPlanner   │
+          │  Compile host/user intent   │
+          │  Resolve roles + services   │
+          │  Pick session semantics     │
+          │  Preallocate session state  │
+          └────────────┬────────────────┘
+                       │
+          ┌────────────▼────────────────┐
           │    ActivityGenerator         │
-          │  Builds SecurityEvents      │
+          │  Emits evidence against     │
+          │  planner-owned state and    │
+          │  builds SecurityEvents      │
           │  with composable contexts   │
           │                              │
           │  CausalExpansionEngine       │
@@ -160,6 +170,15 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
 - `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
 
+### WorldModel and WorldPlanner
+
+The compiled world-model layer (`src/evidenceforge/generation/world_model.py`) sits above the canonical event model and answers the realism question the event model does not: "why would this user/system do this here?"
+
+- `WorldModel` compiles canonical host capabilities and user placement from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
+- `WorldPlanner` centralizes session bootstrap for interactive, network, SSH, and RDP access, including remote source-host selection and planner-owned session allocation
+- Baseline and storyline call this shared layer instead of maintaining separate SSH/RDP/logon heuristics
+- `ActivityGenerator` then emits host/network evidence against that precomputed state using the canonical `SecurityEvent` pipeline
+
 ### EventDispatcher
 
 The dispatcher (`src/evidenceforge/events/dispatcher.py`) routes events through two layers:
@@ -200,8 +219,8 @@ StateManager
 ```
 
 **ID allocation pattern:**
-1. ActivityGenerator calls `state_manager.create_session()` / `create_process()` / `open_connection()` to allocate unique IDs
-2. Builds a SecurityEvent with those IDs
+1. `WorldPlanner` or `ActivityGenerator` calls `state_manager.create_session()` / `create_process()` / `open_connection()` to allocate durable IDs and ownership metadata
+2. `ActivityGenerator` builds a `SecurityEvent` with those IDs
 3. Dispatches the event
 4. `StateManager.apply()` records state from the event (teardown, byte updates — never allocates IDs)
 
@@ -409,7 +428,7 @@ The baseline generation engine includes several layers of realism beyond simple 
 
 **DNS before baseline connections:** System traffic TCP connections (SMB, Kerberos, LDAP, database) emit DNS queries via the causal expansion engine before each connection, with per-host DNS caching (TTL 60-600s) preventing duplicate queries. ~2% of connections are intentionally direct-IP to simulate hardcoded infrastructure configs. Scenario system IP→FQDN mappings are registered at setup time so DNS queries resolve to correct hostnames. All domain↔IP data lives in a single `dns_registry.yaml` (source of truth). The loader (`dns_registry.py`) builds REVERSE_DNS, FORWARD_DNS, and tag-based lookups. All external connections use domain-first selection via `pick_domain_and_ip()` — hostname is resolved once at the top of `generate_connection()` and shared by causal DNS expansion, SSL SNI, and proxy rendering. Background HTTPS traffic (Windows Update, Ubuntu packages, CRL checks) uses tag-based selection from the same registry. Storyline connections to raw C2 IPs skip DNS emission (realistic for direct-IP C2 beaconing).
 
-**Per-system session management:** The baseline engine checks for active sessions on the specific target system before generating processes. If no session exists, a context-aware logon is emitted (type 2 interactive for workstations, type 3/10 network/RDP for servers). This prevents processes appearing on systems where the user has no logon event.
+**Per-system session management:** `WorldPlanner` checks for active sessions on the specific target system before generating processes. If no session exists, it bootstraps a context-aware session (interactive for a user's primary workstation, network for remote process execution, SSH for Linux admin access, RDP for Windows remote admin). This prevents processes appearing on systems where the user has no corresponding logon/session evidence and keeps session ownership consistent across baseline and storyline paths.
 
 **Process→network correlation:** Baseline process creation triggers correlated network connections when the executable normally generates traffic (browsers→HTTPS, Office→cloud, DB clients→SQL, dev tools→registries). 60% emission probability with process PID carried for eCAR FLOW correlation.
 
