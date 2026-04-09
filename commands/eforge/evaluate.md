@@ -24,7 +24,7 @@ uv run eforge eval <output_dir> --scenario <scenario.yaml> --verbose
 
 If they don't have generated output yet, suggest using `/eforge generate` first.
 
-For detailed field documentation and known limitations of each log format, see `references/evidence-formats.md`.
+For detailed field documentation and known limitations of each log format, use the `/eforge:references:evidence-formats` skill.
 
 ## Workflow
 

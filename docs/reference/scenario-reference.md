@@ -1,3 +1,7 @@
+---
+description: "Scenario Schema Reference"
+---
+
 # Scenario Schema Reference
 
 This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
@@ -94,12 +98,17 @@ systems:
 
 ### System Roles
 
-The `roles` field declares a system's function in the network. The engine uses roles for traffic routing decisions:
+The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
 
-- `web_server` — generates web access logs for HTTP requests to this system
+- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users
+- `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
+- `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
+- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations
+- `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
 - `dns_server` — DNS resolution target
-- `mail_server` — mail relay/server
+
+Inbound traffic is constrained by network topology: DMZ hosts receive substantial external traffic, while internal servers only receive connections from other internal systems. The firewall policy determines what gets permitted vs denied — denied connection attempts still produce firewall deny records and source-side sensor visibility.
 
 For server and infrastructure hosts, pair `roles` with realistic `services` whenever possible. `roles` tell the engine what the host is for; `services` help the world model infer concrete protocols and destinations (for example, PostgreSQL vs MSSQL, web stack vs proxy stack, SSH-capable Linux admin targets, and so on).
 

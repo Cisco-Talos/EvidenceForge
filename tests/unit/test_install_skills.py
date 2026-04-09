@@ -80,13 +80,13 @@ class TestInstallSkills:
             f"{[f.name for f in yaml_files]}"
         )
 
-    def test_scenario_has_relative_paths(self, tmp_path):
-        """Installed scenario.md references relative paths, not project paths."""
+    def test_scenario_uses_subskill_references(self, tmp_path):
+        """Installed scenario.md uses sub-skill invocation, not file paths."""
         install_skills(tmp_path)
 
         scenario = (tmp_path / "eforge" / "scenario.md").read_text()
-        assert "references/scenario-reference.md" in scenario
-        assert "docs/scenario-reference.md" not in scenario
+        assert "/eforge:references:scenario-reference" in scenario
+        assert "references/scenario-reference.md" not in scenario
 
     def test_idempotent(self, tmp_path):
         """Running install twice succeeds without error."""
