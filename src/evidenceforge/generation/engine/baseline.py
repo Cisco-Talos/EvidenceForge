@@ -1945,14 +1945,26 @@ class BaselineMixin:
         rng: Any,
         os_cat: str = "windows",
         dns_tags: list[str] | None = None,
+        inbound: bool = False,
     ) -> tuple[str | None, str | None]:
         """Resolve a role name to (ip, hostname), excluding a specific IP.
 
         Works for both outbound (exclude_ip = source) and inbound
         (exclude_ip = destination). Returns (None, None) if no suitable
         system exists in the scenario.
+
+        Args:
+            inbound: If True, _external resolves to a random client IP
+                (realistic for internet clients hitting a server).
+                If False, _external resolves via dns_registry
+                (realistic for outbound destinations like CDNs/APIs).
         """
         if role == "_external":
+            if inbound:
+                # Internet clients use random external IPs, not service
+                # infrastructure from the DNS registry.
+                ip = self._generate_external_client_ip(rng)
+                return ip, None
             from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
 
             tags = tuple(dns_tags) if dns_tags else ("background", os_cat)
@@ -2122,26 +2134,61 @@ class BaselineMixin:
                     s for s in self.scenario.environment.network.sensors if s.type == "firewall"
                 ]
 
+            # Resolve a public-facing hostname for external inbound traffic.
+            # Without this, HTTP Host / TLS SNI falls back to internal FQDNs.
+            _external_dst_hostname = None
+            if allows_external and hasattr(self, "world_model"):
+                # Check for static NAT mapped hostname or use system hostname
+                for sensor in _inbound_fw_sensors:
+                    for rule in sensor.nat_rules:
+                        if rule.type == "static" and rule.real_ip == system.ip:
+                            _external_dst_hostname = rule.mapped_ip
+                            break
+                    if _external_dst_hostname:
+                        break
+                if not _external_dst_hostname:
+                    _external_dst_hostname = self.world_model.fqdn_for_system(system)
+
+            # Pre-resolve firewall interface names for deny records
+            _fw_iface_resolve = None
+            if _inbound_fw_sensors:
+                _fw_sensor_0 = _inbound_fw_sensors[0]
+
+                def _fw_iface_resolve(ip: str) -> str:
+                    import ipaddress as _ipa_fw
+
+                    for seg_name, cidr in _inbound_segment_cidrs.items():
+                        try:
+                            if _ipa_fw.ip_address(ip) in cidr:
+                                return _fw_sensor_0.interfaces.get(seg_name, seg_name)
+                        except ValueError:
+                            continue
+                    return _fw_sensor_0.interfaces.get("_default", "outside")
+
             if not inbound_conns:
                 pass  # All entries were external and host is internal-only
             else:
+                from evidenceforge.events.contexts import FirewallContext as _InboundFwCtx
+
                 inbound_weights = [c.get("weight", 1) for c in inbound_conns]
                 num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
                 for _ in range(num_inbound):
                     conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
+                    is_external_src = conn["role"] == "_external"
                     src_ip, hostname = self._resolve_role(
                         conn["role"],
                         system.ip,
                         rng,
                         os_cat,
+                        inbound=True,
                     )
                     if not src_ip:
                         continue
 
-                    # Evaluate firewall policy — skip connections that any
-                    # firewall would deny.  The deny baseline handles those.
+                    # Evaluate firewall policy — denied connections are
+                    # emitted as deny records (not silently dropped).
+                    fw_denied = False
                     if _inbound_fw_sensors:
-                        denied = False
                         for fw_sensor in _inbound_fw_sensors:
                             action = self._evaluate_firewall_policy(
                                 src_ip,
@@ -2151,10 +2198,8 @@ class BaselineMixin:
                                 _inbound_segment_cidrs,
                             )
                             if action == "deny":
-                                denied = True
+                                fw_denied = True
                                 break
-                        if denied:
-                            continue
 
                     offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
@@ -2166,32 +2211,51 @@ class BaselineMixin:
                         ip_map = getattr(self.activity_generator, "_ip_to_system", {})
                         src_sys = ip_map.get(src_ip)
 
-                    # Internal clients emit DNS before connecting (just like
-                    # outbound traffic).  External sources don't — we can't see
-                    # their resolver queries.
                     is_internal_src = src_sys is not None
+                    # External clients use the public-facing hostname;
+                    # internal clients use the internal FQDN.
                     dst_hostname = None
-                    if is_internal_src and hasattr(self, "world_model"):
+                    if is_external_src:
+                        dst_hostname = _external_dst_hostname
+                    elif is_internal_src and hasattr(self, "world_model"):
                         dst_hostname = self.world_model.fqdn_for_system(system)
 
-                    # Always use the real (internal) IP as dst_ip.  The NAT
-                    # pipeline in the dispatcher handles per-sensor address
-                    # translation — outside-facing sensors see the public VIP
-                    # via NatContext, inside sensors see the real IP.
-                    self.activity_generator.generate_connection(
-                        src_ip=src_ip,
-                        dst_ip=system.ip,
-                        time=ts,
-                        dst_port=conn["port"],
-                        proto=conn.get("proto", "tcp"),
-                        service=conn.get("service"),
-                        duration=rng.uniform(0.05, 5.0),
-                        orig_bytes=rng.randint(200, 5000),
-                        resp_bytes=rng.randint(500, 50000),
-                        source_system=src_sys,
-                        emit_dns=is_internal_src,
-                        hostname=dst_hostname,
-                    )
+                    if fw_denied and _fw_iface_resolve:
+                        # Emit as a deny record instead of dropping
+                        deny_state = "REJ" if _fw_sensor_0.drop_mode == "reject" else "S0"
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip,
+                            dst_ip=system.ip,
+                            time=ts,
+                            dst_port=conn["port"],
+                            proto=conn.get("proto", "tcp"),
+                            service=conn.get("service"),
+                            conn_state=deny_state,
+                            firewall=_InboundFwCtx(
+                                action="deny",
+                                msg_id=106023,
+                                connection_id=0,
+                                src_interface=_fw_iface_resolve(src_ip),
+                                dst_interface=_fw_iface_resolve(system.ip),
+                                access_group=f"{_fw_iface_resolve(src_ip)}_access_in",
+                            ),
+                            emit_dns=False,
+                        )
+                    else:
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip,
+                            dst_ip=system.ip,
+                            time=ts,
+                            dst_port=conn["port"],
+                            proto=conn.get("proto", "tcp"),
+                            service=conn.get("service"),
+                            duration=rng.uniform(0.05, 5.0),
+                            orig_bytes=rng.randint(200, 5000),
+                            resp_bytes=rng.randint(500, 50000),
+                            source_system=src_sys,
+                            emit_dns=is_internal_src,
+                            hostname=dst_hostname,
+                        )
 
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
