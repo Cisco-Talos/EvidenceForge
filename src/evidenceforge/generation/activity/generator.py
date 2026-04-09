@@ -1054,8 +1054,10 @@ class ActivityGenerator:
             edr=EdrContext(object_id=session_obj_id),
         )
 
-        # Attach SyslogContext for Linux hosts (sshd session closed)
-        if event.dst_host and event.dst_host.os_category == "linux":
+        # Attach SyslogContext for Linux SSH sessions only (sshd session closed).
+        # Non-SSH sessions (interactive, network) don't produce sshd evidence.
+        is_ssh_session = session and session.session_kind == "ssh"
+        if event.dst_host and event.dst_host.os_category == "linux" and is_ssh_session:
             from evidenceforge.events.contexts import SyslogContext
 
             sshd_pid = (
@@ -1342,10 +1344,18 @@ class ActivityGenerator:
         # Resolve hostname ONCE for DNS/SNI/proxy consistency.
         # All downstream uses (causal DNS expansion, SSL SNI, proxy hostname)
         # share this single resolved value instead of doing independent lookups.
-        if not hostname:
+        #
+        # hostname semantics:
+        #   None  → auto-resolve from REVERSE_DNS or generate random
+        #   ""    → suppress resolution (external inbound, raw-IP C2)
+        #   "x.y" → use this hostname explicitly
+        if hostname is None:
             hostname = REVERSE_DNS.get(dst_ip)
         if not hostname and emit_dns and proto == "tcp" and dst_port not in (53,):
             hostname = _generate_random_hostname(_get_rng(), dst_ip)
+        # Normalize suppressed hostname to None for downstream
+        if hostname == "":
+            hostname = None
 
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.

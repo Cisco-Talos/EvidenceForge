@@ -781,7 +781,11 @@ class WorldPlanner:
                     command_line = _parameterize_command(rng, command_line, username=user.username)
                 break
 
+        # Backdate the process slightly, but never before the session started
         proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
+        min_proc_time = session.start_time + timedelta(milliseconds=100)
+        if proc_time < min_proc_time:
+            proc_time = min_proc_time
         self.state_manager.set_current_time(proc_time)
         parent_pid = self.activity_generator._resolve_parent(
             system, user, proc_time, session.logon_id, image

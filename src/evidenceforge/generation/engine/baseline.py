@@ -2206,7 +2206,9 @@ class BaselineMixin:
                     # internal clients use the internal FQDN.
                     dst_hostname = None
                     if is_external_src:
-                        pass  # No hostname for external clients (see comment above)
+                        # Suppress hostname resolution — external clients
+                        # shouldn't get internal FQDNs from REVERSE_DNS.
+                        dst_hostname = ""
                     elif is_internal_src and hasattr(self, "world_model"):
                         dst_hostname = self.world_model.fqdn_for_system(system)
 

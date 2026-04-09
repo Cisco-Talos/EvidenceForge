@@ -679,7 +679,8 @@ class StorylineMixin:
             # Only use explicit hostname from scenario.  Do NOT fall back to
             # reverse-DNS: raw-IP storyline connections (C2, exfil) must stay
             # IP-only so they don't sprout fabricated DNS/SNI/proxy domains.
-            conn_hostname = spec.hostname
+            # Use "" to suppress REVERSE_DNS resolution when no hostname given.
+            conn_hostname = spec.hostname or ""
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
