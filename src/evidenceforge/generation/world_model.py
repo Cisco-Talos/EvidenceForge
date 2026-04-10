@@ -508,20 +508,29 @@ class WorldModel:
             for system in self.systems_by_role.get(role, [])
             if system.hostname != src_system.hostname
         ]
-        # Filter database candidates by service compatibility
+        # Filter database candidates by service compatibility.
+        # When a host has no explicit services, use the OS-inferred DB type
+        # (Linux→postgresql, Windows→mssql) to avoid impossible protocol targets.
         if role == "database" and service and candidates:
             match_terms = self._DB_SERVICE_MATCH.get(service, set())
             if match_terms:
-                filtered = [
-                    s
-                    for s in candidates
-                    if s.hostname in self.hosts
-                    and any(
-                        term in svc.lower()
-                        for svc in self.hosts[s.hostname].services
-                        for term in match_terms
-                    )
-                ]
+                _OS_DB_DEFAULT = {"linux": "postgresql", "windows": "mssql"}
+                filtered = []
+                for s in candidates:
+                    host = self.hosts.get(s.hostname)
+                    if not host:
+                        continue
+                    if host.services:
+                        # Check explicit services
+                        if any(
+                            term in svc.lower() for svc in host.services for term in match_terms
+                        ):
+                            filtered.append(s)
+                    else:
+                        # No services — use OS-inferred DB type
+                        inferred = _OS_DB_DEFAULT.get(host.os_category, "mssql")
+                        if inferred == service:
+                            filtered.append(s)
                 if filtered:
                     candidates = filtered
         if candidates:
@@ -703,12 +712,12 @@ class WorldPlanner:
     ) -> SessionBootstrapResult:
         existing = self._find_user_session(user.username, target_system.hostname, session_kind)
         if allow_existing and existing is not None:
-            # Only reuse if transport-compatible: require exact kind match
-            # for SSH/RDP to avoid mismatched transport evidence.
+            # Require exact session_kind match when the caller specifies one.
+            # Prevents interactive requests from reusing network/rdp sessions
+            # and vice versa — each kind carries different transport evidence.
             transport_compatible = True
-            if session_kind in ("ssh", "rdp"):
-                if existing.session_kind != session_kind:
-                    transport_compatible = False
+            if session_kind and existing.session_kind != session_kind:
+                transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
                 if storyline_protected:

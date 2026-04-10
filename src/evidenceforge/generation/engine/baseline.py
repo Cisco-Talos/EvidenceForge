@@ -1604,6 +1604,10 @@ class BaselineMixin:
             session = self.state_manager.get_session(logon_id)
             if not session:
                 continue
+            # Re-check protection — storyline may have marked this session
+            # as protected after logoff was planned earlier in the hour.
+            if session.storyline_protected:
+                continue
             user = user_map.get(session.username)
             if not user:
                 continue
