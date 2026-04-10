@@ -203,6 +203,7 @@ environment:
       members: [marcus.chen]
 
   network:                        # Optional but recommended for realism
+    public_cidrs: ["203.0.113.0/28"]  # Org's public IP block (auto-derived from VIPs if omitted)
     segments:
       - name: corporate_lan
         cidr: "10.0.1.0/24"

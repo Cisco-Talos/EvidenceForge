@@ -62,6 +62,11 @@ class NetworkVisibilityEngine:
         self._sensors: list[NetworkSensor] = []
         # NAT: per-rule PAT port counters keyed by (sensor_name, rule_idx)
         self._pat_port_counters: dict[tuple[str, int], int] = {}
+        # VIP routing: static NAT mapped_ip ↔ real_ip lookups
+        self._vip_to_real_ip: dict[str, str] = {}
+        self._real_ip_to_vip: dict[str, str] = {}
+        # Public address space for external scan targets
+        self._public_cidrs: list[ipaddress.IPv4Network] = []
 
         if self._enabled:
             self._build_topology(network_config, systems)
@@ -112,12 +117,52 @@ class NetworkVisibilityEngine:
                     self._pat_port_counters[(sensor_name, rule_idx)] = 1024 + (seed % 50000)
                     nat_rule_count += 1
 
+        # Build VIP reverse lookups from static NAT rules and register
+        # VIPs in segment membership so visibility/NAT resolution works.
+        for sensor in config.sensors:
+            if sensor.type != "firewall" or not sensor.nat_rules:
+                continue
+            for rule in sensor.nat_rules:
+                if rule.type == "static" and rule.mapped_ip and rule.real_ip:
+                    self._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
+                    self._real_ip_to_vip[rule.real_ip] = rule.mapped_ip
+                    # VIP inherits the real_ip's segment membership
+                    real_segs = self._ip_to_segments.get(rule.real_ip, set())
+                    if real_segs:
+                        self._ip_to_segments[rule.mapped_ip] = set(real_segs)
+
+        # Public address space for scan targets: explicit or auto-derived
+        if hasattr(config, "public_cidrs") and config.public_cidrs:
+            for cidr_str in config.public_cidrs:
+                try:
+                    self._public_cidrs.append(ipaddress.ip_network(cidr_str, strict=False))
+                except ValueError:
+                    logger.warning(f"Invalid public_cidrs entry: {cidr_str!r}")
+        elif self._real_ip_to_vip:
+            # Auto-derive: group VIPs by /24 prefix
+            seen_prefixes: set[str] = set()
+            for vip in self._real_ip_to_vip.values():
+                try:
+                    addr = ipaddress.ip_address(vip)
+                    prefix = str(ipaddress.ip_network(f"{addr}/24", strict=False))
+                    if prefix not in seen_prefixes:
+                        seen_prefixes.add(prefix)
+                        self._public_cidrs.append(ipaddress.ip_network(prefix))
+                except ValueError:
+                    pass
+
         logger.info(
             f"Network visibility engine initialized: "
             f"{len(config.segments)} segments, {len(config.sensors)} sensors, "
             f"{len(self._ip_to_segments)} mapped IPs, "
-            f"{nat_rule_count} NAT rules"
+            f"{nat_rule_count} NAT rules, "
+            f"{len(self._vip_to_real_ip)} VIPs, "
+            f"{len(self._public_cidrs)} public CIDRs"
         )
+
+    def get_inbound_vip(self, real_ip: str) -> str | None:
+        """Return the public VIP for a given real (internal) IP, or None."""
+        return self._real_ip_to_vip.get(real_ip)
 
     def _resolve_ip_segments(self, ip: str) -> set[str]:
         """Return the set of segment names an IP belongs to.

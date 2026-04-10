@@ -753,6 +753,23 @@ class NetworkConfig(BaseModel):
 
     segments: list[NetworkSegment]
     sensors: list[NetworkSensor]
+    public_cidrs: list[str] = Field(
+        default_factory=list,
+        description="Public address blocks allocated to the org (e.g., ['203.0.113.0/28']). "
+        "External scans/probes target these ranges. When empty, auto-derived "
+        "from static NAT VIPs by grouping into /24 blocks.",
+    )
+
+    @field_validator("public_cidrs")
+    @classmethod
+    def validate_public_cidrs(cls, v: list[str]) -> list[str]:
+        """Validate each entry is a valid CIDR."""
+        for cidr in v:
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+            except ValueError as e:
+                raise ValueError(f"Invalid public_cidrs entry {cidr!r}: {e}") from e
+        return v
 
     @field_validator("segments")
     @classmethod

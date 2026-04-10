@@ -250,6 +250,10 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["id.resp_h"] = swaps["dst_ip"]
                     if "dst_port" in swaps:
                         render_data["id.resp_p"] = swaps["dst_port"]
+                    if "local_orig" in swaps:
+                        render_data["local_orig"] = swaps["local_orig"]
+                    if "local_resp" in swaps:
+                        render_data["local_resp"] = swaps["local_resp"]
                 # Directional propagation delay: farther sensors see packets later
                 if i > 0:
                     from datetime import datetime, timedelta

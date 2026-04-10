@@ -1527,3 +1527,38 @@ class ScenarioValidator:
                             suggestion="Set real_ip to the internal IP of the server",
                         )
                     )
+
+        # Validate public_cidrs: warn if VIPs fall outside declared ranges
+        network = self.scenario.environment.network
+        if network and network.public_cidrs:
+            public_nets = []
+            for cidr_str in network.public_cidrs:
+                try:
+                    public_nets.append(ipaddress.ip_network(cidr_str, strict=False))
+                except ValueError:
+                    pass
+            if public_nets:
+                for sensor in network.sensors:
+                    if sensor.type != "firewall":
+                        continue
+                    for nat_rule in sensor.nat_rules:
+                        if nat_rule.type == "static" and nat_rule.mapped_ip:
+                            try:
+                                vip = ipaddress.ip_address(nat_rule.mapped_ip)
+                                if not any(vip in net for net in public_nets):
+                                    self.issues.append(
+                                        ValidationIssue(
+                                            severity="warning",
+                                            field_path="environment.network.public_cidrs",
+                                            message=(
+                                                f"Static NAT VIP {nat_rule.mapped_ip} "
+                                                f"falls outside declared public_cidrs"
+                                            ),
+                                            suggestion=(
+                                                "Add the VIP's CIDR to public_cidrs or "
+                                                "adjust the NAT rule's mapped_ip"
+                                            ),
+                                        )
+                                    )
+                            except ValueError:
+                                pass

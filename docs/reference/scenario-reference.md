@@ -182,6 +182,21 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
 - `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`
 - `ports`: list of port numbers, or empty list / `"any"` for all ports
 - `action`: `"permit"` (default) or `"deny"`
+
+#### Public Address Space
+
+The `public_cidrs` field on `NetworkConfig` declares the org's public IP address blocks. External scan/probe traffic targets these ranges instead of internal IPs, and legitimate inbound connections use VIPs (static NAT `mapped_ip` values) as the wire-level destination.
+
+```yaml
+network:
+  public_cidrs: ["203.0.113.0/28"]  # Optional — auto-derived from VIPs if omitted
+  segments: [...]
+  sensors: [...]
+```
+
+**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `203.0.113.10` and `203.0.113.14` produce `["203.0.113.0/24"]`.
+
+**Inbound traffic flow:** External clients connect to VIPs (public IPs). The NAT engine translates to real (internal) IPs per sensor — outside Zeek sees VIPs, inside Zeek sees real IPs, ASA shows both in Built/Teardown records.
 - Rules are evaluated in order; first match wins (like real ACLs)
 - Traffic not matching any rule is subject to `default_action`
 

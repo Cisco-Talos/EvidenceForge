@@ -187,26 +187,46 @@ class EventDispatcher:
                 )
                 if nat_ctx:
                     event.nat = nat_ctx
-                    # Build per-sensor NAT swaps: sensors on the outside/egress
-                    # segment see post-NAT IPs; inside sensors see real IPs
                     src_segments = self.visibility_engine._resolve_ip_segments(event.network.src_ip)
+                    # Detect NAT direction: inbound static NAT translates
+                    # dst from VIP to real_ip; outbound PAT translates src.
+                    is_inbound_nat = (
+                        nat_ctx.nat_type == "static"
+                        and nat_ctx.mapped_dst_ip
+                        and nat_ctx.mapped_dst_ip != event.network.dst_ip
+                    )
                     nat_swaps: dict[str, dict[str, str | int]] = {}
                     for sensor in sensors:
                         if sensor.type == "firewall":
                             continue  # ASA handles NAT via NatContext directly
                         sensor_segs = set(sensor.monitoring_segments)
-                        # Post-NAT sensor: monitors segments NOT containing the source
-                        if not (sensor_segs & src_segments):
-                            hostname = sensor.hostname or sensor.name
-                            swaps: dict[str, str | int] = {}
-                            if nat_ctx.mapped_src_ip != event.network.src_ip:
-                                swaps["src_ip"] = nat_ctx.mapped_src_ip
-                                swaps["src_port"] = nat_ctx.mapped_src_port
-                            if nat_ctx.mapped_dst_ip != event.network.dst_ip:
+                        hostname = sensor.hostname or sensor.name
+                        swaps: dict[str, str | int] = {}
+
+                        if is_inbound_nat:
+                            # Inbound NAT: inside sensors (monitoring the
+                            # real_ip's segment) see the translated real_ip;
+                            # outside sensors keep the VIP (no swap).
+                            real_ip_segs = self.visibility_engine._resolve_ip_segments(
+                                nat_ctx.mapped_dst_ip
+                            )
+                            if sensor_segs & real_ip_segs:
                                 swaps["dst_ip"] = nat_ctx.mapped_dst_ip
                                 swaps["dst_port"] = nat_ctx.mapped_dst_port
-                            if swaps:
-                                nat_swaps[hostname] = swaps
+                                swaps["local_resp"] = True
+                        else:
+                            # Outbound NAT: outside sensors (NOT on source
+                            # segment) see post-NAT translated IPs.
+                            if not (sensor_segs & src_segments):
+                                if nat_ctx.mapped_src_ip != event.network.src_ip:
+                                    swaps["src_ip"] = nat_ctx.mapped_src_ip
+                                    swaps["src_port"] = nat_ctx.mapped_src_port
+                                if nat_ctx.mapped_dst_ip != event.network.dst_ip:
+                                    swaps["dst_ip"] = nat_ctx.mapped_dst_ip
+                                    swaps["dst_port"] = nat_ctx.mapped_dst_port
+
+                        if swaps:
+                            nat_swaps[hostname] = swaps
                     if nat_swaps:
                         event._nat_swaps_by_sensor = nat_swaps
 

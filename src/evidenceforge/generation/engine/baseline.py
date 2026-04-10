@@ -1392,6 +1392,29 @@ class BaselineMixin:
             if sensor.deny_ratio <= 0:
                 continue
 
+            # Build public scan target pool from visibility engine
+            _public_cidrs: list = []
+            _vip_to_real: dict[str, str] = {}
+            if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                _ve = self.dispatcher.visibility_engine
+                _public_cidrs = _ve._public_cidrs
+                _vip_to_real = _ve._vip_to_real_ip
+
+            def _pick_public_scan_target(
+                _cidrs: list = _public_cidrs,  # noqa: B006
+            ) -> str:
+                """Pick a random IP from the org's public address space."""
+                if not _cidrs:
+                    return rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                # Weight by CIDR size
+                cidr = rng.choices(
+                    _cidrs,
+                    weights=[net.num_addresses for net in _cidrs],
+                    k=1,
+                )[0]
+                offset = rng.randint(1, cidr.num_addresses - 2)
+                return str(cidr.network_address + offset)
+
             # Estimate allow traffic: ~10-20 connections per internal system per hour
             estimated_allows = len(internal_ips) * rng.randint(10, 20)
             deny_count = int(estimated_allows * sensor.deny_ratio)
@@ -1422,13 +1445,13 @@ class BaselineMixin:
                 # Choose deny pattern candidate
                 roll = rng.random()
                 if roll < 0.60:
-                    # External -> internal (use scanner pool for realistic distribution)
+                    # External -> public address space (scanner pool + public CIDRs)
                     src_ip = rng.choices(
                         self._external_scanner_ips,
                         weights=self._external_scanner_weights,
                         k=1,
                     )[0]
-                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_ip = _pick_public_scan_target()
                     dst_port = rng.choice(_SCAN_PORTS)
                     proto = "tcp"
                 elif roll < 0.80:
@@ -1455,19 +1478,24 @@ class BaselineMixin:
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"
                 else:
-                    # ICMP ping sweep from external (use scanner pool)
+                    # ICMP ping sweep from external (use scanner pool + public CIDRs)
                     src_ip = rng.choices(
                         self._external_scanner_ips,
                         weights=self._external_scanner_weights,
                         k=1,
                     )[0]
-                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_ip = _pick_public_scan_target()
                     dst_port = 8  # ICMP echo request type
                     proto = "icmp"
 
-                # Only emit if the policy would actually deny this connection
+                # Policy evaluation uses real (post-NAT) IPs for modern ASA.
+                # Resolve VIP back to real_ip; non-VIP public IPs resolve to
+                # "external" segment which always hits default deny.
+                policy_dst_ip = _vip_to_real.get(dst_ip, dst_ip)
                 if (
-                    self._evaluate_firewall_policy(src_ip, dst_ip, dst_port, sensor, segment_cidrs)
+                    self._evaluate_firewall_policy(
+                        src_ip, policy_dst_ip, dst_port, sensor, segment_cidrs
+                    )
                     != "deny"
                 ):
                     continue
@@ -2151,10 +2179,11 @@ class BaselineMixin:
                     s for s in self.scenario.environment.network.sensors if s.type == "firewall"
                 ]
 
-            # External inbound traffic: leave hostname=None.  We don't model
-            # public DNS names for server services, and using NAT VIPs or
-            # internal FQDNs as hostname would produce impossible TLS SNI
-            # and HTTP Host values in the generated evidence.
+            # VIP lookup for external inbound: use public VIP as dst_ip so
+            # the NAT engine fires and outside sensors see the correct address.
+            _inbound_vip: dict[str, str] = {}
+            if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                _inbound_vip = self.dispatcher.visibility_engine._real_ip_to_vip
 
             # Helper to resolve firewall interface names for a given sensor
             def _fw_iface_for(ip: str, fw_sensor) -> str:
@@ -2205,8 +2234,14 @@ class BaselineMixin:
                     if not src_ip:
                         continue
 
+                    # External clients connect to the public VIP, not the
+                    # internal IP. Internal clients use system.ip directly.
+                    effective_dst_ip = (
+                        _inbound_vip.get(system.ip, system.ip) if is_external_src else system.ip
+                    )
+
                     # Evaluate firewall policy — only on firewalls in the path.
-                    # Denied connections are emitted as deny records.
+                    # Policy uses system.ip (real IP) — correct for modern ASA.
                     fw_denied = False
                     denying_sensor = None
                     if _inbound_fw_sensors:
@@ -2254,7 +2289,7 @@ class BaselineMixin:
                         deny_state = "REJ" if denying_sensor.drop_mode == "reject" else "S0"
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
-                            dst_ip=system.ip,
+                            dst_ip=effective_dst_ip,
                             time=ts,
                             dst_port=conn["port"],
                             proto=conn.get("proto", "tcp"),
@@ -2273,7 +2308,7 @@ class BaselineMixin:
                     else:
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
-                            dst_ip=system.ip,
+                            dst_ip=effective_dst_ip,
                             time=ts,
                             dst_port=conn["port"],
                             proto=conn.get("proto", "tcp"),

@@ -98,6 +98,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
         self._sensor_interfaces: dict[str, dict[str, str]] = {}
+        # VIP→real_ip for interface resolution (set by emitter_setup)
+        self._vip_to_real_ip: dict[str, str] = {}
 
         # Threat detection: per-(sensor, src_ip) deny rate tracking
         self._deny_timestamps: dict[tuple[str, str], list[datetime]] = {}
@@ -125,11 +127,17 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         Looks up which segment the IP belongs to, then maps the segment name
         to an interface name via the sensor's interfaces dict. Falls back to
         segment name, then "outside" for unknown IPs.
+
+        VIPs (public NAT addresses) are resolved via their real_ip's segment.
         """
+        # Resolve VIP → real_ip for segment lookup
+        lookup_ip = self._vip_to_real_ip.get(ip, ip) if self._vip_to_real_ip else ip
         interfaces = self._sensor_interfaces.get(sensor_hostname, {})
         for seg in self._segment_config:
             try:
-                if ipaddress.ip_address(ip) in ipaddress.ip_network(seg["cidr"], strict=False):
+                if ipaddress.ip_address(lookup_ip) in ipaddress.ip_network(
+                    seg["cidr"], strict=False
+                ):
                     seg_name = seg["name"]
                     return interfaces.get(seg_name, seg_name)
             except (ValueError, KeyError):
@@ -243,18 +251,32 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         else:
             msg_id = 302013 if protocol == "tcp" else 302015
             proto_upper = protocol.upper()
-            # Use NAT-mapped IPs in parentheses if available
+            # ASA format: iface:real_ip/port (mapped_ip/port)
+            # For inbound static NAT: dst main=real_ip, dst parens=VIP
+            # For outbound PAT: src main=real_ip, src parens=mapped_ip
             nat = event.nat
+            is_inbound_nat = (
+                nat is not None
+                and nat.nat_type == "static"
+                and nat.mapped_dst_ip
+                and nat.mapped_dst_ip != net.dst_ip
+            )
+            if is_inbound_nat:
+                # Inbound: dst shows real_ip (post-NAT) as main, VIP in parens
+                display_dst_ip, display_dst_port = nat.mapped_dst_ip, nat.mapped_dst_port
+                paren_dst_ip, paren_dst_port = net.dst_ip, net.dst_port
+            else:
+                display_dst_ip, display_dst_port = net.dst_ip, net.dst_port
+                paren_dst_ip = nat.mapped_dst_ip if nat else net.dst_ip
+                paren_dst_port = nat.mapped_dst_port if nat else net.dst_port
             m_src_ip = nat.mapped_src_ip if nat else net.src_ip
             m_src_port = nat.mapped_src_port if nat else net.src_port
-            m_dst_ip = nat.mapped_dst_ip if nat else net.dst_ip
-            m_dst_port = nat.mapped_dst_port if nat else net.dst_port
             message = (
                 f"Built {direction} {proto_upper} connection {conn_id} for "
                 f"{src_iface}:{net.src_ip}/{net.src_port} "
                 f"({m_src_ip}/{m_src_port}) to "
-                f"{dst_iface}:{net.dst_ip}/{net.dst_port} "
-                f"({m_dst_ip}/{m_dst_port})"
+                f"{dst_iface}:{display_dst_ip}/{display_dst_port} "
+                f"({paren_dst_ip}/{paren_dst_port})"
             )
 
         event_data = {
@@ -303,10 +325,20 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 _TEARDOWN_REASONS
             )
             reason = _TEARDOWN_REASONS[reason_idx] if protocol == "tcp" else ""
+            # Inbound static NAT: teardown shows real (post-NAT) dst IP
+            nat = event.nat
+            is_inbound_nat = (
+                nat is not None
+                and nat.nat_type == "static"
+                and nat.mapped_dst_ip
+                and nat.mapped_dst_ip != net.dst_ip
+            )
+            td_dst_ip = nat.mapped_dst_ip if is_inbound_nat else net.dst_ip
+            td_dst_port = nat.mapped_dst_port if is_inbound_nat else net.dst_port
             message = (
                 f"Teardown {proto_upper} connection {conn_id} for "
                 f"{src_iface}:{net.src_ip}/{net.src_port} to "
-                f"{dst_iface}:{net.dst_ip}/{net.dst_port} "
+                f"{dst_iface}:{td_dst_ip}/{td_dst_port} "
                 f"duration {duration} bytes {total_bytes}"
             )
             if reason:

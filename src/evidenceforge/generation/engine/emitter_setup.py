@@ -196,6 +196,10 @@ class EmitterSetupMixin:
                     if sensor.type == "firewall":
                         asa_emitter._td_burst_threshold = sensor.threat_detection_rate
                         asa_emitter._td_avg_threshold = max(1, sensor.threat_detection_rate // 2)
+                        # Pass VIP→real_ip for interface resolution
+                        for rule in sensor.nat_rules:
+                            if rule.type == "static" and rule.mapped_ip and rule.real_ip:
+                                asa_emitter._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
 
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.
