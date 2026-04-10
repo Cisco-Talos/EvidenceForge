@@ -1553,12 +1553,15 @@ class BaselineMixin:
             persona = self._get_user_persona(user)
             is_outside_work_hours = False
             if persona and persona.work_hours_parsed:
-                # Use scenario-local time for work-hour checks, not UTC
-                _local_hour = (
-                    current_hour.astimezone(self._scenario_tz)
-                    if hasattr(self, "_scenario_tz") and self._scenario_tz
-                    else current_hour
-                )
+                # Use scenario-local time for work-hour checks, not UTC.
+                # Guard against naive datetimes (treat as UTC).
+                _local_hour = current_hour
+                if (
+                    hasattr(self, "_scenario_tz")
+                    and self._scenario_tz
+                    and current_hour.tzinfo is not None
+                ):
+                    _local_hour = current_hour.astimezone(self._scenario_tz)
                 is_outside_work_hours = _local_hour.hour not in persona.work_hours_parsed.get(
                     "hours", range(24)
                 )
@@ -2279,11 +2282,14 @@ class BaselineMixin:
                     # internal IP. Internal clients use system.ip directly.
                     if is_external_src:
                         vip = _inbound_vip.get(system.ip)
-                        if not vip:
-                            # No public VIP → external clients can't reach this
-                            # RFC1918 host directly. Skip this connection.
+                        if vip:
+                            effective_dst_ip = vip
+                        elif not _ipa_inbound.ip_address(system.ip).is_private:
+                            # System has a public IP directly (cloud/flat routing)
+                            effective_dst_ip = system.ip
+                        else:
+                            # RFC1918 host with no VIP → unreachable from outside
                             continue
-                        effective_dst_ip = vip
                     else:
                         effective_dst_ip = system.ip
 
