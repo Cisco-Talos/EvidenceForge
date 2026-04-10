@@ -661,7 +661,7 @@ class WorldPlanner:
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
-        existing = self._find_user_session(user.username, target_system.hostname)
+        existing = self._find_user_session(user.username, target_system.hostname, session_kind)
         if allow_existing and existing is not None:
             # Only reuse if transport-compatible: don't satisfy an SSH/RDP
             # request with a generic network session (no transport evidence).
@@ -674,9 +674,8 @@ class WorldPlanner:
                 transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
-                # Do NOT mark reused baseline sessions as storyline_protected —
-                # that would permanently suppress normal logoff for the baseline
-                # session. Only sessions created by the storyline get protection.
+                if storyline_protected:
+                    existing.storyline_protected = True
                 return SessionBootstrapResult(session=existing, network_uid=None)
 
         plan = self.world_model.plan_session(
@@ -837,9 +836,27 @@ class WorldPlanner:
         self.activity_generator._record_user_process(system, user, pid, image)
         return pid
 
-    def _find_user_session(self, username: str, hostname: str) -> ActiveSession | None:
+    def _find_user_session(
+        self,
+        username: str,
+        hostname: str,
+        session_kind: str | None = None,
+    ) -> ActiveSession | None:
+        """Find the newest compatible session for a user on a host.
+
+        Prefers an exact session_kind match; falls back to any host session.
+        Returns the most recent session (by start_time) to avoid picking
+        stale network sessions over newer SSH/RDP ones.
+        """
         sessions = self.state_manager.get_sessions_for_user(username)
-        return next((session for session in sessions if session.system == hostname), None)
+        host_sessions = [s for s in sessions if s.system == hostname]
+        if not host_sessions:
+            return None
+        if session_kind:
+            exact = [s for s in host_sessions if s.session_kind == session_kind]
+            if exact:
+                return max(exact, key=lambda s: s.start_time)
+        return max(host_sessions, key=lambda s: s.start_time)
 
     def _bootstrap_ssh_session(
         self,

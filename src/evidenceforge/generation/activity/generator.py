@@ -641,10 +641,15 @@ class ActivityGenerator:
         if source_ip is None:
             source_ip = system.ip if logon_type != 3 else "127.0.0.1"
 
-        session_kind = {
-            3: "network",
-            10: "rdp",
-        }.get(logon_type, "interactive")
+        # Linux type-10 remote logons are SSH, not RDP
+        os_cat = _get_os_category(system.os)
+        if logon_type == 10 and os_cat == "linux":
+            session_kind = "ssh"
+        else:
+            session_kind = {
+                3: "network",
+                10: "rdp",
+            }.get(logon_type, "interactive")
 
         # Phase 1: Allocate or resolve IDs from StateManager
         if logon_id is None:
