@@ -821,7 +821,7 @@ class WorldPlanner:
         # doing remote server administration.
         is_server_admin = effective_persona == "_server_admin"
         persona = (user.persona or "default").lower()
-        _SERVER_EXCLUDED_CATEGORIES = {"browser", "office"}
+        _SERVER_EXCLUDED_CATEGORIES = {"browser", "office", "code", "build"}
 
         def _is_allowed(exe: str) -> bool:
             if not has_catalog_entry(exe, os_cat):

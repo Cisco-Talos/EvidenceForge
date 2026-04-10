@@ -332,6 +332,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 _stable_seed(f"audit_serial_{system.hostname}") % 5000
             ) + 1000
 
+        # Pass per-host boot datetimes to Sysmon emitter for ProcessGUID realism
+        if "sysmon" in self.emitters:
+            _boot_times = {
+                hostname: self.start_time - timedelta(seconds=uptime)
+                for hostname, uptime in self._kernel_boot_uptimes.items()
+            }
+            self.emitters["sysmon"]._host_boot_times = _boot_times
+
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
         if self.scenario.storyline:

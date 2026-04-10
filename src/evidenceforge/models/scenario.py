@@ -386,6 +386,7 @@ class ConnectionEventSpec(_EventSpecBase):
     uri: str | None = None  # Request URI path
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
+    response_body_len: int | None = None  # Override auto-sized response bytes
 
     @field_validator("hostname")
     @classmethod

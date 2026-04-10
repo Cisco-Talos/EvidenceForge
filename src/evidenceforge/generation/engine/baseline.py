@@ -3108,8 +3108,19 @@ class BaselineMixin:
                 current_hour, system, rng, sys_pids, is_rhel_like, has_web_role
             )
 
-            for _ in range(num_events):
-                offset = rng.uniform(0, 3599)
+            # Use Hawkes process for bursty syslog timing instead of uniform spread
+            from evidenceforge.utils.timing import hawkes_timestamps
+
+            _syslog_mu = max(0.001, num_events / 3600.0 * 0.7)
+            _syslog_offsets, _ = hawkes_timestamps(
+                num_events=num_events,
+                duration=3600.0,
+                mu=_syslog_mu,
+                alpha=0.3,
+                beta=0.8,
+                rng=rng,
+            )
+            for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
                 uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
 

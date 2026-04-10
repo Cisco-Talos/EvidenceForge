@@ -248,17 +248,16 @@ class TestEngineSIDRegistry:
         assert SID_PATTERN.match(registry["user.one"])
         assert SID_PATTERN.match(registry["user.two"])
 
-        # User RIDs: start at 1001, with random gaps (non-sequential)
+        # User RIDs: start at 1001, monotonically increasing (single domain counter)
         rid_one = int(registry["user.one"].rsplit("-", 1)[1])
         rid_two = int(registry["user.two"].rsplit("-", 1)[1])
-        assert rid_one != rid_two
         assert rid_one == 1001  # First user always starts at 1001
-        assert rid_two > rid_one  # Second user has higher RID (with gap)
+        assert rid_two == rid_one + 1  # Monotonic, no gaps
 
-        # Computer account SIDs
+        # Computer account SIDs (follow users in the single counter)
         assert "WKS-01$" in registry
         comp_rid = int(registry["WKS-01$"].rsplit("-", 1)[1])
-        assert comp_rid >= 1100  # Computer RIDs start at 1100+
+        assert comp_rid > rid_two  # After users
 
         # Service account SID
         assert SID_PATTERN.match(registry["svc_backup"])

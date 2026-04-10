@@ -239,11 +239,14 @@ def pick_bash_command(
 
     roll = rng.random()
 
-    if roll < 0.05:
-        # Typo: generate a per-user corrupted command
+    # Per-user typo rate (0-15%) seeded from username for consistency
+    _user_typo_rate = (_stable_seed(f"typo_rate_{username}") % 16) / 100.0
+    if roll < _user_typo_rate:
         return _generate_typo(rng, username, commands)
 
-    if roll < 0.40:
+    # Scale remaining thresholds into the non-typo portion
+    _remaining = 1.0 - _user_typo_rate
+    if roll < _user_typo_rate + _remaining * 0.37:
         # Role-specific command with per-user tool affinity
         pool_key = _get_role_pool(persona, server_role)
         pool = commands.get(pool_key, commands.get("common", ["ls"]))

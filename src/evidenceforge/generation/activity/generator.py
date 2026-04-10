@@ -472,6 +472,19 @@ _PROXY_UAS_LINUX = (
 )
 
 
+# Kerberos TGS service name distribution (weighted)
+_KERBEROS_SVC_DIST = (
+    ("cifs/{hostname}", 45),  # file share access dominates
+    ("host/{hostname}", 20),  # generic host service
+    ("http/{hostname}", 15),  # web services
+    ("ldap/{hostname}", 10),  # directory queries
+    ("krbtgt/{domain}", 5),  # TGT renewals
+    ("DNS/{hostname}", 5),  # DNS service tickets
+)
+_KERBEROS_SVC_VALUES = tuple(s[0] for s in _KERBEROS_SVC_DIST)
+_KERBEROS_SVC_WEIGHTS = tuple(s[1] for s in _KERBEROS_SVC_DIST)
+
+
 def _ephemeral_port(rng: random.Random, os_category: str = "windows") -> int:
     """Generate a random ephemeral port appropriate for the OS.
 
@@ -939,7 +952,10 @@ class ActivityGenerator:
         # Service ticket request: 20-100ms after TGT
         tgs_offset_ms = rng.randint(20, 100)
         tgs_time = tgt_time + timedelta(milliseconds=tgs_offset_ms)
-        service_name = f"host/{system.hostname}"
+        _svc_template = rng.choices(_KERBEROS_SVC_VALUES, weights=_KERBEROS_SVC_WEIGHTS, k=1)[0]
+        service_name = _svc_template.format(
+            hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
+        )
         self.generate_kerberos_service_ticket(
             username=user.username,
             service_name=service_name,
@@ -2467,13 +2483,26 @@ class ActivityGenerator:
 
         rng = _get_rng()
         n_noise = rng.choices([0, 1, 1, 2, 2, 3], k=1)[0]
+        # Complexity-aware inter-command delays
+        _COMPLEX_PREFIXES = ("nmap", "find ", "tar ", "rsync", "make", "docker", "ansible")
+        _MEDIUM_PREFIXES = ("curl", "wget", "scp", "ssh ", "mysql", "psql", "pip", "apt", "yum")
+        cumulative_delay = 0.0
+        prev_cmd = command
         for _ in range(n_noise):
-            offset_sec = rng.uniform(-5.0, 15.0)
-            noise_time = time + timedelta(seconds=offset_sec)
+            # Delay based on complexity of previous command
+            if any(prev_cmd.startswith(p) for p in _COMPLEX_PREFIXES):
+                delay = rng.uniform(10.0, 60.0)
+            elif any(prev_cmd.startswith(p) for p in _MEDIUM_PREFIXES):
+                delay = rng.uniform(3.0, 15.0)
+            else:
+                delay = rng.uniform(1.0, 5.0)
+            cumulative_delay += delay
+            noise_time = time + timedelta(seconds=cumulative_delay)
             noise_cmd = pick_bash_command(
                 rng, user.persona or "", system.hostname, system.services, username=user.username
             )
             self.generate_bash_command(user, system, noise_time, noise_cmd)
+            prev_cmd = noise_cmd
 
     def generate_system_process(
         self,
@@ -4417,7 +4446,10 @@ class ActivityGenerator:
         """Look up the image path of a running process by PID.
 
         Falls back to an OS-appropriate shell if PID not tracked.
+        PID 4 is always the Windows System process (ntoskrnl.exe).
         """
+        if pid == 4 and os_category == "windows":
+            return r"C:\Windows\System32\ntoskrnl.exe"
         key = (hostname, pid)
         proc = self.state_manager.state.running_processes.get(key)
         if proc:

@@ -669,14 +669,30 @@ class StorylineMixin:
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
 
-                resp_bytes = rng.randint(5000, 50000)
+                # Context-aware response sizing (or author-specified override)
+                _method = spec.method or "GET"
+                _uri = (spec.uri or "/").lower()
+                if spec.response_body_len is not None:
+                    resp_bytes = spec.response_body_len
+                elif _method == "POST" and any(
+                    kw in _uri for kw in ("/upload", "/submit", "/api", "/beacon")
+                ):
+                    resp_bytes = rng.randint(200, 2000)
+                elif _method == "GET" and any(
+                    kw in _uri for kw in ("/callback", "/task", "/cmd", "/beacon", "/gate")
+                ):
+                    resp_bytes = rng.randint(500, 5000)
+                elif _method == "POST":
+                    resp_bytes = rng.randint(200, 5000)
+                else:
+                    resp_bytes = rng.randint(5000, 50000)
                 http_ctx = HttpContext(
-                    method=spec.method or "GET",
+                    method=_method,
                     host=spec.hostname or dst_ip,
                     uri=spec.uri or "/",
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
-                    request_body_len=rng.randint(0, 500) if spec.method == "POST" else 0,
+                    request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
                     response_body_len=resp_bytes,
                     status_code=spec.status_code or 200,
                     status_msg={

@@ -355,22 +355,20 @@ class EmitterSetupMixin:
             "krbtgt": f"{base_sid}-502",
         }
 
+        # Single domain-wide monotonic RID counter (mirrors real AD RID Master FSMO).
+        # Objects are allocated sequentially: users → machines → service accounts.
         rid = 1001
         for user in self.scenario.environment.users:
             registry[user.username] = f"{base_sid}-{rid}"
-            rid += rng.randint(1, 5)
-
-        comp_rid = max(rid + 10, 1100)
+            rid += 1
         for system in self.scenario.environment.systems:
             machine_name = f"{system.hostname}$"
-            registry[machine_name] = f"{base_sid}-{comp_rid}"
-            comp_rid += rng.randint(1, 3)
-
-        svc_rid = max(comp_rid + 10, 2001)
+            registry[machine_name] = f"{base_sid}-{rid}"
+            rid += 1
         for svc in self.scenario.environment.service_accounts:
             if svc not in registry:
-                registry[svc] = f"{base_sid}-{svc_rid}"
-                svc_rid += rng.randint(1, 3)
+                registry[svc] = f"{base_sid}-{rid}"
+                rid += 1
 
         logger.info(f"Built SID registry: {len(registry)} entries (domain: {base_sid})")
         return registry

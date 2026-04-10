@@ -56,6 +56,9 @@ class SysmonEventEmitter(LogEmitter):
         "create_remote_thread",
         "process_access",
     }
+    # Per-host boot datetimes for realistic parent ProcessGUID timestamps.
+    # Set by emitter_setup after initialization.
+    _host_boot_times: dict[str, datetime] = {}
 
     # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
     _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
@@ -436,10 +439,12 @@ class SysmonEventEmitter(LogEmitter):
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        # Use per-host boot time for parent GUID (not Jan 1 hardcode)
+        _parent_ts = self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
         parent_guid = self._generate_process_guid(
             host.hostname,
             proc.parent_pid,
-            datetime(event.timestamp.year, 1, 1),  # Stable parent GUID
+            _parent_ts,
         )
 
         # Determine user string
