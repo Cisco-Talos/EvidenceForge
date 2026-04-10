@@ -308,6 +308,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator._world_model = self.world_model
         self.activity_generator._ip_to_system = dict(self.world_model.systems_by_ip)
 
+        # Register VIPs in IP-to-system so host context resolves for VIP-addressed connections
+        ve = self.dispatcher.visibility_engine
+        if ve:
+            for real_ip, vip in ve._real_ip_to_vip.items():
+                system = self.activity_generator._ip_to_system.get(real_ip)
+                if system:
+                    self.activity_generator._ip_to_system[vip] = system
+
         # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
         self._infra_ips = self._detect_infrastructure_ips()
         self._system_service_defaults = self._build_service_defaults()
@@ -323,6 +331,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._audit_serials[system.hostname] = (
                 _stable_seed(f"audit_serial_{system.hostname}") % 5000
             ) + 1000
+
+        # Pass per-host boot datetimes to Sysmon emitter for ProcessGUID realism
+        if "sysmon" in self.emitters:
+            _boot_times = {
+                hostname: self.start_time - timedelta(seconds=uptime)
+                for hostname, uptime in self._kernel_boot_uptimes.items()
+            }
+            self.emitters["sysmon"]._host_boot_times = _boot_times
 
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)

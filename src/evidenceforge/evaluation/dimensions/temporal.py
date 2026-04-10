@@ -548,11 +548,18 @@ class TemporalRealismScorer(DimensionScorer):
                     )
                     if any_before_earlier:
                         rule_correct += 1
-                    elif len(failures) < 10:
-                        failures.append(
-                            f"Rule '{rule['name']}': after event at line {rec.line_number} "
-                            f"precedes all matching before events"
-                        )
+                    else:
+                        # All matching "before" events are AFTER this "after"
+                        # event.  This is a genuine ordering violation: a
+                        # matching login exists in the data but comes after the
+                        # process.  True warm-up cases (session pre-dates
+                        # collection) are handled by the "no matching before"
+                        # skip above — they have no login in the index at all.
+                        if len(failures) < 10:
+                            failures.append(
+                                f"Rule '{rule['name']}': after event at line "
+                                f"{rec.line_number} precedes all matching before events"
+                            )
 
             # Apply per-rule tolerance: if failure rate is within tolerance,
             # treat all pairs as correct for this rule

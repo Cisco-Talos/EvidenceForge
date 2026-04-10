@@ -52,8 +52,8 @@ class ProxyEmitter(HostMultiplexEmitter):
         px = event.proxy
         net = event.network
 
-        # For HTTPS: emit CONNECT entry first
-        if net and net.dst_port == 443:
+        # For HTTPS: emit CONNECT entry first (unless generator already set CONNECT)
+        if net and net.dst_port == 443 and px.method != "CONNECT":
             connect_data = {
                 "timestamp": event.timestamp,
                 "client_ip": px.client_ip,

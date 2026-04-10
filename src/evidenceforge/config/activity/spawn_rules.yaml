@@ -78,9 +78,8 @@ windows:
 
   cmd.exe:
     command_templates:
-      - "cmd.exe"
-      - "cmd.exe /k"
       - "C:\\Windows\\System32\\cmd.exe"
+      - "C:\\Windows\\System32\\cmd.exe /k"
     lifetime: long
     children:
       - dotnet.exe
@@ -117,7 +116,6 @@ windows:
 
   powershell.exe:
     command_templates:
-      - "powershell.exe"
       - "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
     lifetime: long
     children:
@@ -184,10 +182,10 @@ windows:
 
   svchost.exe:
     command_templates:
-      - "svchost.exe -k netsvcs -p"
-      - "svchost.exe -k DcomLaunch -p"
-      - "svchost.exe -k LocalServiceNetworkRestricted -p"
-      - "svchost.exe -k LocalServiceNoNetwork -p"
+      - "C:\\Windows\\System32\\svchost.exe -k netsvcs -p"
+      - "C:\\Windows\\System32\\svchost.exe -k DcomLaunch -p"
+      - "C:\\Windows\\System32\\svchost.exe -k LocalServiceNetworkRestricted -p"
+      - "C:\\Windows\\System32\\svchost.exe -k LocalServiceNoNetwork -p"
     lifetime: long
     spawn_delay: [0.01, 0.5]
     children:

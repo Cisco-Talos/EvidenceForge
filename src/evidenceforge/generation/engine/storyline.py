@@ -467,6 +467,10 @@ class StorylineMixin:
                 logon_type=spec.logon_type,
                 source_ip=source_ip,
             )
+            # Protect storyline-created sessions from baseline logoff
+            session = self.state_manager.get_session(logon_id)
+            if session:
+                session.storyline_protected = True
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
 
@@ -498,14 +502,46 @@ class StorylineMixin:
 
         elif spec.type == "process":
             if hasattr(self, "world_planner"):
-                target_session = self.world_planner.ensure_user_session(
-                    actor,
-                    system,
-                    time,
-                    rng,
-                    session_kind="network",
+                # Built-in/service accounts (SYSTEM, LOCAL SERVICE, etc.) run
+                # locally — don't fabricate remote logon evidence for them.
+                from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
+
+                service_accounts = set(self.scenario.environment.service_accounts)
+                is_local_account = (
+                    actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
                 )
-                logon_id = target_session.logon_id
+                if is_local_account:
+                    # Use existing system session or create a service logon
+                    sessions = self.state_manager.get_sessions_for_user(actor.username)
+                    target_session = next(
+                        (s for s in sessions if s.system == system.hostname), None
+                    )
+                    if target_session:
+                        logon_id = target_session.logon_id
+                    else:
+                        logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
+                        logon_id = self.activity_generator.generate_service_logon(
+                            system=system,
+                            time=logon_time,
+                            service_account=actor.username,
+                        )
+                else:
+                    # Pre-compute the session kind via the planner so reuse
+                    # filtering matches the correct transport type.
+                    plan = self.world_model.plan_session(
+                        user=actor,
+                        target_system=system,
+                        rng=rng,
+                    )
+                    target_session = self.world_planner.ensure_user_session(
+                        actor,
+                        system,
+                        time,
+                        rng,
+                        session_kind=plan.session_kind,
+                        storyline_protected=True,
+                    )
+                    logon_id = target_session.logon_id
             else:
                 sessions = self.state_manager.get_sessions_for_user(actor.username)
                 target_session = next((s for s in sessions if s.system == system.hostname), None)
@@ -633,14 +669,30 @@ class StorylineMixin:
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
 
-                resp_bytes = rng.randint(5000, 50000)
+                # Context-aware response sizing (or author-specified override)
+                _method = spec.method or "GET"
+                _uri = (spec.uri or "/").lower()
+                if spec.response_body_len is not None:
+                    resp_bytes = spec.response_body_len
+                elif _method == "POST" and any(
+                    kw in _uri for kw in ("/upload", "/submit", "/api", "/beacon")
+                ):
+                    resp_bytes = rng.randint(200, 2000)
+                elif _method == "GET" and any(
+                    kw in _uri for kw in ("/callback", "/task", "/cmd", "/beacon", "/gate")
+                ):
+                    resp_bytes = rng.randint(500, 5000)
+                elif _method == "POST":
+                    resp_bytes = rng.randint(200, 5000)
+                else:
+                    resp_bytes = rng.randint(5000, 50000)
                 http_ctx = HttpContext(
-                    method=spec.method or "GET",
-                    host=dst_ip,
+                    method=_method,
+                    host=spec.hostname or dst_ip,
                     uri=spec.uri or "/",
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
-                    request_body_len=rng.randint(0, 500) if spec.method == "POST" else 0,
+                    request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
                     response_body_len=resp_bytes,
                     status_code=spec.status_code or 200,
                     status_msg={
@@ -662,11 +714,22 @@ class StorylineMixin:
                 src_sys = ip_map[source_ip]
             elif source_ip == system.ip:
                 src_sys = system
-            # Use explicit hostname from scenario, fall back to reverse DNS registry.
-            # Raw IP connections (typical for C2/exfil) have no hostname → no DNS.
+            # Only use explicit hostname from scenario.  Do NOT fall back to
+            # Hostname resolution for storyline connections:
+            # - Explicit hostname → use it, emit DNS
+            # - No hostname but IP in REVERSE_DNS → use known hostname, emit DNS
+            # - No hostname, unknown IP → suppress (raw-IP C2/exfil), no DNS
             from evidenceforge.generation.activity.network import REVERSE_DNS
 
-            conn_hostname = spec.hostname or REVERSE_DNS.get(dst_ip)
+            if spec.hostname:
+                conn_hostname = spec.hostname
+                emit_dns = True
+            elif dst_ip in REVERSE_DNS:
+                conn_hostname = None  # let generate_connection resolve via REVERSE_DNS
+                emit_dns = True
+            else:
+                conn_hostname = ""  # suppress — raw IP
+                emit_dns = False
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -676,7 +739,7 @@ class StorylineMixin:
                 duration=rng.uniform(1.0, 30.0),
                 orig_bytes=rng.randint(1000, 10000),
                 resp_bytes=rng.randint(5000, 50000),
-                emit_dns=conn_hostname is not None,
+                emit_dns=emit_dns,
                 source_system=src_sys,
                 http=http_ctx,
                 pid=getattr(self, "_last_storyline_pid", -1) or -1,
@@ -704,6 +767,8 @@ class StorylineMixin:
                     session_kind="ssh",
                     source_system=source_system,
                     allow_existing=False,
+                    source_ip_override=spec.source_ip,
+                    storyline_protected=True,
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -738,6 +803,8 @@ class StorylineMixin:
                     session_kind="rdp",
                     source_system=source_system,
                     allow_existing=False,
+                    source_ip_override=spec.source_ip,
+                    storyline_protected=True,
                 )
             else:
                 source_ip = spec.source_ip or system.ip
@@ -767,8 +834,10 @@ class StorylineMixin:
                 target_username=spec.target_username,
                 target_sid=target_sid,
             )
-            # Store SID for later reuse by group_member_added
+            # Store SID for later reuse by group_member_added, account_deleted,
+            # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
+            self.activity_generator.sid_registry[spec.target_username] = target_sid
             malicious_event["target_username"] = spec.target_username
 
         elif spec.type == "account_deleted":
@@ -902,10 +971,14 @@ class StorylineMixin:
             )
             from evidenceforge.utils.ids import generate_zeek_uid
 
+            # Use DC as DHCP server (common in AD environments)
+            dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
+            dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=time,
                 mac=mac,
+                server_addr=dhcp_server,
                 lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
                 uid=generate_zeek_uid("C"),
             )
@@ -957,13 +1030,15 @@ class StorylineMixin:
 
                     from evidenceforge.events.contexts import FirewallContext
 
+                    # ICMP is connectionless — don't pass TCP conn_state
+                    scan_conn_state = None if spec.protocol == "icmp" else conn_state
                     self.activity_generator.generate_connection(
                         src_ip=scan_src_ip,
                         dst_ip=target_ip,
                         time=scan_time,
                         dst_port=port,
                         proto=spec.protocol,
-                        conn_state=conn_state,
+                        conn_state=scan_conn_state,
                         firewall=FirewallContext(
                             action="deny",
                             msg_id=106023,

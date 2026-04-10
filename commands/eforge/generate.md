@@ -165,7 +165,7 @@ When `nat_rules` are configured on the firewall sensor, cisco_asa.log also inclu
 
 | web_access | Apache/Nginx combined access logs | Web servers |
 
-See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each format.
+Use the `/eforge:references:evidence-formats` skill for detailed field documentation, output paths, and known limitations for each format.
 
 ## Performance Expectations
 

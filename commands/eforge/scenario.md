@@ -52,9 +52,11 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
-**System roles** — Assign `roles` to systems in the environment to enable automatic lateral movement patterns in the baseline. Roles like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` trigger corresponding service account traffic (backup agents, monitoring, AD replication, app→DB connections, etc.). These patterns create realistic background lateral movement that analysts must distinguish from malicious activity.
+**System roles** — Assign `roles` to systems in the environment to drive both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives). Roles like `web_server`, `database`, `mail_server`, `file_server`, `domain_controller` each have specific traffic profiles. For example, a `web_server` generates outbound database queries AND receives inbound HTTPS from external clients and internal users. A `database` generates outbound replication AND receives inbound SQL queries from web/app servers.
 
-`roles` and `services` now do more than flavor the baseline. The compiled world model uses them to decide what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, ask for both whenever the user can provide them.
+Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract external HTTPS, while internal `database` hosts only receive queries from other internal systems. The firewall policy determines what gets permitted vs denied — denied inbound attempts produce firewall deny records visible to analysts.
+
+`roles` and `services` drive the compiled world model, which decides what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, always specify both whenever the user can provide them.
 
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
@@ -155,7 +157,7 @@ A critical principle: **only generate logs that the victim organization would re
 
 ## Scenario YAML Schema
 
-Read `references/scenario-reference.md` (located alongside this skill file) for the full schema reference. Here is the essential structure:
+Use the `/eforge:references:scenario-reference` skill to load the full schema reference. Here is the essential structure:
 
 ```yaml
 version: "1.0"
@@ -201,6 +203,7 @@ environment:
       members: [marcus.chen]
 
   network:                        # Optional but recommended for realism
+    public_cidrs: ["203.0.113.0/28"]  # Org's public IP block (auto-derived from VIPs if omitted)
     segments:
       - name: corporate_lan
         cidr: "10.0.1.0/24"
@@ -319,7 +322,15 @@ The `os` field on systems determines which native log formats are generated:
 
 For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
 
-See `references/evidence-formats.md` for detailed field documentation, output paths, and known limitations for each log format.
+### Database Service Inference
+
+Database hosts (`roles: [database]`) automatically infer the DB engine from `services`. When `services` is empty, the OS determines the default: **Linux → PostgreSQL** (port 5432), **Windows → MSSQL** (port 1433). Traffic generation only routes connections to hosts running the matching engine — mixed-DB environments get correct per-engine routing.
+
+### External Inbound Requirements
+
+External inbound traffic requires a reachable public address. Hosts with a static NAT VIP use it automatically. Hosts with a directly-public IP work as-is. **RFC1918 hosts without a VIP cannot receive external inbound traffic** — configure a `nat_rules` static mapping or use a public IP if external traffic is needed.
+
+Use the `/eforge:references:evidence-formats` skill for detailed field documentation, output paths, and known limitations for each log format.
 
 ### Validation Rules
 

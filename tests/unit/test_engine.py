@@ -1131,10 +1131,12 @@ class TestGenerationEngine:
 
         engine._execute_storyline()
 
-        # Verify generate_logon called with logon_type=3 (network)
+        # Verify generate_logon called (planner chooses appropriate logon type)
         assert mock_activity_instance.generate_logon.called
         call_args = mock_activity_instance.generate_logon.call_args
-        assert call_args[1]["logon_type"] == 3
+        # logon_type depends on user/host relationship:
+        # type 2 = interactive (own workstation), type 3 = network, type 10 = remote
+        assert call_args[1]["logon_type"] in (2, 3, 10)
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

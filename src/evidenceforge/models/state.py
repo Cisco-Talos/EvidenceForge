@@ -66,6 +66,7 @@ class ActiveSession:
     session_kind: str = "logon"
     transport_pid: int | None = None
     ecar_object_id: str = ""
+    storyline_protected: bool = False
 
 
 @dataclass

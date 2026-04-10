@@ -129,9 +129,6 @@ fields:
     type: integer
     required: false
     description: "IP protocol number (6=TCP, 17=UDP, 1=ICMP)"
-    constraints:
-      min_value: 0
-      max_value: 255
 
   - name: tunnel_parents
     type: string

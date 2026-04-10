@@ -29,7 +29,7 @@ and writes to per-host FQDN directories as windows_event_sysmon.xml.
 
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -56,6 +56,9 @@ class SysmonEventEmitter(LogEmitter):
         "create_remote_thread",
         "process_access",
     }
+    # Per-host boot datetimes for realistic parent ProcessGUID timestamps.
+    # Set by emitter_setup after initialization.
+    _host_boot_times: dict[str, datetime] = {}
 
     # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
     _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
@@ -388,24 +391,29 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
-        The first DWORD is a stable machine-specific value (same for all
-        processes on a given host), matching real Sysmon behavior. The
-        remaining segments are per-process unique.
+        Real Sysmon ProcessGUID format: {machine_guid}-HHHH-HHHH-SSSS-XXXXXXXXXXXX}
+        where HHHHHHHH is the hex Unix timestamp of the process creation time
+        and SSSS is a PID-based sequence number.
 
-        The timestamp should be the process creation time, not the event time.
-        This ensures the same PID produces the same GUID across all Sysmon
-        events (Event 1, 8, 10) referencing that process.
+        The first DWORD is a stable machine-specific value (same for all
+        processes on a given host), matching real Sysmon behavior.
         """
         # Machine-specific first DWORD (stable across all processes on this host)
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
 
-        # Per-process uniqueness from remaining hash segments
-        ts_key = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
-        seed = f"{hostname}:{pid}:{ts_key}"
+        # Second segment: hex Unix timestamp of process creation
+        unix_ts = int(timestamp.timestamp())
+        hex_ts = f"{unix_ts:08x}"
+
+        # Third segment: PID-based sequence for uniqueness
+        seq = f"{pid & 0xFFFF:04x}"
+
+        # Remaining segments: deterministic filler for uniqueness
+        seed = f"{hostname}:{pid}:{unix_ts}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        return f"{{{machine_prefix}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
+        return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
     @staticmethod
     def _generate_hashes(image: str, hostname: str) -> str:
@@ -431,10 +439,12 @@ class SysmonEventEmitter(LogEmitter):
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        # Use per-host boot time for parent GUID (not Jan 1 hardcode)
+        _parent_ts = self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
         parent_guid = self._generate_process_guid(
             host.hostname,
             proc.parent_pid,
-            datetime(event.timestamp.year, 1, 1),  # Stable parent GUID
+            _parent_ts,
         )
 
         # Determine user string
@@ -523,14 +533,19 @@ class SysmonEventEmitter(LogEmitter):
         self.emit_event(event_data)
 
     @staticmethod
-    def _resolve_full_image_path(image: str) -> str:
+    def _resolve_full_image_path(image: str, username: str = "") -> str:
         """Ensure a Windows image path is fully qualified.
 
-        Sysmon always logs full paths. If only a bare filename is provided
-        (e.g., 'lsass.exe'), prepend the standard System32 directory.
+        Sysmon always logs full paths. If only a bare filename is provided,
+        resolve it via the application catalog (user apps get Program Files,
+        system binaries get System32).
         """
         if "\\" not in image and "/" not in image:
-            return rf"C:\Windows\System32\{image}"
+            from evidenceforge.generation.activity.application_catalog import (
+                resolve_image_path,
+            )
+
+            return resolve_image_path(image, "windows", username=username)
         return image
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
@@ -547,8 +562,10 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (target_server=target_image, process_name=unused)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
+        target_username = auth.username if auth else ""
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe"
+            auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe",
+            username=target_username,
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
 
@@ -588,8 +605,10 @@ class SysmonEventEmitter(LogEmitter):
 
         # Target process info from auth context (same pattern as create_remote_thread)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
+        target_username = auth.username if auth else ""
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe"
+            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe",
+            username=target_username,
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
 
@@ -690,6 +709,13 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
+                # Sysmon events arrive via a separate kernel callback,
+                # typically tens to hundreds of microseconds after the
+                # corresponding Security event.
+                if ts.microsecond == 0:
+                    ts = ts.replace(microsecond=random.randint(100000, 999999))
+                else:
+                    ts = ts + timedelta(microseconds=random.randint(50, 500))
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":

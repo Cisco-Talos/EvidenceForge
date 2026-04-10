@@ -47,6 +47,23 @@ from pydantic import (
     model_validator,
 )
 
+_HOSTNAME_RE = re.compile(
+    r"^(?!-)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)*$"
+)
+
+
+def _validate_hostname(v: str, field_name: str = "hostname") -> str:
+    """Validate a bare hostname/FQDN — reject schemes, ports, paths, whitespace."""
+    if not v:
+        return v
+    if "://" in v or "/" in v or ":" in v or " " in v or "\t" in v:
+        raise ValueError(
+            f"{field_name} must be a bare hostname (no scheme, port, path, or whitespace): {v!r}"
+        )
+    if not _HOSTNAME_RE.match(v):
+        raise ValueError(f"{field_name} is not a valid hostname: {v!r}")
+    return v
+
 
 class TimeWindow(BaseModel):
     """Time window for log generation.
@@ -180,6 +197,11 @@ class System(BaseModel):
         default_factory=list,
         description="System roles: forward_proxy, web_server, dns_server, mail_server, etc.",
     )
+    public_hostnames: list[str] = Field(
+        default_factory=list,
+        description="Public DNS names for internet-facing services (e.g., 'ehr-portal.example.com'). "
+        "Used for TLS SNI / HTTP Host in external inbound traffic.",
+    )
 
     @field_validator("ip")
     @classmethod
@@ -190,6 +212,12 @@ class System(BaseModel):
         except ValueError as e:
             raise ValueError(f"Invalid IP address: {v}") from e
         return v
+
+    @field_validator("public_hostnames")
+    @classmethod
+    def validate_public_hostnames(cls, v: list[str]) -> list[str]:
+        """Validate each public hostname is a bare FQDN."""
+        return [_validate_hostname(h, "public_hostnames") for h in v]
 
 
 class Group(BaseModel):
@@ -358,6 +386,15 @@ class ConnectionEventSpec(_EventSpecBase):
     uri: str | None = None  # Request URI path
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
+    response_body_len: int | None = None  # Override auto-sized response bytes
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str | None) -> str | None:
+        """Validate hostname is a bare FQDN (no scheme/port/path)."""
+        if v is not None:
+            _validate_hostname(v, "connection.hostname")
+        return v
 
 
 class SshSessionEventSpec(_EventSpecBase):
@@ -717,6 +754,23 @@ class NetworkConfig(BaseModel):
 
     segments: list[NetworkSegment]
     sensors: list[NetworkSensor]
+    public_cidrs: list[str] = Field(
+        default_factory=list,
+        description="Public address blocks allocated to the org (e.g., ['203.0.113.0/28']). "
+        "External scans/probes target these ranges. When empty, auto-derived "
+        "from static NAT VIPs by grouping into /24 blocks.",
+    )
+
+    @field_validator("public_cidrs")
+    @classmethod
+    def validate_public_cidrs(cls, v: list[str]) -> list[str]:
+        """Validate each entry is a valid CIDR."""
+        for cidr in v:
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+            except ValueError as e:
+                raise ValueError(f"Invalid public_cidrs entry {cidr!r}: {e}") from e
+        return v
 
     @field_validator("segments")
     @classmethod

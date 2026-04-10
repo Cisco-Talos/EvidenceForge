@@ -621,6 +621,24 @@ class StateManager:
         with self._lock:
             return list(self.state.open_connections.values())
 
+    _TERMINAL_CONN_STATES = frozenset({"closed", "S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR"})
+
+    def sweep_closed_connections(self) -> int:
+        """Evict completed/failed connections to bound memory growth.
+
+        Call between generation phases (e.g., between hourly passes).
+        Returns the number of connections evicted.
+        """
+        with self._lock:
+            to_remove = [
+                cid
+                for cid, conn in self.state.open_connections.items()
+                if conn.state in self._TERMINAL_CONN_STATES
+            ]
+            for cid in to_remove:
+                del self.state.open_connections[cid]
+            return len(to_remove)
+
     # ========================================
     # DNS Management
     # ========================================

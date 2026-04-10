@@ -1,3 +1,7 @@
+---
+description: "Scenario Schema Reference"
+---
+
 # Scenario Schema Reference
 
 This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
@@ -94,12 +98,17 @@ systems:
 
 ### System Roles
 
-The `roles` field declares a system's function in the network. The engine uses roles for traffic routing decisions:
+The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
 
-- `web_server` — generates web access logs for HTTP requests to this system
+- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users
+- `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
+- `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
+- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations
+- `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
 - `dns_server` — DNS resolution target
-- `mail_server` — mail relay/server
+
+Inbound traffic is constrained by network topology: DMZ hosts receive substantial external traffic, while internal servers only receive connections from other internal systems. The firewall policy determines what gets permitted vs denied — denied connection attempts still produce firewall deny records and source-side sensor visibility.
 
 For server and infrastructure hosts, pair `roles` with realistic `services` whenever possible. `roles` tell the engine what the host is for; `services` help the world model infer concrete protocols and destinations (for example, PostgreSQL vs MSSQL, web stack vs proxy stack, SSH-capable Linux admin targets, and so on).
 
@@ -173,6 +182,21 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
 - `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`
 - `ports`: list of port numbers, or empty list / `"any"` for all ports
 - `action`: `"permit"` (default) or `"deny"`
+
+#### Public Address Space
+
+The `public_cidrs` field on `NetworkConfig` declares the org's public IP address blocks. External scan/probe traffic targets these ranges instead of internal IPs, and legitimate inbound connections use VIPs (static NAT `mapped_ip` values) as the wire-level destination.
+
+```yaml
+network:
+  public_cidrs: ["203.0.113.0/28"]  # Optional — auto-derived from VIPs if omitted
+  segments: [...]
+  sensors: [...]
+```
+
+**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `203.0.113.10` and `203.0.113.14` produce `["203.0.113.0/24"]`.
+
+**Inbound traffic flow:** External clients connect to VIPs (public IPs). The NAT engine translates to real (internal) IPs per sensor — outside Zeek sees VIPs, inside Zeek sees real IPs, ASA shows both in Built/Teardown records.
 - Rules are evaluated in order; first match wins (like real ACLs)
 - Traffic not matching any rule is subject to `default_action`
 
@@ -187,6 +211,47 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
 - `real_ip`: for static NAT, the specific internal IP being mapped
 
 Dynamic PAT: all traffic from matching segments shares one external IP with port translation. Static NAT: bidirectional 1:1 mapping, enables inbound connections to DMZ servers via public IP. NAT only applies to permitted connections that cross segment boundaries; denied connections are not NATted.
+
+### Database Service Routing
+
+When a system has the `database` role, the engine determines the DB protocol from `services`:
+
+- `services: [postgresql]` → PostgreSQL on port 5432
+- `services: [mysql]` or `services: [mariadb]` → MySQL on port 3306
+- `services: [mssql]` or `services: [sqlserver]` → MSSQL on port 1433
+
+When `services` is empty, the engine infers from OS: **Linux → PostgreSQL**, **Windows → MSSQL**. Traffic generation only routes database connections to hosts running the matching DB engine — a PostgreSQL host never receives MSSQL traffic, even in mixed-DB environments.
+
+### External Inbound Requirements
+
+External inbound traffic requires the target host to be reachable from the internet:
+
+- **Hosts with static NAT VIP** → External clients connect to the VIP; NAT translates per sensor
+- **Hosts with a public IP** (non-RFC1918, e.g., cloud) → External clients connect directly
+- **RFC1918 hosts without a VIP** → External inbound is silently skipped (unreachable)
+
+If a system needs external inbound traffic, either configure a static NAT rule with `mapped_ip` or assign it a public IP address.
+
+### Session Management
+
+The engine manages user sessions with exact transport-type matching. When a storyline or baseline requests a session on a host, the engine:
+
+1. Checks for an existing session with the **exact** `session_kind` (interactive, network, ssh, rdp)
+2. If no match, creates a new session with the appropriate transport evidence (SSH syslog, RDP 4624 type 10, etc.)
+
+Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
+
+Sessions marked as `storyline_protected` (by storyline events that depend on them) are immune to baseline logoff, even if logoff was already planned for the same hour.
+
+### Baseline Failed Logon Noise
+
+The engine automatically generates realistic failed logon patterns without scenario configuration:
+
+- **Password typos** (~5% of interactive logons): 1-2 failed attempts (4625) immediately before a successful logon (4624) for the same user. Simulates mistyped complex passwords.
+- **Stale scheduled tasks**: Periodic failed batch logons (type 4) from plausible service accounts on deterministic hosts. Fires every 1-2 hours, representing forgotten tasks with expired credentials.
+- **Management software sweeps**: 1-2 times per business day, a management tool tries a disabled credential across 5-15 servers in quick succession. All fail with "account disabled."
+
+These patterns augment the explicit `stale_accounts` feature, which generates additional failures from accounts you define. Together they produce a realistic ratio of failed-to-successful authentication events.
 
 ## Personas
 
@@ -397,6 +462,10 @@ The generation engine automatically provides several layers of realism in baseli
 **Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.
 
 **Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` events tells the engine which domain name the client resolved to reach that IP. Omit `hostname` for raw-IP C2 (no DNS lookup expected). The validator will warn about unmatched domains.
+
+**NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
+
+**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records have a deterministic propagation delay (100-500 microseconds) based on the sensor's position. Sensors farther from the packet source see events slightly later. Byte and packet counts are identical across sensors (both see the same packets on the wire), but timestamps and durations differ.
 
 **Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
 

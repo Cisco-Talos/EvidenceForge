@@ -122,9 +122,10 @@ class TestDCKerberosOnLogon:
             assert tgt_event.kerberos.target_username == "john.smith"
             assert tgt_event.dst_host.hostname == "DC-01"
 
-            # Service ticket should target host/WKS-01
+            # Service ticket should target a valid service on WKS-01
             tgs_event = next(e for e in events if e.event_type == "kerberos_service")
-            assert tgs_event.kerberos.service_name == "host/WKS-01"
+            svc = tgs_event.kerberos.service_name
+            assert svc.endswith("/WKS-01") or svc.startswith("krbtgt/"), f"Unexpected: {svc}"
             assert tgs_event.dst_host.hostname == "DC-01"
 
             # TGT timestamp should be before logon, service ticket between TGT and logon

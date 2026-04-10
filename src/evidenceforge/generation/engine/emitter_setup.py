@@ -196,6 +196,10 @@ class EmitterSetupMixin:
                     if sensor.type == "firewall":
                         asa_emitter._td_burst_threshold = sensor.threat_detection_rate
                         asa_emitter._td_avg_threshold = max(1, sensor.threat_detection_rate // 2)
+                        # Pass VIP→real_ip for interface resolution
+                        for rule in sensor.nat_rules:
+                            if rule.type == "static" and rule.mapped_ip and rule.real_ip:
+                                asa_emitter._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
 
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.
@@ -351,22 +355,20 @@ class EmitterSetupMixin:
             "krbtgt": f"{base_sid}-502",
         }
 
+        # Single domain-wide monotonic RID counter (mirrors real AD RID Master FSMO).
+        # Objects are allocated sequentially: users → machines → service accounts.
         rid = 1001
         for user in self.scenario.environment.users:
             registry[user.username] = f"{base_sid}-{rid}"
-            rid += rng.randint(1, 5)
-
-        comp_rid = max(rid + 10, 1100)
+            rid += 1
         for system in self.scenario.environment.systems:
             machine_name = f"{system.hostname}$"
-            registry[machine_name] = f"{base_sid}-{comp_rid}"
-            comp_rid += rng.randint(1, 3)
-
-        svc_rid = max(comp_rid + 10, 2001)
+            registry[machine_name] = f"{base_sid}-{rid}"
+            rid += 1
         for svc in self.scenario.environment.service_accounts:
             if svc not in registry:
-                registry[svc] = f"{base_sid}-{svc_rid}"
-                svc_rid += rng.randint(1, 3)
+                registry[svc] = f"{base_sid}-{rid}"
+                rid += 1
 
         logger.info(f"Built SID registry: {len(registry)} entries (domain: {base_sid})")
         return registry
@@ -397,7 +399,7 @@ class EmitterSetupMixin:
 
         infra: dict[str, str | list] = {
             "dns": [],
-            "ntp": ["129.6.15.28", "132.163.97.1"],
+            "ntp": [],  # Populated from DCs (AD) or external (non-domain)
             "dc": [],
             "dc_hostnames": [],
             "db_servers": [],
@@ -438,6 +440,14 @@ class EmitterSetupMixin:
         if not infra["dc"]:
             infra["dc"] = [infra["dns"][0]]
             infra["dc_hostnames"] = ["DC-01"]
+
+        # AD environments: workstations sync NTP from the DC (W32Time service).
+        # Only use external NIST servers for non-domain environments.
+        if not infra["ntp"]:
+            if infra["dc"]:
+                infra["ntp"] = list(infra["dc"])
+            else:
+                infra["ntp"] = ["129.6.15.28", "132.163.97.1"]
 
         return infra
 

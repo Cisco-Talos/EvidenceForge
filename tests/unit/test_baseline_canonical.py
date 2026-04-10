@@ -305,7 +305,7 @@ class TestSyslogContext:
     def test_logon_attaches_syslog_context_on_linux(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """generate_logon() should attach SyslogContext for Linux hosts."""
+        """generate_logon() should attach SyslogContext for Linux SSH logons."""
         linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
         state_manager.set_current_time(timestamp)
         activity_gen.generate_logon(
@@ -313,6 +313,7 @@ class TestSyslogContext:
             system=linux,
             time=timestamp,
             source_ip="10.0.10.1",
+            logon_type=10,  # SSH/remote — sshd syslog expected
         )
 
         syslog = mock_emitters["syslog"]

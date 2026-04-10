@@ -20,6 +20,82 @@ from evidenceforge.config import get_activity_directory
 _CATALOG_PATH = get_activity_directory() / "application_catalog.yaml"
 _CACHED_CATALOG: dict[str, Any] | None = None
 _CACHED_PE: dict[str, tuple[str, str, str, str, str]] | None = None
+_CACHED_PATH_INDEX: dict[str, dict[str, str]] | None = None
+
+# Windows system binaries that correctly live in System32 or Windows\.
+# Only these should get the System32 prefix when resolved from a bare name.
+_SYSTEM_BINARIES = frozenset(
+    {
+        "cmd.exe",
+        "powershell.exe",
+        "svchost.exe",
+        "lsass.exe",
+        "services.exe",
+        "taskhostw.exe",
+        "conhost.exe",
+        "dllhost.exe",
+        "sihost.exe",
+        "searchindexer.exe",
+        "runtimebroker.exe",
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "winlogon.exe",
+        "dwm.exe",
+        "taskmgr.exe",
+        "mmc.exe",
+        "msiexec.exe",
+        "regsvr32.exe",
+        "rundll32.exe",
+        "sc.exe",
+        "net.exe",
+        "net1.exe",
+        "netsh.exe",
+        "wmic.exe",
+        "whoami.exe",
+        "ipconfig.exe",
+        "ping.exe",
+        "tracert.exe",
+        "nslookup.exe",
+        "certutil.exe",
+        "bitsadmin.exe",
+        "cscript.exe",
+        "wscript.exe",
+        "mshta.exe",
+        "reg.exe",
+        "schtasks.exe",
+        "tasklist.exe",
+        "systeminfo.exe",
+        "findstr.exe",
+        "attrib.exe",
+        "xcopy.exe",
+        "robocopy.exe",
+        "icacls.exe",
+        "takeown.exe",
+        "fsutil.exe",
+        "bcdedit.exe",
+        "wmiprvse.exe",
+        "spoolsv.exe",
+        "searchprotocolhost.exe",
+        "searchfilterhost.exe",
+        "usoclient.exe",
+        "tiworker.exe",
+        "cleanmgr.exe",
+        "wsqmcons.exe",
+        "backgroundtaskhost.exe",
+        "compattelrunner.exe",
+        "mstsc.exe",
+        "notepad.exe",
+        "msedge.exe",  # Edge has moved to Program Files but System32 stub exists
+        "msmpeng.exe",
+        "mpcmdrun.exe",
+        "ismserv.exe",
+        "dns.exe",
+        "dfsr.exe",
+        "ntdsutil.exe",
+        "msdtc.exe",
+    }
+)
 
 
 def load_catalog() -> dict[str, Any]:
@@ -66,11 +142,67 @@ def get_apps_for_persona(
             continue
         results.append(app)
 
-    # If no apps matched for this persona, try "default" as fallback
+    # Only fall back to "default" if the persona is truly unknown
+    # (not listed in ANY app's persona allowlist). Known personas with
+    # no apps in a category should return empty — the caller skips
+    # that activity type, preventing role-inappropriate tools.
     if not results and persona_lower != "default":
-        return get_apps_for_persona("default", os_category, category)
+        known_personas = set()
+        for app in data["applications"]:
+            known_personas.update(app.get("personas", []))
+        if persona_lower not in known_personas:
+            return get_apps_for_persona("default", os_category, category)
 
     return results
+
+
+def is_persona_allowed(exe_basename: str, os_category: str, persona: str) -> bool:
+    """Check if a persona is allowed to use an application.
+
+    Looks up the exe in the catalog and checks if the persona appears
+    in its personas list. Returns True if the exe is not in the catalog
+    (unknown apps are not restricted).
+    """
+    data = load_catalog()
+    lower = exe_basename.lower()
+    for app in data["applications"]:
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        path = platform["image_path"]
+        if os_category == "windows":
+            basename = path.rsplit("\\", 1)[-1].lower()
+        else:
+            basename = path.rsplit("/", 1)[-1].lower()
+        if (
+            basename == lower
+            or (lower + ".exe") == basename
+            or basename.replace(".exe", "") == lower
+        ):
+            return persona.lower() in app.get("personas", [])
+    return True  # Unknown apps are unrestricted
+
+
+def get_app_categories(exe_basename: str, os_category: str) -> list[str]:
+    """Return the catalog categories for an executable, or [] if not found."""
+    data = load_catalog()
+    lower = exe_basename.lower()
+    for app in data["applications"]:
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        path = platform["image_path"]
+        if os_category == "windows":
+            basename = path.rsplit("\\", 1)[-1].lower()
+        else:
+            basename = path.rsplit("/", 1)[-1].lower()
+        if (
+            basename == lower
+            or (lower + ".exe") == basename
+            or basename.replace(".exe", "") == lower
+        ):
+            return app.get("categories", [])
+    return []
 
 
 def get_pe_metadata(exe_basename: str) -> tuple[str, str, str, str, str]:
@@ -113,6 +245,107 @@ def _build_pe_index() -> dict[str, tuple[str, str, str, str, str]]:
     return index
 
 
+def has_catalog_entry(exe_basename: str, os_category: str) -> bool:
+    """Check whether an executable has a catalog entry for the given OS."""
+    global _CACHED_PATH_INDEX
+    if _CACHED_PATH_INDEX is None:
+        _CACHED_PATH_INDEX = _build_path_index()
+
+    lower = exe_basename.lower()
+    os_index = _CACHED_PATH_INDEX.get(os_category, {})
+    if lower in os_index:
+        return True
+    # Try with .exe for extensionless Windows lookups
+    if os_category == "windows" and not lower.endswith(".exe"):
+        return f"{lower}.exe" in os_index
+    return False
+
+
+def resolve_image_path(exe_basename: str, os_category: str = "windows", username: str = "") -> str:
+    """Resolve a bare executable name to its correct full filesystem path.
+
+    Lookup order:
+    1. Application catalog (user-installed apps like Chrome, Firefox, etc.)
+    2. Known system binaries with special paths (explorer.exe → C:\\Windows\\)
+    3. Known system binaries (System32 is correct for these)
+    4. Last-resort fallback (System32 for Windows, /usr/bin for Linux)
+
+    Args:
+        exe_basename: Bare executable name (e.g., "chrome.exe", "git")
+        os_category: "windows" or "linux"
+        username: Optional username for profile-scoped apps (Teams, OneDrive).
+            If empty and the path contains {username}, the bare basename is
+            returned unchanged to avoid fabricating paths.
+    """
+    global _CACHED_PATH_INDEX
+    if _CACHED_PATH_INDEX is None:
+        _CACHED_PATH_INDEX = _build_path_index()
+
+    lower = exe_basename.lower()
+    key = lower
+
+    # Also try with .exe appended for extensionless Windows lookups
+    key_with_ext = f"{lower}.exe" if os_category == "windows" and not lower.endswith(".exe") else ""
+
+    # 1. Check catalog
+    os_index = _CACHED_PATH_INDEX.get(os_category, {})
+    path = os_index.get(key) or (os_index.get(key_with_ext) if key_with_ext else None)
+    if path:
+        if "{username}" in path:
+            if username:
+                path = path.replace("{username}", username)
+            else:
+                # No username context — return basename to avoid fabricating paths
+                return exe_basename
+        return path
+
+    # 2. Known system binaries with non-System32 paths
+    _SPECIAL_PATHS = {
+        "explorer.exe": r"C:\Windows\explorer.exe",
+        "dwm.exe": r"C:\Windows\System32\dwm.exe",
+    }
+    if os_category == "windows" and lower in _SPECIAL_PATHS:
+        return _SPECIAL_PATHS[lower]
+
+    # 3. Known system binaries → System32 is correct
+    if os_category == "windows" and lower in _SYSTEM_BINARIES:
+        return rf"C:\Windows\System32\{exe_basename}"
+
+    # 3. Last resort
+    if os_category == "linux":
+        return f"/usr/bin/{exe_basename}"
+    return rf"C:\Windows\System32\{exe_basename}"
+
+
+def _build_path_index() -> dict[str, dict[str, str]]:
+    """Build basename → full path indexes for each OS from the catalog.
+
+    Indexes both with and without .exe extension so that bare names
+    like 'git' and 'git.exe' both resolve to the catalog path.
+    """
+    data = load_catalog()
+    index: dict[str, dict[str, str]] = {"windows": {}, "linux": {}}
+    for app in data["applications"]:
+        for os_cat in ("windows", "linux"):
+            platform = app.get("platforms", {}).get(os_cat)
+            if not platform:
+                continue
+            image_path = platform["image_path"]
+            if os_cat == "windows":
+                basename = image_path.rsplit("\\", 1)[-1].lower()
+            else:
+                basename = image_path.rsplit("/", 1)[-1].lower()
+            if basename and basename not in index[os_cat]:
+                index[os_cat][basename] = image_path
+                # Also index extensionless form (git.exe → git) for callers
+                # that use bare names from process_network_map.yaml
+                if basename.endswith(".exe"):
+                    no_ext = basename[:-4]
+                    if no_ext and no_ext not in index[os_cat]:
+                        index[os_cat][no_ext] = image_path
+    return index
+
+
 def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str]]:
     """Get child process definitions for a given parent executable.
 
@@ -146,6 +379,11 @@ def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str
     return []
 
 
+_USER_BROWSER_AFFINITY: dict[str, str] = {}
+
+_BROWSER_IDS = frozenset({"chrome", "firefox", "edge"})
+
+
 def pick_app_and_command(
     rng: random.Random,
     persona: str,
@@ -157,12 +395,35 @@ def pick_app_and_command(
 
     Returns None if no apps are available for this persona/OS/category.
     The command_template still contains {placeholders} for _parameterize_command().
+
+    For browser-category apps, applies per-user browser affinity: each user
+    has a primary browser (90% of the time) with occasional secondary use (10%).
     """
     apps = get_apps_for_persona(persona, os_category, category)
     if not apps:
         return None
 
-    app = rng.choice(apps)
+    # Per-user browser affinity: same user mostly uses the same browser
+    browser_apps = [a for a in apps if a.get("id", "").lower() in _BROWSER_IDS]
+    if browser_apps and len(browser_apps) > 1 and username and category == "browser":
+        if username not in _USER_BROWSER_AFFINITY:
+            # Deterministic primary browser per user
+            from evidenceforge.utils.rng import _stable_seed
+
+            idx = _stable_seed(f"browser_{username}") % len(browser_apps)
+            _USER_BROWSER_AFFINITY[username] = browser_apps[idx]["id"]
+
+        primary_id = _USER_BROWSER_AFFINITY[username]
+        if rng.random() < 0.90:
+            # Use primary browser
+            app = next((a for a in browser_apps if a["id"] == primary_id), rng.choice(apps))
+        else:
+            # Occasionally use a different browser
+            others = [a for a in browser_apps if a["id"] != primary_id]
+            app = rng.choice(others) if others else rng.choice(apps)
+    else:
+        app = rng.choice(apps)
+
     platform = app["platforms"][os_category]
     image_path = platform["image_path"]
     if "{username}" in image_path:

@@ -33,6 +33,7 @@ Contains the BaselineMixin with methods for:
 
 import logging
 import math
+import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -487,6 +488,7 @@ class BaselineMixin:
 
         self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
         self._generate_stale_account_noise(current_hour)
+        self._generate_baseline_failed_logons(current_hour)
         self._generate_lateral_movement_noise(current_hour)
         self._generate_suspicious_noise(current_hour)
         self._generate_firewall_deny_baseline(current_hour)
@@ -556,6 +558,7 @@ class BaselineMixin:
                 self._generate_hour(
                     current_hour, enabled_users, emit_storylines=False, flush_emitters=False
                 )
+                self.state_manager.sweep_closed_connections()
                 current_hour += timedelta(hours=1)
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
@@ -578,6 +581,8 @@ class BaselineMixin:
             )
 
             self._generate_hour(current_hour, enabled_users)
+            # Evict completed/failed connections to bound memory during long runs
+            self.state_manager.sweep_closed_connections()
             current_hour += timedelta(hours=1)
 
         logger.info(f"Baseline generation complete: processed {hour_count} hours")
@@ -668,6 +673,115 @@ class BaselineMixin:
                     time=event_time,
                     logon_type=5,  # Service logon
                     source_ip=svc_host.ip,
+                )
+
+    def _generate_baseline_failed_logons(self, current_hour: datetime) -> None:
+        """Generate realistic baseline failed logon patterns.
+
+        Three patterns:
+        1. Password typo: 1-2 failed logons immediately before a successful one
+        2. Scheduled task with stale creds: periodic failures on specific hosts
+        3. Management sweep: burst of failures across multiple servers
+        """
+        rng = _get_rng()
+        systems = self.scenario.environment.systems
+        servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        if not servers:
+            servers = systems
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+        if not enabled_users:
+            return
+
+        # Pattern 1: Password typo before successful logon (~3 per hour in
+        # a medium environment). Pick a random user and system.
+        n_typos = rng.randint(1, max(1, len(enabled_users) // 3))
+        for _ in range(n_typos):
+            if rng.random() > 0.15:  # ~15% chance per slot
+                continue
+            user = rng.choice(enabled_users)
+            system = next(
+                (s for s in systems if s.assigned_user == user.username),
+                rng.choice(systems),
+            )
+            base_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            self.state_manager.set_current_time(base_time)
+            # 1-2 failures then success
+            n_fails = rng.randint(1, 2)
+            for i in range(n_fails):
+                fail_time = base_time + timedelta(seconds=i * rng.randint(2, 8))
+                self.activity_generator.generate_failed_logon(
+                    user=user,
+                    system=system,
+                    time=fail_time,
+                    logon_type=2,  # interactive
+                )
+
+        # Pattern 2: Scheduled task with stale creds (deterministic per scenario).
+        # Pick 1-2 hosts and a plausible service account name.
+        _sched_seed = _stable_seed(self.scenario.name + "_sched_fail")
+        _sched_rng = random.Random(_sched_seed)
+        _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
+        _sched_acct = _sched_rng.choice(_svc_names)
+        # Ensure no collision with actual scenario accounts
+        _existing = {u.username for u in self.scenario.environment.users} | set(
+            self.scenario.environment.service_accounts
+        )
+        while _sched_acct in _existing:
+            _sched_acct = _sched_rng.choice(_svc_names) + str(_sched_rng.randint(1, 9))
+        _sched_user = User(
+            username=_sched_acct,
+            full_name=_sched_acct,
+            email=f"{_sched_acct}@system.local",
+            enabled=False,
+        )
+        n_sched_hosts = min(2, len(servers))
+        _sched_hosts = _sched_rng.sample(servers, n_sched_hosts)
+        # Fires every 1-2 hours (check if this hour is a firing hour)
+        _sched_interval = _sched_rng.choice([1, 2])
+        hour_idx = int((current_hour - self.start_time).total_seconds() / 3600)
+        if hour_idx % _sched_interval == 0:
+            for host in _sched_hosts:
+                sched_time = current_hour + timedelta(
+                    seconds=_sched_rng.randint(0, 300)  # first 5 minutes of hour
+                )
+                self.state_manager.set_current_time(sched_time)
+                self.activity_generator.generate_failed_logon(
+                    user=_sched_user,
+                    system=host,
+                    time=sched_time,
+                    logon_type=4,  # batch (scheduled task)
+                    source_ip=host.ip,
+                )
+
+        # Pattern 3: Management software sweep (1-2 per business day).
+        # Use scenario-local time for business-hour gating.
+        _local = current_hour
+        if hasattr(self, "_scenario_tz") and self._scenario_tz and current_hour.tzinfo is not None:
+            _local = current_hour.astimezone(self._scenario_tz)
+        is_business = 0 <= _local.weekday() <= 4 and 8 <= _local.hour <= 17
+        # Fire at ~10am and ~2pm (deterministic per scenario)
+        if is_business and _local.hour in (10, 14) and rng.random() < 0.5:
+            _mgmt_acct = "svc_mgmt"
+            while _mgmt_acct in _existing:
+                _mgmt_acct = f"svc_mgmt{rng.randint(1, 9)}"
+            _mgmt_user = User(
+                username=_mgmt_acct,
+                full_name=_mgmt_acct,
+                email=f"{_mgmt_acct}@system.local",
+                enabled=False,
+            )
+            n_targets = min(rng.randint(5, 15), len(servers))
+            targets = rng.sample(servers, n_targets)
+            sweep_start = current_hour + timedelta(seconds=rng.randint(0, 1800))
+            for i, target in enumerate(targets):
+                sweep_time = sweep_start + timedelta(seconds=i * rng.uniform(1.0, 3.0))
+                self.state_manager.set_current_time(sweep_time)
+                self.activity_generator.generate_failed_logon(
+                    user=_mgmt_user,
+                    system=target,
+                    time=sweep_time,
+                    logon_type=3,  # network
+                    source_ip=rng.choice(servers).ip,
                 )
 
     def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
@@ -1389,6 +1503,32 @@ class BaselineMixin:
             if sensor.deny_ratio <= 0:
                 continue
 
+            # Build public scan target pool from visibility engine
+            _public_cidrs: list = []
+            _vip_to_real: dict[str, str] = {}
+            if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                _ve = self.dispatcher.visibility_engine
+                _public_cidrs = _ve._public_cidrs
+                _vip_to_real = _ve._vip_to_real_ip
+
+            def _pick_public_scan_target(
+                _cidrs: list = _public_cidrs,  # noqa: B006
+            ) -> str:
+                """Pick a random IP from the org's public address space."""
+                if not _cidrs:
+                    return rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                # Weight by CIDR size (minimum 1 to handle /31 and /32)
+                cidr = rng.choices(
+                    _cidrs,
+                    weights=[max(1, net.num_addresses) for net in _cidrs],
+                    k=1,
+                )[0]
+                # Handle /32 (single host) and /31 (point-to-point)
+                if cidr.num_addresses <= 2:
+                    return str(cidr.network_address)
+                offset = rng.randint(1, cidr.num_addresses - 2)
+                return str(cidr.network_address + offset)
+
             # Estimate allow traffic: ~10-20 connections per internal system per hour
             estimated_allows = len(internal_ips) * rng.randint(10, 20)
             deny_count = int(estimated_allows * sensor.deny_ratio)
@@ -1419,13 +1559,13 @@ class BaselineMixin:
                 # Choose deny pattern candidate
                 roll = rng.random()
                 if roll < 0.60:
-                    # External -> internal (use scanner pool for realistic distribution)
+                    # External -> public address space (scanner pool + public CIDRs)
                     src_ip = rng.choices(
                         self._external_scanner_ips,
                         weights=self._external_scanner_weights,
                         k=1,
                     )[0]
-                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_ip = _pick_public_scan_target()
                     dst_port = rng.choice(_SCAN_PORTS)
                     proto = "tcp"
                 elif roll < 0.80:
@@ -1452,19 +1592,24 @@ class BaselineMixin:
                     dst_port = rng.choice(_BLOCKED_PORTS)
                     proto = "tcp"
                 else:
-                    # ICMP ping sweep from external (use scanner pool)
+                    # ICMP ping sweep from external (use scanner pool + public CIDRs)
                     src_ip = rng.choices(
                         self._external_scanner_ips,
                         weights=self._external_scanner_weights,
                         k=1,
                     )[0]
-                    dst_ip = rng.choice(internal_ips) if internal_ips else "10.0.10.1"
+                    dst_ip = _pick_public_scan_target()
                     dst_port = 8  # ICMP echo request type
                     proto = "icmp"
 
-                # Only emit if the policy would actually deny this connection
+                # Policy evaluation uses real (post-NAT) IPs for modern ASA.
+                # Resolve VIP back to real_ip; non-VIP public IPs resolve to
+                # "external" segment which always hits default deny.
+                policy_dst_ip = _vip_to_real.get(dst_ip, dst_ip)
                 if (
-                    self._evaluate_firewall_policy(src_ip, dst_ip, dst_port, sensor, segment_cidrs)
+                    self._evaluate_firewall_policy(
+                        src_ip, policy_dst_ip, dst_port, sensor, segment_cidrs
+                    )
                     != "deny"
                 ):
                     continue
@@ -1519,11 +1664,24 @@ class BaselineMixin:
             persona = self._get_user_persona(user)
             is_outside_work_hours = False
             if persona and persona.work_hours_parsed:
-                is_outside_work_hours = current_hour.hour not in persona.work_hours_parsed.get(
+                # Use scenario-local time for work-hour checks, not UTC.
+                # Guard against naive datetimes (treat as UTC).
+                _local_hour = current_hour
+                if (
+                    hasattr(self, "_scenario_tz")
+                    and self._scenario_tz
+                    and current_hour.tzinfo is not None
+                ):
+                    _local_hour = current_hour.astimezone(self._scenario_tz)
+                is_outside_work_hours = _local_hour.hour not in persona.work_hours_parsed.get(
                     "hours", range(24)
                 )
 
             for session in list(sessions):
+                # Never baseline-close a storyline-created session — the
+                # storyline controls when these sessions end.
+                if session.storyline_protected:
+                    continue
                 sess_start = session.start_time
                 hour_ts = current_hour
                 if sess_start.tzinfo is not None and hour_ts.tzinfo is None:
@@ -1556,6 +1714,10 @@ class BaselineMixin:
             # Find the session to get username and logon_type
             session = self.state_manager.get_session(logon_id)
             if not session:
+                continue
+            # Re-check protection — storyline may have marked this session
+            # as protected after logoff was planned earlier in the hour.
+            if session.storyline_protected:
                 continue
             user = user_map.get(session.username)
             if not user:
@@ -1928,61 +2090,115 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
-    def _resolve_dest_role(
+    # Service→DNS tag defaults for external resolution when dns_tags is absent
+    _SERVICE_DNS_DEFAULTS: dict[str, tuple[str, ...]] = {
+        "smtp": ("email",),
+        "dns": ("background",),
+        "ntp": ("background",),
+    }
+
+    def _resolve_role(
         self,
-        dest_role: str,
-        src_ip: str,
+        role: str,
+        exclude_ip: str,
         rng: Any,
         os_cat: str = "windows",
         dns_tags: list[str] | None = None,
+        inbound: bool = False,
+        src_host: str = "",
+        service: str = "",
     ) -> tuple[str | None, str | None]:
-        """Resolve a dest_role from traffic_profiles.yaml to (ip, hostname).
+        """Resolve a role name to (ip, hostname), excluding a specific IP.
 
-        Returns (None, None) if no suitable target exists in the scenario.
+        Works for both outbound (exclude_ip = source) and inbound
+        (exclude_ip = destination). Returns (None, None) if no suitable
+        system exists in the scenario.
+
+        Args:
+            inbound: If True, _external resolves to a random client IP
+                (realistic for internet clients hitting a server).
+                If False, _external resolves via dns_registry
+                (realistic for outbound destinations like CDNs/APIs).
+            src_host: Source hostname for DNS affinity (per-host IP caching).
+            service: Network service (ssl, smtp, etc.) for default tag derivation.
         """
+        if role == "_external":
+            if inbound:
+                ip = self._generate_external_client_ip(rng)
+                return ip, None
+            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+            if dns_tags:
+                tags = tuple(dns_tags)
+            elif service in self._SERVICE_DNS_DEFAULTS:
+                tags = self._SERVICE_DNS_DEFAULTS[service]
+            else:
+                tags = ("background", os_cat)
+            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host)
+            return ip, domain
+
         if hasattr(self, "world_model"):
             src_system = next(
-                (system for system in self.scenario.environment.systems if system.ip == src_ip),
+                (system for system in self.scenario.environment.systems if system.ip == exclude_ip),
                 None,
             )
             if src_system is not None:
                 return self.world_model.resolve_destination(
-                    dest_role=dest_role,
+                    dest_role=role,
                     src_system=src_system,
                     rng=rng,
                     os_category=os_cat,
                     dns_tags=dns_tags,
+                    service=service,
                 )
 
-        if dest_role == "_external":
-            from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
-
-            tags = tuple(dns_tags) if dns_tags else ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host="")
-            return ip, domain
-        if dest_role in ("_dc", "domain_controller"):
+        if role in ("_dc", "domain_controller"):
             dc_ips = self._infra_ips.get("dc", [])
-            return (rng.choice(dc_ips), None) if dc_ips else (None, None)
-        if dest_role == "_any_server":
+            candidates = [ip for ip in dc_ips if ip != exclude_ip]
+            return (rng.choice(candidates), None) if candidates else (None, None)
+        if role == "_any_server":
             servers = [
                 s.ip
                 for s in self.scenario.environment.systems
-                if s.ip != src_ip and s.type and s.type.lower() in ("server", "domain_controller")
+                if s.ip != exclude_ip
+                and s.type
+                and s.type.lower() in ("server", "domain_controller")
             ]
             return (rng.choice(servers), None) if servers else (None, None)
-        if dest_role == "_any":
-            others = [s.ip for s in self.scenario.environment.systems if s.ip != src_ip]
+        if role == "_any":
+            others = [s.ip for s in self.scenario.environment.systems if s.ip != exclude_ip]
             return (rng.choice(others), None) if others else (None, None)
-        # Named role: find a system with that role/type
+        # Named role: find a system with that role/type.
+        # For database role, filter by service compatibility when a specific
+        # DB service is requested (prevents MSSQL traffic to PostgreSQL hosts).
         candidates = [
             s.ip
             for s in self.scenario.environment.systems
-            if s.ip != src_ip
+            if s.ip != exclude_ip
             and (
-                (s.type and s.type.lower() == dest_role)
-                or (s.roles and dest_role in [r.lower() for r in s.roles])
+                (s.type and s.type.lower() == role)
+                or (s.roles and role in [r.lower() for r in s.roles])
             )
         ]
+        if role == "database" and service and candidates and hasattr(self, "world_model"):
+            _DB_SERVICE_MATCH = {
+                "mssql": {"mssql", "sqlserver"},
+                "postgresql": {"postgres", "postgresql"},
+                "mysql": {"mysql", "maria", "mariadb"},
+            }
+            match_terms = _DB_SERVICE_MATCH.get(service, set())
+            if match_terms:
+                ip_to_host = {s.ip: s.hostname for s in self.scenario.environment.systems}
+                filtered = []
+                for ip in candidates:
+                    hostname = ip_to_host.get(ip, "")
+                    host = self.world_model.hosts.get(hostname)
+                    if host and any(
+                        term in svc.lower() for svc in host.services for term in match_terms
+                    ):
+                        filtered.append(ip)
+                if filtered:
+                    candidates = filtered
         return (rng.choice(candidates), None) if candidates else (None, None)
 
     def _generate_profile_traffic(
@@ -2005,10 +2221,29 @@ class BaselineMixin:
             get_role_connections,
         )
 
-        # Build role list: system.roles first, then system.type as fallback
-        roles = [r.lower() for r in (system.roles or [])]
-        if not roles:
-            roles = [(system.type or "workstation").lower()]
+        # Pre-compute burst windows for realistic traffic burstiness.
+        # Real enterprise traffic is self-similar with CV > 0.5.
+        # 70% of connections cluster around 3-5 peaks per hour;
+        # 30% are uniform background.
+        _n_bursts = rng.randint(3, 5)
+        _burst_centers = sorted(rng.sample(range(300, 3300, 60), _n_bursts))
+        _burst_width = 180  # seconds
+
+        def _burst_offset() -> float:
+            if rng.random() < 0.70:
+                center = rng.choice(_burst_centers)
+                return max(0.0, min(3599.0, center + rng.gauss(0, _burst_width / 3)))
+            return rng.uniform(0, 3599)
+
+        # Use compiled world-model canonical roles (includes service/hostname-inferred
+        # roles like 'database' from services=['postgresql']). Falls back to raw
+        # scenario fields for engines without a world model.
+        if hasattr(self, "world_model") and system.hostname in self.world_model.hosts:
+            roles = list(self.world_model.hosts[system.hostname].canonical_roles)
+        else:
+            roles = [r.lower() for r in (system.roles or [])]
+            if not roles:
+                roles = [(system.type or "workstation").lower()]
 
         # --- Role traffic (system-level, 24/7) ---
         role_conns = get_role_connections(roles, os_cat)
@@ -2024,16 +2259,18 @@ class BaselineMixin:
 
             for _ in range(base_count):
                 conn = rng.choices(role_conns, weights=weights, k=1)[0]
-                dst_ip, hostname = self._resolve_dest_role(
-                    conn["dest_role"],
+                dst_ip, hostname = self._resolve_role(
+                    conn["role"],
                     system.ip,
                     rng,
                     os_cat=os_cat,
                     dns_tags=conn.get("dns_tags"),
+                    src_host=system.hostname,
+                    service=conn.get("service", ""),
                 )
                 if not dst_ip:
                     continue
-                offset = rng.uniform(0, 3599)
+                offset = _burst_offset()
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 # Resolve initiating PID from the system process that handles this service
@@ -2065,6 +2302,193 @@ class BaselineMixin:
                     pid=conn_pid,
                 )
 
+        # --- Inbound traffic (connections TO this host from other roles/external) ---
+        # Inbound profile traffic generates permitted connections that match
+        # the host's role.  Each candidate connection is checked against
+        # firewall policy — denied flows are skipped here because the deny
+        # baseline (_generate_firewall_deny_baseline) already generates
+        # ASA Deny / REJ records independently.
+        from evidenceforge.generation.activity.traffic_profiles import (
+            get_role_inbound_connections,
+        )
+
+        inbound_conns = get_role_inbound_connections(roles, os_cat)
+        if inbound_conns:
+            # Gate external inbound on segment exposure — internal-only
+            # hosts must not receive internet client traffic.
+            exposure = self._get_system_exposure(system)
+            allows_external = exposure in ("external", "both")
+            if not allows_external:
+                inbound_conns = [c for c in inbound_conns if c["role"] != "_external"]
+
+            # Pre-compute firewall policy context for per-connection checks
+            import ipaddress as _ipa_inbound
+
+            _inbound_segment_cidrs: dict = {}
+            _inbound_fw_sensors: list = []
+            if self.scenario.environment.network:
+                for seg in self.scenario.environment.network.segments:
+                    try:
+                        _inbound_segment_cidrs[seg.name] = _ipa_inbound.ip_network(
+                            seg.cidr, strict=False
+                        )
+                    except ValueError:
+                        continue
+                _inbound_fw_sensors = [
+                    s for s in self.scenario.environment.network.sensors if s.type == "firewall"
+                ]
+
+            # VIP lookup for external inbound: use public VIP as dst_ip so
+            # the NAT engine fires and outside sensors see the correct address.
+            _inbound_vip: dict[str, str] = {}
+            if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                _inbound_vip = self.dispatcher.visibility_engine._real_ip_to_vip
+
+            # Helper to resolve firewall interface names for a given sensor
+            def _fw_iface_for(ip: str, fw_sensor) -> str:
+                import ipaddress as _ipa_fw
+
+                for seg_name, cidr in _inbound_segment_cidrs.items():
+                    try:
+                        if _ipa_fw.ip_address(ip) in cidr:
+                            return fw_sensor.interfaces.get(seg_name, seg_name)
+                    except ValueError:
+                        continue
+                return fw_sensor.interfaces.get("_default", "outside")
+
+            def _fw_is_on_path(fw_sensor, src_ip: str, dst_ip: str) -> bool:
+                """Check if a firewall monitors segments containing src or dst."""
+                import ipaddress as _ipa_fw
+
+                for seg_name in fw_sensor.monitoring_segments:
+                    cidr = _inbound_segment_cidrs.get(seg_name)
+                    if cidr is None:
+                        continue
+                    try:
+                        addr_s = _ipa_fw.ip_address(src_ip)
+                        addr_d = _ipa_fw.ip_address(dst_ip)
+                        if addr_s in cidr or addr_d in cidr:
+                            return True
+                    except ValueError:
+                        continue
+                return False
+
+            if not inbound_conns:
+                pass  # All entries were external and host is internal-only
+            else:
+                from evidenceforge.events.contexts import FirewallContext as _InboundFwCtx
+
+                inbound_weights = [c.get("weight", 1) for c in inbound_conns]
+                num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
+                for _ in range(num_inbound):
+                    conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
+                    is_external_src = conn["role"] == "_external"
+                    src_ip, hostname = self._resolve_role(
+                        conn["role"],
+                        system.ip,
+                        rng,
+                        os_cat,
+                        inbound=True,
+                    )
+                    if not src_ip:
+                        continue
+
+                    # External clients connect to the public VIP, not the
+                    # internal IP. Internal clients use system.ip directly.
+                    if is_external_src:
+                        vip = _inbound_vip.get(system.ip)
+                        if vip:
+                            effective_dst_ip = vip
+                        elif not _ipa_inbound.ip_address(system.ip).is_private:
+                            # System has a public IP directly (cloud/flat routing)
+                            effective_dst_ip = system.ip
+                        else:
+                            # RFC1918 host with no VIP → unreachable from outside
+                            continue
+                    else:
+                        effective_dst_ip = system.ip
+
+                    # Evaluate firewall policy — only on firewalls in the path.
+                    # Policy uses system.ip (real IP) — correct for modern ASA.
+                    fw_denied = False
+                    denying_sensor = None
+                    if _inbound_fw_sensors:
+                        for fw_sensor in _inbound_fw_sensors:
+                            if not _fw_is_on_path(fw_sensor, src_ip, system.ip):
+                                continue
+                            action = self._evaluate_firewall_policy(
+                                src_ip,
+                                system.ip,
+                                conn["port"],
+                                fw_sensor,
+                                _inbound_segment_cidrs,
+                            )
+                            if action == "deny":
+                                fw_denied = True
+                                denying_sensor = fw_sensor
+                                break
+
+                    offset = _burst_offset()
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+
+                    # Resolve source system object (None for external IPs)
+                    src_sys = None
+                    if hasattr(self, "activity_generator"):
+                        ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+                        src_sys = ip_map.get(src_ip)
+
+                    is_internal_src = src_sys is not None
+                    # External clients use the public-facing hostname;
+                    # internal clients use the internal FQDN.
+                    dst_hostname = None
+                    if is_external_src:
+                        # Use public hostname if configured, otherwise suppress
+                        # REVERSE_DNS to avoid leaking internal FQDNs.
+                        if system.public_hostnames:
+                            dst_hostname = rng.choice(system.public_hostnames)
+                        else:
+                            dst_hostname = ""
+                    elif is_internal_src and hasattr(self, "world_model"):
+                        dst_hostname = self.world_model.fqdn_for_system(system)
+
+                    if fw_denied and denying_sensor:
+                        # Emit as a deny record from the actual in-path firewall
+                        deny_state = "REJ" if denying_sensor.drop_mode == "reject" else "S0"
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip,
+                            dst_ip=effective_dst_ip,
+                            time=ts,
+                            dst_port=conn["port"],
+                            proto=conn.get("proto", "tcp"),
+                            service=conn.get("service"),
+                            conn_state=deny_state,
+                            firewall=_InboundFwCtx(
+                                action="deny",
+                                msg_id=106023,
+                                connection_id=0,
+                                src_interface=_fw_iface_for(src_ip, denying_sensor),
+                                dst_interface=_fw_iface_for(system.ip, denying_sensor),
+                                access_group=f"{_fw_iface_for(src_ip, denying_sensor)}_access_in",
+                            ),
+                            emit_dns=False,
+                        )
+                    else:
+                        self.activity_generator.generate_connection(
+                            src_ip=src_ip,
+                            dst_ip=effective_dst_ip,
+                            time=ts,
+                            dst_port=conn["port"],
+                            proto=conn.get("proto", "tcp"),
+                            service=conn.get("service"),
+                            duration=rng.uniform(0.05, 5.0),
+                            orig_bytes=rng.randint(200, 5000),
+                            resp_bytes=rng.randint(500, 50000),
+                            source_system=src_sys,
+                            emit_dns=is_internal_src,
+                            hostname=dst_hostname,
+                        )
+
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
         # SYSTEM, LOCAL SERVICE, NETWORK SERVICE, machine accounts, etc.
@@ -2082,7 +2506,13 @@ class BaselineMixin:
             # Only interactive sessions generate user-driven persona traffic
             if session.logon_type not in (2, 10, 11):
                 continue
-            persona_conns = get_persona_connections(persona, os_cat)
+            # Remote admin sessions on other machines use _server_admin profile
+            # instead of the user's normal persona (no Outlook/Teams on servers).
+            is_own_workstation = system.assigned_user == session.username
+            if not is_own_workstation and session.logon_type in (10, 11):
+                persona_conns = get_persona_connections("_server_admin", os_cat)
+            else:
+                persona_conns = get_persona_connections(persona, os_cat)
             if not persona_conns:
                 continue
             p_weights = [c.get("weight", 1) for c in persona_conns]
@@ -2097,21 +2527,37 @@ class BaselineMixin:
 
             for _ in range(num_persona):
                 conn = rng.choices(persona_conns, weights=p_weights, k=1)[0]
-                dst_ip, hostname = self._resolve_dest_role(
-                    conn["dest_role"],
+                # Skip SSH/RDP — these require compound session evidence
+                # (sshd syslog, 4624 type 10, bash history) that bare
+                # connections don't provide. They're handled by dedicated
+                # SSH/RDP generation paths instead.
+                if conn.get("service") in ("ssh", "rdp"):
+                    continue
+                dst_ip, hostname = self._resolve_role(
+                    conn["role"],
                     system.ip,
                     rng,
                     os_cat=os_cat,
                     dns_tags=conn.get("dns_tags"),
+                    src_host=system.hostname,
+                    service=conn.get("service", ""),
                 )
                 if not dst_ip:
                     continue
 
-                # Compute timestamp first (needed for PID start_time check)
-                offset = rng.uniform(session_start_sec, _max_offset)
+                # Compute timestamp with burst clustering, clamped to session window
+                raw_offset = _burst_offset()
+                offset = max(session_start_sec, min(_max_offset, raw_offset))
                 ts = current_hour + timedelta(seconds=offset)
 
                 persona_pid = -1
+                # Thread effective persona so _server_admin sessions don't
+                # get browser/SaaS processes attributed on servers.
+                eff_persona = (
+                    "_server_admin"
+                    if (not is_own_workstation and session.logon_type in (10, 11))
+                    else None
+                )
                 if user_obj and conn.get("service"):
                     persona_pid = self.world_planner.ensure_connection_process(
                         user=user_obj,
@@ -2120,6 +2566,7 @@ class BaselineMixin:
                         time=ts,
                         service=conn["service"],
                         rng=rng,
+                        effective_persona=eff_persona,
                     )
 
                 self.state_manager.set_current_time(ts)
@@ -2224,25 +2671,33 @@ class BaselineMixin:
                 offset = max(0, min(3599, offset))
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
-                ntp_ip = rng.choice(ntp_ips)
-                ntp_pid = (
-                    _svc_pid("svchost_local_svc")
-                    if os_cat == "windows"
-                    else _svc_pid("chronyd", "timesyncd")
+                # Deterministic NTP source per host (stable across hours)
+                # Exclude the host's own IP — DCs don't NTP-sync to themselves
+                ntp_candidates = [ip for ip in ntp_ips if ip != system.ip]
+                ntp_ip = (
+                    ntp_candidates[_stable_seed(f"ntp_src_{system.hostname}") % len(ntp_candidates)]
+                    if ntp_candidates
+                    else None  # This host IS the NTP server; skip NTP client traffic only
                 )
-                self.activity_generator.generate_connection(
-                    src_ip=system.ip,
-                    dst_ip=ntp_ip,
-                    time=ts,
-                    dst_port=123,
-                    proto="udp",
-                    service="ntp",
-                    duration=rng.uniform(0.01, 0.1),
-                    orig_bytes=48,
-                    resp_bytes=48,
-                    source_system=system,
-                    pid=ntp_pid,
-                )
+                if ntp_ip:
+                    ntp_pid = (
+                        _svc_pid("svchost_local_svc")
+                        if os_cat == "windows"
+                        else _svc_pid("chronyd", "timesyncd")
+                    )
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=ntp_ip,
+                        time=ts,
+                        dst_port=123,
+                        proto="udp",
+                        service="ntp",
+                        duration=rng.uniform(0.01, 0.1),
+                        orig_bytes=48,
+                        resp_bytes=48,
+                        source_system=system,
+                        pid=ntp_pid,
+                    )
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
@@ -2391,52 +2846,25 @@ class BaselineMixin:
                         username="SYSTEM",
                     )
 
-            # Scheduled tasks — diverse per-hour selection from YAML
-            from evidenceforge.generation.activity.system_processes import (
-                pick_scheduled_task,
-            )
-
-            host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
+            # Windows scheduled tasks — diverse per-hour selection from YAML.
+            # Linux scheduled tasks are handled by _generate_scheduled_tasks()
+            # which uses realistic daily/weekly frequencies instead of the
+            # legacy 2-5 per hour approach.
             if os_cat == "windows":
-                pass  # Tasks selected per-iteration below
-            else:
-                os_str = (system.os or "").lower()
-                is_rhel_task = any(
-                    d in os_str for d in ("centos", "rhel", "red hat", "rocky", "alma")
+                from evidenceforge.generation.activity.system_processes import (
+                    pick_scheduled_task,
                 )
-                if is_rhel_task:
-                    linux_tasks = [
-                        ("/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                        ("/usr/bin/dnf", "/usr/bin/dnf -y makecache --timer"),
-                        ("/usr/bin/needs-restarting", "/usr/bin/needs-restarting -r"),
-                    ]
-                else:
-                    linux_tasks = [
-                        ("/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf"),
-                        ("/usr/bin/apt-get", "/usr/bin/apt-get -qq update"),
-                        (
-                            "/usr/lib/update-notifier/apt-check",
-                            "/usr/lib/update-notifier/apt-check --human-readable",
-                        ),
-                    ]
-                task_name, task_cmd = linux_tasks[
-                    _stable_seed(f"linux_task_{system.hostname}") % len(linux_tasks)
-                ]
 
-            # Randomize scheduled task count per hour (2-5) with per-host variation
-            num_tasks = rng.randint(2, 5)
-            slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
-            for slot_base in slot_bases:
-                offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
-                offset = max(0, min(3599, offset))
-                ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
-
-                if os_cat == "windows":
-                    # Pick a diverse task each iteration (not deterministic per host)
+                host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
+                num_tasks = rng.randint(2, 5)
+                slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
+                for slot_base in slot_bases:
+                    offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
+                    offset = max(0, min(3599, offset))
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
                     parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
-                    # 4648 explicit credentials for scheduled task execution
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
                         user=_SYSTEM_USER,
@@ -2454,16 +2882,6 @@ class BaselineMixin:
                         command_line=task_cmd,
                         parent_pid=parent_pid,
                         username="SYSTEM",
-                    )
-                else:
-                    parent_pid = sys_pids.get("cron", 0)
-                    self.activity_generator.generate_system_process(
-                        system=system,
-                        time=ts,
-                        process_name=task_name,
-                        command_line=task_cmd,
-                        parent_pid=parent_pid,
-                        username="root",
                     )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
@@ -2542,18 +2960,26 @@ class BaselineMixin:
                             n_cmds = rng.randint(1, 4)
                         hour_end = current_hour + timedelta(hours=1)
                         cumulative_gap = 0
+                        _SLOW_CMD_KEYWORDS = frozenset(
+                            [
+                                "build",
+                                "make",
+                                "pytest",
+                                "cargo",
+                                "docker",
+                                "npm run",
+                                "go build",
+                                "gcc",
+                                "compile",
+                                "install",
+                                "apt",
+                                "yum",
+                                "dnf",
+                                "pip install",
+                            ]
+                        )
                         for _cmd_i in range(n_cmds):
                             cmd_offset = rng.randint(30, 600)
-                            # Human typing: variable think time between commands
-                            gap = rng.choices(
-                                [rng.randint(3, 10), rng.randint(12, 45), rng.randint(60, 300)],
-                                weights=[45, 35, 20],
-                                k=1,
-                            )[0]
-                            cumulative_gap += gap
-                            cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
-                            if cmd_time >= hour_end:
-                                break
                             cmd = pick_bash_command(
                                 rng,
                                 ssh_user.persona or "",
@@ -2561,6 +2987,25 @@ class BaselineMixin:
                                 system.services,
                                 username=ssh_user.username,
                             )
+                            # Complexity-aware timing: build/install commands
+                            # take longer than simple lookups (ls, cat, pwd)
+                            is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)
+                            if is_slow:
+                                gap = rng.randint(30, 180)
+                            else:
+                                gap = rng.choices(
+                                    [
+                                        rng.randint(8, 25),
+                                        rng.randint(30, 90),
+                                        rng.randint(120, 300),
+                                    ],
+                                    weights=[35, 40, 25],
+                                    k=1,
+                                )[0]
+                            cumulative_gap += gap
+                            cmd_time = ts + timedelta(seconds=cmd_offset + cumulative_gap)
+                            if cmd_time >= hour_end:
+                                break
                             self.activity_generator.generate_bash_command(
                                 ssh_user, system, cmd_time, cmd
                             )
@@ -2774,8 +3219,19 @@ class BaselineMixin:
                 current_hour, system, rng, sys_pids, is_rhel_like, has_web_role
             )
 
-            for _ in range(num_events):
-                offset = rng.uniform(0, 3599)
+            # Use Hawkes process for bursty syslog timing instead of uniform spread
+            from evidenceforge.utils.timing import hawkes_timestamps
+
+            _syslog_mu = max(0.001, num_events / 3600.0 * 0.7)
+            _syslog_offsets, _ = hawkes_timestamps(
+                num_events=num_events,
+                duration=3600.0,
+                mu=_syslog_mu,
+                alpha=0.3,
+                beta=0.8,
+                rng=rng,
+            )
+            for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
                 uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
 
@@ -2959,18 +3415,28 @@ class BaselineMixin:
                 elif source_roll < 0.88:
                     if is_rhel_like:
                         continue  # RHEL uses chronyd, not systemd-timesyncd
-                    ntp_ip = rng.choice(["91.189.89.198", "91.189.89.199", "91.189.94.4"])
+                    # Use the same deterministic NTP source as network-level NTP
+                    ntp_candidates = [
+                        ip
+                        for ip in self._infra_ips.get("ntp", ["91.189.89.198"])
+                        if ip != system.ip
+                    ]
+                    if not ntp_candidates:
+                        continue  # This host IS the NTP server; skip timesyncd messages
+                    ntp_ip = ntp_candidates[
+                        _stable_seed(f"ntp_src_{system.hostname}") % len(ntp_candidates)
+                    ]
                     if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
                     if system.hostname not in self._timesyncd_first_seen:
-                        msg = f"Synchronized to time server for the first time {ntp_ip}:123 (ntp.ubuntu.com)."
+                        msg = f"Synchronized to time server for the first time {ntp_ip}:123."
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
                         msg = rng.choice(
                             [
-                                f"Initial synchronization to time server {ntp_ip}:123 (ntp.ubuntu.com).",
-                                f"Timed out waiting for reply from {ntp_ip}:123 (ntp.ubuntu.com).",
-                                f"Synchronized to time server {ntp_ip}:123 (ntp.ubuntu.com).",
+                                f"Initial synchronization to time server {ntp_ip}:123.",
+                                f"Timed out waiting for reply from {ntp_ip}:123.",
+                                f"Synchronized to time server {ntp_ip}:123.",
                             ]
                         )
                     self.activity_generator.generate_syslog_event(

@@ -530,12 +530,30 @@ def generate_unusual_powershell(
     offset = timedelta(seconds=rng.randint(0, 3599))
     event_time = current_hour + offset
 
+    _LOG_DIRS = ["Logs", "AppLogs", "EventExport", "Temp\\Logs", "Audit"]
+    _BACKUP_NAMES = ["logs-backup", "archive", "audit-export", "monthly-logs", "cleanup"]
+    _SCRIPT_NAMES = [
+        "deploy-monitoring.ps1",
+        "health-check.ps1",
+        "patch-audit.ps1",
+        "compliance-scan.ps1",
+        "cert-renewal.ps1",
+    ]
+    _REPORT_NAMES = ["audit", "security-review", "compliance", "weekly-report", "incident"]
+    _API_PATHS = ["/health", "/status", "/api/v1/check", "/metrics", "/readiness"]
+
+    log_dir = rng.choice(_LOG_DIRS)
+    backup = rng.choice(_BACKUP_NAMES)
+    script = rng.choice(_SCRIPT_NAMES)
+    report = rng.choice(_REPORT_NAMES)
+    api_path = rng.choice(_API_PATHS)
+
     suspicious_ps = [
-        r'powershell.exe -WindowStyle Hidden -Command "Get-WinEvent -LogName Security -MaxEvents 100 | Export-Csv C:\Reports\audit.csv"',
+        rf'powershell.exe -WindowStyle Hidden -Command "Get-WinEvent -LogName Security -MaxEvents {rng.choice([50, 100, 200, 500])} | Export-Csv C:\Reports\{report}.csv"',
         r"powershell.exe -EncodedCommand RwBlAHQALQBTAGUAcgB2AGkAYwBlAA==",  # Get-Service
-        r"powershell.exe -Exec Bypass -File C:\Scripts\deploy-monitoring.ps1",
-        r'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://internal-api.corp.local/health"',
-        r'powershell.exe -WindowStyle Hidden -Command "Compress-Archive -Path C:\Logs\*.log -DestinationPath C:\Backups\logs.zip"',
+        rf"powershell.exe -Exec Bypass -File C:\Scripts\{script}",
+        rf'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://internal-api.corp.local{api_path}"',
+        rf'powershell.exe -WindowStyle Hidden -Command "Compress-Archive -Path C:\{log_dir}\*.log -DestinationPath C:\Backups\{backup}.zip"',
     ]
 
     cmd = rng.choice(suspicious_ps)

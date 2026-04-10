@@ -74,7 +74,13 @@ def _build_nat_scenario(
 
     systems = [
         System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
-        System(hostname="SRV-WEB", ip="172.16.0.5", os="Linux Ubuntu", type="server"),
+        System(
+            hostname="SRV-WEB",
+            ip="172.16.0.5",
+            os="Linux Ubuntu",
+            type="server",
+            roles=["web_server"],
+        ),
     ]
     if extra_systems:
         systems.extend(extra_systems)
@@ -227,14 +233,12 @@ class TestInboundStaticNat:
         assert len(nat_records) >= 1, "Expected static NAT translation records"
         assert "static" in nat_records[0].lower()
 
-        # The Built connection should show the real DMZ IP and mapped public IP
-        built_conn = [line for line in asa_lines if "302013" in line]
-        dmz_records = [line for line in built_conn if "172.16.0.5" in line]
-        if dmz_records:
-            # At least one DMZ record should contain the mapped public IP
-            assert any("203.0.113.5" in line for line in dmz_records), (
-                "Inbound Built records for DMZ server should reference mapped IP 203.0.113.5"
-            )
+        # Outbound connections from DMZ server should show the mapped public IP
+        # via static NAT in either Built records or NAT translation records
+        dmz_traffic = [line for line in asa_lines if "172.16.0.5" in line]
+        assert any("203.0.113.5" in line for line in dmz_traffic), (
+            "DMZ server traffic should reference mapped IP 203.0.113.5 via static NAT"
+        )
 
 
 # @pytest.mark.skip(reason="NAT implementation pending")

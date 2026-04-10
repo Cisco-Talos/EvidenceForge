@@ -232,10 +232,15 @@ class SensorMultiplexEmitter(LogEmitter):
             # and potentially NAT-swapped IPs
             original_uid = event_data.get("uid")
             for i, hostname in enumerate(targets):
-                render_data = event_data
+                # Always copy for secondary sensors (timing jitter + UID derivation)
+                if i > 0:
+                    render_data = dict(event_data)
+                else:
+                    render_data = event_data
                 # Apply NAT IP swaps for post-NAT sensors
                 if nat_swaps and hostname in nat_swaps:
-                    render_data = dict(event_data)  # shallow copy
+                    if render_data is event_data:
+                        render_data = dict(event_data)
                     swaps = nat_swaps[hostname]
                     if "src_ip" in swaps:
                         render_data["id.orig_h"] = swaps["src_ip"]
@@ -245,6 +250,29 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["id.resp_h"] = swaps["dst_ip"]
                     if "dst_port" in swaps:
                         render_data["id.resp_p"] = swaps["dst_port"]
+                    if "local_orig" in swaps:
+                        render_data["local_orig"] = swaps["local_orig"]
+                    if "local_resp" in swaps:
+                        render_data["local_resp"] = swaps["local_resp"]
+                # Directional propagation delay: farther sensors see packets later
+                if i > 0:
+                    from datetime import datetime, timedelta
+
+                    from evidenceforge.utils.rng import _stable_seed
+
+                    sensor_delay_us = (_stable_seed(f"sensor_delay_{hostname}") % 400) + 100
+                    ts = render_data.get("ts")
+                    if ts is not None:
+                        if isinstance(ts, datetime):
+                            render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
+                        elif isinstance(ts, (int, float)):
+                            render_data["ts"] = ts + sensor_delay_us / 1_000_000
+                    dur = render_data.get("duration")
+                    if dur is not None and isinstance(dur, (int, float)):
+                        dur_jitter = (
+                            (_stable_seed(f"dur_jitter_{hostname}_{original_uid}") % 200) - 100
+                        ) / 1_000_000
+                        render_data["duration"] = max(0.0, dur + dur_jitter)
                 if i > 0 and original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)

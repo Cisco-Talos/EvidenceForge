@@ -188,14 +188,18 @@ class WorldModel:
             roles.add(_normalize_role_name(role))
 
         service_values = tuple(system.services or ())
-        service_blob = " ".join(service.lower() for service in service_values)
         hostname_lower = system.hostname.lower()
+
+        service_blob = " ".join(service.lower() for service in service_values)
 
         if system.type == "domain_controller":
             roles.update({"domain_controller", "dns_server"})
         elif system.type == "workstation":
             roles.add("workstation")
 
+        # Service/hostname heuristics are always additive — they supplement
+        # explicit roles, not override them. Mixed-use hosts (e.g.,
+        # roles=[web_server] + services=[postgresql]) get both capabilities.
         for hints, role_name in _SERVICE_ROLE_HINTS:
             if any(hint in service_blob for hint in hints):
                 roles.add(role_name)
@@ -290,12 +294,24 @@ class WorldModel:
     def _collect_db_servers(self) -> list[DatabaseEndpoint]:
         endpoints: list[DatabaseEndpoint] = []
         for system in self.systems_by_role.get("database", []):
-            service_names = [service.lower() for service in self.hosts[system.hostname].services]
-            db_service = "mssql"
+            host = self.hosts[system.hostname]
+            service_names = [service.lower() for service in host.services]
+            db_service: str | None = None
             if any("postgres" in service for service in service_names):
                 db_service = "postgresql"
             elif any("mysql" in service or "maria" in service for service in service_names):
                 db_service = "mysql"
+            elif any("mssql" in service or "sqlserver" in service for service in service_names):
+                db_service = "mssql"
+            else:
+                # No explicit DB service — infer from OS to avoid assigning
+                # MSSQL to Linux hosts (or PostgreSQL to Windows).
+                if host.os_category == "windows":
+                    db_service = "mssql"
+                elif host.os_category == "linux":
+                    db_service = "postgresql"
+                else:
+                    db_service = "mssql"  # safe fallback
             endpoints.append(
                 DatabaseEndpoint(
                     system=system,
@@ -313,6 +329,9 @@ class WorldModel:
         ]
         if ntp_hosts:
             return [system.ip for system in ntp_hosts]
+        # AD environments: workstations sync NTP from the DC (W32Time service)
+        if self.domain_controllers:
+            return [dc.ip for dc in self.domain_controllers]
         return ["129.6.15.28", "132.163.97.1"]
 
     def to_infrastructure_ips(self) -> dict[str, str | list[Any]]:
@@ -425,6 +444,13 @@ class WorldModel:
 
         return roster
 
+    # DB service matching for service-aware destination filtering
+    _DB_SERVICE_MATCH: dict[str, set[str]] = {
+        "mssql": {"mssql", "sqlserver"},
+        "postgresql": {"postgres", "postgresql"},
+        "mysql": {"mysql", "maria", "mariadb"},
+    }
+
     def resolve_destination(
         self,
         dest_role: str,
@@ -432,6 +458,7 @@ class WorldModel:
         rng: random.Random,
         os_category: str = "windows",
         dns_tags: list[str] | None = None,
+        service: str = "",
     ) -> tuple[str | None, str | None]:
         """Resolve a profile destination role to a concrete IP and hostname."""
         if dest_role == "_external":
@@ -447,8 +474,7 @@ class WorldModel:
                 for system in self.domain_controllers
                 if system.hostname != src_system.hostname
             ]
-            if not dc_candidates and self.domain_controllers:
-                dc_candidates = list(self.domain_controllers)
+            # Single-DC: no peer exists — skip rather than self-target
             if dc_candidates:
                 target = rng.choice(dc_candidates)
                 return target.ip, self.fqdn_for_system(target)
@@ -482,6 +508,32 @@ class WorldModel:
             for system in self.systems_by_role.get(role, [])
             if system.hostname != src_system.hostname
         ]
+        # Filter database candidates by service compatibility.
+        # When a host has no explicit services, use the OS-inferred DB type
+        # (Linux→postgresql, Windows→mssql) to avoid impossible protocol targets.
+        if role == "database" and service and candidates:
+            match_terms = self._DB_SERVICE_MATCH.get(service, set())
+            if match_terms:
+                _OS_DB_DEFAULT = {"linux": "postgresql", "windows": "mssql"}
+                filtered = []
+                for s in candidates:
+                    host = self.hosts.get(s.hostname)
+                    if not host:
+                        continue
+                    if host.services:
+                        # Check explicit services
+                        if any(
+                            term in svc.lower() for svc in host.services for term in match_terms
+                        ):
+                            filtered.append(s)
+                    else:
+                        # No services — use OS-inferred DB type
+                        inferred = _OS_DB_DEFAULT.get(host.os_category, "mssql")
+                        if inferred == service:
+                            filtered.append(s)
+                # If no service-compatible host exists, skip rather than
+                # routing to an incompatible DB engine.
+                candidates = filtered if filtered else []
         if candidates:
             target = rng.choice(candidates)
             return target.ip, self.fqdn_for_system(target)
@@ -497,8 +549,16 @@ class WorldModel:
         rng: random.Random,
         session_kind: str | None = None,
         source_system: System | None = None,
+        source_ip_override: str | None = None,
     ) -> SessionPlan:
-        """Plan how a user should reach a target host."""
+        """Plan how a user should reach a target host.
+
+        Args:
+            source_ip_override: Explicit source IP from the scenario
+                storyline. When set and the IP doesn't map to a scenario
+                system, we preserve it in the plan instead of inventing
+                a different source.
+        """
         host = self.hosts[target_system.hostname]
         kind = session_kind
 
@@ -523,7 +583,7 @@ class WorldModel:
             return SessionPlan(
                 target_system=target_system,
                 source_system=None,
-                source_ip=target_system.ip,
+                source_ip=source_ip_override or target_system.ip,
                 logon_type=2,
                 session_kind="interactive",
                 requires_transport=False,
@@ -531,7 +591,9 @@ class WorldModel:
 
         if kind == "network":
             source = source_system or self.pick_remote_source_system(user, target_system, rng)
-            source_ip = source.ip if source is not None else target_system.ip
+            source_ip = source_ip_override or (
+                source.ip if source is not None else target_system.ip
+            )
             return SessionPlan(
                 target_system=target_system,
                 source_system=source,
@@ -542,8 +604,41 @@ class WorldModel:
             )
 
         source = source_system or self.pick_remote_source_system(user, target_system, rng)
+
+        # RDP requires a Windows source — mstsc.exe can't exist on Linux.
+        # If the selected source is non-Windows, downgrade to SSH or network.
+        if kind == "rdp" and source is not None:
+            source_host = self.hosts.get(source.hostname)
+            if source_host and source_host.os_category != "windows":
+                if host.supports_ssh:
+                    kind = "ssh"
+                else:
+                    source = None  # will trigger fallback below
+
         if source is None:
-            fallback_kind = "network" if host.is_server else "interactive"
+            if source_ip_override:
+                # Explicit source IP from storyline but no modeled source
+                # host.  Keep the session kind so the transport connection
+                # (port 22 / 3389) is still generated — we just won't have
+                # source-side process evidence (mstsc.exe / ssh client).
+                return SessionPlan(
+                    target_system=target_system,
+                    source_system=None,
+                    source_ip=source_ip_override,
+                    logon_type=10,
+                    session_kind=kind,
+                    requires_transport=True,
+                )
+            # No explicit IP and no suitable source — fall back.
+            # RDP without a Windows source is impossible (no mstsc.exe),
+            # so coerce for auto-selected sessions only.
+            if kind == "rdp":
+                kind = "ssh" if host.supports_ssh else "network"
+            fallback_kind = (
+                kind
+                if kind in ("ssh", "network")
+                else ("network" if host.is_server else "interactive")
+            )
             return self.plan_session(
                 user=user,
                 target_system=target_system,
@@ -552,10 +647,17 @@ class WorldModel:
                 source_system=None,
             )
 
+        # If the caller specified a source IP that doesn't belong to the
+        # auto-selected source system, don't attach internal host evidence
+        # to the external IP — that creates impossible host↔network correlation.
+        effective_source = source
+        if source_ip_override and source is not None and source_ip_override != source.ip:
+            effective_source = None
+
         return SessionPlan(
             target_system=target_system,
-            source_system=source,
-            source_ip=source.ip,
+            source_system=effective_source,
+            source_ip=source_ip_override or source.ip,
             logon_type=10,
             session_kind=kind,
             requires_transport=True,
@@ -584,6 +686,7 @@ class WorldPlanner:
         session_kind: str | None = None,
         source_system: System | None = None,
         allow_existing: bool = True,
+        storyline_protected: bool = False,
     ) -> ActiveSession:
         return self.bootstrap_user_session(
             user=user,
@@ -593,6 +696,7 @@ class WorldPlanner:
             session_kind=session_kind,
             source_system=source_system,
             allow_existing=allow_existing,
+            storyline_protected=storyline_protected,
         ).session
 
     def bootstrap_user_session(
@@ -604,11 +708,22 @@ class WorldPlanner:
         session_kind: str | None = None,
         source_system: System | None = None,
         allow_existing: bool = True,
+        source_ip_override: str | None = None,
+        storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
-        existing = self._find_user_session(user.username, target_system.hostname)
+        existing = self._find_user_session(user.username, target_system.hostname, session_kind)
         if allow_existing and existing is not None:
-            existing.last_activity_time = time
-            return SessionBootstrapResult(session=existing, network_uid=None)
+            # Require exact session_kind match when the caller specifies one.
+            # Prevents interactive requests from reusing network/rdp sessions
+            # and vice versa — each kind carries different transport evidence.
+            transport_compatible = True
+            if session_kind and existing.session_kind != session_kind:
+                transport_compatible = False
+            if transport_compatible:
+                existing.last_activity_time = time
+                if storyline_protected:
+                    existing.storyline_protected = True
+                return SessionBootstrapResult(session=existing, network_uid=None)
 
         plan = self.world_model.plan_session(
             user=user,
@@ -616,14 +731,21 @@ class WorldPlanner:
             rng=rng,
             session_kind=session_kind,
             source_system=source_system,
+            source_ip_override=source_ip_override,
         )
         logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
-            return self._bootstrap_ssh_session(user, plan, logon_time, time, rng)
+            result = self._bootstrap_ssh_session(user, plan, logon_time, time, rng)
+            if storyline_protected and result.session:
+                result.session.storyline_protected = True
+            return result
         if plan.session_kind == "rdp":
-            return self._bootstrap_rdp_session(user, plan, logon_time, time, rng)
+            result = self._bootstrap_rdp_session(user, plan, logon_time, time, rng)
+            if storyline_protected and result.session:
+                result.session.storyline_protected = True
+            return result
 
         logon_id = self.state_manager.create_session(
             username=user.username,
@@ -644,6 +766,8 @@ class WorldPlanner:
         if session is None:
             raise RuntimeError(f"Failed to resolve planned session {logon_id} on {target_system}")
         session.last_activity_time = time
+        if storyline_protected:
+            session.storyline_protected = True
         return SessionBootstrapResult(session=session, network_uid=None)
 
     def ensure_connection_process(
@@ -654,8 +778,15 @@ class WorldPlanner:
         time: datetime,
         service: str,
         rng: random.Random,
+        effective_persona: str | None = None,
     ) -> int:
-        """Resolve or create a user process that can own a network connection."""
+        """Resolve or create a user process that can own a network connection.
+
+        Args:
+            effective_persona: Override persona for catalog filtering. When set
+                (e.g. ``"_server_admin"``), restricts executables to those
+                cataloged for this persona instead of the user's normal one.
+        """
         compatible_exes = get_service_to_exes().get(service, [])
         if not compatible_exes:
             return -1
@@ -672,12 +803,70 @@ class WorldPlanner:
             if exe in compatible_exes:
                 return pid
 
-        target_exe = rng.choice(compatible_exes)
-        if self.world_model.hosts[system.hostname].os_category == "windows":
-            image = f"C:\\Windows\\System32\\{target_exe}"
-        else:
-            image = f"/usr/bin/{target_exe}"
+        from evidenceforge.generation.activity.application_catalog import (
+            get_app_categories,
+            has_catalog_entry,
+            is_persona_allowed,
+            load_catalog,
+            resolve_image_path,
+        )
+        from evidenceforge.generation.activity.helpers import _parameterize_command
+
+        os_cat = self.world_model.hosts[system.hostname].os_category
+        # _server_admin is a policy overlay: use the user's real persona for
+        # catalog eligibility, then exclude browser/office categories that
+        # are inappropriate on servers (no Chrome/Outlook on DC via RDP).
+        # Also merge sysadmin access so non-sysadmin personas (developer,
+        # security_analyst) can use admin tools (dsquery, ldapsearch) when
+        # doing remote server administration.
+        is_server_admin = effective_persona == "_server_admin"
+        persona = (user.persona or "default").lower()
+        _SERVER_EXCLUDED_CATEGORIES = {"browser", "office", "code", "build"}
+
+        def _is_allowed(exe: str) -> bool:
+            if not has_catalog_entry(exe, os_cat):
+                return False
+            allowed = is_persona_allowed(exe, os_cat, persona)
+            # Server-admin sessions also grant sysadmin-level tool access
+            if not allowed and is_server_admin:
+                allowed = is_persona_allowed(exe, os_cat, "sysadmin")
+            if allowed and is_server_admin:
+                cats = get_app_categories(exe, os_cat)
+                if _SERVER_EXCLUDED_CATEGORIES.intersection(cats):
+                    return False
+            return allowed
+
+        os_exes = [e for e in compatible_exes if _is_allowed(e)]
+        if not os_exes:
+            # No persona-approved executable for this service — don't
+            # relax past the allowlist (that would spawn forbidden tools
+            # like sqlcmd.exe for accountants).  Return -1 (no owning process).
+            return -1
+        target_exe = rng.choice(os_exes)
+        image = resolve_image_path(target_exe, os_cat, username=user.username)
+
+        # Build a realistic command line from the catalog template when
+        # available, instead of emitting the bare executable name.
+        command_line = target_exe
+        catalog = load_catalog()
+        for app in catalog.get("applications", []):
+            plat = app.get("platforms", {}).get(os_cat)
+            if not plat:
+                continue
+            plat_image = plat.get("image_path", "")
+            plat_exe = plat_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if plat_exe == target_exe.lower() or plat_exe.replace(".exe", "") == target_exe.lower():
+                templates = plat.get("command_templates", [])
+                if templates:
+                    command_line = rng.choice(templates)
+                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                break
+
+        # Backdate the process slightly, but never before the session started
         proc_time = time - timedelta(seconds=rng.uniform(0.5, 3.0))
+        min_proc_time = session.start_time + timedelta(milliseconds=100)
+        if proc_time < min_proc_time:
+            proc_time = min_proc_time
         self.state_manager.set_current_time(proc_time)
         parent_pid = self.activity_generator._resolve_parent(
             system, user, proc_time, session.logon_id, image
@@ -688,15 +877,33 @@ class WorldPlanner:
             time=proc_time,
             logon_id=session.logon_id,
             process_name=image,
-            command_line=target_exe,
+            command_line=command_line,
             parent_pid=parent_pid,
         )
         self.activity_generator._record_user_process(system, user, pid, image)
         return pid
 
-    def _find_user_session(self, username: str, hostname: str) -> ActiveSession | None:
+    def _find_user_session(
+        self,
+        username: str,
+        hostname: str,
+        session_kind: str | None = None,
+    ) -> ActiveSession | None:
+        """Find the newest compatible session for a user on a host.
+
+        Prefers an exact session_kind match; falls back to any host session.
+        Returns the most recent session (by start_time) to avoid picking
+        stale network sessions over newer SSH/RDP ones.
+        """
         sessions = self.state_manager.get_sessions_for_user(username)
-        return next((session for session in sessions if session.system == hostname), None)
+        host_sessions = [s for s in sessions if s.system == hostname]
+        if not host_sessions:
+            return None
+        if session_kind:
+            exact = [s for s in host_sessions if s.session_kind == session_kind]
+            if exact:
+                return max(exact, key=lambda s: s.start_time)
+        return max(host_sessions, key=lambda s: s.start_time)
 
     def _bootstrap_ssh_session(
         self,

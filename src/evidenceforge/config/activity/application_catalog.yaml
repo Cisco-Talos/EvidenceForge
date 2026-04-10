@@ -414,6 +414,16 @@ applications:
   - id: ssh
     display_name: "OpenSSH Client"
     platforms:
+      windows:
+        image_path: 'C:\Windows\System32\OpenSSH\ssh.exe'
+        pe_metadata:
+          file_version: "8.6.0.1"
+          description: "OpenSSH SSH client"
+          product: "OpenSSH for Windows"
+          company: "Microsoft Corporation"
+          original_filename: "ssh.exe"
+        command_templates:
+          - 'ssh.exe {username}@{ssh_target}'
       linux:
         image_path: "/usr/bin/ssh"
         command_templates:
@@ -556,6 +566,57 @@ applications:
     categories: [build]
     personas: [developer]
 
+  # ===== Windows Query Tools =====
+  - id: sqlcmd
+    display_name: "SQL Server Command Line"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe'
+        pe_metadata:
+          file_version: "15.0.4153.1"
+          description: "Microsoft SQL Server Command Line Tool"
+          product: "Microsoft SQL Server"
+          company: "Microsoft Corporation"
+          original_filename: "sqlcmd.exe"
+        command_templates:
+          - 'sqlcmd.exe -S {db_server} -Q "{sql_query}"'
+          - 'sqlcmd.exe -S {db_server} -d {db_name} -Q "{sql_query}"'
+    categories: [query]
+    personas: [analyst, developer, sysadmin, data_analyst, accountant, default]
+
+  - id: wmic
+    display_name: "WMI Command-line"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\wbem\WMIC.exe'
+        pe_metadata:
+          file_version: "10.0.19041.1"
+          description: "WMI Commandline Utility"
+          product: "Microsoft Windows Operating System"
+          company: "Microsoft Corporation"
+          original_filename: "wmic.exe"
+        command_templates:
+          - 'WMIC.exe {wmic_query}'
+    categories: [query]
+    personas: [sysadmin, analyst, default]
+
+  - id: powershell_query
+    display_name: "PowerShell (Query)"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+        pe_metadata:
+          file_version: "10.0.19041.1"
+          description: "Windows PowerShell"
+          product: "Microsoft Windows Operating System"
+          company: "Microsoft Corporation"
+          original_filename: "PowerShell.EXE"
+        command_templates:
+          - 'powershell.exe -Command "{ps_command}"'
+          - 'powershell.exe -ExecutionPolicy Bypass -File {ps_script}'
+    categories: [query]
+    personas: [analyst, developer, sysadmin, default]
+
   # ===== Linux Query Tools =====
   - id: mysql
     display_name: "MySQL Client"
@@ -570,12 +631,22 @@ applications:
   - id: psql
     display_name: "PostgreSQL Client"
     platforms:
+      windows:
+        image_path: 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
+        pe_metadata:
+          file_version: "16.2"
+          description: "PostgreSQL interactive terminal"
+          product: "PostgreSQL"
+          company: "PostgreSQL Global Development Group"
+          original_filename: "psql.exe"
+        command_templates:
+          - 'psql.exe -U postgres -d {psql_db}'
       linux:
         image_path: "/usr/bin/psql"
         command_templates:
           - "psql -U postgres -d {psql_db}"
     categories: [query]
-    personas: [developer, analyst, sysadmin]
+    personas: [developer, analyst, sysadmin, data_analyst]
 
   - id: redis_cli
     display_name: "Redis CLI"
@@ -586,3 +657,69 @@ applications:
           - "{redis_cmd}"
     categories: [query]
     personas: [developer, sysadmin]
+
+  # --- Process-network mapping support entries ---
+  # These apps are referenced by process_network_map.yaml for service→exe resolution.
+
+  - id: windows-explorer
+    display_name: "Windows Explorer"
+    platforms:
+      windows:
+        image_path: "C:\\Windows\\explorer.exe"
+        pe_metadata:
+          file_version: "10.0.19041.1"
+          description: "Windows Explorer"
+          product: "Microsoft Windows Operating System"
+          company: "Microsoft Corporation"
+          original_filename: "explorer.exe"
+        command_templates:
+          - "C:\\Windows\\explorer.exe"
+    categories: [user_app]
+    personas: [analyst, data_analyst, accountant, executive, hr, sales, marketing,
+               legal_counsel, project_manager, intern, receptionist, sysadmin, help_desk, default]
+
+  - id: mstsc
+    display_name: "Remote Desktop Connection"
+    platforms:
+      windows:
+        image_path: "C:\\Windows\\System32\\mstsc.exe"
+        pe_metadata:
+          file_version: "10.0.19041.1"
+          description: "Remote Desktop Connection"
+          product: "Microsoft Windows Operating System"
+          company: "Microsoft Corporation"
+          original_filename: "mstsc.exe"
+        command_templates:
+          - "mstsc.exe /v:{ssh_target}"
+          - "mstsc.exe /v:{ssh_target} /admin"
+    categories: [user_app]
+    personas: [sysadmin, help_desk]
+
+  - id: dsquery
+    display_name: "Directory Service Query"
+    platforms:
+      windows:
+        image_path: "C:\\Windows\\System32\\dsquery.exe"
+        pe_metadata:
+          file_version: "10.0.19041.1"
+          description: "Microsoft Directory Service query tool"
+          product: "Microsoft Windows Operating System"
+          company: "Microsoft Corporation"
+          original_filename: "dsquery.exe"
+        command_templates:
+          - 'dsquery.exe user -name "*" -limit 50'
+          - 'dsquery.exe computer -stalepwd 90'
+          - 'dsquery.exe group -name "Domain Admins"'
+    categories: [query]
+    personas: [sysadmin, help_desk]
+
+  - id: ldapsearch
+    display_name: "LDAP Search"
+    platforms:
+      linux:
+        image_path: "/usr/bin/ldapsearch"
+        command_templates:
+          - 'ldapsearch -x -H ldap://{ssh_target} -b "dc=corp,dc=local" "(objectClass=user)"'
+          - 'ldapsearch -x -H ldap://{ssh_target} -b "dc=corp,dc=local" "(objectClass=computer)"'
+    categories: [query]
+    personas: [sysadmin, help_desk]
