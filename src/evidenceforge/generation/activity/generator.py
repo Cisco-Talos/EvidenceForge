@@ -2840,8 +2840,16 @@ class ActivityGenerator:
             db_servers = getattr(self, "_db_servers", [])
             all_ips = getattr(self, "_all_system_ips", [])
             if conn_info["service"] in ("mssql", "mysql", "postgresql") and db_servers:
-                db_entry = rng.choice(db_servers)
-                # _db_servers entries are dicts with "ip", "port", "service"
+                # Filter to DB servers that match the requested service
+                svc = conn_info["service"]
+                compatible = [
+                    e
+                    for e in db_servers
+                    if (isinstance(e, dict) and e.get("service") == svc) or not isinstance(e, dict)
+                ]
+                if not compatible:
+                    compatible = db_servers  # fallback if no match
+                db_entry = rng.choice(compatible)
                 dst_ip = db_entry["ip"] if isinstance(db_entry, dict) else db_entry
             elif all_ips:
                 dst_ip = rng.choice([ip for ip in all_ips if ip != system.ip] or all_ips)
