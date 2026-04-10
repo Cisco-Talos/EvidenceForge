@@ -29,7 +29,7 @@ and writes to per-host FQDN directories as windows_event_sysmon.xml.
 
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -388,24 +388,29 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
-        The first DWORD is a stable machine-specific value (same for all
-        processes on a given host), matching real Sysmon behavior. The
-        remaining segments are per-process unique.
+        Real Sysmon ProcessGUID format: {machine_guid}-HHHH-HHHH-SSSS-XXXXXXXXXXXX}
+        where HHHHHHHH is the hex Unix timestamp of the process creation time
+        and SSSS is a PID-based sequence number.
 
-        The timestamp should be the process creation time, not the event time.
-        This ensures the same PID produces the same GUID across all Sysmon
-        events (Event 1, 8, 10) referencing that process.
+        The first DWORD is a stable machine-specific value (same for all
+        processes on a given host), matching real Sysmon behavior.
         """
         # Machine-specific first DWORD (stable across all processes on this host)
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
 
-        # Per-process uniqueness from remaining hash segments
-        ts_key = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
-        seed = f"{hostname}:{pid}:{ts_key}"
+        # Second segment: hex Unix timestamp of process creation
+        unix_ts = int(timestamp.timestamp())
+        hex_ts = f"{unix_ts:08x}"
+
+        # Third segment: PID-based sequence for uniqueness
+        seq = f"{pid & 0xFFFF:04x}"
+
+        # Remaining segments: deterministic filler for uniqueness
+        seed = f"{hostname}:{pid}:{unix_ts}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        return f"{{{machine_prefix}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}}}"
+        return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
     @staticmethod
     def _generate_hashes(image: str, hostname: str) -> str:
@@ -699,6 +704,13 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
+                # Sysmon events arrive via a separate kernel callback,
+                # typically tens to hundreds of microseconds after the
+                # corresponding Security event.
+                if ts.microsecond == 0:
+                    ts = ts.replace(microsecond=random.randint(100000, 999999))
+                else:
+                    ts = ts + timedelta(microseconds=random.randint(50, 500))
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":

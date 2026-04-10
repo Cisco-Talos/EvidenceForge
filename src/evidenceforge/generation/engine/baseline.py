@@ -2033,6 +2033,20 @@ class BaselineMixin:
             get_role_connections,
         )
 
+        # Pre-compute burst windows for realistic traffic burstiness.
+        # Real enterprise traffic is self-similar with CV > 0.5.
+        # 70% of connections cluster around 3-5 peaks per hour;
+        # 30% are uniform background.
+        _n_bursts = rng.randint(3, 5)
+        _burst_centers = sorted(rng.sample(range(300, 3300, 60), _n_bursts))
+        _burst_width = 180  # seconds
+
+        def _burst_offset() -> float:
+            if rng.random() < 0.70:
+                center = rng.choice(_burst_centers)
+                return max(0.0, min(3599.0, center + rng.gauss(0, _burst_width / 3)))
+            return rng.uniform(0, 3599)
+
         # Use compiled world-model canonical roles (includes service/hostname-inferred
         # roles like 'database' from services=['postgresql']). Falls back to raw
         # scenario fields for engines without a world model.
@@ -2066,7 +2080,7 @@ class BaselineMixin:
                 )
                 if not dst_ip:
                     continue
-                offset = rng.uniform(0, 3599)
+                offset = _burst_offset()
                 ts = current_hour + timedelta(seconds=offset)
                 self.state_manager.set_current_time(ts)
                 # Resolve initiating PID from the system process that handles this service
@@ -2191,7 +2205,7 @@ class BaselineMixin:
                                 fw_denied = True
                                 break
 
-                    offset = rng.uniform(0, 3599)
+                    offset = _burst_offset()
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
 
@@ -2306,8 +2320,9 @@ class BaselineMixin:
                 if not dst_ip:
                     continue
 
-                # Compute timestamp first (needed for PID start_time check)
-                offset = rng.uniform(session_start_sec, _max_offset)
+                # Compute timestamp with burst clustering, clamped to session window
+                raw_offset = _burst_offset()
+                offset = max(session_start_sec, min(_max_offset, raw_offset))
                 ts = current_hour + timedelta(seconds=offset)
 
                 persona_pid = -1
