@@ -526,16 +526,15 @@ class StorylineMixin:
                             service_account=actor.username,
                         )
                 else:
-                    is_own_workstation = system.assigned_user == actor.username
-                    auto_kind = None  # let planner decide for own workstation
-                    if not is_own_workstation:
-                        auto_kind = "network"
+                    # Let WorldPlanner.plan_session() decide session kind
+                    # based on primary_system, assigned_user, and OS support.
+                    # Don't override — the planner knows the right transport.
                     target_session = self.world_planner.ensure_user_session(
                         actor,
                         system,
                         time,
                         rng,
-                        session_kind=auto_kind,
+                        session_kind=None,
                         storyline_protected=True,
                     )
                     logon_id = target_session.logon_id
@@ -696,11 +695,21 @@ class StorylineMixin:
             elif source_ip == system.ip:
                 src_sys = system
             # Only use explicit hostname from scenario.  Do NOT fall back to
-            # reverse-DNS: raw-IP storyline connections (C2, exfil) must stay
-            # IP-only so they don't sprout fabricated DNS/SNI/proxy domains.
-            # Use "" to suppress REVERSE_DNS resolution when no hostname given.
-            # "" suppresses REVERSE_DNS; only emit DNS when explicit hostname given
-            conn_hostname = spec.hostname or ""
+            # Hostname resolution for storyline connections:
+            # - Explicit hostname → use it, emit DNS
+            # - No hostname but IP in REVERSE_DNS → use known hostname, emit DNS
+            # - No hostname, unknown IP → suppress (raw-IP C2/exfil), no DNS
+            from evidenceforge.generation.activity.network import REVERSE_DNS
+
+            if spec.hostname:
+                conn_hostname = spec.hostname
+                emit_dns = True
+            elif dst_ip in REVERSE_DNS:
+                conn_hostname = None  # let generate_connection resolve via REVERSE_DNS
+                emit_dns = True
+            else:
+                conn_hostname = ""  # suppress — raw IP
+                emit_dns = False
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -710,7 +719,7 @@ class StorylineMixin:
                 duration=rng.uniform(1.0, 30.0),
                 orig_bytes=rng.randint(1000, 10000),
                 resp_bytes=rng.randint(5000, 50000),
-                emit_dns=bool(spec.hostname),
+                emit_dns=emit_dns,
                 source_system=src_sys,
                 http=http_ctx,
                 pid=getattr(self, "_last_storyline_pid", -1) or -1,
