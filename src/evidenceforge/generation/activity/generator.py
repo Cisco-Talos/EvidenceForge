@@ -1625,13 +1625,14 @@ class ActivityGenerator:
         if dns is not None:
             event.dns = dns
 
-        # Proxy context: attach only for outbound internet traffic (not internal east-west).
-        # Forward proxies only see egress to external destinations.
+        # Proxy context: attach only for established outbound internet traffic.
+        # Forward proxies only see egress that completes (not blocked/denied flows).
         if (
             not local_only
             and service in ("ssl", "http")
             and dst_port in (80, 443)
             and not _is_private_ip(dst_ip)
+            and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
         ):
             proxy_routes = getattr(self, "_proxy_routes", {})
             chain = proxy_routes.get(src_ip)
