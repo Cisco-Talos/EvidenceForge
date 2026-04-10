@@ -322,6 +322,14 @@ The `os` field on systems determines which native log formats are generated:
 
 For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
 
+### Database Service Inference
+
+Database hosts (`roles: [database]`) automatically infer the DB engine from `services`. When `services` is empty, the OS determines the default: **Linux → PostgreSQL** (port 5432), **Windows → MSSQL** (port 1433). Traffic generation only routes connections to hosts running the matching engine — mixed-DB environments get correct per-engine routing.
+
+### External Inbound Requirements
+
+External inbound traffic requires a reachable public address. Hosts with a static NAT VIP use it automatically. Hosts with a directly-public IP work as-is. **RFC1918 hosts without a VIP cannot receive external inbound traffic** — configure a `nat_rules` static mapping or use a public IP if external traffic is needed.
+
 Use the `/eforge:references:evidence-formats` skill for detailed field documentation, output paths, and known limitations for each log format.
 
 ### Validation Rules

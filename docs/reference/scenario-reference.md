@@ -212,6 +212,37 @@ network:
 
 Dynamic PAT: all traffic from matching segments shares one external IP with port translation. Static NAT: bidirectional 1:1 mapping, enables inbound connections to DMZ servers via public IP. NAT only applies to permitted connections that cross segment boundaries; denied connections are not NATted.
 
+### Database Service Routing
+
+When a system has the `database` role, the engine determines the DB protocol from `services`:
+
+- `services: [postgresql]` → PostgreSQL on port 5432
+- `services: [mysql]` or `services: [mariadb]` → MySQL on port 3306
+- `services: [mssql]` or `services: [sqlserver]` → MSSQL on port 1433
+
+When `services` is empty, the engine infers from OS: **Linux → PostgreSQL**, **Windows → MSSQL**. Traffic generation only routes database connections to hosts running the matching DB engine — a PostgreSQL host never receives MSSQL traffic, even in mixed-DB environments.
+
+### External Inbound Requirements
+
+External inbound traffic requires the target host to be reachable from the internet:
+
+- **Hosts with static NAT VIP** → External clients connect to the VIP; NAT translates per sensor
+- **Hosts with a public IP** (non-RFC1918, e.g., cloud) → External clients connect directly
+- **RFC1918 hosts without a VIP** → External inbound is silently skipped (unreachable)
+
+If a system needs external inbound traffic, either configure a static NAT rule with `mapped_ip` or assign it a public IP address.
+
+### Session Management
+
+The engine manages user sessions with exact transport-type matching. When a storyline or baseline requests a session on a host, the engine:
+
+1. Checks for an existing session with the **exact** `session_kind` (interactive, network, ssh, rdp)
+2. If no match, creates a new session with the appropriate transport evidence (SSH syslog, RDP 4624 type 10, etc.)
+
+Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
+
+Sessions marked as `storyline_protected` (by storyline events that depend on them) are immune to baseline logoff, even if logoff was already planned for the same hour.
+
 ## Personas
 
 Personas define user behavior patterns for activity generation. EvidenceForge includes 15 pre-built personas (developer, analyst, sysadmin, executive, etc.) that are resolved automatically by name — reference them in user definitions without needing to define them inline. Define personas inline only if you need to customize behavior beyond what the pre-built library provides; inline definitions override pre-built ones with the same name.
