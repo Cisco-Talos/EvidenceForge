@@ -674,8 +674,9 @@ class WorldPlanner:
                 transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
-                if storyline_protected:
-                    existing.storyline_protected = True
+                # Do NOT mark reused baseline sessions as storyline_protected —
+                # that would permanently suppress normal logoff for the baseline
+                # session. Only sessions created by the storyline get protection.
                 return SessionBootstrapResult(session=existing, network_uid=None)
 
         plan = self.world_model.plan_session(
@@ -769,19 +770,27 @@ class WorldPlanner:
         # _server_admin is a policy overlay: use the user's real persona for
         # catalog eligibility, then exclude browser/office categories that
         # are inappropriate on servers (no Chrome/Outlook on DC via RDP).
+        # Also merge sysadmin access so non-sysadmin personas (developer,
+        # security_analyst) can use admin tools (dsquery, ldapsearch) when
+        # doing remote server administration.
         is_server_admin = effective_persona == "_server_admin"
         persona = (user.persona or "default").lower()
         _SERVER_EXCLUDED_CATEGORIES = {"browser", "office"}
-        os_exes = [
-            e
-            for e in compatible_exes
-            if has_catalog_entry(e, os_cat)
-            and is_persona_allowed(e, os_cat, persona)
-            and not (
-                is_server_admin
-                and _SERVER_EXCLUDED_CATEGORIES.intersection(get_app_categories(e, os_cat))
-            )
-        ]
+
+        def _is_allowed(exe: str) -> bool:
+            if not has_catalog_entry(exe, os_cat):
+                return False
+            allowed = is_persona_allowed(exe, os_cat, persona)
+            # Server-admin sessions also grant sysadmin-level tool access
+            if not allowed and is_server_admin:
+                allowed = is_persona_allowed(exe, os_cat, "sysadmin")
+            if allowed and is_server_admin:
+                cats = get_app_categories(exe, os_cat)
+                if _SERVER_EXCLUDED_CATEGORIES.intersection(cats):
+                    return False
+            return allowed
+
+        os_exes = [e for e in compatible_exes if _is_allowed(e)]
         if not os_exes:
             # No persona-approved executable for this service — don't
             # relax past the allowlist (that would spawn forbidden tools

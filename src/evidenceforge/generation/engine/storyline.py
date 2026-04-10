@@ -506,10 +506,13 @@ class StorylineMixin:
                 # to avoid injecting unsolicited SSH/RDP transport evidence.
                 # Explicit ssh_session/rdp_session storyline events handle
                 # transport when the scenario actually wants it.
-                host_info = self.world_model.hosts.get(system.hostname)
                 is_own_workstation = system.assigned_user == actor.username
                 auto_kind = None  # let planner decide for own workstation
-                if not is_own_workstation and host_info and host_info.is_server:
+                if not is_own_workstation:
+                    # Non-owned hosts always require remote access evidence —
+                    # "network" for servers (bare network logon, no SSH/RDP),
+                    # "network" for peer workstations (avoids fabricating local
+                    # console access on someone else's machine).
                     auto_kind = "network"
                 target_session = self.world_planner.ensure_user_session(
                     actor,
