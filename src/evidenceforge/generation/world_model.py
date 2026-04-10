@@ -188,20 +188,24 @@ class WorldModel:
             roles.add(_normalize_role_name(role))
 
         service_values = tuple(system.services or ())
-        service_blob = " ".join(service.lower() for service in service_values)
         hostname_lower = system.hostname.lower()
 
+        # Type-derived roles always apply (they're structural, not inferred)
         if system.type == "domain_controller":
             roles.update({"domain_controller", "dns_server"})
         elif system.type == "workstation":
             roles.add("workstation")
 
-        for hints, role_name in _SERVICE_ROLE_HINTS:
-            if any(hint in service_blob for hint in hints):
-                roles.add(role_name)
-        for hints, role_name in _HOSTNAME_ROLE_HINTS:
-            if any(hint in hostname_lower for hint in hints):
-                roles.add(role_name)
+        # Service/hostname heuristic inference only when no explicit roles
+        # are declared — honor the scenario author's intent.
+        if not system.roles:
+            service_blob = " ".join(service.lower() for service in service_values)
+            for hints, role_name in _SERVICE_ROLE_HINTS:
+                if any(hint in service_blob for hint in hints):
+                    roles.add(role_name)
+            for hints, role_name in _HOSTNAME_ROLE_HINTS:
+                if any(hint in hostname_lower for hint in hints):
+                    roles.add(role_name)
 
         supports_ssh = os_category == "linux"
         supports_rdp = os_category == "windows" and system.type in ("server", "domain_controller")
@@ -663,15 +667,12 @@ class WorldPlanner:
     ) -> SessionBootstrapResult:
         existing = self._find_user_session(user.username, target_system.hostname, session_kind)
         if allow_existing and existing is not None:
-            # Only reuse if transport-compatible: don't satisfy an SSH/RDP
-            # request with a generic network session (no transport evidence).
+            # Only reuse if transport-compatible: require exact kind match
+            # for SSH/RDP to avoid mismatched transport evidence.
             transport_compatible = True
-            if session_kind in ("ssh", "rdp") and existing.session_kind not in (
-                session_kind,
-                "ssh",
-                "rdp",
-            ):
-                transport_compatible = False
+            if session_kind in ("ssh", "rdp"):
+                if existing.session_kind != session_kind:
+                    transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
                 if storyline_protected:
