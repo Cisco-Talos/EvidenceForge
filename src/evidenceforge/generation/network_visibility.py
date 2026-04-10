@@ -253,10 +253,14 @@ class NetworkVisibilityEngine:
                         boundary_segments.update(fw_segments & dst_segments)
             if not boundary_segments:
                 return []
+            # For external denied traffic, only firewall sensors see the
+            # packets — non-firewall sensors (Zeek, IDS) behind the firewall
+            # never receive denied/dropped flows.
             return [
                 sensor
                 for sensor in self._sensors
-                if self._sensor_can_observe(sensor, set(), boundary_segments)
+                if sensor.type == "firewall"
+                and self._sensor_can_observe(sensor, set(), boundary_segments)
             ]
 
         # Internal IP: check which sensors can observe traffic FROM this

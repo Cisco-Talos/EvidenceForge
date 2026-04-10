@@ -319,11 +319,13 @@ class TestMultiFirewallVisibility:
         ]
         engine = NetworkVisibilityEngine(network_config=config, systems=systems)
 
-        # External deny targeting DMZ: only fw-external and dmz-zeek should see it
+        # External deny targeting DMZ: only firewall sensors see denied
+        # traffic — non-firewall sensors behind the firewall (dmz-zeek)
+        # never receive dropped/rejected packets.
         sensors = engine.get_source_side_sensors("203.0.113.45", "172.16.0.5")
         sensor_names = {s.name for s in sensors}
         assert "fw-external" in sensor_names
-        assert "dmz-zeek" in sensor_names
+        assert "dmz-zeek" not in sensor_names  # denied traffic doesn't reach Zeek
         assert "fw-internal" not in sensor_names  # doesn't monitor DMZ
         assert "db-zeek" not in sensor_names  # doesn't monitor DMZ
 
@@ -374,11 +376,11 @@ class TestSingleFirewallSegmentScoping:
         ]
         engine = NetworkVisibilityEngine(network_config=config, systems=systems)
 
-        # External deny targeting DMZ: only dmz-segment sensors should see it
+        # External deny targeting DMZ: only firewall sensors see denied traffic
         sensors = engine.get_source_side_sensors("203.0.113.45", "172.16.0.5")
         sensor_names = {s.name for s in sensors}
-        assert "dmz-zeek" in sensor_names  # inbound on dmz
-        assert "fw01" in sensor_names  # firewall monitors dmz
+        assert "dmz-zeek" not in sensor_names  # denied packets don't reach Zeek
+        assert "fw01" in sensor_names  # firewall that denied the traffic
         assert "inside-zeek" not in sensor_names  # packet never reached internal
 
 

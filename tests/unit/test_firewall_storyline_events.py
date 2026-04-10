@@ -313,14 +313,13 @@ class TestSourceOnlyVisibility:
         ]
         engine = NetworkVisibilityEngine(network_config=config, systems=systems)
 
-        # External IP targeting DMZ: only dmz segment is the boundary
-        # (firewall monitors both, but dst is in dmz specifically).
-        # dmz-zeek (inbound on dmz) should see it.
-        # inside-zeek should NOT — packet never reached internal segment.
+        # External IP targeting DMZ: only firewall sensors see denied
+        # external traffic — non-firewall sensors behind the firewall
+        # don't receive dropped/rejected packets.
         sensors = engine.get_source_side_sensors("203.0.113.45", "172.16.0.5")
         sensor_names = [s.name for s in sensors]
-        assert "dmz-zeek" in sensor_names  # inbound on destination segment
-        assert "fw01" in sensor_names  # firewall monitors dmz
+        assert "dmz-zeek" not in sensor_names  # denied packets don't reach Zeek
+        assert "fw01" in sensor_names  # firewall that monitors dmz
         assert "inside-zeek" not in sensor_names  # packet didn't reach internal
 
 

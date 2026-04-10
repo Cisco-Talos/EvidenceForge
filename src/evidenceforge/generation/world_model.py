@@ -190,22 +190,22 @@ class WorldModel:
         service_values = tuple(system.services or ())
         hostname_lower = system.hostname.lower()
 
-        # Type-derived roles always apply (they're structural, not inferred)
+        service_blob = " ".join(service.lower() for service in service_values)
+
         if system.type == "domain_controller":
             roles.update({"domain_controller", "dns_server"})
         elif system.type == "workstation":
             roles.add("workstation")
 
-        # Service/hostname heuristic inference only when no explicit roles
-        # are declared — honor the scenario author's intent.
-        if not system.roles:
-            service_blob = " ".join(service.lower() for service in service_values)
-            for hints, role_name in _SERVICE_ROLE_HINTS:
-                if any(hint in service_blob for hint in hints):
-                    roles.add(role_name)
-            for hints, role_name in _HOSTNAME_ROLE_HINTS:
-                if any(hint in hostname_lower for hint in hints):
-                    roles.add(role_name)
+        # Service/hostname heuristics are always additive — they supplement
+        # explicit roles, not override them. Mixed-use hosts (e.g.,
+        # roles=[web_server] + services=[postgresql]) get both capabilities.
+        for hints, role_name in _SERVICE_ROLE_HINTS:
+            if any(hint in service_blob for hint in hints):
+                roles.add(role_name)
+        for hints, role_name in _HOSTNAME_ROLE_HINTS:
+            if any(hint in hostname_lower for hint in hints):
+                roles.add(role_name)
 
         supports_ssh = os_category == "linux"
         supports_rdp = os_category == "windows" and system.type in ("server", "domain_controller")
