@@ -2156,21 +2156,34 @@ class BaselineMixin:
             # internal FQDNs as hostname would produce impossible TLS SNI
             # and HTTP Host values in the generated evidence.
 
-            # Pre-resolve firewall interface names for deny records
-            _fw_iface_resolve = None
-            if _inbound_fw_sensors:
-                _fw_sensor_0 = _inbound_fw_sensors[0]
+            # Helper to resolve firewall interface names for a given sensor
+            def _fw_iface_for(ip: str, fw_sensor) -> str:
+                import ipaddress as _ipa_fw
 
-                def _fw_iface_resolve(ip: str) -> str:
-                    import ipaddress as _ipa_fw
+                for seg_name, cidr in _inbound_segment_cidrs.items():
+                    try:
+                        if _ipa_fw.ip_address(ip) in cidr:
+                            return fw_sensor.interfaces.get(seg_name, seg_name)
+                    except ValueError:
+                        continue
+                return fw_sensor.interfaces.get("_default", "outside")
 
-                    for seg_name, cidr in _inbound_segment_cidrs.items():
-                        try:
-                            if _ipa_fw.ip_address(ip) in cidr:
-                                return _fw_sensor_0.interfaces.get(seg_name, seg_name)
-                        except ValueError:
-                            continue
-                    return _fw_sensor_0.interfaces.get("_default", "outside")
+            def _fw_is_on_path(fw_sensor, src_ip: str, dst_ip: str) -> bool:
+                """Check if a firewall monitors segments containing src or dst."""
+                import ipaddress as _ipa_fw
+
+                for seg_name in fw_sensor.monitoring_segments:
+                    cidr = _inbound_segment_cidrs.get(seg_name)
+                    if cidr is None:
+                        continue
+                    try:
+                        addr_s = _ipa_fw.ip_address(src_ip)
+                        addr_d = _ipa_fw.ip_address(dst_ip)
+                        if addr_s in cidr or addr_d in cidr:
+                            return True
+                    except ValueError:
+                        continue
+                return False
 
             if not inbound_conns:
                 pass  # All entries were external and host is internal-only
@@ -2192,11 +2205,14 @@ class BaselineMixin:
                     if not src_ip:
                         continue
 
-                    # Evaluate firewall policy — denied connections are
-                    # emitted as deny records (not silently dropped).
+                    # Evaluate firewall policy — only on firewalls in the path.
+                    # Denied connections are emitted as deny records.
                     fw_denied = False
+                    denying_sensor = None
                     if _inbound_fw_sensors:
                         for fw_sensor in _inbound_fw_sensors:
+                            if not _fw_is_on_path(fw_sensor, src_ip, system.ip):
+                                continue
                             action = self._evaluate_firewall_policy(
                                 src_ip,
                                 system.ip,
@@ -2206,6 +2222,7 @@ class BaselineMixin:
                             )
                             if action == "deny":
                                 fw_denied = True
+                                denying_sensor = fw_sensor
                                 break
 
                     offset = _burst_offset()
@@ -2232,9 +2249,9 @@ class BaselineMixin:
                     elif is_internal_src and hasattr(self, "world_model"):
                         dst_hostname = self.world_model.fqdn_for_system(system)
 
-                    if fw_denied and _fw_iface_resolve:
-                        # Emit as a deny record instead of dropping
-                        deny_state = "REJ" if _fw_sensor_0.drop_mode == "reject" else "S0"
+                    if fw_denied and denying_sensor:
+                        # Emit as a deny record from the actual in-path firewall
+                        deny_state = "REJ" if denying_sensor.drop_mode == "reject" else "S0"
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=system.ip,
@@ -2247,9 +2264,9 @@ class BaselineMixin:
                                 action="deny",
                                 msg_id=106023,
                                 connection_id=0,
-                                src_interface=_fw_iface_resolve(src_ip),
-                                dst_interface=_fw_iface_resolve(system.ip),
-                                access_group=f"{_fw_iface_resolve(src_ip)}_access_in",
+                                src_interface=_fw_iface_for(src_ip, denying_sensor),
+                                dst_interface=_fw_iface_for(system.ip, denying_sensor),
+                                access_group=f"{_fw_iface_for(src_ip, denying_sensor)}_access_in",
                             ),
                             emit_dns=False,
                         )
