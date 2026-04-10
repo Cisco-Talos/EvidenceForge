@@ -526,15 +526,19 @@ class StorylineMixin:
                             service_account=actor.username,
                         )
                 else:
-                    # Let WorldPlanner.plan_session() decide session kind
-                    # based on primary_system, assigned_user, and OS support.
-                    # Don't override — the planner knows the right transport.
+                    # Pre-compute the session kind via the planner so reuse
+                    # filtering matches the correct transport type.
+                    plan = self.world_model.plan_session(
+                        user=actor,
+                        target_system=system,
+                        rng=rng,
+                    )
                     target_session = self.world_planner.ensure_user_session(
                         actor,
                         system,
                         time,
                         rng,
-                        session_kind=None,
+                        session_kind=plan.session_kind,
                         storyline_protected=True,
                     )
                     logon_id = target_session.logon_id

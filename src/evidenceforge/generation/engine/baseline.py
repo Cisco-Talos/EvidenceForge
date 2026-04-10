@@ -2049,7 +2049,9 @@ class BaselineMixin:
         if role == "_any":
             others = [s.ip for s in self.scenario.environment.systems if s.ip != exclude_ip]
             return (rng.choice(others), None) if others else (None, None)
-        # Named role: find a system with that role/type
+        # Named role: find a system with that role/type.
+        # For database role, filter by service compatibility when a specific
+        # DB service is requested (prevents MSSQL traffic to PostgreSQL hosts).
         candidates = [
             s.ip
             for s in self.scenario.environment.systems
@@ -2059,6 +2061,25 @@ class BaselineMixin:
                 or (s.roles and role in [r.lower() for r in s.roles])
             )
         ]
+        if role == "database" and service and candidates and hasattr(self, "world_model"):
+            _DB_SERVICE_MATCH = {
+                "mssql": {"mssql", "sqlserver"},
+                "postgresql": {"postgres", "postgresql"},
+                "mysql": {"mysql", "maria", "mariadb"},
+            }
+            match_terms = _DB_SERVICE_MATCH.get(service, set())
+            if match_terms:
+                ip_to_host = {s.ip: s.hostname for s in self.scenario.environment.systems}
+                filtered = []
+                for ip in candidates:
+                    hostname = ip_to_host.get(ip, "")
+                    host = self.world_model.hosts.get(hostname)
+                    if host and any(
+                        term in svc.lower() for svc in host.services for term in match_terms
+                    ):
+                        filtered.append(ip)
+                if filtered:
+                    candidates = filtered
         return (rng.choice(candidates), None) if candidates else (None, None)
 
     def _generate_profile_traffic(
