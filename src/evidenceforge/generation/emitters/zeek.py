@@ -67,6 +67,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "orig_ip_bytes": net.orig_ip_bytes,
             "resp_pkts": net.resp_pkts,
             "resp_ip_bytes": net.resp_ip_bytes,
+            "ip_proto": net.ip_proto,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:
@@ -89,6 +90,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "orig_ip_bytes",
             "resp_pkts",
             "resp_ip_bytes",
+            "ip_proto",
             "tunnel_parents",
         ]
         for f in optional_fields:

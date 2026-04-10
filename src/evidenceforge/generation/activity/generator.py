@@ -1700,7 +1700,7 @@ class ActivityGenerator:
                     client_ip=src_ip,
                     method=proxy_method,
                     url=url,
-                    host=hostname or dst_ip,
+                    host=proxy_hostname,
                     status_code=200 if cache_result != "DENIED" else 403,
                     sc_bytes=resp_bytes or 0,
                     cs_bytes=orig_bytes or 0,
@@ -1773,6 +1773,22 @@ class ActivityGenerator:
             not_before_max = issuer_cfg.get("not_before_max_days", 300)
             not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
             remaining_days = validity_days - not_before_days
+            # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
+            # real hostnames get the domain + wildcard SAN.
+            _is_ip = False
+            try:
+                import ipaddress as _ipa
+
+                _ipa.ip_address(cert_name)
+                _is_ip = True
+            except ValueError:
+                pass
+            if _is_ip:
+                san_dns_list: list[str] = []
+            elif "." in cert_name:
+                san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
+            else:
+                san_dns_list = [cert_name]
             event.x509 = X509Context(
                 fingerprint=cert_hash,
                 certificate_version=3,
@@ -1786,9 +1802,7 @@ class ActivityGenerator:
                 certificate_key_type=key_type,
                 certificate_key_length=key_length,
                 certificate_exponent="65537" if not is_ecdsa else "",
-                san_dns=[cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
-                if "." in cert_name
-                else [cert_name],
+                san_dns=san_dns_list,
                 basic_constraints_ca=False,
                 host_cert=True,
                 client_cert=False,

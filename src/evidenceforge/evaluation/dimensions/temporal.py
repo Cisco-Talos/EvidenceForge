@@ -550,21 +550,16 @@ class TemporalRealismScorer(DimensionScorer):
                         rule_correct += 1
                     else:
                         # All matching "before" events are AFTER this "after"
-                        # event.  Only forgive this as a warm-up artefact when
-                        # the after-event is near the scenario start (the
-                        # session plausibly pre-dates the collection window).
-                        # A process deep into the scenario with no preceding
-                        # login is a genuine ordering bug.
-                        warm_up_limit = scenario_start + 2 * grace_td
-                        if rec_ts < warm_up_limit:
-                            # Near scenario start — plausible pre-existing session
-                            rule_correct += 1
-                        else:
-                            if len(failures) < 10:
-                                failures.append(
-                                    f"Rule '{rule['name']}': after event at line "
-                                    f"{rec.line_number} precedes all matching before events"
-                                )
+                        # event.  This is a genuine ordering violation: a
+                        # matching login exists in the data but comes after the
+                        # process.  True warm-up cases (session pre-dates
+                        # collection) are handled by the "no matching before"
+                        # skip above — they have no login in the index at all.
+                        if len(failures) < 10:
+                            failures.append(
+                                f"Rule '{rule['name']}': after event at line "
+                                f"{rec.line_number} precedes all matching before events"
+                            )
 
             # Apply per-rule tolerance: if failure rate is within tolerance,
             # treat all pairs as correct for this rule

@@ -125,6 +125,11 @@ fields:
     constraints:
       min_value: 0
 
+  - name: ip_proto
+    type: integer
+    required: false
+    description: "IP protocol number (6=TCP, 17=UDP, 1=ICMP)"
+
   - name: tunnel_parents
     type: string
     required: false
@@ -187,6 +192,9 @@ output:
       {%- endif %}
       {%- if resp_ip_bytes is not none %},
       "resp_ip_bytes": {{ resp_ip_bytes | tojson }}
+      {%- endif %}
+      {%- if ip_proto is not none %},
+      "ip_proto": {{ ip_proto | tojson }}
       {%- endif %}
       {%- if tunnel_parents %},
       "tunnel_parents": {{ tunnel_parents | tojson }}
