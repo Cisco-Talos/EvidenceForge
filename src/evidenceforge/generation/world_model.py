@@ -444,6 +444,13 @@ class WorldModel:
 
         return roster
 
+    # DB service matching for service-aware destination filtering
+    _DB_SERVICE_MATCH: dict[str, set[str]] = {
+        "mssql": {"mssql", "sqlserver"},
+        "postgresql": {"postgres", "postgresql"},
+        "mysql": {"mysql", "maria", "mariadb"},
+    }
+
     def resolve_destination(
         self,
         dest_role: str,
@@ -451,6 +458,7 @@ class WorldModel:
         rng: random.Random,
         os_category: str = "windows",
         dns_tags: list[str] | None = None,
+        service: str = "",
     ) -> tuple[str | None, str | None]:
         """Resolve a profile destination role to a concrete IP and hostname."""
         if dest_role == "_external":
@@ -500,6 +508,22 @@ class WorldModel:
             for system in self.systems_by_role.get(role, [])
             if system.hostname != src_system.hostname
         ]
+        # Filter database candidates by service compatibility
+        if role == "database" and service and candidates:
+            match_terms = self._DB_SERVICE_MATCH.get(service, set())
+            if match_terms:
+                filtered = [
+                    s
+                    for s in candidates
+                    if s.hostname in self.hosts
+                    and any(
+                        term in svc.lower()
+                        for svc in self.hosts[s.hostname].services
+                        for term in match_terms
+                    )
+                ]
+                if filtered:
+                    candidates = filtered
         if candidates:
             target = rng.choice(candidates)
             return target.ip, self.fqdn_for_system(target)

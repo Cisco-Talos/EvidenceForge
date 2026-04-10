@@ -2031,6 +2031,7 @@ class BaselineMixin:
                     rng=rng,
                     os_category=os_cat,
                     dns_tags=dns_tags,
+                    service=service,
                 )
 
         if role in ("_dc", "domain_controller"):
@@ -2276,9 +2277,15 @@ class BaselineMixin:
 
                     # External clients connect to the public VIP, not the
                     # internal IP. Internal clients use system.ip directly.
-                    effective_dst_ip = (
-                        _inbound_vip.get(system.ip, system.ip) if is_external_src else system.ip
-                    )
+                    if is_external_src:
+                        vip = _inbound_vip.get(system.ip)
+                        if not vip:
+                            # No public VIP → external clients can't reach this
+                            # RFC1918 host directly. Skip this connection.
+                            continue
+                        effective_dst_ip = vip
+                    else:
+                        effective_dst_ip = system.ip
 
                     # Evaluate firewall policy — only on firewalls in the path.
                     # Policy uses system.ip (real IP) — correct for modern ASA.
