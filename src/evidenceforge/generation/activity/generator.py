@@ -2848,7 +2848,7 @@ class ActivityGenerator:
                     if (isinstance(e, dict) and e.get("service") == svc) or not isinstance(e, dict)
                 ]
                 if not compatible:
-                    compatible = db_servers  # fallback if no match
+                    return  # No service-compatible DB host — skip
                 db_entry = rng.choice(compatible)
                 dst_ip = db_entry["ip"] if isinstance(db_entry, dict) else db_entry
             elif all_ips:

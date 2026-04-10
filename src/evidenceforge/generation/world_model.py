@@ -531,8 +531,9 @@ class WorldModel:
                         inferred = _OS_DB_DEFAULT.get(host.os_category, "mssql")
                         if inferred == service:
                             filtered.append(s)
-                if filtered:
-                    candidates = filtered
+                # If no service-compatible host exists, skip rather than
+                # routing to an incompatible DB engine.
+                candidates = filtered if filtered else []
         if candidates:
             target = rng.choice(candidates)
             return target.ip, self.fqdn_for_system(target)
