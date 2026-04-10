@@ -502,27 +502,43 @@ class StorylineMixin:
 
         elif spec.type == "process":
             if hasattr(self, "world_planner"):
-                # Bare process steps use "network" session kind for servers
-                # to avoid injecting unsolicited SSH/RDP transport evidence.
-                # Explicit ssh_session/rdp_session storyline events handle
-                # transport when the scenario actually wants it.
-                is_own_workstation = system.assigned_user == actor.username
-                auto_kind = None  # let planner decide for own workstation
-                if not is_own_workstation:
-                    # Non-owned hosts always require remote access evidence —
-                    # "network" for servers (bare network logon, no SSH/RDP),
-                    # "network" for peer workstations (avoids fabricating local
-                    # console access on someone else's machine).
-                    auto_kind = "network"
-                target_session = self.world_planner.ensure_user_session(
-                    actor,
-                    system,
-                    time,
-                    rng,
-                    session_kind=auto_kind,
-                    storyline_protected=True,
+                # Built-in/service accounts (SYSTEM, LOCAL SERVICE, etc.) run
+                # locally — don't fabricate remote logon evidence for them.
+                from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
+
+                service_accounts = set(self.scenario.environment.service_accounts)
+                is_local_account = (
+                    actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
                 )
-                logon_id = target_session.logon_id
+                if is_local_account:
+                    # Use existing system session or create a service logon
+                    sessions = self.state_manager.get_sessions_for_user(actor.username)
+                    target_session = next(
+                        (s for s in sessions if s.system == system.hostname), None
+                    )
+                    if target_session:
+                        logon_id = target_session.logon_id
+                    else:
+                        logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
+                        logon_id = self.activity_generator.generate_service_logon(
+                            system=system,
+                            time=logon_time,
+                            service_account=actor.username,
+                        )
+                else:
+                    is_own_workstation = system.assigned_user == actor.username
+                    auto_kind = None  # let planner decide for own workstation
+                    if not is_own_workstation:
+                        auto_kind = "network"
+                    target_session = self.world_planner.ensure_user_session(
+                        actor,
+                        system,
+                        time,
+                        rng,
+                        session_kind=auto_kind,
+                        storyline_protected=True,
+                    )
+                    logon_id = target_session.logon_id
             else:
                 sessions = self.state_manager.get_sessions_for_user(actor.username)
                 target_session = next((s for s in sessions if s.system == system.hostname), None)

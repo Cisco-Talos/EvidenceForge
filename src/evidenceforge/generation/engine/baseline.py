@@ -1972,6 +1972,13 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
+    # Service→DNS tag defaults for external resolution when dns_tags is absent
+    _SERVICE_DNS_DEFAULTS: dict[str, tuple[str, ...]] = {
+        "smtp": ("email",),
+        "dns": ("background",),
+        "ntp": ("background",),
+    }
+
     def _resolve_role(
         self,
         role: str,
@@ -1980,6 +1987,8 @@ class BaselineMixin:
         os_cat: str = "windows",
         dns_tags: list[str] | None = None,
         inbound: bool = False,
+        src_host: str = "",
+        service: str = "",
     ) -> tuple[str | None, str | None]:
         """Resolve a role name to (ip, hostname), excluding a specific IP.
 
@@ -1992,17 +2001,22 @@ class BaselineMixin:
                 (realistic for internet clients hitting a server).
                 If False, _external resolves via dns_registry
                 (realistic for outbound destinations like CDNs/APIs).
+            src_host: Source hostname for DNS affinity (per-host IP caching).
+            service: Network service (ssl, smtp, etc.) for default tag derivation.
         """
         if role == "_external":
             if inbound:
-                # Internet clients use random external IPs, not service
-                # infrastructure from the DNS registry.
                 ip = self._generate_external_client_ip(rng)
                 return ip, None
             from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
 
-            tags = tuple(dns_tags) if dns_tags else ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host="")
+            if dns_tags:
+                tags = tuple(dns_tags)
+            elif service in self._SERVICE_DNS_DEFAULTS:
+                tags = self._SERVICE_DNS_DEFAULTS[service]
+            else:
+                tags = ("background", os_cat)
+            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host)
             return ip, domain
 
         if hasattr(self, "world_model"):
@@ -2111,6 +2125,8 @@ class BaselineMixin:
                     rng,
                     os_cat=os_cat,
                     dns_tags=conn.get("dns_tags"),
+                    src_host=system.hostname,
+                    service=conn.get("service", ""),
                 )
                 if not dst_ip:
                     continue
@@ -2374,6 +2390,8 @@ class BaselineMixin:
                     rng,
                     os_cat=os_cat,
                     dns_tags=conn.get("dns_tags"),
+                    src_host=system.hostname,
+                    service=conn.get("service", ""),
                 )
                 if not dst_ip:
                     continue
