@@ -28,6 +28,7 @@ coordinates them across multiple log formats for consistency.
 """
 
 import logging
+import math
 import random
 import uuid
 from datetime import datetime, timedelta
@@ -385,6 +386,90 @@ CONN_STATE_DISTRIBUTION = TCP_CONN_STATE_DISTRIBUTION
 _CONN_STATES = [s[0] for s in TCP_CONN_STATE_DISTRIBUTION]
 _CONN_WEIGHTS = _TCP_CONN_WEIGHTS
 _CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
+
+# --- Network realism constants ---
+
+# UDP header overhead: standard (93%), VLAN-tagged (5%), tunneled (2%)
+_UDP_OVERHEAD_VALUES = (28, 32, 52, 60, 78)
+_UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
+
+# TCP header overhead: bimodal around 40/52/60
+# 40=no options (legacy), 52=timestamps (dominant), 60=SACK+ts, 64=full
+_TCP_OVERHEAD_VALUES = (40, 52, 60, 64)
+_TCP_OVERHEAD_WEIGHTS = (10, 75, 10, 5)
+
+# NTP stratum-based timing: (mean_ms, sigma) for lognormal
+_NTP_STRATUM_TIMING = {
+    1: (2.0, 0.5),  # GPS-connected
+    2: (10.0, 0.7),  # synced to stratum 1
+    3: (30.0, 0.8),  # synced to stratum 2
+}
+
+# TLS cipher distributions (weighted)
+_TLS12_CIPHER_DIST = (
+    ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", 60),
+    ("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", 25),
+    ("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", 10),
+    ("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256", 5),
+)
+_TLS12_CIPHER_VALUES = tuple(c[0] for c in _TLS12_CIPHER_DIST)
+_TLS12_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS12_CIPHER_DIST)
+
+_TLS13_CIPHER_DIST = (
+    ("TLS_AES_128_GCM_SHA256", 55),
+    ("TLS_AES_256_GCM_SHA384", 30),
+    ("TLS_CHACHA20_POLY1305_SHA256", 15),
+)
+_TLS13_CIPHER_VALUES = tuple(c[0] for c in _TLS13_CIPHER_DIST)
+_TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
+
+# SSL history patterns (weighted)
+_SSL_HISTORY_SUCCESS = (
+    ("CsiI", 55),  # normal full handshake
+    ("CsijI", 25),  # handshake with session ticket
+    ("CiI", 10),  # abbreviated/resumed
+    ("CsiIa", 3),  # established then client abort
+    ("CsI", 2),  # no server key exchange
+)
+_SSL_HIST_SUCCESS_VALUES = tuple(h[0] for h in _SSL_HISTORY_SUCCESS)
+_SSL_HIST_SUCCESS_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_SUCCESS)
+
+_SSL_HISTORY_FAILURE = (
+    ("Cs", 60),  # client hello only, server didn't complete
+    ("Ch", 40),  # client hello, no server response
+)
+_SSL_HIST_FAILURE_VALUES = tuple(h[0] for h in _SSL_HISTORY_FAILURE)
+_SSL_HIST_FAILURE_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_FAILURE)
+
+_SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
+
+# Proxy header overhead ranges (bytes)
+_PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
+_PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
+
+# OS-aware proxy User-Agent pools
+_PROXY_UAS_WINDOWS = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
+    "Microsoft-CryptoAPI/10.0",
+    "Windows-Update-Agent/10.0.19041.1",
+)
+
+_PROXY_UAS_LINUX = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "python-requests/2.31.0",
+    "curl/7.88.1",
+    "Wget/1.21.3",
+    "apt-http/2.4.11 (amd64)",
+    "Debian APT-HTTP/1.3 (2.4.11)",
+    "libdnf (Fedora Linux 39; workstation; Linux.x86_64)",
+)
 
 
 def _ephemeral_port(rng: random.Random, os_category: str = "windows") -> int:
@@ -1539,7 +1624,10 @@ class ActivityGenerator:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
-        overhead = 28 if proto == "udp" else _get_rng().randint(52, 72)
+        if proto == "udp":
+            overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
+        else:
+            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
         # IP bytes = payload + (packets * header overhead). Handshake-only states
         # have 0 payload bytes but still have packet-level IP bytes from SYN/SYN-ACK.
         orig_ip_bytes = ((orig_bytes or 0) + orig_pkts * overhead) if orig_pkts else None
@@ -1682,33 +1770,38 @@ class ActivityGenerator:
                         _get_rng(), proxy_hostname, domain_tags
                     )
                     url = f"http://{proxy_hostname}{path}"
-                # Pick a random user from the scenario (if available)
-                _PROXY_UAS = [
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0",
-                    "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-                ]
-                user_agent = proxy_ua_override or _get_rng().choice(_PROXY_UAS)
-                cache_roll = _get_rng().random()
+                # OS-aware proxy User-Agent selection
+                if proxy_ua_override:
+                    user_agent = proxy_ua_override
+                elif source_system and _get_os_category(source_system.os) == "linux":
+                    user_agent = rng.choice(_PROXY_UAS_LINUX)
+                else:
+                    user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+                cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
                 elif cache_roll < 0.95:
                     cache_result = "MISS"
                 else:
                     cache_result = "DENIED"
+                # Proxy byte counts differ from wire bytes: header overhead,
+                # cache effects, and proxy error pages.
+                _cs = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+                if cache_result == "DENIED":
+                    _sc = rng.randint(500, 2000)  # proxy error page
+                elif cache_result == "HIT":
+                    _rb = max(1, resp_bytes or 0)
+                    _sc = rng.randint(max(1, int(_rb * 0.4)), max(2, int(_rb * 1.1)))
+                else:
+                    _sc = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
                     method=proxy_method,
                     url=url,
                     host=proxy_hostname,
                     status_code=200 if cache_result != "DENIED" else 403,
-                    sc_bytes=resp_bytes or 0,
-                    cs_bytes=orig_bytes or 0,
+                    sc_bytes=_sc,
+                    cs_bytes=_cs,
                     time_taken=int((duration or 0) * 1000),
                     user_agent=user_agent,
                     content_type=proxy_content_type,
@@ -1735,103 +1828,121 @@ class ActivityGenerator:
             # Suppressed hostname → no SNI (raw-IP C2, etc.)
             if server_name == "":
                 server_name = None
-            _TLS12_CIPHERS = [
-                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-            ]
-            _TLS13_CIPHERS = [
-                "TLS_AES_128_GCM_SHA256",
-                "TLS_AES_256_GCM_SHA384",
-                "TLS_CHACHA20_POLY1305_SHA256",
-            ]
             tls_version = rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
+            # Weighted cipher selection (bug #7)
+            if tls_version == "TLSv13":
+                cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+            else:
+                cipher = rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+            # ~2% handshake failure (bug #5)
+            ssl_established = rng.random() > _SSL_FAILURE_RATE
+            # Weighted SSL history patterns (bug #6)
+            if ssl_established:
+                ssl_hist = rng.choices(
+                    _SSL_HIST_SUCCESS_VALUES, weights=_SSL_HIST_SUCCESS_WEIGHTS, k=1
+                )[0]
+            else:
+                ssl_hist = rng.choices(
+                    _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
+                )[0]
             event.ssl = SslContext(
                 version=tls_version,
-                cipher=rng.choice(_TLS13_CIPHERS if tls_version == "TLSv13" else _TLS12_CIPHERS),
+                cipher=cipher if ssl_established else "",
                 server_name=server_name,
-                resumed=rng.random() < 0.6,
-                established=True,
-                ssl_history="CsiI" if rng.random() < 0.7 else "CsijI",
+                resumed=rng.random() < 0.45 if ssl_established else False,
+                established=ssl_established,
+                ssl_history=ssl_hist,
             )
+            # Failed handshake side-effects on connection state
+            if not ssl_established:
+                event.network.conn_state = rng.choice(["S1", "SH"])
+                event.network.history = "Sh" if event.network.conn_state == "SH" else "ShR"
+                event.network.resp_bytes = 0
+                event.network.orig_bytes = 0
+                if event.network.duration is not None:
+                    event.network.duration = rng.uniform(0.0, 0.5)
 
             # X.509 certificate for SSL connections (fan-out to x509.log)
-            import hashlib
+            # Only for established handshakes — failed ones have no cert exchange.
+            if ssl_established:
+                import hashlib
 
-            from evidenceforge.events.contexts import X509Context
+                from evidenceforge.events.contexts import X509Context
 
-            # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
-            cert_name = server_name or dst_ip
-            cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
-            # Issuer-aware certificate generation from YAML config
-            from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+                # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
+                cert_name = server_name or dst_ip
+                cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
+                # Issuer-aware certificate generation from YAML config
+                from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
 
-            issuer_cfg = pick_issuer(rng, server_name=cert_name)
-            key_type, key_length = pick_key_type(rng, issuer_cfg)
-            is_ecdsa = key_type == "ecdsa"
-            now_epoch = int(event.timestamp.timestamp())
-            # Support validity_days_min/max ranges; fall back to scalar validity_days
-            _vd_fallback = issuer_cfg.get("validity_days", 397)
-            _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
-            _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
-            validity_days = rng.randint(_vd_min, _vd_max)
-            not_before_max = issuer_cfg.get("not_before_max_days", 300)
-            not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
-            remaining_days = validity_days - not_before_days
-            # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
-            # real hostnames get the domain + wildcard SAN.
-            _is_ip = False
-            try:
-                import ipaddress as _ipa
+                issuer_cfg = pick_issuer(rng, server_name=cert_name)
+                key_type, key_length = pick_key_type(rng, issuer_cfg)
+                is_ecdsa = key_type == "ecdsa"
+                now_epoch = int(event.timestamp.timestamp())
+                # Support validity_days_min/max ranges; fall back to scalar validity_days
+                _vd_fallback = issuer_cfg.get("validity_days", 397)
+                _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
+                _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
+                validity_days = rng.randint(_vd_min, _vd_max)
+                not_before_max = issuer_cfg.get("not_before_max_days", 300)
+                not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
+                remaining_days = validity_days - not_before_days
+                # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
+                # real hostnames get the domain + wildcard SAN.
+                _is_ip = False
+                try:
+                    import ipaddress as _ipa
 
-                _ipa.ip_address(cert_name)
-                _is_ip = True
-            except ValueError:
-                pass
-            if _is_ip:
-                san_dns_list: list[str] = []
-            elif "." in cert_name:
-                san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
-            else:
-                san_dns_list = [cert_name]
-            event.x509 = X509Context(
-                fingerprint=cert_hash,
-                certificate_version=3,
-                certificate_serial=f"{rng.getrandbits(128):032X}",
-                certificate_subject=f"CN={cert_name}",
-                certificate_issuer=issuer_cfg["name"],
-                certificate_not_valid_before=now_epoch - not_before_days * 86400,
-                certificate_not_valid_after=now_epoch + remaining_days * 86400,
-                certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-                certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
-                certificate_key_type=key_type,
-                certificate_key_length=key_length,
-                certificate_exponent="65537" if not is_ecdsa else "",
-                san_dns=san_dns_list,
-                basic_constraints_ca=False,
-                host_cert=True,
-                client_cert=False,
-            )
-
-            # OCSP response (~30% of SSL connections)
-            if rng.random() < 0.30:
-                from evidenceforge.events.contexts import OcspContext
-                from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
-
-                event.ocsp = OcspContext(
-                    id=_gen_uid("F"),
-                    hash_algorithm="sha256",
-                    issuer_name_hash=hashlib.sha256(
-                        event.x509.certificate_issuer.encode()
-                    ).hexdigest()[:40],
-                    issuer_key_hash=hashlib.sha256(
-                        f"key_{event.x509.certificate_issuer}".encode()
-                    ).hexdigest()[:40],
-                    serial_number=event.x509.certificate_serial,
-                    cert_status="good",
-                    this_update=now_epoch - rng.randint(0, 86400),
-                    next_update=now_epoch + rng.randint(86400, 86400 * 7),
+                    _ipa.ip_address(cert_name)
+                    _is_ip = True
+                except ValueError:
+                    pass
+                if _is_ip:
+                    san_dns_list: list[str] = []
+                elif "." in cert_name:
+                    san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
+                else:
+                    san_dns_list = [cert_name]
+                event.x509 = X509Context(
+                    fingerprint=cert_hash,
+                    certificate_version=3,
+                    certificate_serial=f"{rng.getrandbits(128):032X}",
+                    certificate_subject=f"CN={cert_name}",
+                    certificate_issuer=issuer_cfg["name"],
+                    certificate_not_valid_before=now_epoch - not_before_days * 86400,
+                    certificate_not_valid_after=now_epoch + remaining_days * 86400,
+                    certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+                    certificate_sig_alg="ecdsa-with-SHA256"
+                    if is_ecdsa
+                    else "sha256WithRSAEncryption",
+                    certificate_key_type=key_type,
+                    certificate_key_length=key_length,
+                    certificate_exponent="65537" if not is_ecdsa else "",
+                    san_dns=san_dns_list,
+                    basic_constraints_ca=False,
+                    host_cert=True,
+                    client_cert=False,
                 )
+
+                # OCSP response (~30% of SSL connections)
+                if rng.random() < 0.30:
+                    from evidenceforge.events.contexts import OcspContext
+                    from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
+
+                    event.ocsp = OcspContext(
+                        id=_gen_uid("F"),
+                        hash_algorithm="sha256",
+                        issuer_name_hash=hashlib.sha256(
+                            event.x509.certificate_issuer.encode()
+                        ).hexdigest()[:40],
+                        issuer_key_hash=hashlib.sha256(
+                            f"key_{event.x509.certificate_issuer}".encode()
+                        ).hexdigest()[:40],
+                        serial_number=event.x509.certificate_serial,
+                        cert_status="good",
+                        this_update=now_epoch - rng.randint(0, 86400),
+                        next_update=now_epoch + rng.randint(86400, 86400 * 7),
+                    )
 
         elif (
             not local_only
@@ -1956,22 +2067,27 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import NtpContext
 
             ntp_rng = _get_rng()
-            # Populate NTP timestamps relative to event time
             ntp_epoch = time.timestamp()
-            ntp_jitter = ntp_rng.uniform(-0.01, 0.01)
+            # Stratum-aware timing via log-normal distribution
+            stratum = (_stable_seed(f"ntp_stratum_{dst_ip}") % 3) + 1
+            _ntp_mean_ms, _ntp_sigma = _NTP_STRATUM_TIMING.get(stratum, (10.0, 0.7))
+            _ntp_mu = math.log(_ntp_mean_ms) - (_ntp_sigma**2) / 2
+            rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
+            proc_sec = ntp_rng.lognormvariate(math.log(0.5) - 0.3**2 / 2, 0.3) / 1000.0
+            ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
             event.ntp = NtpContext(
                 version=ntp_rng.choice([3, 4]),
                 mode=3,  # client
-                stratum=(_stable_seed(f"ntp_stratum_{dst_ip}") % 3) + 1,  # Stable per server
+                stratum=stratum,
                 poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
                 precision=float(ntp_rng.randint(-25, -18)),
                 root_delay=ntp_rng.uniform(0.0, 0.1),
                 root_disp=ntp_rng.uniform(0.0, 0.05),
                 ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
-                org_ts=round(ntp_epoch + ntp_jitter - 0.001, 6),
-                rec_ts=round(ntp_epoch + ntp_jitter, 6),
-                xmt_ts=round(ntp_epoch + ntp_jitter + 0.0001, 6),
+                org_ts=round(ntp_epoch + ntp_jitter, 6),
+                rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),
+                xmt_ts=round(ntp_epoch + ntp_jitter + rtt_sec + proc_sec, 6),
             )
 
         # Zeek weird.log: probabilistic network anomalies
