@@ -1356,7 +1356,9 @@ class ActivityGenerator:
 
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
-        if emit_dns and proto == "tcp" and dst_port not in (53,):
+        # Only internal hosts generate DNS lookups — external source IPs (e.g.,
+        # attacker IPs in storylines) don't query the victim's internal resolver.
+        if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(src_ip):
             self._expand_and_emit(
                 "connection",
                 time,
@@ -1623,8 +1625,14 @@ class ActivityGenerator:
         if dns is not None:
             event.dns = dns
 
-        # Proxy context: attach if source system routes through a proxy for HTTP/HTTPS
-        if not local_only and service in ("ssl", "http") and dst_port in (80, 443):
+        # Proxy context: attach only for outbound internet traffic (not internal east-west).
+        # Forward proxies only see egress to external destinations.
+        if (
+            not local_only
+            and service in ("ssl", "http")
+            and dst_port in (80, 443)
+            and not _is_private_ip(dst_ip)
+        ):
             proxy_routes = getattr(self, "_proxy_routes", {})
             chain = proxy_routes.get(src_ip)
             if chain:
@@ -2076,8 +2084,10 @@ class ActivityGenerator:
         uid = self.state_manager.get_zeek_uid(conn_id)
         self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
-        # Emit DNS for SSH target
-        self._emit_dns_lookup(source_ip, target_system.ip, time)
+        # Emit DNS for SSH target — only when source is internal (external
+        # attacker IPs don't query the victim's internal resolver).
+        if _is_private_ip(source_ip):
+            self._emit_dns_lookup(source_ip, target_system.ip, time)
 
         # Build compound SSH session event
         event = SecurityEvent(
