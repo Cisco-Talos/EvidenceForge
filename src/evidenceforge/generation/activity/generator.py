@@ -4920,17 +4920,26 @@ class ActivityGenerator:
             return self.sid_registry[username]
         if username in self._WELL_KNOWN_SIDS:
             return self._WELL_KNOWN_SIDS[username]
-        # Generate deterministic synthetic SID for unknown principals
+        # Generate deterministic synthetic SID for unknown principals.
+        # Allocate from max existing RID + offset (not hardcoded 7000 range)
+        # to avoid unrealistic gaps in the RID sequence.
         if not hasattr(self, "_domain_sid_prefix"):
             self._domain_sid_prefix: str | None = None
+            self._max_rid: int = 1100
             for sid in self.sid_registry.values():
                 if sid.startswith("S-1-5-21-") and sid.count("-") == 7:
                     self._domain_sid_prefix = "-".join(sid.split("-")[:7])
-                    break
+                    try:
+                        rid_val = int(sid.rsplit("-", 1)[1])
+                        if rid_val > self._max_rid:
+                            self._max_rid = rid_val
+                    except ValueError:
+                        pass
         if self._domain_sid_prefix:
             from evidenceforge.utils.rng import _stable_seed
 
-            rid = 7000 + (_stable_seed(f"unknown_sid_{username}") % 3000)
+            rid = self._max_rid + 1 + (_stable_seed(f"unknown_sid_{username}") % 50)
+            self._max_rid = max(self._max_rid, rid)
             synthetic = f"{self._domain_sid_prefix}-{rid}"
             self.sid_registry[username] = synthetic  # Cache for consistency
             return synthetic

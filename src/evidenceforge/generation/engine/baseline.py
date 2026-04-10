@@ -33,6 +33,7 @@ Contains the BaselineMixin with methods for:
 
 import logging
 import math
+import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -487,6 +488,7 @@ class BaselineMixin:
 
         self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
         self._generate_stale_account_noise(current_hour)
+        self._generate_baseline_failed_logons(current_hour)
         self._generate_lateral_movement_noise(current_hour)
         self._generate_suspicious_noise(current_hour)
         self._generate_firewall_deny_baseline(current_hour)
@@ -671,6 +673,115 @@ class BaselineMixin:
                     time=event_time,
                     logon_type=5,  # Service logon
                     source_ip=svc_host.ip,
+                )
+
+    def _generate_baseline_failed_logons(self, current_hour: datetime) -> None:
+        """Generate realistic baseline failed logon patterns.
+
+        Three patterns:
+        1. Password typo: 1-2 failed logons immediately before a successful one
+        2. Scheduled task with stale creds: periodic failures on specific hosts
+        3. Management sweep: burst of failures across multiple servers
+        """
+        rng = _get_rng()
+        systems = self.scenario.environment.systems
+        servers = [s for s in systems if s.type in ("server", "domain_controller")]
+        if not servers:
+            servers = systems
+        enabled_users = [u for u in self.scenario.environment.users if u.enabled]
+        if not enabled_users:
+            return
+
+        # Pattern 1: Password typo before successful logon (~3 per hour in
+        # a medium environment). Pick a random user and system.
+        n_typos = rng.randint(1, max(1, len(enabled_users) // 3))
+        for _ in range(n_typos):
+            if rng.random() > 0.15:  # ~15% chance per slot
+                continue
+            user = rng.choice(enabled_users)
+            system = next(
+                (s for s in systems if s.assigned_user == user.username),
+                rng.choice(systems),
+            )
+            base_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            self.state_manager.set_current_time(base_time)
+            # 1-2 failures then success
+            n_fails = rng.randint(1, 2)
+            for i in range(n_fails):
+                fail_time = base_time + timedelta(seconds=i * rng.randint(2, 8))
+                self.activity_generator.generate_failed_logon(
+                    user=user,
+                    system=system,
+                    time=fail_time,
+                    logon_type=2,  # interactive
+                )
+
+        # Pattern 2: Scheduled task with stale creds (deterministic per scenario).
+        # Pick 1-2 hosts and a plausible service account name.
+        _sched_seed = _stable_seed(self.scenario.name + "_sched_fail")
+        _sched_rng = random.Random(_sched_seed)
+        _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
+        _sched_acct = _sched_rng.choice(_svc_names)
+        # Ensure no collision with actual scenario accounts
+        _existing = {u.username for u in self.scenario.environment.users} | set(
+            self.scenario.environment.service_accounts
+        )
+        while _sched_acct in _existing:
+            _sched_acct = _sched_rng.choice(_svc_names) + str(_sched_rng.randint(1, 9))
+        _sched_user = User(
+            username=_sched_acct,
+            full_name=_sched_acct,
+            email=f"{_sched_acct}@system.local",
+            enabled=False,
+        )
+        n_sched_hosts = min(2, len(servers))
+        _sched_hosts = _sched_rng.sample(servers, n_sched_hosts)
+        # Fires every 1-2 hours (check if this hour is a firing hour)
+        _sched_interval = _sched_rng.choice([1, 2])
+        hour_idx = int((current_hour - self.start_time).total_seconds() / 3600)
+        if hour_idx % _sched_interval == 0:
+            for host in _sched_hosts:
+                sched_time = current_hour + timedelta(
+                    seconds=_sched_rng.randint(0, 300)  # first 5 minutes of hour
+                )
+                self.state_manager.set_current_time(sched_time)
+                self.activity_generator.generate_failed_logon(
+                    user=_sched_user,
+                    system=host,
+                    time=sched_time,
+                    logon_type=4,  # batch (scheduled task)
+                    source_ip=host.ip,
+                )
+
+        # Pattern 3: Management software sweep (1-2 per business day).
+        # Use scenario-local time for business-hour gating.
+        _local = current_hour
+        if hasattr(self, "_scenario_tz") and self._scenario_tz and current_hour.tzinfo is not None:
+            _local = current_hour.astimezone(self._scenario_tz)
+        is_business = 0 <= _local.weekday() <= 4 and 8 <= _local.hour <= 17
+        # Fire at ~10am and ~2pm (deterministic per scenario)
+        if is_business and _local.hour in (10, 14) and rng.random() < 0.5:
+            _mgmt_acct = "svc_mgmt"
+            while _mgmt_acct in _existing:
+                _mgmt_acct = f"svc_mgmt{rng.randint(1, 9)}"
+            _mgmt_user = User(
+                username=_mgmt_acct,
+                full_name=_mgmt_acct,
+                email=f"{_mgmt_acct}@system.local",
+                enabled=False,
+            )
+            n_targets = min(rng.randint(5, 15), len(servers))
+            targets = rng.sample(servers, n_targets)
+            sweep_start = current_hour + timedelta(seconds=rng.randint(0, 1800))
+            for i, target in enumerate(targets):
+                sweep_time = sweep_start + timedelta(seconds=i * rng.uniform(1.0, 3.0))
+                self.state_manager.set_current_time(sweep_time)
+                self.activity_generator.generate_failed_logon(
+                    user=_mgmt_user,
+                    system=target,
+                    time=sweep_time,
+                    logon_type=3,  # network
+                    source_ip=rng.choice(servers).ip,
                 )
 
     def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:

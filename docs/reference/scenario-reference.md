@@ -243,6 +243,16 @@ Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts 
 
 Sessions marked as `storyline_protected` (by storyline events that depend on them) are immune to baseline logoff, even if logoff was already planned for the same hour.
 
+### Baseline Failed Logon Noise
+
+The engine automatically generates realistic failed logon patterns without scenario configuration:
+
+- **Password typos** (~5% of interactive logons): 1-2 failed attempts (4625) immediately before a successful logon (4624) for the same user. Simulates mistyped complex passwords.
+- **Stale scheduled tasks**: Periodic failed batch logons (type 4) from plausible service accounts on deterministic hosts. Fires every 1-2 hours, representing forgotten tasks with expired credentials.
+- **Management software sweeps**: 1-2 times per business day, a management tool tries a disabled credential across 5-15 servers in quick succession. All fail with "account disabled."
+
+These patterns augment the explicit `stale_accounts` feature, which generates additional failures from accounts you define. Together they produce a realistic ratio of failed-to-successful authentication events.
+
 ## Personas
 
 Personas define user behavior patterns for activity generation. EvidenceForge includes 15 pre-built personas (developer, analyst, sysadmin, executive, etc.) that are resolved automatically by name — reference them in user definitions without needing to define them inline. Define personas inline only if you need to customize behavior beyond what the pre-built library provides; inline definitions override pre-built ones with the same name.
