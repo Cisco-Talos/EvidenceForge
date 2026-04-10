@@ -731,8 +731,15 @@ class WorldPlanner:
         time: datetime,
         service: str,
         rng: random.Random,
+        effective_persona: str | None = None,
     ) -> int:
-        """Resolve or create a user process that can own a network connection."""
+        """Resolve or create a user process that can own a network connection.
+
+        Args:
+            effective_persona: Override persona for catalog filtering. When set
+                (e.g. ``"_server_admin"``), restricts executables to those
+                cataloged for this persona instead of the user's normal one.
+        """
         compatible_exes = get_service_to_exes().get(service, [])
         if not compatible_exes:
             return -1
@@ -758,9 +765,10 @@ class WorldPlanner:
         from evidenceforge.generation.activity.helpers import _parameterize_command
 
         os_cat = self.world_model.hosts[system.hostname].os_category
-        persona = (user.persona or "default").lower()
+        persona = (effective_persona or user.persona or "default").lower()
         # Filter to executables that exist in the catalog for this OS AND
-        # are allowed for this user's persona (prevents dev tools on HR)
+        # are allowed for this user's persona (prevents dev tools on HR,
+        # browsers/SaaS on servers via _server_admin)
         os_exes = [
             e
             for e in compatible_exes

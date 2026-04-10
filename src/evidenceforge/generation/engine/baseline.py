@@ -2326,6 +2326,13 @@ class BaselineMixin:
                 ts = current_hour + timedelta(seconds=offset)
 
                 persona_pid = -1
+                # Thread effective persona so _server_admin sessions don't
+                # get browser/SaaS processes attributed on servers.
+                eff_persona = (
+                    "_server_admin"
+                    if (not is_own_workstation and session.logon_type in (10, 11))
+                    else None
+                )
                 if user_obj and conn.get("service"):
                     persona_pid = self.world_planner.ensure_connection_process(
                         user=user_obj,
@@ -2334,6 +2341,7 @@ class BaselineMixin:
                         time=ts,
                         service=conn["service"],
                         rng=rng,
+                        effective_persona=eff_persona,
                     )
 
                 self.state_manager.set_current_time(ts)

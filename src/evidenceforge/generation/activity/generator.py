@@ -1345,17 +1345,14 @@ class ActivityGenerator:
         # All downstream uses (causal DNS expansion, SSL SNI, proxy hostname)
         # share this single resolved value instead of doing independent lookups.
         #
-        # hostname semantics:
+        # hostname semantics (preserved through all downstream builders):
         #   None  → auto-resolve from REVERSE_DNS or generate random
-        #   ""    → suppress resolution (external inbound, raw-IP C2)
+        #   ""    → suppress resolution (raw-IP C2, exposed hosts w/o public_hostnames)
         #   "x.y" → use this hostname explicitly
         if hostname is None:
             hostname = REVERSE_DNS.get(dst_ip)
-        if not hostname and emit_dns and proto == "tcp" and dst_port not in (53,):
+        if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
             hostname = _generate_random_hostname(_get_rng(), dst_ip)
-        # Normalize suppressed hostname to None for downstream
-        if hostname == "":
-            hostname = None
 
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
@@ -1641,12 +1638,15 @@ class ActivityGenerator:
                     proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
                 # Hostname was resolved once at the top of generate_connection().
                 proxy_hostname = hostname
-                if not proxy_hostname and dns is not None and dns.query:
+                if proxy_hostname is None and dns is not None and dns.query:
                     proxy_hostname = dns.query
-                if not proxy_hostname:
+                if proxy_hostname is None:
                     proxy_hostname = REVERSE_DNS.get(dst_ip)
-                if not proxy_hostname:
+                if proxy_hostname is None:
                     proxy_hostname = _generate_random_hostname(_get_rng(), dst_ip)
+                # Suppressed hostname → use raw IP for proxy logging
+                if proxy_hostname == "":
+                    proxy_hostname = dst_ip
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
@@ -1712,12 +1712,15 @@ class ActivityGenerator:
             # Fall back to DnsContext query or IP-based generation only for
             # connections that skipped early resolution (no emit_dns, internal).
             server_name = hostname
-            if not server_name and dns is not None and dns.query:
+            if server_name is None and dns is not None and dns.query:
                 server_name = dns.query
-            if not server_name:
+            if server_name is None:
                 server_name = REVERSE_DNS.get(dst_ip)
-            if not server_name:
+            if server_name is None:
                 server_name = _generate_random_hostname(rng, dst_ip)
+            # Suppressed hostname → no SNI (raw-IP C2, etc.)
+            if server_name == "":
+                server_name = None
             _TLS12_CIPHERS = [
                 "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
                 "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
@@ -1743,11 +1746,13 @@ class ActivityGenerator:
 
             from evidenceforge.events.contexts import X509Context
 
-            cert_hash = hashlib.sha256(f"cert_{server_name}".encode()).hexdigest()
+            # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
+            cert_name = server_name or dst_ip
+            cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
             # Issuer-aware certificate generation from YAML config
             from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
 
-            issuer_cfg = pick_issuer(rng, server_name=server_name)
+            issuer_cfg = pick_issuer(rng, server_name=cert_name)
             key_type, key_length = pick_key_type(rng, issuer_cfg)
             is_ecdsa = key_type == "ecdsa"
             now_epoch = int(event.timestamp.timestamp())
@@ -1763,7 +1768,7 @@ class ActivityGenerator:
                 fingerprint=cert_hash,
                 certificate_version=3,
                 certificate_serial=f"{rng.getrandbits(128):032X}",
-                certificate_subject=f"CN={server_name}",
+                certificate_subject=f"CN={cert_name}",
                 certificate_issuer=issuer_cfg["name"],
                 certificate_not_valid_before=now_epoch - not_before_days * 86400,
                 certificate_not_valid_after=now_epoch + remaining_days * 86400,
@@ -1772,9 +1777,9 @@ class ActivityGenerator:
                 certificate_key_type=key_type,
                 certificate_key_length=key_length,
                 certificate_exponent="65537" if not is_ecdsa else "",
-                san_dns=[server_name, f"*.{'.'.join(server_name.split('.')[1:])}"]
-                if "." in server_name
-                else [server_name],
+                san_dns=[cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
+                if "." in cert_name
+                else [cert_name],
                 basic_constraints_ca=False,
                 host_cert=True,
                 client_cert=False,
