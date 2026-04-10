@@ -294,12 +294,24 @@ class WorldModel:
     def _collect_db_servers(self) -> list[DatabaseEndpoint]:
         endpoints: list[DatabaseEndpoint] = []
         for system in self.systems_by_role.get("database", []):
-            service_names = [service.lower() for service in self.hosts[system.hostname].services]
-            db_service = "mssql"
+            host = self.hosts[system.hostname]
+            service_names = [service.lower() for service in host.services]
+            db_service: str | None = None
             if any("postgres" in service for service in service_names):
                 db_service = "postgresql"
             elif any("mysql" in service or "maria" in service for service in service_names):
                 db_service = "mysql"
+            elif any("mssql" in service or "sqlserver" in service for service in service_names):
+                db_service = "mssql"
+            else:
+                # No explicit DB service — infer from OS to avoid assigning
+                # MSSQL to Linux hosts (or PostgreSQL to Windows).
+                if host.os_category == "windows":
+                    db_service = "mssql"
+                elif host.os_category == "linux":
+                    db_service = "postgresql"
+                else:
+                    db_service = "mssql"  # safe fallback
             endpoints.append(
                 DatabaseEndpoint(
                     system=system,

@@ -1406,12 +1406,15 @@ class BaselineMixin:
                 """Pick a random IP from the org's public address space."""
                 if not _cidrs:
                     return rng.choice(internal_ips) if internal_ips else "10.0.10.1"
-                # Weight by CIDR size
+                # Weight by CIDR size (minimum 1 to handle /31 and /32)
                 cidr = rng.choices(
                     _cidrs,
-                    weights=[net.num_addresses for net in _cidrs],
+                    weights=[max(1, net.num_addresses) for net in _cidrs],
                     k=1,
                 )[0]
+                # Handle /32 (single host) and /31 (point-to-point)
+                if cidr.num_addresses <= 2:
+                    return str(cidr.network_address)
                 offset = rng.randint(1, cidr.num_addresses - 2)
                 return str(cidr.network_address + offset)
 
