@@ -757,6 +757,7 @@ class WorldPlanner:
                 return pid
 
         from evidenceforge.generation.activity.application_catalog import (
+            get_app_categories,
             has_catalog_entry,
             is_persona_allowed,
             load_catalog,
@@ -765,14 +766,21 @@ class WorldPlanner:
         from evidenceforge.generation.activity.helpers import _parameterize_command
 
         os_cat = self.world_model.hosts[system.hostname].os_category
-        persona = (effective_persona or user.persona or "default").lower()
-        # Filter to executables that exist in the catalog for this OS AND
-        # are allowed for this user's persona (prevents dev tools on HR,
-        # browsers/SaaS on servers via _server_admin)
+        # _server_admin is a policy overlay: use the user's real persona for
+        # catalog eligibility, then exclude browser/office categories that
+        # are inappropriate on servers (no Chrome/Outlook on DC via RDP).
+        is_server_admin = effective_persona == "_server_admin"
+        persona = (user.persona or "default").lower()
+        _SERVER_EXCLUDED_CATEGORIES = {"browser", "office"}
         os_exes = [
             e
             for e in compatible_exes
-            if has_catalog_entry(e, os_cat) and is_persona_allowed(e, os_cat, persona)
+            if has_catalog_entry(e, os_cat)
+            and is_persona_allowed(e, os_cat, persona)
+            and not (
+                is_server_admin
+                and _SERVER_EXCLUDED_CATEGORIES.intersection(get_app_categories(e, os_cat))
+            )
         ]
         if not os_exes:
             # No persona-approved executable for this service — don't

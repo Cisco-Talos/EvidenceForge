@@ -1837,14 +1837,19 @@ class ActivityGenerator:
                 ua = rng.choice(_USER_AGENTS_LINUX)
             else:
                 ua = rng.choice(_USER_AGENTS_WINDOWS)
-            # Use the already-resolved hostname for HTTP Host header and URI templates
-            host = hostname or REVERSE_DNS.get(dst_ip, dst_ip)
+            # Use the already-resolved hostname for HTTP Host header and URI templates.
+            # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
+            host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
+            if host == "":
+                host = dst_ip
             if dst_port not in (80, 443):
                 host = f"{host}:{dst_port}"
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
             from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-            web_host = hostname or REVERSE_DNS.get(dst_ip, dst_ip)
+            web_host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
+            if web_host == "":
+                web_host = dst_ip
             web_domain_tags = get_domain_tags(web_host)
             uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
                 rng, web_host, web_domain_tags
