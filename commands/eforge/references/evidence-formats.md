@@ -1,7 +1,3 @@
----
-description: "Evidence Formats Reference"
----
-
 # Evidence Formats Reference
 
 This document lists every evidence type EvidenceForge can generate, where to find it in the output, and any known limitations.
@@ -10,8 +6,8 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 
 ```
 output/
-  GROUND_TRUTH.md                          # Attack narrative, timeline, IOCs
-  ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
+  GROUND_TRUTH.md                          # Attack narrative, timeline, IOCs, red herrings
+  ENVIRONMENT.md                           # Student-facing environment description
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
@@ -26,8 +22,6 @@ output/
   ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
   syslog.log                               # Linux syslog (BSD format)
   snort_alert.log                          # Snort/Suricata IDS alerts
-  <fw-hostname>/                           # Per-firewall directories
-    cisco_asa.log                          # Cisco ASA firewall syslog
   web_access.log                           # Apache/Nginx access log
   <proxy-hostname.domain>/                 # Per-proxy-host directories
     proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
@@ -47,7 +41,7 @@ output/
 | 1102 | Security Log Cleared | Defense Evasion | Different provider (Microsoft-Windows-Eventlog). Uses `<UserData>` instead of `<EventData>`. Level=4, Keywords=0x4020. |
 | 4624 | Successful Logon | Authentication | Version 2 format. Includes ImpersonationLevel, VirtualAccount, ElevatedToken, TargetLinkedLogonId. LogonTypes: 2 (interactive), 3 (network), 5 (service), 7 (unlock), 10 (RDP), 11 (cached). IPv4 rendered as `::ffff:x.x.x.x`. |
 | 4625 | Failed Logon | Authentication | Version 0. Keywords=0x8010 (Audit Failure). Includes Status/SubStatus failure codes. |
-| 4634 | Logoff | Authentication | Paired with 4624 via matching TargetLogonId. Generated for interactive sessions (type 2/10) at work-day end and for type 3 network logons (including machine account logons on DCs) after short delays. |
+| 4634 | Logoff | Authentication | Paired with 4624 via matching TargetLogonId. |
 | 4648 | Explicit Credentials | Lateral Movement | Fires when RunAs, PsExec, WMIC, or scheduled tasks use alternate credentials. Emitted on the source system. |
 | 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside 4624 for elevated accounts. Admin accounts get full privilege set; regular users get limited set. |
 | 4688 | Process Created | Execution | Version 2. Includes CommandLine, ParentProcessName, MandatoryLabel. TokenElevationType indicates UAC status. |
@@ -77,10 +71,9 @@ output/
 
 **Known Limitations:**
 - EventRecordIDs use probabilistic gaps (15% chance +2-8, 3% chance +20-200) rather than correlating with unlogged events
-- Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses the System process (PID 4, now properly registered)
+- Execution ProcessID for auth events uses the lsass.exe PID; for process/WFP events uses System (4)
+- 4648 only fires for storyline lateral movement and explicit-credential tool processes, not for all service logons
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
-- SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts
-- 4648 (explicit credentials) fires in baseline for scheduled task execution with randomized counts (2-5/hour) plus storyline lateral movement
 
 ---
 
@@ -93,10 +86,10 @@ output/
 
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
-| 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. ParentCommandLine is populated from the parent process's actual command line in StateManager (e.g., `powershell.exe`, `cmd.exe /k`, `Code.exe --folder-uri ...`). ParentImage reflects realistic parent-child relationships driven by `spawn_rules.yaml` — CLI tools parent from shells, GUI apps from explorer.exe, system services from services.exe/svchost.exe. |
-| 5 | ProcessTerminate | Execution | Version 3. Emitted alongside Security 4689 and eCAR PROCESS/TERMINATE for the same process exit. Storyline processes terminate with realistic delays based on command type (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination). Fields: ProcessGuid, ProcessId, Image, User. |
-| 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. Baseline generates benign noise (1-3/hr) from Defender, CSRSS, svchost. Correlated with eCAR THREAD/REMOTE_CREATE. |
-| 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz accessing lsass.exe). Includes GrantedAccess mask, CallTrace. Baseline generates benign noise (3-8/hr) from Defender, CSRSS, Services.exe. Correlated with eCAR PROCESS/OPEN. |
+| 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. |
+| 5 | ProcessTerminate | Execution | Version 3. Emitted for both baseline stale-process cleanup and storyline process completions. Storyline processes terminate with realistic delays based on command type (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination). ProcessGuid matches the Event 1 that created the process. |
+| 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. |
+| 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz -> lsass). Source and target process GUIDs, GrantedAccess mask. |
 
 **Known Limitations:**
 - ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
@@ -120,9 +113,9 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for port 443 connections. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
-| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Sensor-routed via NetworkContext. |
+| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info. Whole-second timestamps. |
+| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity, key info. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
 | ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
@@ -151,14 +144,13 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
-| PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) — includes granted_access mask in properties. |
-| THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, tgt_pid, tgt_pid_uuid, start_address, and stack addresses matching OpTC eCAR format. |
+| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
 | FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes. |
 | USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. |
-| SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
+| SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account. |
 
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
@@ -200,10 +192,11 @@ Authentication and system logs from Linux hosts. All syslog entries are rendered
 **File:** `<hostname.domain>/bash_history/<username>.bash_history`
 **Format:** Timestamped bash history (`#<epoch>\n<command>`)
 
-Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving.
+Per-user command history for Linux systems.
 
 **Known Limitations:**
-- No command typos, tab-completion artifacts, or repeated commands
+- Commands generated from persona activity templates, not interactive session simulation
+- May be sparse for long SSH sessions
 - No command output or error messages
 
 ---
@@ -217,49 +210,6 @@ Network intrusion detection alerts. Baseline generates false-positive alerts (e.
 
 **Known Limitations:**
 - Limited SID/classification variety
-
----
-
-## Cisco ASA Firewall Syslog
-
-**File:** `<fw-hostname>/cisco_asa.log`
-**Format:** Cisco ASA syslog (RFC 3164 BSD syslog with ASA message IDs)
-
-Cisco ASA firewall logs for permitted and denied connections. Produced by firewall-type network sensors with `cisco_asa` in their `log_formats`. Each permitted connection generates a Built + Teardown pair; denied connections generate a single Deny record.
-
-| Message ID | Severity | Protocol | Description |
-|------------|----------|----------|-------------|
-| 302013 | 6 (info) | TCP | Built inbound/outbound TCP connection |
-| 302014 | 6 (info) | TCP | Teardown TCP connection (with duration, bytes, reason) |
-| 302015 | 6 (info) | UDP | Built inbound/outbound UDP connection |
-| 302016 | 6 (info) | UDP | Teardown UDP connection |
-| 302020 | 6 (info) | ICMP | Built inbound/outbound ICMP connection |
-| 302021 | 6 (info) | ICMP | Teardown ICMP connection |
-| 106023 | 4 (warn) | any | Deny by access-group |
-| 305011 | 6 (info) | any | Built dynamic/static NAT translation |
-| 305012 | 6 (info) | any | Teardown dynamic/static NAT translation |
-| 733100 | 4 (warn) | — | Threat detection scanning alert (automatic, rate-based) |
-
-**Example records:**
-```
-<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to outside:203.0.113.50/443 (203.0.113.50/443)
-<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection 100042 for inside:10.0.10.50/54321 to outside:203.0.113.50/443 duration 0:01:23 bytes 5120 TCP FINs
-<164>Jun 15 14:23:10 fw01 %ASA-4-106023: Deny tcp src outside:198.51.100.1/44231 dst inside:10.0.10.50/445 by access-group "outside_access_in" [0x0, 0x0]
-<164>Jun 15 14:23:15 fw01 %ASA-4-733100: [Scanning] drop rate-1 exceeded. Current burst rate is 87 per second, max configured rate is 10; Current average rate is 45 per second, max configured rate is 5; Cumulative total count is 2340
-```
-
-**Threat detection (733100):** The ASA emitter automatically tracks per-source-IP deny rates. When both burst rate (default 10 drops/sec over 20s) and average rate (default 5 drops/sec over 60s) are exceeded, a 733100 alert fires. Can re-fire after a 20-second cooldown if rates remain elevated. Configurable via `threat_detection_rate` on the firewall sensor (set to 0 to disable).
-
-**NAT translation (305011/305012):** When `nat_rules` are configured on the firewall sensor, permitted connections that cross the NAT boundary produce 305011 (Built) and 305012 (Teardown) translation records alongside the normal 302013/302014 connection records. Built messages show post-NAT mapped addresses in parentheses. Outside Zeek sensors see post-NAT IPs; inside Zeek sensors see real IPs.
-
-**Baseline deny generation:** When `deny_ratio > 0` on the firewall sensor, the baseline generates denied connection attempts proportional to allowed traffic. Patterns include external scanning (60%), cross-segment blocked (20%), outbound blocked (10%), and ICMP noise (10%).
-
-**Storyline event types:** `port_scan` generates bulk 106023 denies for reconnaissance/scanning. `blocked_c2` generates periodic 106023 denies for blocked malware beaconing. Both produce correlated Zeek conn.log entries on sensors that can see the source-side traffic. Port scans with sufficient rate automatically trigger 733100 threat detection alerts.
-
-**Source-only visibility:** Denied connections are only visible to sensors on the source side of the firewall. Sensors on the destination side do not see blocked traffic.
-
-**Known Limitations:**
-- Simplified message format — omits IDFW user, internal port numbers, rx_ring metadata
 
 ---
 
