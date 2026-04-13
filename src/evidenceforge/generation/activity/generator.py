@@ -1858,13 +1858,12 @@ class ActivityGenerator:
                     proxy_referrer = event.http.referrer
                 elif dst_port == 443:
                     # Legacy single-connection HTTPS path
-                    proxy_method = "GET"
-                    url = f"https://{proxy_hostname}/"
                     domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
-                    _, proxy_content_type, _, proxy_ua_override = pick_proxy_uri(
+                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
+                    url = f"https://{proxy_hostname}{path}"
                     proxy_referrer = ""
                 else:
                     domain_tags = get_domain_tags(proxy_hostname)
