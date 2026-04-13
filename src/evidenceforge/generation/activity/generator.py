@@ -875,25 +875,64 @@ class ActivityGenerator:
                 os_cat = _get_os_category(system.os)
                 if os_cat == "windows":
                     sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-                    # Find a valid parent: userinit, winlogon, or any seeded system PID
-                    parent_pid = None
-                    for candidate in ("userinit", "winlogon", "explorer", "services"):
-                        pid = sys_pids.get(candidate)
-                        if pid and self.state_manager.get_process(system.hostname, pid):
-                            parent_pid = pid
-                            break
-                    if parent_pid is not None:
-                        explorer_pid = self.state_manager.create_process(
-                            system.hostname,
-                            parent_pid,
-                            r"C:\Windows\explorer.exe",
-                            "explorer.exe",
-                            user.username,
-                            "Medium",
-                            logon_id=logon_id,
-                        )
-                        session.explorer_pid = explorer_pid
-                        session.process_tree_root = explorer_pid
+                    if logon_type == 10:
+                        # RDP: per-session winlogon → userinit → explorer chain
+                        # Windows creates a new session subsystem for each RDP logon
+                        smss_pid = sys_pids.get("smss")
+                        parent_for_chain = smss_pid or sys_pids.get("wininit")
+                        if parent_for_chain and self.state_manager.get_process(
+                            system.hostname, parent_for_chain
+                        ):
+                            winlogon_pid = self.state_manager.create_process(
+                                system.hostname,
+                                parent_for_chain,
+                                r"C:\Windows\System32\winlogon.exe",
+                                "winlogon.exe",
+                                "SYSTEM",
+                                "System",
+                                logon_id=logon_id,
+                            )
+                            session.session_winlogon_pid = winlogon_pid
+                            userinit_pid = self.state_manager.create_process(
+                                system.hostname,
+                                winlogon_pid,
+                                r"C:\Windows\System32\userinit.exe",
+                                "userinit.exe",
+                                user.username,
+                                "Medium",
+                                logon_id=logon_id,
+                            )
+                            explorer_pid = self.state_manager.create_process(
+                                system.hostname,
+                                userinit_pid,
+                                r"C:\Windows\explorer.exe",
+                                "explorer.exe",
+                                user.username,
+                                "Medium",
+                                logon_id=logon_id,
+                            )
+                            session.explorer_pid = explorer_pid
+                            session.process_tree_root = winlogon_pid
+                    else:
+                        # Interactive/cached: use system-wide userinit/winlogon
+                        parent_pid = None
+                        for candidate in ("userinit", "winlogon", "explorer", "services"):
+                            pid = sys_pids.get(candidate)
+                            if pid and self.state_manager.get_process(system.hostname, pid):
+                                parent_pid = pid
+                                break
+                        if parent_pid is not None:
+                            explorer_pid = self.state_manager.create_process(
+                                system.hostname,
+                                parent_pid,
+                                r"C:\Windows\explorer.exe",
+                                "explorer.exe",
+                                user.username,
+                                "Medium",
+                                logon_id=logon_id,
+                            )
+                            session.explorer_pid = explorer_pid
+                            session.process_tree_root = explorer_pid
                 session.last_activity_time = time
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
@@ -1144,10 +1183,17 @@ class ActivityGenerator:
             logon_id: LogonID from the logon event
             logon_type: Logon type for the session being ended
         """
-        # Terminate session-specific explorer.exe before ending session
+        # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
-        if session and session.explorer_pid is not None:
-            self.state_manager.end_process(session.system, session.explorer_pid)
+        if session:
+            if session.explorer_pid is not None:
+                self.state_manager.end_process(session.system, session.explorer_pid)
+            # Clean up per-RDP-session winlogon chain
+            if session.session_winlogon_pid is not None:
+                self.state_manager.end_process(session.system, session.session_winlogon_pid)
+            # Clean up per-SSH-session bash
+            if session.session_shell_pid is not None:
+                self.state_manager.end_process(session.system, session.session_shell_pid)
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
@@ -1806,13 +1852,15 @@ class ActivityGenerator:
                     )
                     url = proxy_host_port
                     domain_tags = get_domain_tags(proxy_hostname)
+                    _src_os = _get_os_category(source_system.os) if source_system else None
                     _, proxy_content_type, _, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags
+                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
                 else:
                     domain_tags = get_domain_tags(proxy_hostname)
+                    _src_os = _get_os_category(source_system.os) if source_system else None
                     path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags
+                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
                     url = f"http://{proxy_hostname}{path}"
                 # OS-aware proxy User-Agent selection
@@ -2035,8 +2083,9 @@ class ActivityGenerator:
             if web_host == "":
                 web_host = dst_ip
             web_domain_tags = get_domain_tags(web_host)
+            _src_os_http = _get_os_category(source_system.os) if source_system else None
             uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
-                rng, web_host, web_domain_tags
+                rng, web_host, web_domain_tags, source_os=_src_os_http
             )
             if http_ua_override:
                 ua = http_ua_override
@@ -3452,7 +3501,11 @@ class ActivityGenerator:
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
-                ticket_options="0x40810010",
+                ticket_options=rng.choices(
+                    ["0x40810010", "0x40810000", "0x40000010", "0x50800000", "0x10"],
+                    weights=[60, 20, 10, 5, 5],
+                    k=1,
+                )[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 pre_auth_type=15,
                 source_ip=f"::ffff:{source_ip}",
@@ -3486,7 +3539,7 @@ class ActivityGenerator:
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
-                ticket_options="0x2",
+                ticket_options=rng.choices(["0x2", "0x60810010"], weights=[80, 20], k=1)[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
@@ -3521,7 +3574,11 @@ class ActivityGenerator:
                 service_sid=self._get_sid(
                     f"{service_name.split('/')[1]}$" if "/" in service_name else service_name
                 ),
-                ticket_options="0x40810000",
+                ticket_options=rng.choices(
+                    ["0x40810000", "0x40810010", "0x40000000", "0x10"],
+                    weights=[50, 25, 15, 10],
+                    k=1,
+                )[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
@@ -4637,6 +4694,14 @@ class ActivityGenerator:
             shells = [(pid, name) for pid, name in alive_history if name in self._LINUX_SHELLS]
             if shells:
                 return shells[-1][0]
+            # Prefer per-session bash from the user's SSH session
+            for sess in self.state_manager.get_sessions_for_user(user.username):
+                if (
+                    sess.system == system.hostname
+                    and sess.session_shell_pid is not None
+                    and self._is_pid_alive(system, sess.session_shell_pid)
+                ):
+                    return sess.session_shell_pid
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
     def _resolve_parent(

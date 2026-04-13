@@ -11,6 +11,7 @@ domains:
   # --- Windows Update / Delivery Optimization ---
   download.windowsupdate.com:
     user_agent: "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+    os: windows
     paths:
       - "/msdownload/update/v3/static/trustedr/en/{guid}.cab"
       - "/msdownload/update/software/secu/{guid}/{guid}.cab"
@@ -22,6 +23,7 @@ domains:
 
   ctldl.windowsupdate.com:
     user_agent: "Microsoft-CryptoAPI/10.0"
+    os: windows
     paths:
       - "/msdownload/update/v3/static/trustedr/en/authrootstl.cab"
       - "/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab"
@@ -32,6 +34,7 @@ domains:
   # --- Certificate / OCSP / CRL ---
   crl.microsoft.com:
     user_agent: "Microsoft-CryptoAPI/10.0"
+    os: windows
     paths:
       - "/pki/crl/products/MicRooCerAut2011_2011_03_22.crl"
       - "/pki/crl/products/MicTimStaPCA_2010-07-01.crl"
@@ -43,6 +46,7 @@ domains:
 
   ocsp.digicert.com:
     user_agent: "Microsoft-CryptoAPI/10.0"
+    os: windows
     paths:
       - "/"
     content_type: "application/ocsp-response"

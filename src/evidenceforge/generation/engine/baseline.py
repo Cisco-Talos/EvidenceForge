@@ -633,8 +633,8 @@ class BaselineMixin:
                     source_ip=source_system.ip,
                 )
 
-            # Pattern 2: Kerberos pre-auth failure on DC (~5%/hour)
-            if rng.random() < 0.05 and dcs:
+            # Pattern 2: Kerberos pre-auth failure on DC (~15%/hour)
+            if rng.random() < 0.15 and dcs:
                 dc = rng.choice(dcs)
                 source_system = rng.choice(target_systems)
                 event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
@@ -783,6 +783,27 @@ class BaselineMixin:
                     logon_type=3,  # network
                     source_ip=rng.choice(servers).ip,
                 )
+
+        # Pattern 4: Active-user Kerberos pre-auth failure (password typo at lock screen).
+        # ~2% chance per active user per hour → 0-2 events total in a 10-user scenario.
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        if dcs:
+            for user in enabled_users:
+                if rng.random() < 0.02:
+                    dc = rng.choice(dcs)
+                    user_system = next(
+                        (s for s in systems if s.assigned_user == user.username),
+                        rng.choice(systems),
+                    )
+                    event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    self.state_manager.set_current_time(event_time)
+                    self.activity_generator.generate_kerberos_preauth_failed(
+                        username=user.username,
+                        source_ip=user_system.ip,
+                        dc_hostname=dc.hostname,
+                        time=event_time,
+                        status="0x18",  # KDC_ERR_PREAUTH_FAILED (bad password)
+                    )
 
     def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
         """Generate legitimate service account lateral movement between servers.
@@ -1372,7 +1393,7 @@ class BaselineMixin:
                 else:
                     max_hours = rng.uniform(0.5, 2.0)
 
-                if proc_age_hours > max_hours and rng.random() < 0.5:
+                if proc_age_hours > max_hours and rng.random() < 0.85:
                     actor = self._find_actor(proc.username)
                     if not actor:
                         continue
@@ -4002,7 +4023,17 @@ class BaselineMixin:
 
                     # Bots only from external IPs; browsers from anywhere
                     is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
-                    ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
+                    # OS-aware UA selection for internal clients
+                    ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+                    client_sys = ip_map.get(client_ip)
+                    if client_sys and _get_os_category(client_sys.os) == "linux":
+                        ua_pool = [
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                            "curl/7.88.1",
+                            "python-requests/2.31.0",
+                        ]
+                    else:
+                        ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
                     _URI_MIME = {
                         "/": "text/html",
