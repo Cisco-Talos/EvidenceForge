@@ -387,6 +387,10 @@ class ConnectionEventSpec(_EventSpecBase):
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
     response_body_len: int | None = None  # Override auto-sized response bytes
+    # Override auto-sized byte counts and connection outcome
+    orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
+    resp_bytes: int | None = None  # Responder payload bytes (large for downloads)
+    conn_state: str | None = None  # Connection outcome (default: SF for storyline)
 
     @field_validator("hostname")
     @classmethod

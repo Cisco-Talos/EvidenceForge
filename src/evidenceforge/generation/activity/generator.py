@@ -327,50 +327,54 @@ PERSONA_APP_INDICES_LINUX = {
 
 # Zeek TCP connection state distribution with matching history strings
 # Format: (conn_state, weight, history_string)
-# Phase 6.3: Expanded from 7 to 20+ patterns for realism
+# Rebalanced: SF ~62% (real enterprise: 55-75%), non-SF states expanded
 TCP_CONN_STATE_DISTRIBUTION = [
-    # Normal completions (SF) — various data exchange patterns
-    ("SF", 28, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
-    ("SF", 14, "ShADaDadfF"),  # Multiple data exchanges before FIN
-    ("SF", 8, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
-    ("SF", 7, "ShADadfFa"),  # FIN-ACK with trailing ACK
-    ("SF", 6, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
-    ("SF", 5, "ShADadFf"),  # Originator FIN first (client closes)
-    ("SF", 5, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
-    ("SF", 4, "ShADadTFf"),  # Retransmit then FIN
-    ("SF", 3, "ShADaDadFf"),  # Multi data then client closes
-    ("SF", 2, "ShADaDaTtdfF"),  # Multi data with retransmissions
-    # Connection attempts (S0)
-    ("S0", 3, "S"),  # Single SYN, no reply
-    ("S0", 2, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
-    # Partial handshakes (S1)
+    # Normal completions (SF) — ~62% total (real: 55-75%)
+    ("SF", 21, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
+    ("SF", 11, "ShADaDadfF"),  # Multiple data exchanges before FIN
+    ("SF", 6, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
+    ("SF", 5, "ShADadfFa"),  # FIN-ACK with trailing ACK
+    ("SF", 5, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
+    ("SF", 4, "ShADadFf"),  # Originator FIN first (client closes)
+    ("SF", 4, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
+    ("SF", 3, "ShADadTFf"),  # Retransmit then FIN
+    ("SF", 2, "ShADaDadFf"),  # Multi data then client closes
+    ("SF", 1, "ShADaDaTtdfF"),  # Multi data with retransmissions
+    # Connection attempts (S0) — ~14% (timeouts, unreachable hosts, scanning)
+    ("S0", 9, "S"),  # Single SYN, no reply
+    ("S0", 5, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
+    # Partial handshakes (S1) — ~3%
     ("S1", 2, "ShR"),  # SYN-ACK seen, RST
     ("S1", 1, "Sh"),  # SYN-ACK seen, no further data
-    # Rejected connections (REJ)
-    ("REJ", 2, "Sr"),  # RST from responder immediately
-    ("REJ", 1, "Srr"),  # Multiple RSTs from responder
-    # Reset by originator (RSTO)
-    ("RSTO", 2, "ShADaR"),  # Data exchange then originator RST
-    ("RSTO", 1, "ShADadTR"),  # Data + retransmit then RST
-    ("RSTO", 1, "ShAR"),  # Quick RST after handshake
-    # Reset by responder (RSTR)
-    ("RSTR", 1, "ShADadR"),  # Data exchange then responder RST
-    ("RSTR", 1, "ShAdR"),  # Partial data then responder RST
-    # Midstream (OTH) — rare in enterprise (<0.3%), only from partial captures
+    # Rejected connections (REJ) — ~5% (refused ports, firewall rejects)
+    ("REJ", 3, "Sr"),  # RST from responder immediately
+    ("REJ", 2, "Srr"),  # Multiple RSTs from responder
+    # Reset by originator (RSTO) — ~8% (client aborts, load balancer health checks)
+    ("RSTO", 4, "ShADaR"),  # Data exchange then originator RST
+    ("RSTO", 2, "ShADadTR"),  # Data + retransmit then RST
+    ("RSTO", 2, "ShAR"),  # Quick RST after handshake
+    # Reset by responder (RSTR) — ~5% (server resets, IDS/WAF termination)
+    ("RSTR", 3, "ShADadR"),  # Data exchange then responder RST
+    ("RSTR", 2, "ShAdR"),  # Partial data then responder RST
+    # Half-closed states — ~2% (one side closed, other didn't respond)
+    ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
+    ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied
+    # Midstream (OTH) — ~1% (partial captures, NAT state loss)
     ("OTH", 1, "Cc"),  # Midstream traffic (no SYN/SYN-ACK seen)
 ]
 
 # Zeek UDP connection state distribution
 # UDP has no TCP handshake — only D/d datagram flags
+# Rebalanced: SF ~72% (more S0 timeouts for realistic DNS/NTP failures)
 UDP_CONN_STATE_DISTRIBUTION = [
-    ("SF", 65, "Dd"),  # Normal bidirectional exchange (query + response)
+    ("SF", 55, "Dd"),  # Normal bidirectional exchange (query + response)
     ("SF", 8, "DdDd"),  # Multi-packet exchange
-    ("SF", 4, "DdDdDd"),  # Extended multi-packet exchange
-    ("SF", 3, "DdA"),  # Additional acknowledgment packet
-    ("S0", 10, "D"),  # Originator only, no response (timeout)
-    ("S0", 3, "DD"),  # Retransmitted datagram, no response
-    ("OTH", 4, "Dd"),  # Midstream UDP exchange
-    ("OTH", 3, "DdDdA"),  # Midstream multi-packet with ACK
+    ("SF", 5, "DdDdDd"),  # Extended multi-packet exchange
+    ("SF", 4, "DdA"),  # Additional acknowledgment packet
+    ("S0", 12, "D"),  # Originator only, no response (timeout)
+    ("S0", 6, "DD"),  # Retransmitted datagram, no response
+    ("OTH", 6, "Dd"),  # Midstream UDP exchange
+    ("OTH", 4, "DdDdA"),  # Midstream multi-packet with ACK
 ]
 
 # Pre-extract for random.choices — TCP (select full tuples, not just states)
@@ -1561,13 +1565,31 @@ class ActivityGenerator:
             dst_port = 0
         elif conn_state is not None:
             # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
-            history = {"REJ": "Sr", "S0": "S", "SF": "ShADadfF", "OTH": "Cc"}.get(
-                conn_state, "ShADadfF"
-            )
+            history = {
+                "REJ": "Sr",
+                "S0": "S",
+                "SF": "ShADadfF",
+                "OTH": "Cc",
+                "S2": "ShADadF",
+                "S3": "ShADadf",
+                "RSTO": "ShADaR",
+                "RSTR": "ShADadR",
+                "S1": "ShR",
+            }.get(conn_state, "ShADadfF")
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
                 orig_bytes = 0
+            elif conn_state in ("S2", "S3"):
+                if duration is not None:
+                    duration = duration * rng.uniform(0.3, 0.8)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
+            elif conn_state in ("RSTO", "RSTR"):
+                if duration is not None:
+                    duration = duration * rng.uniform(0.1, 0.5)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
         elif proto == "udp":
             # DNS connections with responses must not be S0 (no-response)
             if service == "dns" and resp_bytes and resp_bytes > 0:
@@ -1607,6 +1629,13 @@ class ActivityGenerator:
                 resp_bytes = 0
                 if duration is not None:
                     duration = rng.uniform(0.0, 0.5)
+            elif conn_state in ("S2", "S3"):
+                # S2/S3 = half-closed: connection established, one side sent FIN
+                # but the other never replied. Some data transferred before close.
+                if duration is not None:
+                    duration = duration * rng.uniform(0.3, 0.8)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
             elif conn_state in ("RSTO", "RSTR"):
                 if duration is not None:
                     duration = duration * rng.uniform(0.1, 0.5)

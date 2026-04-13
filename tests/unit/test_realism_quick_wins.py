@@ -107,15 +107,19 @@ def test_generate_external_ip_excludes_rfc5737():
                 return 50
 
         rng.randint = mixed_randint
-        ip = EmitterSetupMixin._generate_external_client_ip(rng)
+        obj = MagicMock(spec=[])
+        obj._org_cidr_networks = []
+        ip = EmitterSetupMixin._generate_external_client_ip(obj, rng)
         assert not ip.startswith(f"{first}.{second}.{third}."), (
             f"RFC 5737 IP {ip} should have been excluded"
         )
 
     # Also verify with normal random that no RFC 5737 IPs appear in a large sample
     rng = random.Random(42)
+    obj = MagicMock(spec=[])
+    obj._org_cidr_networks = []
     for _ in range(5000):
-        ip = EmitterSetupMixin._generate_external_client_ip(rng)
+        ip = EmitterSetupMixin._generate_external_client_ip(obj, rng)
         assert not ip.startswith("203.0.113."), f"RFC 5737 TEST-NET-3: {ip}"
         assert not ip.startswith("198.51.100."), f"RFC 5737 TEST-NET-2: {ip}"
         assert not ip.startswith("192.0.2."), f"RFC 5737 TEST-NET-1: {ip}"

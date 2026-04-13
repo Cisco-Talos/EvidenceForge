@@ -89,9 +89,9 @@ PERSONA_CLUSTER_CONFIG = {
 # No hardcoded persona names — new personas work automatically.
 # Ratios tuned to produce CV > 1.0 for users with 30+ events.
 _HAWKES_RISK_PARAMS = {
-    "high": {"alpha_beta_ratio": 0.80, "beta": 0.04},  # strong bursts, slow decay (~25s)
-    "medium": {"alpha_beta_ratio": 0.65, "beta": 0.05},  # moderate bursts (~20s decay)
-    "low": {"alpha_beta_ratio": 0.45, "beta": 0.08},  # mild bursts, faster decay (~12s)
+    "high": {"alpha_beta_ratio": 0.60, "beta": 0.06},  # moderate bursts, ~17s decay
+    "medium": {"alpha_beta_ratio": 0.50, "beta": 0.07},  # mild bursts, ~14s decay
+    "low": {"alpha_beta_ratio": 0.35, "beta": 0.10},  # gentle bursts, ~10s decay
 }
 
 
@@ -1918,9 +1918,9 @@ class BaselineMixin:
         if username and hasattr(self, "_user_time_offsets"):
             user_offsets = self._user_time_offsets.get(username, {})
             size_bias = 1.0 + user_offsets.get("cluster_size_bias", 0)
-            alpha_beta_ratio = min(0.95, alpha_beta_ratio * size_bias)
+            alpha_beta_ratio = min(0.75, alpha_beta_ratio * size_bias)
             gap_bias = 1.0 + user_offsets.get("inter_gap_bias", 0)
-            beta = max(0.01, beta * gap_bias)
+            beta = max(0.03, beta * gap_bias)
 
         alpha = alpha_beta_ratio * beta
         # Adaptive mu: calibrate base rate so expected count ≈ num_events
@@ -2199,7 +2199,67 @@ class BaselineMixin:
                         filtered.append(ip)
                 if filtered:
                     candidates = filtered
-        return (rng.choice(candidates), None) if candidates else (None, None)
+        result = (rng.choice(candidates), None) if candidates else (None, None)
+        if result[0]:
+            self._validate_ip_in_segments(result[0], f"_resolve_role({role})")
+        return result
+
+    def _validate_ip_in_segments(self, ip: str, context: str) -> None:
+        """Warn if a private IP doesn't belong to any defined network segment."""
+        import ipaddress as _ipa_val
+
+        if not self.scenario.environment.network:
+            return
+        try:
+            addr = _ipa_val.ip_address(ip)
+        except ValueError:
+            return
+        if not addr.is_private:
+            return  # External IPs don't need segment validation
+        for seg in self.scenario.environment.network.segments:
+            try:
+                if addr in _ipa_val.ip_network(seg.cidr, strict=False):
+                    return
+            except ValueError:
+                continue
+        logger.warning("Internal IP %s not in any defined segment (%s)", ip, context)
+
+    def _emit_smb_logon_pair(
+        self,
+        user: Any,
+        file_server: Any,
+        source_ip: str,
+        time: datetime,
+        rng: Any,
+    ) -> str | None:
+        """Emit type 3 network logon + logoff pair on a file server for SMB access.
+
+        In real Windows, every authenticated SMB share access produces:
+        - 4624 type 3 (network logon) on the file server
+        - 4634 (logoff) after the file access session closes
+        """
+        from evidenceforge.generation.activity.generator import _get_os_category
+
+        if _get_os_category(file_server.os) != "windows":
+            return None
+
+        logon_id = self.activity_generator.generate_logon(
+            user=user,
+            system=file_server,
+            time=time,
+            logon_type=3,
+            source_ip=source_ip,
+        )
+        logoff_delay = rng.uniform(5.0, 60.0)
+        logoff_time = time + timedelta(seconds=logoff_delay)
+        self.activity_generator.generate_logoff(
+            user=user,
+            system=file_server,
+            time=logoff_time,
+            logon_id=logon_id,
+            logon_type=3,
+        )
+        return logon_id
 
     def _generate_profile_traffic(
         self,
@@ -2489,6 +2549,30 @@ class BaselineMixin:
                             hostname=dst_hostname,
                         )
 
+                        # SMB access to file servers produces type 3 logon
+                        if (
+                            conn.get("service") == "smb"
+                            and is_internal_src
+                            and src_sys
+                            and "file_server" in roles
+                        ):
+                            src_sessions = self.state_manager.get_sessions_on_system(
+                                src_sys.hostname
+                            )
+                            for sess in src_sessions:
+                                if sess.logon_type in (2, 10, 11):
+                                    smb_user = next(
+                                        (
+                                            u
+                                            for u in self.scenario.environment.users
+                                            if u.username == sess.username
+                                        ),
+                                        None,
+                                    )
+                                    if smb_user:
+                                        self._emit_smb_logon_pair(smb_user, system, src_ip, ts, rng)
+                                        break
+
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
         # SYSTEM, LOCAL SERVICE, NETWORK SERVICE, machine accounts, etc.
@@ -2728,13 +2812,26 @@ class BaselineMixin:
                     )
                     dhcp_state["last_renewal"] = next_renewal
 
-            # SMB browsing: Windows workstations only
+            # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
 
+            # Include file servers in SMB targets for workstations
+            fs_targets = [
+                s
+                for s in self.scenario.environment.systems
+                if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
+            ]
+
             if "smb-client" in services and os_cat == "windows" and dc_targets:
+                # Combine DC + file server IPs as SMB targets
+                smb_targets = list(dc_targets)
+                for fs in fs_targets:
+                    if fs.ip not in smb_targets:
+                        smb_targets.append(fs.ip)
+
                 smb_interval = 1200 + (_stable_seed(f"smb_iv_{system.hostname}") % 1800)
                 smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
                 hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
@@ -2746,9 +2843,10 @@ class BaselineMixin:
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    smb_dst_ip = rng.choice(smb_targets)
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(dc_targets),
+                        dst_ip=smb_dst_ip,
                         time=ts,
                         dst_port=445,
                         proto="tcp",
@@ -2760,6 +2858,26 @@ class BaselineMixin:
                         source_system=system,
                         pid=4,  # SMB: kernel System process
                     )
+                    # Emit type 3 logon on file server for SMB access
+                    smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                    if smb_dst_sys:
+                        # Find active user on this workstation
+                        ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+                        for sess in ws_sessions:
+                            if sess.logon_type in (2, 10, 11):
+                                ws_user = next(
+                                    (
+                                        u
+                                        for u in self.scenario.environment.users
+                                        if u.username == sess.username
+                                    ),
+                                    None,
+                                )
+                                if ws_user:
+                                    self._emit_smb_logon_pair(
+                                        ws_user, smb_dst_sys, system.ip, ts, rng
+                                    )
+                                    break
                     t += smb_interval
 
             # Kerberos
