@@ -211,6 +211,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Only 2 unique TicketOptions values; zero 4771 pre-auth failures — randomized TicketOptions per event type; boosted stale 4771 probability to 15%; added active-user typo 4771 at 2%/hour
 - [x] File server has no domain user logon events — type 3 logon+logoff pairs for SMB access in baseline traffic profiles and storyline causal expansion
 - [x] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY" — _subject_domain() helper in windows.py returns "NT AUTHORITY" for SYSTEM/NETWORK SERVICE/LOCAL SERVICE
+- [ ] Event 4672 LogonId 0x3e7 for domain users — SYSTEM-only logon ID (0x3e7) assigned to regular domain users (e.g., james.washington, aisha.johnson) in Special Privileges events
 
 **Process Trees:**
 - [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)
@@ -231,6 +232,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
 - [ ] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — paths need hostname-aware selection
 - [ ] Proxy lacks session depth — 1 request per site, no cascading subresource loads (CSS/JS/images/API)
+- [ ] Proxy user-agent mismatch — Windows-Update-Agent UA appearing on Reddit/StackOverflow browsing sessions (flagged by all 4 experts); session UA selection doesn't filter OS-specific system UAs from user browsing
+- [ ] Web access log referrer headers — random system URLs (windowsupdate.com, ocsp.digicert.com) appearing as referrers for local page navigation; referrer chain crosses unrelated browsing sessions
 - [x] DHCP shows full discovery instead of renewals in mid-scenario windows — initial leases emitted during warm-up (suppressed); periodic REQUEST/ACK renewals at T/2 in _generate_system_traffic()
 
 **Cisco ASA:**
@@ -245,6 +248,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] No FILE events on attack hosts — storyline processes now pass ensure_file_event=True, guaranteeing a FILE/CREATE for the process image
 - [x] No USER_SESSION events for server-side RDP lateral movement — generate_rdp_session() calls generate_logon() on target, which dispatches USER_SESSION/LOGIN to eCAR with EdrContext
 - [x] Vary filenames in file operations — expanded _EDR_FILE_PATHS_WIN from 7 to 21 entries, _EDR_FILE_PATHS_LINUX from 5 to 20 entries
+- [ ] Template variable leak — literal `{psql_db}` appearing in eCAR output; unsubstituted template variable in process command line or file path
 
 **Cross-Source / General:**
 - [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
