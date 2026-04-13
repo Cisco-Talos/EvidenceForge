@@ -159,7 +159,20 @@ def generate_browsing_session(
 
     requests: list[BrowsingRequest] = []
     current_ms = 0
-    previous_page_url = ""  # Referrer for navigation (empty for landing)
+
+    # Landing page referrer: most sessions start from a direct navigation
+    # (typed URL, bookmark) with no referrer. ~20% come from a search engine
+    # link click, which carries the search page as referrer.
+    landing_roll = rng.random()
+    if landing_roll < 0.80:
+        previous_page_url = ""  # Direct navigation / bookmark
+    else:
+        # Arrived via search engine link click
+        search_engines = [
+            "https://www.google.com/search?q=",
+            "https://www.bing.com/search?q=",
+        ]
+        previous_page_url = rng.choice(search_engines) + hostname.replace(".", "+")
 
     # Determine number of pages to visit
     n_pages_lo, n_pages_hi = params["pages"]
@@ -170,12 +183,17 @@ def generate_browsing_session(
 
     # Track visited pages to avoid exact repeats (but allow revisits via nav)
     visited_indices: list[int] = []
-    current_page_idx = 0  # Start at the first page (typically root/landing)
+
+    # Landing page selection: 70% start at root/index, 30% land on a
+    # deeper page (bookmark, shared link, search result deep link).
+    if rng.random() < 0.70 or len(site_map.pages) == 1:
+        current_page_idx = 0
+    else:
+        current_page_idx = rng.randint(0, len(site_map.pages) - 1)
 
     for page_num in range(total_pages):
         if page_num == 0:
-            # Landing page: always the first defined page
-            current_page_idx = 0
+            pass  # Use the landing page index selected above
         else:
             # Navigation: pick from current page's nav_targets or other pages
             current_page = site_map.pages[current_page_idx]

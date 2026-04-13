@@ -87,9 +87,35 @@ class TestReferrerChains:
         requests = generate_browsing_session(rng, "github.com", [])
         for req in requests:
             if req.referrer:
-                assert req.referrer.startswith("https://"), (
-                    f"Referrer '{req.referrer}' should start with https://"
+                assert req.referrer.startswith("https://") or req.referrer.startswith("http://"), (
+                    f"Referrer '{req.referrer}' should start with http(s)://"
                 )
+
+    def test_some_sessions_have_search_engine_referrer(self):
+        """~20% of sessions should start with a search engine referrer."""
+        search_ref_count = 0
+        for seed in range(50):
+            rng = random.Random(seed)
+            requests = generate_browsing_session(rng, "github.com", [])
+            if requests and requests[0].referrer and "search" in requests[0].referrer:
+                search_ref_count += 1
+        assert search_ref_count >= 3, (
+            f"Expected some sessions with search referrer, got {search_ref_count}/50"
+        )
+
+    def test_some_sessions_start_deep(self):
+        """~30% of sessions should land on a non-root page."""
+        deep_start_count = 0
+        for seed in range(50):
+            rng = random.Random(seed)
+            requests = generate_browsing_session(
+                rng, "outlook.office365.com", [], browsing_intensity="normal"
+            )
+            if requests and requests[0].path != "/owa/":
+                deep_start_count += 1
+        assert deep_start_count >= 3, (
+            f"Expected some sessions starting deep, got {deep_start_count}/50"
+        )
 
 
 class TestCdnFanOut:
