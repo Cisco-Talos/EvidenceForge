@@ -127,7 +127,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓² Snort baseline volume too low (1-3/hour) — increased to 5-15/hour per sensor; experts still consider 73/day low vs thousands in real environments
 - [x] ✓² Snort alert timestamps not chronologically sorted — enabled _sort_before_flush on SnortEmitter
 - [ ] Snort SID revisions all `:1:1` — should vary to match real ET ruleset update patterns
-- [ ] Snort baseline scan IPs absent from Zeek conn — visibility engine filters external→internal connections out of non-firewall sensors; need to emit Zeek conn records for IDS-observed scans
+- [x] ~~Snort baseline scan IPs absent from Zeek conn~~ — no longer reproduces; prior visibility fixes (denied traffic visibility, external deny scoping) resolved this
 - [ ] Snort alert volume still 10-100x too low for real perimeter IDS (experts expect thousands/day)
 - [x] No ET POLICY, ET INFO, ET DNS categories in baseline — added ET POLICY (curl UA, Basic Auth, SSLv3, APT, PE download), ET INFO (Let's Encrypt, Discord, Telegram, IP lookup, TLS failure, STUN), ET DNS (.top/.cloud TLDs) in baseline.py
 
@@ -150,14 +150,14 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
 - [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
-- [ ] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states
+- [x] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states — rebalanced TCP distribution: SF 82%→62%, added S2/S3 half-closed states, increased S0/REJ/RSTO/RSTR
 - [ ] SSL ssl_history limited to 2 values (CsiI, CsijI) — need 10-20+ patterns including resumed sessions, failed handshakes
 - [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
 - [ ] SMB volume too low for Windows file server environments
-- [ ] DNS UIDs missing from conn.log (~7%)
+- [x] ~~DNS UIDs missing from conn.log (~7%)~~ — no longer reproduces (0/6487 orphans on apt-healthcare-breach); prior visibility fixes resolved this
 - [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
 - [x] weird.json TCP-specific types attributed to UDP sources — split into protocol-specific pools; UDP gets DNS/checksum/length anomalies at 0.5% rate vs TCP's 3%
-- [ ] Exfiltration connections show 0 bytes transferred
+- [x] Exfiltration connections show 0 bytes transferred — auto-size by technique/description heuristic; added orig_bytes/resp_bytes/conn_state to ConnectionEventSpec; storyline defaults to SF
 - [ ] No port 135 (RPC/EPMAP) traffic
 - [ ] Inconsistent sensor coverage for SSH pivot
 
@@ -198,7 +198,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **Windows Events:**
 - [x] ✓ IpAddress "::ffff:-" malformed — handle "-" string in _ipv6_mapped()
 - [ ] DLL file as NewProcessName in 4688
-- [ ] Low 4689:4688 process termination ratio (57% vs 80-90%)
+- [x] Low 4689:4688 process termination ratio (57% vs 80-90%) — raised termination probability from 0.5 to 0.85
 - [ ] EventRecordID gaps too regular
 - [ ] 4769 TargetUserName double-realm format
 - [ ] KeyLength always 0 for NTLM logons
@@ -208,23 +208,23 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Process creation timestamp can precede its authorizing logon
 - [x] Missing 4634 logoff events for network logon sessions — paired logoffs for type 3 machine account logons on DCs (1-30s delay); baseline type 3/5 already had logoff pairing
 - [ ] Only AES-256 Kerberos encryption; no RC4/AES-128 mix
-- [ ] Only 2 unique TicketOptions values; zero 4771 pre-auth failures
-- [ ] File server has no domain user logon events
+- [x] Only 2 unique TicketOptions values; zero 4771 pre-auth failures — randomized TicketOptions per event type; boosted stale 4771 probability to 15%; added active-user typo 4771 at 2%/hour
+- [x] File server has no domain user logon events — type 3 logon+logoff pairs for SMB access in baseline traffic profiles and storyline causal expansion
 - [x] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY" — _subject_domain() helper in windows.py returns "NT AUTHORITY" for SYSTEM/NETWORK SERVICE/LOCAL SERVICE
 
 **Process Trees:**
 - [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)
 - [x] ✓³ PID allocation monotonic with uniform stride (~4) — replaced choice list with lognormal distribution (Windows mu=1.2 sigma=0.8; Linux mu=0.5 sigma=0.6); PID wraparound skips allocated PIDs
-- [ ] explorer.exe parent for RDP sessions (should be per-session userinit→explorer)
-- [ ] All Linux user processes share same ppid
-- [ ] Human Burstiness at 56/100 — events too uniformly distributed, need more clustering/idle
+- [x] explorer.exe parent for RDP sessions (should be per-session userinit→explorer) — per-session smss→winlogon→userinit→explorer chain for type 10 logons
+- [x] All Linux user processes share same ppid — per-SSH-session sshd fork + bash login shell; session_shell_pid on ActiveSession
+- [x] Human Burstiness at 56/100 — retuned Hawkes params (alpha_beta_ratio 0.80→0.60, beta 0.04→0.06), tightened bias clamps (0.95→0.75), narrowed Gaussians
 - [ ] Mimikatz at Medium integrity would succeed in scenario but fail in reality — generator doesn't model integrity levels
 
 **HTTP/Proxy:**
 - [x] ✓² Proxy user-agent pool limited to 2 agents — expanded to 8 diverse agents (Chrome/Firefox/Edge/Opera/IE11)
 - [x] ✓² Proxy/SSL hostname uses CDN reverse-DNS PTR records instead of domain names — now prefers dns.query from DnsContext; partial fix (first connections per host still use PTR when no DNS context exists)
 - [x] ✓² Proxy URL paths all root "/" only — added pool of 18 realistic URI paths
-- [ ] User-Agent OS mismatch with source hosts
+- [x] User-Agent OS mismatch with source hosts — os field on proxy_uri_templates.yaml; OS-aware filtering in pick_proxy_uri(); OS-aware baseline web UA pool
 - [x] 100% HTTP 200 status codes — _get_http_status() in network.py returns 200 (70%), 304 (8%), 301 (10%), 302 (5%), 404 (4%), 403 (2%), 500 (1%)
 - [x] HTTP MIME type mismatches with URI — _URI_MIME_MAP in baseline.py and generator.py pairs URIs to correct MIME types
 - [ ] Proxy format doesn't match standard Squid or Bluecoat output
@@ -258,7 +258,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()
 - [x] Bash history still lacks typos, repeated commands, tab-completion artifacts — bash_commands.yaml with per-role command vocabularies (sysadmin/dba/webadmin/developer/security), template parameterization, 5% typo rate; per-server RBAC user rosters via _get_server_ssh_users()
-- [ ] Baseline generates IPs outside defined network segments
+- [x] Baseline generates IPs outside defined network segments — external IP generator excludes org CIDRs; diagnostic validator warns on out-of-segment internal IPs
 - [ ] Parsability at ~95% (5% records fail structure validation)
 
 ### Tier 4: Eval Fixes
