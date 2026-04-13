@@ -12,3 +12,4 @@ application_usage:
   - "Chrome"
   - "Active Directory"
 risk_profile: "medium"
+browsing_intensity: "normal"

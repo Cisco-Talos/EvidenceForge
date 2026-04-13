@@ -162,6 +162,11 @@ class User(BaseModel):
     enabled: bool = Field(default=True)
     persona: str | None = Field(None, description="Reference to persona name")
     primary_system: str | None = Field(None, description="Primary system hostname")
+    browsing_intensity: str | None = Field(
+        None,
+        pattern="^(light|normal|heavy)$",
+        description="Per-user browsing intensity override (takes precedence over persona)",
+    )
 
     @field_validator("email")
     @classmethod
@@ -265,6 +270,11 @@ class Persona(BaseModel):
     work_hours: str = Field(default="9am-5pm")
     application_usage: list[str] = Field(default_factory=list)
     risk_profile: str = Field(default="medium", pattern="^(low|medium|high)$")
+    browsing_intensity: str = Field(
+        default="normal",
+        pattern="^(light|normal|heavy)$",
+        description="Browsing session depth: light (1 page), normal (1-2 pages), heavy (2-4 pages)",
+    )
 
     # Phase 2.4 optional fields (backward compatible - prepare for future LLM expansion)
     expanded_activities: list[dict[str, Any]] | None = Field(

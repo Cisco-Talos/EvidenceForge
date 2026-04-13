@@ -14,3 +14,4 @@ application_usage:
   - "Docker"
   - "Git"
 risk_profile: "high"
+browsing_intensity: "heavy"

@@ -13,3 +13,4 @@ application_usage:
   - "Event Viewer"
   - "SSH"
 risk_profile: "high"
+browsing_intensity: "normal"
