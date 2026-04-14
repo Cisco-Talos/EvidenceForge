@@ -721,6 +721,14 @@ def info(
         console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
 
+    if list_fields_flag and field:
+        console.print(
+            "[bold red]Error:[/bold red] Cannot use --fields with a field argument. "
+            "Use 'eforge info --fields' to list fields, or 'eforge info <field>' to get a value.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
     if list_fields_flag:
         fields = list_fields(data)
         if json_output:

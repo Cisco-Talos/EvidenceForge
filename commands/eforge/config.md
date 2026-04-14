@@ -26,7 +26,10 @@ eforge info paths.personas
 
 Do not read files. Do not search. Do not explore. Run the commands above first.
 
-`eforge info <field>` gives you exactly what you need — one value per call. Run `eforge info --fields` to see all available field names. Use `eforge info --json` only if you need everything at once.
+The `eforge info` command has three modes — do not mix them:
+- `eforge info <field>` — get one value (e.g., `eforge info personas`, `eforge info paths.activity`)
+- `eforge info --fields` — list all available field names (no other arguments)
+- `eforge info --json` — get everything as JSON (no other arguments)
 
 **Where to READ** (package defaults): use the paths from `eforge info paths.*`.
 
