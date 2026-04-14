@@ -62,7 +62,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 
 Compound operations touch multiple types — identify all of them. For the full dependency map, read `references/config-dependency-graph.md`.
 
-For **validation** requests ("check my config", "validate config files"), read `references/config-validation.md`.
+For **validation** requests ("check my config", "validate config files"), run `eforge validate-config`. Do NOT use `eforge validate` (that validates scenario files, not config). Use `eforge validate-config --json` for machine-readable output.
 
 ## Step 3: Read Affected Files and Reference Docs
 

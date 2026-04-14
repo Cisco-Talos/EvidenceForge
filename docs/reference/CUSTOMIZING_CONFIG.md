@@ -139,12 +139,9 @@ This is a **partial overlay** — it adds `nurse` to Chrome's and Outlook's pers
 ```bash
 eforge info personas    # Should include "nurse"
 eforge info dns_tags    # Should include your new tags
-```
 
-Or use the skill to run a full validation:
-
-```
-/eforge:config validate my config files
+# Run full validation (27 cross-reference checks)
+eforge validate-config
 ```
 
 ## Cross-File Dependencies

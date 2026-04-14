@@ -762,6 +762,75 @@ def info(
         console.print(format_human_readable(data))
 
 
+@app.command("validate-config")
+def validate_config_cmd(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Validate config files for integrity and cross-reference consistency.
+
+    Runs 27 checks across all config YAML files (activity, personas, formats,
+    evaluation) including any overlay customizations. Reports errors, warnings,
+    and info items.
+
+    Exit codes:
+    - 0: All checks passed (may include warnings/info)
+    - 2: Errors found
+    """
+    from evidenceforge.cli.validate_config import validate_config
+
+    status_console = Console(stderr=True) if json_output else console
+    status_console.print("[bold blue]EvidenceForge Config Validator[/bold blue]")
+
+    try:
+        result = validate_config()
+    except Exception as e:
+        status_console.print(f"[bold red]Error:[/bold red] Validation failed: {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if json_output:
+        import json
+
+        output = {
+            "files_checked": result.files_checked,
+            "errors": [{"file": i.file, "message": i.message} for i in result.errors],
+            "warnings": [{"file": i.file, "message": i.message} for i in result.warnings],
+            "info": [{"file": i.file, "message": i.message} for i in result.infos],
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        if result.errors:
+            status_console.print("\n[bold red]ERRORS (must fix):[/bold red]")
+            for issue in result.errors:
+                status_console.print(f"  [red]{issue.file}:[/red] {issue.message}")
+
+        if result.warnings:
+            status_console.print(
+                "\n[bold yellow]WARNINGS (may degrade output quality):[/bold yellow]"
+            )
+            for issue in result.warnings:
+                status_console.print(f"  [yellow]{issue.file}:[/yellow] {issue.message}")
+
+        if result.infos:
+            status_console.print("\n[bold cyan]INFO (suggestions):[/bold cyan]")
+            for issue in result.infos:
+                status_console.print(f"  [cyan]{issue.file}:[/cyan] {issue.message}")
+
+        total_e = len(result.errors)
+        total_w = len(result.warnings)
+        total_i = len(result.infos)
+        status_console.print(
+            f"\n{total_e} errors, {total_w} warnings, {total_i} info items across {result.files_checked} files checked."
+        )
+
+        if result.errors:
+            raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+
+    if not result.issues:
+        console.print(
+            f"\n[bold green]All config files validated successfully. No issues found across {result.files_checked} files.[/bold green]"
+        )
+
+
 @app.command()
 def version() -> None:
     """Show version information."""
