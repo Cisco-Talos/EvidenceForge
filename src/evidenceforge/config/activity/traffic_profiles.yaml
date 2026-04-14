@@ -109,14 +109,14 @@ role_traffic:
       - {role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 15, os: windows}
       - {role: domain_controller, port: 389, proto: tcp, service: ldap, weight: 10, os: windows}
       - {role: file_server, port: 445, proto: tcp, service: smb, weight: 20, os: windows}
-      - {role: _external, port: 443, proto: tcp, service: ssl, weight: 30, emit_dns: true, description: "General browsing/SaaS"}
+      - {role: _external, port: 443, proto: tcp, service: ssl, weight: 10, emit_dns: true, dns_tags: [background, windows], description: "System updates/CRL/telemetry"}
     # Workstations generally don't receive inbound connections
 
   # Fallback for roles not explicitly listed
   _default:
     outbound:
       - {role: domain_controller, port: 88, proto: tcp, service: kerberos, weight: 10, os: windows}
-      - {role: _external, port: 443, proto: tcp, service: ssl, weight: 15, emit_dns: true}
+      - {role: _external, port: 443, proto: tcp, service: ssl, weight: 10, emit_dns: true, dns_tags: [background], description: "System updates/background checks"}
 
 
 persona_traffic:
