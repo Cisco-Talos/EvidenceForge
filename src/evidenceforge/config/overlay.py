@@ -129,8 +129,16 @@ def merge_keyed_list(
 ) -> list[dict]:
     """Merge two lists of dicts using a unique key field.
 
-    Overlay entries with a matching key replace the default entry (with a
-    warning logged). Overlay entries with new keys are appended.
+    When an overlay entry matches a default entry by key, the entries are
+    merged field-by-field rather than replaced wholesale:
+    - List fields are extended (overlay items appended to default items)
+    - Dict fields are deep-merged recursively
+    - Scalar fields are replaced by the overlay value
+
+    This allows minimal overlay entries like ``{id: chrome, personas: [nurse]}``
+    to add ``nurse`` to Chrome's persona list without copying the entire entry.
+
+    Overlay entries with new keys (no match in defaults) are appended.
 
     Args:
         default_list: Package default entries.
@@ -146,12 +154,14 @@ def merge_keyed_list(
     for entry in default_list:
         key = entry.get(key_field)
         if key and key in overlay_by_key:
-            logger.warning(
-                "Config overlay: replacing default %s=%r with user override",
+            overlay_entry = overlay_by_key.pop(key)
+            logger.info(
+                "Config overlay: merging fields into %s=%r",
                 key_field,
                 key,
             )
-            result.append(overlay_by_key.pop(key))
+            merged = deep_merge_dict(entry, overlay_entry, _path=f"{key_field}={key}")
+            result.append(merged)
         else:
             result.append(entry)
 
@@ -189,10 +199,11 @@ def deep_merge_dict(
                 # For leaf lists within a dict merge, extend rather than replace
                 result[key] = default_value + overlay_value
             else:
-                logger.warning(
-                    "Config overlay: replacing default value at %r",
-                    full_key,
-                )
+                if default_value != overlay_value:
+                    logger.warning(
+                        "Config overlay: replacing default value at %r",
+                        full_key,
+                    )
                 result[key] = overlay_value
         else:
             result[key] = overlay_value

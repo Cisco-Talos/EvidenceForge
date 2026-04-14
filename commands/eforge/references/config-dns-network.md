@@ -72,6 +72,31 @@ domains:
     tags: [dev]
 ```
 
+### Overlay Examples
+
+Overlay files go in `.eforge/config/activity/dns_registry.yaml`. They contain ONLY new or modified entries.
+
+**Add new domains:**
+
+```yaml
+domains:
+  - domain: ehr.meridianhealth.local
+    ips: ["10.50.1.100"]
+    tags: [internal]
+```
+
+New domains (no matching `domain` in defaults) are appended to the registry.
+
+**Modify an existing domain's tags** (e.g., add `social` tag to reddit):
+
+```yaml
+domains:
+  - domain: www.reddit.com
+    tags: [web, social]
+```
+
+This merges into the existing reddit entry — the `tags` field is updated while `ips` and other fields are preserved from the package default.
+
 ### Common Mistakes
 
 - Using `tags: [web]` for API endpoints (produces unrealistic browsing to API domains)

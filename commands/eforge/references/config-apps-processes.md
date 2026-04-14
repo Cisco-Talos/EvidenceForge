@@ -100,6 +100,45 @@ applications:
 - Use `default` in personas list for universal apps (everyone uses a browser)
 - Command templates should be realistic — look at real process creation events for reference
 
+### Overlay Examples
+
+Overlay files go in `.eforge/config/activity/application_catalog.yaml`. They contain ONLY the entries you're adding or modifying — the engine merges them with package defaults.
+
+**Add a persona to existing apps** (most common overlay use case). To add `nurse` to Chrome and Outlook, the overlay only needs the `id` and the fields being extended:
+
+```yaml
+applications:
+  - id: chrome
+    personas: [nurse]
+  - id: outlook
+    personas: [nurse]
+```
+
+The engine merges this with the package defaults: Chrome keeps all its existing fields (image_path, pe_metadata, command_templates, categories, etc.) and `nurse` is appended to its `personas` list. You do NOT need to copy the full entry.
+
+**Add a completely new application:**
+
+```yaml
+applications:
+  - id: ehr_client
+    display_name: "EHR Client"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\MeridianEHR\ehr.exe'
+        pe_metadata:
+          file_version: "3.2.1"
+          description: "Meridian EHR Client"
+          product: "Meridian EHR"
+          company: "Meridian Healthcare Solutions"
+          original_filename: "ehr.exe"
+        command_templates:
+          - '"C:\Program Files\MeridianEHR\ehr.exe" /login'
+    categories: [user_app]
+    personas: [nurse, doctor]
+```
+
+New entries (no matching `id` in defaults) are appended to the catalog as-is.
+
 ### Common Mistakes
 
 - Bare filenames in `image_path` (e.g., `slack.exe` instead of full path)
