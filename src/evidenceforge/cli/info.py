@@ -221,6 +221,22 @@ def format_human_readable(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def list_fields(data: dict[str, Any], prefix: str = "") -> list[str]:
+    """List all valid dot-path field names from the info data.
+
+    Returns:
+        Sorted list of dot-paths (e.g., ["config_writable", "overlay.exists", "paths.activity", ...]).
+    """
+    fields: list[str] = []
+    for key, value in data.items():
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            fields.extend(list_fields(value, full_key))
+        else:
+            fields.append(full_key)
+    return sorted(fields)
+
+
 def resolve_field(data: dict[str, Any], field: str) -> Any:
     """Resolve a dot-path field reference against the info data.
 

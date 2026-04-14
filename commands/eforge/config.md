@@ -26,7 +26,7 @@ eforge info paths.personas
 
 Do not read files. Do not search. Do not explore. Run the commands above first.
 
-`eforge info <field>` gives you exactly what you need. You can query any field: `paths.activity`, `paths.personas`, `paths.formats`, `paths.evaluation`, `overlay.exists`, `overlay.path`, `overlay.files`, `config_writable`, `version`, `personas`, `formats`, `dns_tags`, `application_ids`, `system_roles`. Use `eforge info --json` only if you need everything at once.
+`eforge info <field>` gives you exactly what you need — one value per call. Run `eforge info --fields` to see all available field names. Use `eforge info --json` only if you need everything at once.
 
 **Where to READ** (package defaults): use the paths from `eforge info paths.*`.
 

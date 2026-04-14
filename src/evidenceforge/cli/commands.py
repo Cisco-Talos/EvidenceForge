@@ -689,6 +689,9 @@ def info(
         None, help="Dot-path to a specific field (e.g., paths.activity, overlay.exists, personas)"
     ),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON for machine parsing"),
+    list_fields_flag: bool = typer.Option(
+        False, "--fields", help="List all valid dot-path field names"
+    ),
 ) -> None:
     """Show EvidenceForge installation info: version, config paths, available data.
 
@@ -708,6 +711,7 @@ def info(
         format_human_readable,
         format_json,
         gather_info,
+        list_fields,
         resolve_field,
     )
 
@@ -717,7 +721,10 @@ def info(
         console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
 
-    if field:
+    if list_fields_flag:
+        for f in list_fields(data):
+            print(f)
+    elif field:
         value = resolve_field(data, field)
         if value is None:
             console.print(f"[bold red]Error:[/bold red] Unknown field: {field}", style="red")
