@@ -201,25 +201,25 @@ domains:
     tags: [saas]
   - domain: cdn.onenote.net
     ips: ["52.109.8.20", "52.109.8.21"]
-    tags: [saas]
+    tags: [cdn]
   - domain: onenote.officeapps.live.com
     ips: ["52.109.12.22", "52.109.12.23"]
     tags: [saas]
   - domain: graph.microsoft.com
     ips: ["40.126.28.19", "40.126.29.19"]
-    tags: [saas]
+    tags: [dev]
   - domain: login.live.com
     ips: ["20.190.159.64", "20.190.160.64"]
-    tags: [saas]
+    tags: [background]
   - domain: slack.com
     ips: ["34.237.161.42", "34.237.162.42"]
     tags: [saas]
   - domain: api.slack.com
     ips: ["52.26.132.56", "52.26.133.56"]
-    tags: [saas]
+    tags: [dev]
   - domain: files.slack.com
     ips: ["54.187.91.57", "54.187.92.57"]
-    tags: [saas]
+    tags: [cdn]
   - domain: zoom.us
     ips: ["3.21.137.128", "3.21.138.128"]
     tags: [saas]
@@ -231,7 +231,7 @@ domains:
     tags: [saas]
   - domain: login.salesforce.com
     ips: ["13.108.0.20", "13.108.0.21"]
-    tags: [saas]
+    tags: [background]
   - domain: na139.salesforce.com
     ips: ["13.110.54.8", "13.110.54.9"]
     tags: [saas]

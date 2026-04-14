@@ -140,6 +140,15 @@ domains:
     content_type: "application/json"
     methods: ["GET"]
 
+  onenote.officeapps.live.com:
+    paths:
+      - "/o/onenoteframe.aspx?ui=en-us&rs=en-us"
+      - "/o/onenoteframe.aspx?edit=0&{hex16}"
+      - "/api/v1.0/me/notes/notebooks"
+      - "/api/v1.0/me/notes/sections"
+    content_type: "text/html"
+    methods: ["GET", "GET", "GET", "GET"]
+
   onedrive.live.com:
     paths:
       - "/redir?resid={hex16}"
@@ -173,6 +182,16 @@ domains:
       - "/ServiceLogin"
       - "/o/oauth2/auth"
       - "/signin/v2/challenge"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  calendar.google.com:
+    paths:
+      - "/render"
+      - "/r/month"
+      - "/r/week"
+      - "/r/eventedit"
+      - "/r/search?q={search_term}"
     content_type: "text/html"
     methods: ["GET"]
 
@@ -272,6 +291,46 @@ domains:
       - "/"
       - "/explore/projects"
       - "/users/sign_in"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Cloudflare ---
+  www.cloudflare.com:
+    paths:
+      - "/"
+      - "/products/cdn/"
+      - "/learning/what-is-cloudflare/"
+      - "/plans/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  dash.cloudflare.com:
+    paths:
+      - "/"
+      - "/login"
+      - "/{hex8}/domains"
+      - "/{hex8}/dns"
+      - "/{hex8}/analytics"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  blog.cloudflare.com:
+    paths:
+      - "/"
+      - "/tag/security/"
+      - "/tag/speed-and-reliability/"
+      - "/{slug}/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- AWS ---
+  aws.amazon.com:
+    paths:
+      - "/"
+      - "/ec2/"
+      - "/s3/"
+      - "/console/"
+      - "/solutions/case-studies/"
     content_type: "text/html"
     methods: ["GET"]
 

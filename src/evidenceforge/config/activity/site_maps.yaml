@@ -93,6 +93,98 @@ domains:
           - {path: "/api/csa/api/v1/teams/conversations?$top=30", type: "application/json"}
           - {host: "statics.teams.cdn.office.net", path: "/hashedv2/chat-{hex16}.js", type: "application/javascript"}
 
+  sharepoint.com:
+    cdn_domains: ["res.cdn.office.net", "static.sharepointonline.com"]
+    pages:
+      - path: "/sites/intranet/SitePages/Home.aspx"
+        nav_targets: ["/sites/intranet/_layouts/15/viewlsts.aspx", "/sites/intranet/Shared%20Documents"]
+        subresources:
+          - {host: "static.sharepointonline.com", path: "/bld/_layouts/15/{hex16}/init.js", type: "application/javascript"}
+          - {host: "static.sharepointonline.com", path: "/bld/_layouts/15/{hex16}/styles/fabric.css", type: "text/css"}
+          - {host: "res.cdn.office.net", path: "/officehub/{hex16}/images/ms-logo.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/_api/web/lists"
+        nav_targets: ["/sites/intranet/SitePages/Home.aspx"]
+        subresources:
+          - {path: "/_api/web/lists?$select=Title,Id", type: "application/json"}
+
+  onenote.officeapps.live.com:
+    cdn_domains: ["res.cdn.office.net", "c1-onenote-15.cdn.office.net"]
+    pages:
+      - path: "/o/onenoteframe.aspx?ui=en-us&rs=en-us"
+        nav_targets: ["/o/onenoteframe.aspx?edit=0&{hex16}"]
+        subresources:
+          - {host: "c1-onenote-15.cdn.office.net", path: "/o/{hex16}/scripts/onenote-main.js", type: "application/javascript"}
+          - {host: "c1-onenote-15.cdn.office.net", path: "/o/{hex16}/styles/onenote.css", type: "text/css"}
+          - {host: "res.cdn.office.net", path: "/onenote/{hex16}/images/onenote-logo.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/o/onenoteframe.aspx?edit=0&{hex16}"
+        nav_targets: ["/o/onenoteframe.aspx?ui=en-us&rs=en-us"]
+        subresources:
+          - {host: "c1-onenote-15.cdn.office.net", path: "/o/{hex16}/scripts/onenote-editor.js", type: "application/javascript"}
+          - {path: "/api/v1.0/me/notes/sections", type: "application/json"}
+
+  onedrive.live.com:
+    cdn_domains: ["spoprod-a.akamaihd.net", "res.cdn.office.net"]
+    pages:
+      - path: "/"
+        nav_targets: ["/redir?resid={hex16}", "/edit.aspx?resid={hex16}"]
+        subresources:
+          - {host: "spoprod-a.akamaihd.net", path: "/files/onedrive-f-{hex16}.js", type: "application/javascript"}
+          - {host: "spoprod-a.akamaihd.net", path: "/files/onedrive-f-{hex16}.css", type: "text/css"}
+          - {host: "res.cdn.office.net", path: "/onedrive/{hex16}/images/od-logo.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/redir?resid={hex16}"
+        nav_targets: ["/", "/edit.aspx?resid={hex16}"]
+        subresources:
+          - {host: "spoprod-a.akamaihd.net", path: "/files/onedrive-viewer-{hex16}.js", type: "application/javascript"}
+
+  login.microsoftonline.com:
+    cdn_domains: ["aadcdn.msftauth.net", "aadcdn.msauth.net"]
+    pages:
+      - path: "/common/oauth2/v2.0/authorize"
+        nav_targets: ["/common/oauth2/v2.0/token"]
+        subresources:
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/js/ConvergedLogin_PCore.js", type: "application/javascript"}
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/css/converged_login.css", type: "text/css"}
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/images/microsoft_logo.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/common/oauth2/v2.0/token"
+        nav_targets: ["/common/oauth2/v2.0/authorize"]
+        subresources:
+          - {path: "/common/discovery/instance", type: "application/json"}
+
+  accounts.google.com:
+    cdn_domains: ["www.gstatic.com", "accounts.cdn.mozilla.net"]
+    pages:
+      - path: "/ServiceLogin"
+        nav_targets: ["/signin/v2/challenge", "/o/oauth2/auth"]
+        subresources:
+          - {host: "www.gstatic.com", path: "/accountalerts/{hex8}/account.js", type: "application/javascript"}
+          - {host: "www.gstatic.com", path: "/accountalerts/{hex8}/account.css", type: "text/css"}
+          - {host: "www.gstatic.com", path: "/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/signin/v2/challenge"
+        nav_targets: ["/ServiceLogin"]
+        subresources:
+          - {host: "www.gstatic.com", path: "/accountalerts/{hex8}/challenge.js", type: "application/javascript"}
+
+  calendar.google.com:
+    cdn_domains: ["www.gstatic.com", "fonts.gstatic.com"]
+    pages:
+      - path: "/render"
+        nav_targets: ["/r/month", "/r/week", "/r/eventedit"]
+        subresources:
+          - {host: "www.gstatic.com", path: "/calendar/{hex8}/js/calendar-main.js", type: "application/javascript"}
+          - {host: "www.gstatic.com", path: "/calendar/{hex8}/css/calendar.css", type: "text/css"}
+          - {host: "fonts.gstatic.com", path: "/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2", type: "font/woff2"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/r/month"
+        nav_targets: ["/render", "/r/week", "/r/eventedit"]
+        subresources:
+          - {host: "www.gstatic.com", path: "/calendar/{hex8}/js/month-view.js", type: "application/javascript"}
+          - {path: "/calendar/v3/calendars/primary/events?timeMin=2026-01-01T00:00:00Z", type: "application/json"}
+
   www.google.com:
     cdn_domains: ["www.gstatic.com", "encrypted-tbn0.gstatic.com", "fonts.gstatic.com"]
     pages:
@@ -221,6 +313,148 @@ domains:
         subresources:
           - {path: "/svc/shreddit/community-more-posts/t5_2qh16?after={hex16}", type: "application/json"}
           - {host: "preview.redd.it", path: "/{hex16}.png?width=640&auto=webp&s={hex16}", type: "image/png"}
+
+  www.facebook.com:
+    cdn_domains: ["static.xx.fbcdn.net", "scontent.xx.fbcdn.net"]
+    pages:
+      - path: "/"
+        nav_targets: ["/login", "/groups/feed/"]
+        subresources:
+          - {host: "static.xx.fbcdn.net", path: "/rsrc.php/{hex16}.js", type: "application/javascript"}
+          - {host: "static.xx.fbcdn.net", path: "/rsrc.php/{hex16}.css", type: "text/css"}
+          - {host: "scontent.xx.fbcdn.net", path: "/v/{hex16}.jpg", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/login"
+        nav_targets: ["/"]
+        subresources:
+          - {host: "static.xx.fbcdn.net", path: "/rsrc.php/{hex16}.js", type: "application/javascript"}
+          - {host: "static.xx.fbcdn.net", path: "/rsrc.php/{hex16}.css", type: "text/css"}
+
+  aws.amazon.com:
+    cdn_domains: ["a0.awsstatic.com", "d1.awsstatic.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/ec2/", "/s3/", "/console/", "/solutions/case-studies/"]
+        subresources:
+          - {host: "a0.awsstatic.com", path: "/libra-css/images/logos/aws_logo_smile_{hex8}.png", type: "image/png"}
+          - {host: "a0.awsstatic.com", path: "/libra-css/css/main.{hex8}.css", type: "text/css"}
+          - {host: "d1.awsstatic.com", path: "/libs/scripts/aws-core.{hex8}.js", type: "application/javascript"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/console/"
+        nav_targets: ["/", "/ec2/", "/s3/"]
+        subresources:
+          - {host: "a0.awsstatic.com", path: "/libra-css/css/console.{hex8}.css", type: "text/css"}
+          - {host: "d1.awsstatic.com", path: "/libs/scripts/console.{hex8}.js", type: "application/javascript"}
+
+  pages.github.io:
+    cdn_domains: []
+    pages:
+      - path: "/"
+        nav_targets: ["/index.html", "/about"]
+        subresources:
+          - {path: "/assets/css/style.css", type: "text/css"}
+          - {path: "/assets/js/main.js", type: "application/javascript"}
+          - {path: "/assets/images/banner.jpg", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/index.html"
+        nav_targets: ["/", "/about"]
+        subresources:
+          - {path: "/assets/css/style.css", type: "text/css"}
+          - {path: "/assets/js/main.js", type: "application/javascript"}
+
+  blog.cloudflare.com:
+    cdn_domains: ["cf-assets.www.cloudflare.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/tag/security/", "/tag/speed-and-reliability/", "/{slug}/"]
+        subresources:
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/js/blog.{hex8}.js", type: "application/javascript"}
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/css/blog.{hex8}.css", type: "text/css"}
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/images/cf-blog-header.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/tag/security/"
+        nav_targets: ["/", "/{slug}/"]
+        subresources:
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/js/blog.{hex8}.js", type: "application/javascript"}
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/images/post-thumb-{hex8}.png", type: "image/png"}
+
+  www.cloudflare.com:
+    cdn_domains: ["cf-assets.www.cloudflare.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/products/cdn/", "/learning/what-is-cloudflare/", "/plans/"]
+        subresources:
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/js/www.{hex8}.js", type: "application/javascript"}
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/css/www.{hex8}.css", type: "text/css"}
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/images/cf-logo.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/products/cdn/"
+        nav_targets: ["/", "/plans/", "/learning/what-is-cloudflare/"]
+        subresources:
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/js/www.{hex8}.js", type: "application/javascript"}
+          - {host: "cf-assets.www.cloudflare.com", path: "/slt3lc6tev37/assets/images/cdn-hero.webp", type: "image/webp"}
+
+  dash.cloudflare.com:
+    cdn_domains: ["static.dash.cloudflare.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/login", "/{hex8}/domains", "/{hex8}/analytics"]
+        subresources:
+          - {host: "static.dash.cloudflare.com", path: "/js/app.{hex16}.js", type: "application/javascript"}
+          - {host: "static.dash.cloudflare.com", path: "/css/app.{hex16}.css", type: "text/css"}
+          - {host: "static.dash.cloudflare.com", path: "/img/cf-dash-logo.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/{hex8}/domains"
+        nav_targets: ["/", "/{hex8}/dns", "/{hex8}/analytics"]
+        subresources:
+          - {host: "static.dash.cloudflare.com", path: "/js/domains.{hex16}.js", type: "application/javascript"}
+          - {path: "/api/v4/zones?page=1&per_page=20", type: "application/json"}
+
+  www.example.com:
+    cdn_domains: []
+    pages:
+      - path: "/"
+        nav_targets: []
+        subresources:
+          - {path: "/css/style.css", type: "text/css"}
+          - {path: "/js/main.js", type: "application/javascript"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  zoom.us:
+    cdn_domains: ["st1.zoom.us", "st2.zoom.us"]
+    pages:
+      - path: "/"
+        nav_targets: ["/signin", "/j/{hex8}"]
+        subresources:
+          - {host: "st1.zoom.us", path: "/static/{hex8}/js/index.js", type: "application/javascript"}
+          - {host: "st1.zoom.us", path: "/static/{hex8}/css/index.css", type: "text/css"}
+          - {host: "st2.zoom.us", path: "/static/img/zoom-logo.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/signin"
+        nav_targets: ["/"]
+        subresources:
+          - {host: "st1.zoom.us", path: "/static/{hex8}/js/login.js", type: "application/javascript"}
+          - {host: "st1.zoom.us", path: "/static/{hex8}/css/login.css", type: "text/css"}
+
+  us02web.zoom.us:
+    cdn_domains: ["st1.zoom.us"]
+    pages:
+      - path: "/wc/join/{hex8}"
+        nav_targets: []
+        subresources:
+          - {host: "st1.zoom.us", path: "/static/{hex8}/js/webclient.js", type: "application/javascript"}
+          - {host: "st1.zoom.us", path: "/static/{hex8}/css/webclient.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  us06web.zoom.us:
+    cdn_domains: ["st1.zoom.us"]
+    pages:
+      - path: "/wc/join/{hex8}"
+        nav_targets: []
+        subresources:
+          - {host: "st1.zoom.us", path: "/static/{hex8}/js/webclient.js", type: "application/javascript"}
+          - {host: "st1.zoom.us", path: "/static/{hex8}/css/webclient.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
 
 # ─── Tier 2: Tag-based synthesis templates ────────────────────────────
 tags:

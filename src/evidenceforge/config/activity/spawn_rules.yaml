@@ -45,6 +45,7 @@ windows:
       - taskmgr.exe
       - regedit.exe
       - notepad.exe
+      - mstsc.exe
 
   # Applications that spawn child/utility subprocesses of the same exe name
   chrome.exe:
@@ -119,6 +120,12 @@ windows:
       - powershell.exe
       - conhost.exe
       - reg.exe
+      - docker.exe
+      - kubectl.exe
+      - psql.exe
+      - ssh.exe
+      - npm.cmd
+      - dsquery.exe
 
   powershell.exe:
     command_templates:
@@ -149,6 +156,12 @@ windows:
       - powershell.exe
       - conhost.exe
       - reg.exe
+      - docker.exe
+      - kubectl.exe
+      - psql.exe
+      - ssh.exe
+      - npm.cmd
+      - dsquery.exe
 
   code.exe:
     command_templates:
@@ -282,6 +295,11 @@ linux:
       - wc
       - bash
       - sh
+      - firefox
+      - google-chrome
+      - thunderbird
+      - ldapsearch
+      - redis-cli
 
   sh:
     command_templates:
