@@ -81,6 +81,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] **Coverage threshold mismatch (local 70% vs CI 90%)** — pyproject.toml `fail_under` doesn't match CI's `--cov-fail-under=90`. Devs pass locally, fail in CI.
 - [x] **CI runs tests 3 times** — 3 separate pytest invocations (unit, integration, both again for coverage). Consolidate to single run.
 - [x] **No pre-commit hooks** — ruff issues only caught in CI. Add pre-commit framework with ruff check + format hooks.
+- [ ] **Re-generation appends to existing output** — `GenerationEngine` creates output directories with `exist_ok=True` and emitters append to existing files. Re-running a scenario without manually clearing the output directory produces mixed old+new data. Should clean the output directory (or at least its per-sensor subdirectories) before writing.
 
 ### Tier 1: Foundational Correctness
 
@@ -211,6 +212,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Only 2 unique TicketOptions values; zero 4771 pre-auth failures — randomized TicketOptions per event type; boosted stale 4771 probability to 15%; added active-user typo 4771 at 2%/hour
 - [x] File server has no domain user logon events — type 3 logon+logoff pairs for SMB access in baseline traffic profiles and storyline causal expansion
 - [x] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY" — _subject_domain() helper in windows.py returns "NT AUTHORITY" for SYSTEM/NETWORK SERVICE/LOCAL SERVICE
+- [ ] Event 4672 LogonId 0x3e7 for domain users — SYSTEM-only logon ID (0x3e7) assigned to regular domain users (e.g., james.washington, aisha.johnson) in Special Privileges events
 
 **Process Trees:**
 - [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)
@@ -229,8 +231,10 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] HTTP MIME type mismatches with URI — _URI_MIME_MAP in baseline.py and generator.py pairs URIs to correct MIME types
 - [ ] Proxy format doesn't match standard Squid or Bluecoat output
 - [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
-- [ ] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — paths need hostname-aware selection
-- [ ] Proxy lacks session depth — 1 request per site, no cascading subresource loads (CSS/JS/images/API)
+- [x] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — site map data layer with 12 curated domains + 8 tag-based synthesis templates; browsing session generator selects paths from site-specific page definitions
+- [x] Proxy lacks session depth — browsing session model generates landing page + subresource cascade (CSS/JS/images/fonts/favicon/API) + navigation to additional pages with referrer chains; persona-driven intensity (light/normal/heavy); cross-domain CDN fan-out; CONNECT tunnel deduplication with 5-min timeout
+- [x] Proxy user-agent mismatch — removed system UAs (Windows-Update-Agent, Microsoft-CryptoAPI) from general _PROXY_UAS_WINDOWS pool; restricted workstation role traffic dns_tags to [background, windows]; added dns_tags to all persona profiles; retagged CDN/API domains in dns_registry
+- [x] Web access log referrer headers — tightened web_access emitter can_handle() to require dst_host (destination is a scenario system); prevents outbound HTTPS connections from creating entries on source workstation
 - [x] DHCP shows full discovery instead of renewals in mid-scenario windows — initial leases emitted during warm-up (suppressed); periodic REQUEST/ACK renewals at T/2 in _generate_system_traffic()
 
 **Cisco ASA:**
@@ -245,6 +249,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] No FILE events on attack hosts — storyline processes now pass ensure_file_event=True, guaranteeing a FILE/CREATE for the process image
 - [x] No USER_SESSION events for server-side RDP lateral movement — generate_rdp_session() calls generate_logon() on target, which dispatches USER_SESSION/LOGIN to eCAR with EdrContext
 - [x] Vary filenames in file operations — expanded _EDR_FILE_PATHS_WIN from 7 to 21 entries, _EDR_FILE_PATHS_LINUX from 5 to 20 entries
+- [ ] Template variable leak — literal `{psql_db}` appearing in eCAR output; unsubstituted template variable in process command line or file path
 
 **Cross-Source / General:**
 - [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps

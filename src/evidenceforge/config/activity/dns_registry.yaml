@@ -38,7 +38,7 @@ domains:
     tags: [web]
   - domain: api.cloudflare.com
     ips: ["104.18.25.35", "104.18.26.35"]
-    tags: [web]
+    tags: [cdn]
   - domain: blog.cloudflare.com
     ips: ["104.21.67.152", "104.21.68.152"]
     tags: [web]
@@ -49,13 +49,13 @@ domains:
     tags: [web]
   - domain: i.redd.it
     ips: ["151.101.65.140", "151.101.129.140"]
-    tags: [web]
+    tags: [cdn]
   - domain: old.reddit.com
     ips: ["151.101.129.140", "151.101.193.140"]
-    tags: [web]
+    tags: [cdn]
   - domain: v.redd.it
     ips: ["151.101.193.140", "151.101.1.140"]
-    tags: [web]
+    tags: [cdn]
 
   # === Akamai ===
   - domain: download.windowsupdate.com
@@ -63,15 +63,15 @@ domains:
     tags: [background, windows]
   - domain: static.akamai.net
     ips: ["23.72.134.56", "23.72.135.56"]
-    tags: [web]
+    tags: [cdn]
   - domain: media.akamai.net
     ips: ["23.205.100.42", "23.205.101.42"]
-    tags: [web]
+    tags: [cdn]
 
   # === AWS CloudFront ===
   - domain: cdn.jsdelivr.net
     ips: ["54.230.129.180", "54.230.130.180"]
-    tags: [web]
+    tags: [cdn]
   - domain: aws.amazon.com
     ips: ["52.85.83.55", "52.85.84.55"]
     tags: [web]
@@ -120,7 +120,7 @@ domains:
     tags: [web]
   - domain: registry.npmjs.org
     ips: ["199.232.64.133", "199.232.65.133"]
-    tags: [web]
+    tags: [dev]
   - domain: pages.github.io
     ips: ["185.199.108.153", "185.199.109.153"]
     tags: [web]

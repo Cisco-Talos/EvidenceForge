@@ -22,10 +22,16 @@
 
 """HTTP/HTTPS forward proxy access log emitter (W3C Extended format)."""
 
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+
+# CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
+# only when no tunnel exists for this (client_ip, host) pair, or the
+# existing tunnel has been idle longer than this threshold.
+_CONNECT_TUNNEL_TIMEOUT_S = 300  # 5 minutes
 
 
 class ProxyEmitter(HostMultiplexEmitter):
@@ -34,11 +40,18 @@ class ProxyEmitter(HostMultiplexEmitter):
     Per-host FQDN directory routing: each proxy server gets its own access log.
 
     Handles SecurityEvents with ProxyContext (fan-out from connection events).
-    For HTTPS connections, emits a CONNECT entry followed by the actual request.
+    For HTTPS connections, emits a CONNECT entry only for the first request
+    in a tunnel session (per client_ip + host), then subsequent requests
+    reuse the existing tunnel without additional CONNECTs.
     """
 
     _log_filename = "proxy_access.log"
     _supported_types: set[str] = {"connection"}
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Track active CONNECT tunnels: (client_ip, host) -> last_activity_time
+        self._active_tunnels: dict[tuple[str, str], datetime] = {}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry a ProxyContext."""
@@ -47,30 +60,44 @@ class ProxyEmitter(HostMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         """Render ProxyContext to W3C Extended format.
 
-        For HTTPS (port 443), emits CONNECT entry first, then the actual request.
+        For HTTPS (port 443), emits CONNECT entry only for the first request
+        to a (client_ip, host) pair within the tunnel timeout window.
         """
         px = event.proxy
         net = event.network
 
-        # For HTTPS: emit CONNECT entry first (unless generator already set CONNECT)
+        # For HTTPS: emit CONNECT only if no active tunnel exists
         if net and net.dst_port == 443 and px.method != "CONNECT":
-            connect_data = {
-                "timestamp": event.timestamp,
-                "client_ip": px.client_ip,
-                "username": px.username,
-                "method": "CONNECT",
-                "url": f"{px.host}:443",
-                "status_code": 200,
-                "sc_bytes": 0,
-                "cs_bytes": 0,
-                "time_taken": 0,
-                "user_agent": px.user_agent,
-                "host": f"{px.host}:443",
-                "content_type": None,
-                "cache_result": "NONE",
-                "_host_fqdn": px.proxy_fqdn,
-            }
-            self._dispatch(connect_data)
+            tunnel_key = (px.client_ip, px.host)
+            last_activity = self._active_tunnels.get(tunnel_key)
+            needs_connect = True
+            if last_activity is not None:
+                elapsed = (event.timestamp - last_activity).total_seconds()
+                if elapsed < _CONNECT_TUNNEL_TIMEOUT_S:
+                    needs_connect = False
+
+            if needs_connect:
+                connect_data = {
+                    "timestamp": event.timestamp,
+                    "client_ip": px.client_ip,
+                    "username": px.username,
+                    "method": "CONNECT",
+                    "url": f"{px.host}:443",
+                    "status_code": 200,
+                    "sc_bytes": 0,
+                    "cs_bytes": 0,
+                    "time_taken": 0,
+                    "user_agent": px.user_agent,
+                    "host": f"{px.host}:443",
+                    "content_type": None,
+                    "cache_result": "NONE",
+                    "referrer": None,
+                    "_host_fqdn": px.proxy_fqdn,
+                }
+                self._dispatch(connect_data)
+
+            # Update tunnel last-activity timestamp
+            self._active_tunnels[tunnel_key] = event.timestamp
 
         # Emit the actual request
         event_data = {
@@ -87,6 +114,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "host": px.host,
             "content_type": px.content_type,
             "cache_result": px.cache_result,
+            "referrer": px.referrer or None,
             "_host_fqdn": px.proxy_fqdn,
         }
         self._dispatch(event_data)
@@ -113,6 +141,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "host": event_data.get("host"),
             "content_type": event_data.get("content_type"),
             "cache_result": event_data.get("cache_result"),
+            "referrer": event_data.get("referrer"),
         }
         rendered = self._template.render(**context)
         return rendered.strip()

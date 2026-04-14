@@ -12,3 +12,4 @@ application_usage:
   - "SQL Client"
   - "Tableau"
 risk_profile: "medium"
+browsing_intensity: "normal"

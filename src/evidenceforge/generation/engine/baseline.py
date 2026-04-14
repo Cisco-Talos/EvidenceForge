@@ -2675,21 +2675,153 @@ class BaselineMixin:
                     )
 
                 self.state_manager.set_current_time(ts)
-                self.activity_generator.generate_connection(
-                    src_ip=system.ip,
-                    dst_ip=dst_ip,
-                    time=ts,
-                    dst_port=conn["port"],
-                    proto=conn.get("proto", "tcp"),
-                    service=conn.get("service"),
-                    duration=rng.uniform(0.1, 10.0),
-                    orig_bytes=rng.randint(200, 8000),
-                    resp_bytes=rng.randint(500, 80000),
-                    emit_dns=conn.get("emit_dns", False),
-                    source_system=system,
-                    hostname=hostname,
-                    pid=persona_pid,
-                )
+
+                # For HTTP/HTTPS: generate browsing session with subresources,
+                # referrer chains, and cross-domain CDN fan-out.
+                svc = conn.get("service", "")
+                if svc in ("ssl", "http") and hostname:
+                    self._emit_browsing_session(
+                        system=system,
+                        user_obj=user_obj,
+                        session=session,
+                        hostname=hostname,
+                        dst_ip=dst_ip,
+                        conn=conn,
+                        base_ts=ts,
+                        persona_pid=persona_pid,
+                        os_cat=os_cat,
+                        rng=rng,
+                    )
+                else:
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        time=ts,
+                        dst_port=conn["port"],
+                        proto=conn.get("proto", "tcp"),
+                        service=conn.get("service"),
+                        duration=rng.uniform(0.1, 10.0),
+                        orig_bytes=rng.randint(200, 8000),
+                        resp_bytes=rng.randint(500, 80000),
+                        emit_dns=conn.get("emit_dns", False),
+                        source_system=system,
+                        hostname=hostname,
+                        pid=persona_pid,
+                    )
+
+    def _emit_browsing_session(
+        self,
+        system: Any,
+        user_obj: Any,
+        session: Any,
+        hostname: str,
+        dst_ip: str,
+        conn: dict,
+        base_ts: datetime,
+        persona_pid: int,
+        os_cat: str,
+        rng: Any,
+    ) -> None:
+        """Generate a multi-request browsing session for an HTTP/HTTPS persona connection.
+
+        Replaces the single generate_connection() call with a session model
+        that produces a landing page, subresource cascade, navigation, and
+        referrer chains.
+        """
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.browsing_session import (
+            generate_browsing_session,
+        )
+        from evidenceforge.generation.activity.dns_registry import (
+            get_domain_tags,
+            pick_domain_and_ip,
+        )
+
+        domain_tags = get_domain_tags(hostname) if hostname else []
+
+        # Resolve browsing intensity: user override > persona > default
+        intensity = "normal"
+        if user_obj and getattr(user_obj, "browsing_intensity", None):
+            intensity = user_obj.browsing_intensity
+        elif user_obj and user_obj.persona:
+            for p in self.scenario.personas:
+                if p.name == user_obj.persona:
+                    intensity = getattr(p, "browsing_intensity", "normal")
+                    break
+
+        session_requests = generate_browsing_session(
+            rng=rng,
+            hostname=hostname,
+            domain_tags=domain_tags,
+            source_os=os_cat,
+            browsing_intensity=intensity,
+            port=conn.get("port", 443),
+        )
+
+        if not session_requests:
+            return
+
+        # Pick a consistent UA for the entire session
+        if os_cat == "linux":
+            _session_uas = [
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            ]
+        else:
+            _session_uas = [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+            ]
+        session_ua = rng.choice(_session_uas)
+
+        for req in session_requests:
+            req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+            self.state_manager.set_current_time(req_ts)
+
+            # Resolve destination IP for CDN subresources
+            req_dst_ip = dst_ip
+            req_hostname = hostname
+            if req.hostname != hostname:
+                req_hostname = req.hostname
+                # Resolve CDN domain to an IP
+                _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
+                if cdn_ip:
+                    req_dst_ip = cdn_ip
+
+            http_ctx = HttpContext(
+                method=req.method,
+                host=req_hostname,
+                uri=req.path,
+                version="1.1",
+                user_agent=session_ua,
+                request_body_len=req.request_body_len,
+                response_body_len=req.response_body_len,
+                status_code=200,
+                status_msg="OK",
+                referrer=req.referrer,
+                trans_depth=req.trans_depth,
+                resp_mime_types=[req.content_type] if req.content_type else [],
+                tags=[],
+            )
+
+            self.activity_generator.generate_connection(
+                src_ip=system.ip,
+                dst_ip=req_dst_ip,
+                time=req_ts,
+                dst_port=conn.get("port", 443),
+                proto=conn.get("proto", "tcp"),
+                service=conn.get("service"),
+                duration=rng.uniform(0.05, 2.0),
+                orig_bytes=req.request_body_len,
+                resp_bytes=req.response_body_len,
+                emit_dns=req.is_page_load,  # DNS only for page loads, not subresources
+                source_system=system,
+                hostname=req_hostname,
+                pid=persona_pid,
+                http=http_ctx,
+            )
 
     def _generate_system_traffic(
         self,

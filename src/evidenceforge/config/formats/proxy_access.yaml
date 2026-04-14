@@ -77,6 +77,11 @@ fields:
     required: false
     description: "Cache result (HIT, MISS, NONE, DENIED)"
 
+  - name: referrer
+    type: string
+    required: false
+    description: "HTTP Referer header"
+
 output:
   format: text
   file_extension: ".log"
@@ -84,6 +89,6 @@ output:
   header_template: |
     #Software: EvidenceForge Proxy Log
     #Version: 1.0
-    #Fields: date time c-ip cs-username cs-method cs-uri sc-status sc-bytes cs-bytes time-taken cs(User-Agent) cs-host rs(Content-Type) s-cache-result
+    #Fields: date time c-ip cs-username cs-method cs-uri sc-status sc-bytes cs-bytes time-taken cs(User-Agent) cs-host rs(Content-Type) s-cache-result cs(Referer)
   template: |
-    {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }} {{ client_ip }} {{ username if username else '-' }} {{ method }} {{ url }} {{ status_code }} {{ sc_bytes if sc_bytes else 0 }} {{ cs_bytes if cs_bytes else 0 }} {{ time_taken if time_taken else 0 }} "{{ user_agent if user_agent else '-' }}" {{ host }} {{ content_type if content_type else '-' }} {{ cache_result if cache_result else '-' }}
+    {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }} {{ client_ip }} {{ username if username else '-' }} {{ method }} {{ url }} {{ status_code }} {{ sc_bytes if sc_bytes else 0 }} {{ cs_bytes if cs_bytes else 0 }} {{ time_taken if time_taken else 0 }} "{{ user_agent if user_agent else '-' }}" {{ host }} {{ content_type if content_type else '-' }} {{ cache_result if cache_result else '-' }} "{{ referrer if referrer else '-' }}"

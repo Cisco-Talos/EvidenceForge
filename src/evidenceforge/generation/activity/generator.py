@@ -453,6 +453,8 @@ _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 
 # OS-aware proxy User-Agent pools
 _PROXY_UAS_WINDOWS = (
+    # Browser UAs only — system-level UAs (Microsoft-CryptoAPI, Windows-Update-Agent)
+    # are handled by domain-specific overrides in proxy_uri_templates.yaml.
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
@@ -460,8 +462,6 @@ _PROXY_UAS_WINDOWS = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-    "Microsoft-CryptoAPI/10.0",
-    "Windows-Update-Agent/10.0.19041.1",
 )
 
 _PROXY_UAS_LINUX = (
@@ -1843,19 +1843,28 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-                # HTTPS: forward proxies log CONNECT tunnels, not decrypted content
-                # HTTP: proxies log full URL with verb
-                if dst_port == 443:
-                    proxy_method = "CONNECT"
-                    proxy_host_port = (
-                        proxy_hostname if ":" in proxy_hostname else f"{proxy_hostname}:443"
+                # When a pre-built HttpContext exists (from browsing session
+                # generator), derive proxy fields from it.  The proxy emitter
+                # handles CONNECT tunnel deduplication automatically.
+                if event.http is not None:
+                    scheme = "https" if dst_port == 443 else "http"
+                    proxy_method = event.http.method
+                    url = f"{scheme}://{proxy_hostname}{event.http.uri}"
+                    proxy_content_type = (
+                        event.http.resp_mime_types[0] if event.http.resp_mime_types else "text/html"
                     )
-                    url = proxy_host_port
+                    proxy_ua_override = None  # session UA is already on HttpContext
+                    user_agent = event.http.user_agent
+                    proxy_referrer = event.http.referrer
+                elif dst_port == 443:
+                    # Legacy single-connection HTTPS path
                     domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
-                    _, proxy_content_type, _, proxy_ua_override = pick_proxy_uri(
+                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
+                    url = f"https://{proxy_hostname}{path}"
+                    proxy_referrer = ""
                 else:
                     domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
@@ -1863,13 +1872,15 @@ class ActivityGenerator:
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
                     url = f"http://{proxy_hostname}{path}"
-                # OS-aware proxy User-Agent selection
-                if proxy_ua_override:
-                    user_agent = proxy_ua_override
-                elif source_system and _get_os_category(source_system.os) == "linux":
-                    user_agent = rng.choice(_PROXY_UAS_LINUX)
-                else:
-                    user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+                    proxy_referrer = ""
+                # OS-aware proxy User-Agent selection (skip when session set it)
+                if event.http is None:
+                    if proxy_ua_override:
+                        user_agent = proxy_ua_override
+                    elif source_system and _get_os_category(source_system.os) == "linux":
+                        user_agent = rng.choice(_PROXY_UAS_LINUX)
+                    else:
+                        user_agent = rng.choice(_PROXY_UAS_WINDOWS)
                 cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
@@ -1899,6 +1910,7 @@ class ActivityGenerator:
                     user_agent=user_agent,
                     content_type=proxy_content_type,
                     cache_result=cache_result,
+                    referrer=proxy_referrer,
                     proxy_fqdn=proxy_fqdn,
                 )
 

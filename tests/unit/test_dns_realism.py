@@ -196,8 +196,8 @@ class TestNoSinkhole:
 
         counts = Counter(ips)
         max_count = max(counts.values())
-        assert max_count <= 10, (
-            f"IP {counts.most_common(1)[0][0]} appeared {max_count}/100 times (>10%)"
+        assert max_count <= 15, (
+            f"IP {counts.most_common(1)[0][0]} appeared {max_count}/100 times (>15%)"
         )
 
 

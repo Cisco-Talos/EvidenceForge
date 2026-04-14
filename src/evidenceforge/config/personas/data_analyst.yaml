@@ -13,3 +13,4 @@ application_usage:
   - "SQL Client"
   - "Chrome"
 risk_profile: "medium"
+browsing_intensity: "heavy"

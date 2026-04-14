@@ -1,0 +1,419 @@
+# Site map definitions for realistic browsing session generation.
+#
+# Three tiers:
+#   1. Curated domains: Full page/subresource/CDN mappings for high-traffic sites
+#   2. Tag-based synthesis: Page templates per domain tag (saas, healthcare, etc.)
+#   3. Generic fallback: Minimal site structure for unknown domains
+#
+# Template variables (same as proxy_uri_templates.yaml):
+#   {guid}        - random UUID
+#   {hex8}        - 8-char hex string
+#   {hex16}       - 16-char hex string
+#   {search_term} - random search term
+#   {n}           - random integer 1-20
+#   {slug}        - random URL slug
+
+# ─── Search terms for template substitution ───────────────────────────
+search_terms:
+  - "enterprise+security+best+practices"
+  - "hipaa+compliance+requirements"
+  - "windows+server+2022+patch"
+  - "network+monitoring+tools"
+  - "quarterly+budget+template"
+  - "employee+handbook+template"
+  - "remote+desktop+troubleshooting"
+  - "python+data+analysis"
+  - "cloud+migration+checklist"
+  - "project+management+methodology"
+
+# ─── Tier 1: Curated domain site maps ────────────────────────────────
+domains:
+  outlook.office365.com:
+    cdn_domains: ["res.cdn.office.net", "r1.res.office365.com", "aadcdn.msftauth.net"]
+    pages:
+      - path: "/owa/"
+        nav_targets: ["/owa/#/mail", "/owa/#/calendar", "/owa/#/people"]
+        subresources:
+          - {host: "res.cdn.office.net", path: "/owamail/{hex16}/scripts/boot.js", type: "application/javascript"}
+          - {host: "res.cdn.office.net", path: "/owamail/{hex16}/styles/fabric.min.css", type: "text/css"}
+          - {host: "res.cdn.office.net", path: "/owamail/{hex16}/styles/owamail.css", type: "text/css"}
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/images/microsoft_logo.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/owa/#/mail"
+        nav_targets: ["/owa/#/mail/compose", "/owa/#/calendar", "/owa/#/mail/search"]
+        subresources:
+          - {host: "res.cdn.office.net", path: "/owamail/{hex16}/scripts/mailbox.bundle.js", type: "application/javascript"}
+          - {path: "/owa/service.svc?action=GetConversationItems", type: "application/json", method: "POST"}
+          - {path: "/owa/service.svc?action=GetFolder", type: "application/json", method: "POST"}
+          - {host: "res.cdn.office.net", path: "/owamail/{hex16}/resources/images/mailicon.png", type: "image/png"}
+      - path: "/owa/#/calendar"
+        nav_targets: ["/owa/#/mail", "/owa/#/calendar/view/week"]
+        subresources:
+          - {path: "/owa/service.svc?action=GetCalendarView", type: "application/json", method: "POST"}
+          - {host: "res.cdn.office.net", path: "/owamail/{hex16}/scripts/calendar.bundle.js", type: "application/javascript"}
+      - path: "/owa/#/mail/compose"
+        nav_targets: ["/owa/#/mail"]
+        subresources:
+          - {path: "/owa/service.svc?action=GetComposeData", type: "application/json", method: "POST"}
+
+  www.office.com:
+    cdn_domains: ["res.cdn.office.net", "c.s-microsoft.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/launch/word", "/launch/excel", "/launch/powerpoint", "/my"]
+        subresources:
+          - {host: "res.cdn.office.net", path: "/officehub/{hex16}/scripts/officehub.bundle.js", type: "application/javascript"}
+          - {host: "res.cdn.office.net", path: "/officehub/{hex16}/styles/officehub.css", type: "text/css"}
+          - {host: "c.s-microsoft.com", path: "/mscc/statics/mscc-0.5.0.min.js", type: "application/javascript"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/my"
+        nav_targets: ["/", "/launch/onedrive"]
+        subresources:
+          - {path: "/api/v2/me/recent?$top=20", type: "application/json"}
+          - {host: "res.cdn.office.net", path: "/officehub/{hex16}/scripts/recent.bundle.js", type: "application/javascript"}
+
+  teams.microsoft.com:
+    cdn_domains: ["statics.teams.cdn.office.net", "res.cdn.office.net"]
+    pages:
+      - path: "/"
+        nav_targets: ["/v2/#/conversations", "/v2/#/calendar", "/v2/#/files"]
+        subresources:
+          - {host: "statics.teams.cdn.office.net", path: "/hashedv2/app-{hex16}.js", type: "application/javascript"}
+          - {host: "statics.teams.cdn.office.net", path: "/hashedv2/styles-{hex16}.css", type: "text/css"}
+          - {host: "statics.teams.cdn.office.net", path: "/hashedv2/assets/teams-logo.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/v2/#/conversations"
+        nav_targets: ["/v2/#/calendar", "/v2/#/files", "/v2/#/conversations/{guid}"]
+        subresources:
+          - {path: "/api/csa/api/v1/teams/conversations?$top=30", type: "application/json"}
+          - {host: "statics.teams.cdn.office.net", path: "/hashedv2/chat-{hex16}.js", type: "application/javascript"}
+
+  www.google.com:
+    cdn_domains: ["www.gstatic.com", "encrypted-tbn0.gstatic.com", "fonts.gstatic.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/search?q={search_term}"]
+        subresources:
+          - {host: "www.gstatic.com", path: "/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png", type: "image/png"}
+          - {host: "www.gstatic.com", path: "/og/_/js/k=og.qtm.en_US.{hex8}.js", type: "application/javascript"}
+          - {path: "/gen_204?atyp=i", type: "text/html"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/search?q={search_term}"
+        nav_targets: ["/search?q={search_term}", "/images/search?q={search_term}"]
+        subresources:
+          - {host: "encrypted-tbn0.gstatic.com", path: "/images?q=tbn:{hex16}", type: "image/jpeg"}
+          - {host: "encrypted-tbn0.gstatic.com", path: "/images?q=tbn:{hex16}", type: "image/jpeg"}
+          - {host: "www.gstatic.com", path: "/og/_/ss/k=og.qtm.{hex8}.css", type: "text/css"}
+          - {host: "fonts.gstatic.com", path: "/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2", type: "font/woff2"}
+          - {path: "/gen_204?atyp=csi", type: "text/html"}
+
+  drive.google.com:
+    cdn_domains: ["ssl.gstatic.com", "lh3.googleusercontent.com"]
+    pages:
+      - path: "/drive/my-drive"
+        nav_targets: ["/drive/shared-with-me", "/drive/recent", "/drive/starred"]
+        subresources:
+          - {host: "ssl.gstatic.com", path: "/docs/common/cleardot.gif", type: "image/gif"}
+          - {host: "ssl.gstatic.com", path: "/docs/picker/{hex8}/js/picker.js", type: "application/javascript"}
+          - {path: "/_/DriveFs/data?hl=en", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/drive/shared-with-me"
+        nav_targets: ["/drive/my-drive", "/drive/recent"]
+        subresources:
+          - {path: "/_/DriveFs/data?hl=en&resource_keys=true", type: "application/json"}
+
+  github.com:
+    cdn_domains: ["github.githubassets.com", "avatars.githubusercontent.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/pulls", "/issues", "/notifications", "/explore"]
+        subresources:
+          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.css", type: "text/css"}
+          - {host: "github.githubassets.com", path: "/assets/vendors-{hex16}.js", type: "application/javascript"}
+          - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=40", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/pulls"
+        nav_targets: ["/", "/issues", "/notifications"]
+        subresources:
+          - {path: "/dashboard/recent-activity", type: "application/json"}
+          - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=20", type: "image/png"}
+      - path: "/explore"
+        nav_targets: ["/", "/explore/trending"]
+        subresources:
+          - {host: "github.githubassets.com", path: "/assets/explore-{hex16}.js", type: "application/javascript"}
+          - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=48", type: "image/png"}
+          - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=48", type: "image/png"}
+
+  slack.com:
+    cdn_domains: ["a.slack-edge.com", "ca.slack-edge.com"]
+    pages:
+      - path: "/client"
+        nav_targets: ["/client/{hex8}/channels", "/client/{hex8}/threads"]
+        subresources:
+          - {host: "a.slack-edge.com", path: "/bv1-13-{hex8}/client-boot-{hex16}.js", type: "application/javascript"}
+          - {host: "a.slack-edge.com", path: "/bv1-13-{hex8}/client-boot-css-{hex16}.css", type: "text/css"}
+          - {host: "ca.slack-edge.com", path: "/{hex16}/img/slack_hash_256.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  na139.salesforce.com:
+    cdn_domains: ["static.lightning.force.com"]
+    pages:
+      - path: "/lightning/page/home"
+        nav_targets: ["/lightning/o/Opportunity/list", "/lightning/o/Account/list", "/lightning/o/Lead/list"]
+        subresources:
+          - {host: "static.lightning.force.com", path: "/cs{hex8}/auraFW/javascript/{hex16}/aura_prod.js", type: "application/javascript"}
+          - {host: "static.lightning.force.com", path: "/cs{hex8}/auraFW/css/{hex16}/aura_prod.css", type: "text/css"}
+          - {path: "/aura?r=1&ui-home-page.Home.getListViewData=1", type: "application/json", method: "POST"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/lightning/o/Opportunity/list"
+        nav_targets: ["/lightning/page/home", "/lightning/o/Account/list", "/lightning/r/Opportunity/{guid}/view"]
+        subresources:
+          - {path: "/aura?r=2&ui-list.ListViewManager.getListViewData=1", type: "application/json", method: "POST"}
+
+  stackoverflow.com:
+    cdn_domains: ["cdn.sstatic.net"]
+    pages:
+      - path: "/"
+        nav_targets: ["/questions", "/questions/tagged/python", "/questions/tagged/javascript"]
+        subresources:
+          - {host: "cdn.sstatic.net", path: "/Js/full.en.js?v={hex8}", type: "application/javascript"}
+          - {host: "cdn.sstatic.net", path: "/Shared/stacks.css?v={hex8}", type: "text/css"}
+          - {host: "cdn.sstatic.net", path: "/Sites/stackoverflow/Img/favicon.ico", type: "image/x-icon"}
+      - path: "/questions"
+        nav_targets: ["/", "/questions/tagged/python", "/questions/{n}"]
+        subresources:
+          - {host: "cdn.sstatic.net", path: "/Js/stub.en.js?v={hex8}", type: "application/javascript"}
+
+  www.bing.com:
+    cdn_domains: ["r.bing.com", "th.bing.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/search?q={search_term}"]
+        subresources:
+          - {host: "r.bing.com", path: "/rp/{hex16}.js", type: "application/javascript"}
+          - {host: "r.bing.com", path: "/rp/{hex16}.css", type: "text/css"}
+          - {host: "th.bing.com", path: "/th?id=OHR.{hex8}&w=1920", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/search?q={search_term}"
+        nav_targets: ["/", "/search?q={search_term}", "/images/search?q={search_term}"]
+        subresources:
+          - {host: "r.bing.com", path: "/rp/{hex16}.js", type: "application/javascript"}
+          - {host: "th.bing.com", path: "/th?id=OIP.{hex16}&w=200", type: "image/jpeg"}
+
+  www.reddit.com:
+    cdn_domains: ["www.redditstatic.com", "preview.redd.it"]
+    pages:
+      - path: "/"
+        nav_targets: ["/r/popular", "/r/all", "/r/technology", "/r/netsec"]
+        subresources:
+          - {host: "www.redditstatic.com", path: "/desktop2x/js/vendors~Reddit.{hex16}.js", type: "application/javascript"}
+          - {host: "www.redditstatic.com", path: "/desktop2x/css/Reddit.{hex16}.css", type: "text/css"}
+          - {host: "preview.redd.it", path: "/{hex16}.jpg?width=640&auto=webp&s={hex16}", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/r/technology"
+        nav_targets: ["/", "/r/technology/comments/{hex8}", "/r/netsec"]
+        subresources:
+          - {path: "/svc/shreddit/community-more-posts/t5_2qh16?after={hex16}", type: "application/json"}
+          - {host: "preview.redd.it", path: "/{hex16}.png?width=640&auto=webp&s={hex16}", type: "image/png"}
+
+# ─── Tier 2: Tag-based synthesis templates ────────────────────────────
+tags:
+  saas:
+    page_templates:
+      - path: "/dashboard"
+        nav_targets: ["/settings", "/reports", "/analytics", "/users"]
+        subresource_pattern: "saas_app"
+      - path: "/reports"
+        nav_targets: ["/dashboard", "/reports/export", "/reports/scheduled"]
+        subresource_pattern: "saas_app"
+      - path: "/settings"
+        nav_targets: ["/dashboard", "/settings/profile", "/settings/security"]
+        subresource_pattern: "saas_app"
+    subresource_patterns:
+      saas_app:
+        - {path: "/static/js/vendor.chunk.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/js/main.chunk.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/main.{hex8}.css", type: "text/css"}
+        - {path: "/api/v1/me", type: "application/json"}
+        - {path: "/api/v1/notifications?unread=true", type: "application/json"}
+        - {path: "/static/img/logo.svg", type: "image/svg+xml"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  healthcare:
+    page_templates:
+      - path: "/ehr/"
+        nav_targets: ["/ehr/patient/search", "/ehr/orders", "/ehr/schedule", "/ehr/inbox"]
+        subresource_pattern: "healthcare_app"
+      - path: "/ehr/patient/search"
+        nav_targets: ["/ehr/", "/ehr/patient/{hex8}", "/ehr/patient/search?q={search_term}"]
+        subresource_pattern: "healthcare_app"
+      - path: "/ehr/patient/{hex8}"
+        nav_targets: ["/ehr/patient/search", "/ehr/patient/{hex8}/chart", "/ehr/patient/{hex8}/orders"]
+        subresource_pattern: "healthcare_detail"
+      - path: "/ehr/orders"
+        nav_targets: ["/ehr/", "/ehr/orders/new", "/ehr/orders/pending"]
+        subresource_pattern: "healthcare_app"
+    subresource_patterns:
+      healthcare_app:
+        - {path: "/static/js/ehr-core.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/js/ehr-vendor.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/ehr-theme.{hex8}.css", type: "text/css"}
+        - {path: "/api/v2/session/keepalive", type: "application/json", method: "POST"}
+        - {path: "/static/img/health-logo.png", type: "image/png"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+      healthcare_detail:
+        - {path: "/static/js/ehr-core.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/ehr-theme.{hex8}.css", type: "text/css"}
+        - {path: "/api/v2/patient/{hex8}/summary", type: "application/json"}
+        - {path: "/api/v2/patient/{hex8}/vitals", type: "application/json"}
+        - {path: "/api/v2/patient/{hex8}/medications", type: "application/json"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  web:
+    page_templates:
+      - path: "/"
+        nav_targets: ["/about", "/products", "/blog", "/contact", "/login"]
+        subresource_pattern: "standard_web"
+      - path: "/about"
+        nav_targets: ["/", "/contact", "/careers"]
+        subresource_pattern: "content_page"
+      - path: "/products"
+        nav_targets: ["/", "/products/{slug}", "/pricing"]
+        subresource_pattern: "content_page"
+      - path: "/blog"
+        nav_targets: ["/", "/blog/{slug}", "/blog/page/{n}"]
+        subresource_pattern: "content_page"
+      - path: "/login"
+        nav_targets: ["/dashboard", "/"]
+        subresource_pattern: "standard_web"
+    subresource_patterns:
+      standard_web:
+        - {path: "/assets/css/main.min.{hex8}.css", type: "text/css"}
+        - {path: "/assets/js/app.bundle.{hex8}.js", type: "application/javascript"}
+        - {path: "/assets/js/vendor.{hex8}.js", type: "application/javascript"}
+        - {path: "/assets/img/hero.webp", type: "image/webp"}
+        - {path: "/assets/img/logo.svg", type: "image/svg+xml"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+      content_page:
+        - {path: "/assets/css/main.min.{hex8}.css", type: "text/css"}
+        - {path: "/assets/js/app.bundle.{hex8}.js", type: "application/javascript"}
+        - {path: "/assets/img/content/{hex8}.jpg", type: "image/jpeg"}
+        - {path: "/assets/img/content/{hex8}.webp", type: "image/webp"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  search:
+    page_templates:
+      - path: "/"
+        nav_targets: ["/search?q={search_term}"]
+        subresource_pattern: "search_page"
+      - path: "/search?q={search_term}"
+        nav_targets: ["/", "/search?q={search_term}", "/images?q={search_term}"]
+        subresource_pattern: "search_results"
+    subresource_patterns:
+      search_page:
+        - {path: "/static/js/search.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/search.{hex8}.css", type: "text/css"}
+        - {path: "/static/img/logo.png", type: "image/png"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+      search_results:
+        - {path: "/static/js/search.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/results.{hex8}.css", type: "text/css"}
+        - {path: "/static/img/thumb/{hex8}.jpg", type: "image/jpeg"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  social:
+    page_templates:
+      - path: "/"
+        nav_targets: ["/feed", "/messages", "/notifications", "/profile"]
+        subresource_pattern: "social_app"
+      - path: "/feed"
+        nav_targets: ["/", "/feed", "/messages"]
+        subresource_pattern: "social_feed"
+    subresource_patterns:
+      social_app:
+        - {path: "/static/js/app.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/app.{hex8}.css", type: "text/css"}
+        - {path: "/api/v1/feed?page=1", type: "application/json"}
+        - {path: "/static/img/avatar/{hex8}.jpg", type: "image/jpeg"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+      social_feed:
+        - {path: "/static/js/feed.{hex8}.js", type: "application/javascript"}
+        - {path: "/api/v1/feed?page=1", type: "application/json"}
+        - {path: "/static/img/post/{hex8}.jpg", type: "image/jpeg"}
+        - {path: "/static/img/post/{hex8}.webp", type: "image/webp"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  dev:
+    page_templates:
+      - path: "/"
+        nav_targets: ["/docs", "/api", "/pricing", "/login"]
+        subresource_pattern: "dev_portal"
+      - path: "/docs"
+        nav_targets: ["/docs/getting-started", "/docs/api-reference", "/docs/examples"]
+        subresource_pattern: "dev_docs"
+      - path: "/docs/api-reference"
+        nav_targets: ["/docs", "/docs/getting-started", "/docs/changelog"]
+        subresource_pattern: "dev_docs"
+    subresource_patterns:
+      dev_portal:
+        - {path: "/assets/js/app.{hex8}.js", type: "application/javascript"}
+        - {path: "/assets/css/main.{hex8}.css", type: "text/css"}
+        - {path: "/assets/img/logo.svg", type: "image/svg+xml"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+      dev_docs:
+        - {path: "/assets/js/docs.{hex8}.js", type: "application/javascript"}
+        - {path: "/assets/css/docs.{hex8}.css", type: "text/css"}
+        - {path: "/assets/js/prism.{hex8}.js", type: "application/javascript"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  internal:
+    page_templates:
+      - path: "/"
+        nav_targets: ["/login", "/dashboard", "/status"]
+        subresource_pattern: "internal_app"
+      - path: "/dashboard"
+        nav_targets: ["/", "/reports", "/admin", "/settings"]
+        subresource_pattern: "internal_app"
+      - path: "/admin"
+        nav_targets: ["/dashboard", "/admin/users", "/admin/config"]
+        subresource_pattern: "internal_app"
+    subresource_patterns:
+      internal_app:
+        - {path: "/static/app.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/style.{hex8}.css", type: "text/css"}
+        - {path: "/api/v1/health", type: "application/json"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+  storage:
+    page_templates:
+      - path: "/"
+        nav_targets: ["/files", "/shared", "/recent", "/trash"]
+        subresource_pattern: "storage_app"
+      - path: "/files"
+        nav_targets: ["/", "/files/{slug}", "/shared"]
+        subresource_pattern: "storage_app"
+    subresource_patterns:
+      storage_app:
+        - {path: "/static/js/filemanager.{hex8}.js", type: "application/javascript"}
+        - {path: "/static/css/filemanager.{hex8}.css", type: "text/css"}
+        - {path: "/api/v2/files?sort=modified", type: "application/json"}
+        - {path: "/static/img/icons/sprite.svg", type: "image/svg+xml"}
+        - {path: "/favicon.ico", type: "image/x-icon"}
+
+# ─── Tier 3: Generic fallback ────────────────────────────────────────
+# Domains matching neither curated nor tag-based get this minimal structure
+generic:
+  page_templates:
+    - path: "/"
+      nav_targets: ["/about", "/services", "/contact"]
+      subresource_pattern: "generic_site"
+    - path: "/about"
+      nav_targets: ["/", "/contact"]
+      subresource_pattern: "generic_site"
+  subresource_patterns:
+    generic_site:
+      - {path: "/css/style.css", type: "text/css"}
+      - {path: "/js/main.js", type: "application/javascript"}
+      - {path: "/images/banner.jpg", type: "image/jpeg"}
+      - {path: "/favicon.ico", type: "image/x-icon"}

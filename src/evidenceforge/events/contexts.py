@@ -443,6 +443,7 @@ class ProxyContext:
     user_agent: str = ""
     content_type: str = ""
     cache_result: str = "MISS"  # HIT, MISS, NONE, DENIED
+    referrer: str = ""  # HTTP Referer header
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
 
 
