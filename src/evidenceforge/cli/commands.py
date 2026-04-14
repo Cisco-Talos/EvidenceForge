@@ -722,8 +722,13 @@ def info(
         raise typer.Exit(EXIT_INPUT_ERROR)
 
     if list_fields_flag:
-        for f in list_fields(data):
-            print(f)
+        fields = list_fields(data)
+        max_name = max(len(name) for name, _ in fields)
+        for name, desc in fields:
+            if desc:
+                print(f"{name:<{max_name}}  {desc}")
+            else:
+                print(name)
     elif field:
         value = resolve_field(data, field)
         if value is None:

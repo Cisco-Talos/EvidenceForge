@@ -221,19 +221,40 @@ def format_human_readable(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def list_fields(data: dict[str, Any], prefix: str = "") -> list[str]:
-    """List all valid dot-path field names from the info data.
+_FIELD_DESCRIPTIONS: dict[str, str] = {
+    "application_ids": "Application IDs in the catalog",
+    "config_writable": "Whether package config files are directly editable",
+    "dns_tags": "DNS tags in use across all domains",
+    "formats": "Supported log format names",
+    "install_type": "Package install type (editable or package)",
+    "overlay.exists": "Whether a project-local overlay directory exists",
+    "overlay.files": "YAML files in the overlay directory",
+    "overlay.path": "Path to the overlay directory",
+    "paths.activity": "Activity config directory (dns, traffic, apps, etc.)",
+    "paths.config_root": "Root config directory",
+    "paths.evaluation": "Evaluation rules directory",
+    "paths.formats": "Format definitions directory",
+    "paths.personas": "Persona definitions directory",
+    "personas": "Built-in persona names (package + overlay)",
+    "system_roles": "System role names from traffic profiles",
+    "version": "EvidenceForge version",
+}
+
+
+def list_fields(data: dict[str, Any], prefix: str = "") -> list[tuple[str, str]]:
+    """List all valid dot-path field names with descriptions.
 
     Returns:
-        Sorted list of dot-paths (e.g., ["config_writable", "overlay.exists", "paths.activity", ...]).
+        Sorted list of (field_name, description) tuples.
     """
-    fields: list[str] = []
+    fields: list[tuple[str, str]] = []
     for key, value in data.items():
         full_key = f"{prefix}.{key}" if prefix else key
         if isinstance(value, dict):
             fields.extend(list_fields(value, full_key))
         else:
-            fields.append(full_key)
+            desc = _FIELD_DESCRIPTIONS.get(full_key, "")
+            fields.append((full_key, desc))
     return sorted(fields)
 
 
