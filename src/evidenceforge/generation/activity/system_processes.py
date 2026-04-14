@@ -36,6 +36,54 @@ def load_system_processes() -> dict[str, Any]:
     return _CACHED_DATA
 
 
+_CACHED_BINARY_EXES: set[str] | None = None
+_CACHED_BINARY_PATHS: dict[str, str] | None = None
+
+
+def get_system_binary_exes() -> set[str]:
+    """Return the set of all system binary exe names (both OSes).
+
+    Reads from the ``system_binaries`` section of system_processes.yaml
+    (including overlay). This replaces the hardcoded ``_SYSTEM_BINARIES``
+    frozenset that was previously in application_catalog.py.
+    """
+    global _CACHED_BINARY_EXES
+    if _CACHED_BINARY_EXES is not None:
+        return _CACHED_BINARY_EXES
+
+    data = load_system_processes()
+    exes: set[str] = set()
+    for os_binaries in data.get("system_binaries", {}).values():
+        if isinstance(os_binaries, list):
+            for entry in os_binaries:
+                exe = entry.get("exe", "")
+                if exe:
+                    exes.add(exe)
+    _CACHED_BINARY_EXES = exes
+    return exes
+
+
+def get_system_binary_path(exe_name: str) -> str | None:
+    """Look up the full image path for a system binary by exe name.
+
+    Case-insensitive lookup. Returns None if not found.
+    """
+    global _CACHED_BINARY_PATHS
+    if _CACHED_BINARY_PATHS is None:
+        data = load_system_processes()
+        paths: dict[str, str] = {}
+        for os_binaries in data.get("system_binaries", {}).values():
+            if isinstance(os_binaries, list):
+                for entry in os_binaries:
+                    exe = entry.get("exe", "")
+                    path = entry.get("path", "")
+                    if exe and path:
+                        paths[exe.lower()] = path
+        _CACHED_BINARY_PATHS = paths
+
+    return _CACHED_BINARY_PATHS.get(exe_name.lower())
+
+
 def _resolve_template(template: str, rng: random.Random, entry_params: dict | None) -> str:
     """Resolve {placeholder} tokens in a command template."""
     result = template

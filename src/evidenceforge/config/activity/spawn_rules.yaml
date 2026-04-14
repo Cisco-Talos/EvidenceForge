@@ -24,16 +24,16 @@ windows:
       - firefox.exe
       - msedge.exe
       - iexplore.exe
-      - outlook.exe
-      - winword.exe
-      - excel.exe
+      - OUTLOOK.EXE
+      - WINWORD.EXE
+      - EXCEL.EXE
       - powerpnt.exe
-      - teams.exe
-      - onedrive.exe
-      - acrobat.exe
-      - 7zfm.exe
+      - Teams.exe
+      - OneDrive.exe
+      - Acrobat.exe
+      - 7zFM.exe
       - notepad++.exe
-      - code.exe
+      - Code.exe
       - idea64.exe
       - sublime_text.exe
       - cmd.exe

@@ -122,11 +122,16 @@ def validate_config() -> ValidationResult:
     formats_dir = get_formats_directory()
     evaluation_dir = get_evaluation_directory()
 
-    # Load all the data we need (through the loaders, which include overlay merges)
+    # Load all data through overlay-aware loaders for consistency.
+    # Every config file should be loaded via its loader (not raw yaml.safe_load)
+    # so that overlay customizations are visible to validation.
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
     from evidenceforge.generation.activity.process_network import load_process_network_map
+    from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
+    from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
+    from evidenceforge.generation.activity.system_processes import load_system_processes
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
 
     dns_data = load_dns_registry()
@@ -134,6 +139,9 @@ def validate_config() -> ValidationResult:
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
+    proxy_data = load_proxy_uri_templates()
+    site_data = load_site_maps()
+    sys_proc_data = load_system_processes()
 
     # Collect file count
     yaml_files: list[Path] = []
@@ -192,18 +200,15 @@ def validate_config() -> ValidationResult:
                 )
 
     # --- Checks 7-10: DNS → Downstream Cascade ---
-    # Load proxy templates and site maps
-    proxy_data, _ = _safe_load_yaml(activity_dir / "proxy_uri_templates.yaml")
-    site_data, _ = _safe_load_yaml(activity_dir / "site_maps.yaml")
-
+    # proxy_data and site_data loaded above via overlay-aware loaders
     proxy_domains = (
-        set((proxy_data or {}).get("domains", {}).keys())
-        if isinstance((proxy_data or {}).get("domains"), dict)
+        set(proxy_data.get("domains", {}).keys())
+        if isinstance(proxy_data.get("domains"), dict)
         else set()
     )
     site_domains = (
-        set((site_data or {}).get("domains", {}).keys())
-        if isinstance((site_data or {}).get("domains"), dict)
+        set(site_data.get("domains", {}).keys())
+        if isinstance(site_data.get("domains"), dict)
         else set()
     )
 
@@ -275,7 +280,7 @@ def validate_config() -> ValidationResult:
     # Check 12: Orphaned persona_traffic keys
     persona_names = _get_persona_names(personas_dir)
     for persona_name in persona_traffic:
-        if persona_name not in persona_names and persona_name != "_default":
+        if persona_name not in persona_names and not persona_name.startswith("_"):
             result.issues.append(
                 Issue(
                     "WARNING",
@@ -363,8 +368,7 @@ def validate_config() -> ValidationResult:
                 basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                 catalog_exes.add(basename)
 
-    # Load system process exes
-    sys_proc_data, _ = _safe_load_yaml(activity_dir / "system_processes.yaml")
+    # sys_proc_data loaded above via overlay-aware loader
     system_exes: set[str] = set()
     if sys_proc_data:
         for task in sys_proc_data.get("scheduled_tasks", []):
@@ -377,47 +381,62 @@ def validate_config() -> ValidationResult:
                     image = proc.get("image", "")
                     if image:
                         system_exes.add(image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1])
+        # system_binaries section: explicit exe name → path mappings
+        for os_binaries in sys_proc_data.get("system_binaries", {}).values():
+            if isinstance(os_binaries, list):
+                for entry in os_binaries:
+                    exe = entry.get("exe", "")
+                    if exe:
+                        system_exes.add(exe)
 
     known_exes = catalog_exes | system_exes
+    # Case-insensitive lookup for Windows exe matching
+    known_exes_lower = {e.lower() for e in known_exes}
 
-    # Check 18: Orphaned spawn rule children
-    for child in spawn_children - known_exes:
-        result.issues.append(
-            Issue(
-                "WARNING",
-                "spawn_rules.yaml",
-                f'Child "{child}" not found in application_catalog or system_processes',
+    # Check 18: Orphaned spawn rule children (case-insensitive)
+    for child in spawn_children:
+        if child.lower() not in known_exes_lower:
+            result.issues.append(
+                Issue(
+                    "WARNING",
+                    "spawn_rules.yaml",
+                    f'Child "{child}" not found in application_catalog or system_processes',
+                )
             )
-        )
 
-    # Check 19: Missing spawn rules (apps not in any spawn rule)
+    # Check 19: Missing spawn rules (apps not in any spawn rule, case-insensitive)
     spawn_all_entries: set[str] = set()
     for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
         spawn_all_entries.update(os_rules.keys())
         for parent_data in os_rules.values():
             if isinstance(parent_data, dict):
                 spawn_all_entries.update(parent_data.get("children", []))
+    spawn_all_entries_lower = {e.lower() for e in spawn_all_entries}
 
-    for exe in catalog_exes - spawn_all_entries:
-        result.issues.append(
-            Issue(
-                "INFO", "application_catalog.yaml", f'App exe "{exe}" not listed in any spawn rule'
+    for exe in catalog_exes:
+        if exe.lower() not in spawn_all_entries_lower:
+            result.issues.append(
+                Issue(
+                    "INFO",
+                    "application_catalog.yaml",
+                    f'App exe "{exe}" not listed in any spawn rule',
+                )
             )
-        )
 
-    # Check 20: Orphaned process_network_map entries
+    # Check 20: Orphaned process_network_map entries (case-insensitive)
     pnm_exes: set[str] = set()
     if isinstance(process_net_data, list):
         for mapping in process_net_data:
             pnm_exes.update(mapping.get("exe", []))
-    for exe in pnm_exes - known_exes:
-        result.issues.append(
-            Issue(
-                "WARNING",
-                "process_network_map.yaml",
-                f'Exe "{exe}" not found in application_catalog or system_processes',
+    for exe in pnm_exes:
+        if exe.lower() not in known_exes_lower:
+            result.issues.append(
+                Issue(
+                    "WARNING",
+                    "process_network_map.yaml",
+                    f'Exe "{exe}" not found in application_catalog or system_processes',
+                )
             )
-        )
 
     # --- Checks 21-25: Persona Integrity ---
     for yaml_file in sorted(personas_dir.glob("*.yaml")):
@@ -464,7 +483,8 @@ def validate_config() -> ValidationResult:
     for persona_name in persona_traffic:
         all_referenced_personas.add(persona_name)
     all_referenced_personas.discard("default")
-    all_referenced_personas.discard("_default")
+    # Underscore-prefixed names are internal profiles, not actual personas
+    all_referenced_personas = {p for p in all_referenced_personas if not p.startswith("_")}
 
     for persona in all_referenced_personas - persona_names:
         result.issues.append(
@@ -482,9 +502,15 @@ def validate_config() -> ValidationResult:
         fmt_data, _ = _safe_load_yaml(fmt_file)
         if fmt_data:
             fields = set()
+            # Top-level fields
             for f in fmt_data.get("fields", []):
                 if isinstance(f, dict) and "name" in f:
                     fields.add(f["name"])
+            # Per-EventID variant fields (e.g., windows_event_security)
+            for variant in fmt_data.get("variants", []):
+                for f in variant.get("fields", []):
+                    if isinstance(f, dict) and "name" in f:
+                        fields.add(f["name"])
             format_fields[fmt_file.stem] = fields
 
     for eval_file in evaluation_dir.glob("*.yaml"):

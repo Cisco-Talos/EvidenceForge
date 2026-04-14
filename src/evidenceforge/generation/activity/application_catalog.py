@@ -15,86 +15,17 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.generation.activity.system_processes import (
+    get_system_binary_path,
+)
 
 _CATALOG_PATH = get_activity_directory() / "application_catalog.yaml"
 _CACHED_CATALOG: dict[str, Any] | None = None
 _CACHED_PE: dict[str, tuple[str, str, str, str, str]] | None = None
 _CACHED_PATH_INDEX: dict[str, dict[str, str]] | None = None
 
-# Windows system binaries that correctly live in System32 or Windows\.
-# Only these should get the System32 prefix when resolved from a bare name.
-_SYSTEM_BINARIES = frozenset(
-    {
-        "cmd.exe",
-        "powershell.exe",
-        "svchost.exe",
-        "lsass.exe",
-        "services.exe",
-        "taskhostw.exe",
-        "conhost.exe",
-        "dllhost.exe",
-        "sihost.exe",
-        "searchindexer.exe",
-        "runtimebroker.exe",
-        "smss.exe",
-        "csrss.exe",
-        "wininit.exe",
-        "winlogon.exe",
-        "dwm.exe",
-        "taskmgr.exe",
-        "mmc.exe",
-        "msiexec.exe",
-        "regsvr32.exe",
-        "rundll32.exe",
-        "sc.exe",
-        "net.exe",
-        "net1.exe",
-        "netsh.exe",
-        "wmic.exe",
-        "whoami.exe",
-        "ipconfig.exe",
-        "ping.exe",
-        "tracert.exe",
-        "nslookup.exe",
-        "certutil.exe",
-        "bitsadmin.exe",
-        "cscript.exe",
-        "wscript.exe",
-        "mshta.exe",
-        "reg.exe",
-        "schtasks.exe",
-        "tasklist.exe",
-        "systeminfo.exe",
-        "findstr.exe",
-        "attrib.exe",
-        "xcopy.exe",
-        "robocopy.exe",
-        "icacls.exe",
-        "takeown.exe",
-        "fsutil.exe",
-        "bcdedit.exe",
-        "wmiprvse.exe",
-        "spoolsv.exe",
-        "searchprotocolhost.exe",
-        "searchfilterhost.exe",
-        "usoclient.exe",
-        "tiworker.exe",
-        "cleanmgr.exe",
-        "wsqmcons.exe",
-        "backgroundtaskhost.exe",
-        "compattelrunner.exe",
-        "mstsc.exe",
-        "notepad.exe",
-        "msedge.exe",  # Edge has moved to Program Files but System32 stub exists
-        "msmpeng.exe",
-        "mpcmdrun.exe",
-        "ismserv.exe",
-        "dns.exe",
-        "dfsr.exe",
-        "ntdsutil.exe",
-        "msdtc.exe",
-    }
-)
+# System binaries are now data-driven from system_processes.yaml.
+# See get_system_binary_exes() and get_system_binary_path() in system_processes.py.
 
 
 def _merge_catalog(default: dict, overlay: dict) -> dict:
@@ -321,11 +252,12 @@ def resolve_image_path(exe_basename: str, os_category: str = "windows", username
     if os_category == "windows" and lower in _SPECIAL_PATHS:
         return _SPECIAL_PATHS[lower]
 
-    # 3. Known system binaries → System32 is correct
-    if os_category == "windows" and lower in _SYSTEM_BINARIES:
-        return rf"C:\Windows\System32\{exe_basename}"
+    # 3. Data-driven system binary path lookup
+    sys_path = get_system_binary_path(exe_basename)
+    if sys_path:
+        return sys_path
 
-    # 3. Last resort
+    # 4. Last resort — assume System32 (Windows) or /usr/bin (Linux)
     if os_category == "linux":
         return f"/usr/bin/{exe_basename}"
     return rf"C:\Windows\System32\{exe_basename}"
