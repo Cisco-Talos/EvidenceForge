@@ -17,7 +17,7 @@ description: >
 Before doing anything else, run these commands to establish where to read and write:
 
 ```bash
-eforge info config_writable
+eforge info install_type
 eforge info overlay.exists
 eforge info overlay.path
 eforge info paths.activity
@@ -34,8 +34,8 @@ The `eforge info` command has three modes — do not mix them:
 **Where to READ** (package defaults): use the paths from `eforge info paths.*`.
 
 **Where to WRITE** (user changes):
-- `config_writable` is `False` → WRITE to the overlay directory from `eforge info overlay.path` (create it if `overlay.exists` is False)
-- `config_writable` is `True` (dev install) → ask the user: overlay or edit source files directly?
+- `install_type` is `package` → ALWAYS write to the overlay at `eforge info overlay.path` (create it if `overlay.exists` is False). Never edit package files — they are lost on upgrade.
+- `install_type` is `editable` → ask the user: overlay or edit source files directly? Only editable installs (developers working in the repo) should ever edit source files.
 
 When writing to the overlay, files are partial — they contain ONLY the user's new or changed entries. The engine merges them with package defaults automatically. Mirror the package directory structure: `activity/`, `personas/`, etc.
 
