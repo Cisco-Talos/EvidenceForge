@@ -58,6 +58,7 @@ EvidenceForge includes Claude Code Skills for interactive, guided workflows. The
 | `/eforge generate` | Validates the scenario, runs the generation engine, monitors output, and diagnoses errors. |
 | `/eforge validate` | Checks a scenario for schema correctness and cross-reference integrity. Fixes simple issues, escalates structural problems. |
 | `/eforge evaluate` | Runs the data quality evaluation, interprets scores, reviews records for realism, and suggests improvements. |
+| `/eforge config` | Add, modify, or remove personas, domains, applications, and other configuration data. Handles cross-file dependencies automatically. See [Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md). |
 
 Install skills with `uv run eforge install-skills` (project scope) or `uv run eforge install-skills --global`.
 
@@ -70,10 +71,23 @@ For scripted or non-interactive use:
 | `eforge generate <scenario.yaml> -o <dir>` | Generate logs from a scenario file |
 | `eforge validate <scenario.yaml>` | Validate scenario schema and cross-references |
 | `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (5 dimensions, 23 sub-scores) |
+| `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge install-skills [--global]` | Install Claude Code skills |
 | `eforge version` | Show version |
 
 Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output directory.
+
+## Customizing Configuration
+
+EvidenceForge ships with 50+ YAML config files controlling DNS domains, applications, personas, traffic profiles, and more. You can customize these using a project-local overlay at `.eforge/config/` — your changes survive package upgrades and merge automatically with built-in defaults.
+
+The recommended approach is the Claude Code skill:
+
+```
+/eforge config add a nurse persona for a healthcare scenario
+```
+
+For details on the overlay system, manual editing, and cross-file dependencies, see **[Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md)**.
 
 ## What It Does
 
