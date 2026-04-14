@@ -154,8 +154,38 @@ domains:
         subresources:
           - {path: "/common/discovery/instance", type: "application/json"}
 
+  login.live.com:
+    cdn_domains: ["aadcdn.msftauth.net"]
+    pages:
+      - path: "/oauth20_authorize.srf"
+        nav_targets: ["/ppsecure/post.srf"]
+        subresources:
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/js/ConvergedLogin_PCore.js", type: "application/javascript"}
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/css/converged_login.css", type: "text/css"}
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/images/microsoft_logo.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/ppsecure/post.srf"
+        nav_targets: ["/oauth20_authorize.srf"]
+        subresources:
+          - {host: "aadcdn.msftauth.net", path: "/shared/1.0/content/js/Post_PCore.js", type: "application/javascript"}
+
+  login.salesforce.com:
+    cdn_domains: []
+    pages:
+      - path: "/"
+        nav_targets: ["/services/oauth2/authorize"]
+        subresources:
+          - {path: "/static/{hex8}/js/main.js", type: "application/javascript"}
+          - {path: "/static/{hex8}/css/login.css", type: "text/css"}
+          - {path: "/img/logo190.png", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/services/oauth2/authorize"
+        nav_targets: ["/"]
+        subresources:
+          - {path: "/static/{hex8}/js/oauth.js", type: "application/javascript"}
+
   accounts.google.com:
-    cdn_domains: ["www.gstatic.com", "accounts.cdn.mozilla.net"]
+    cdn_domains: ["www.gstatic.com", "fonts.gstatic.com"]
     pages:
       - path: "/ServiceLogin"
         nav_targets: ["/signin/v2/challenge", "/o/oauth2/auth"]
@@ -347,7 +377,7 @@ domains:
           - {host: "d1.awsstatic.com", path: "/libs/scripts/console.{hex8}.js", type: "application/javascript"}
 
   pages.github.io:
-    cdn_domains: []
+    cdn_domains: ["github.githubassets.com"]
     pages:
       - path: "/"
         nav_targets: ["/index.html", "/about"]

@@ -210,7 +210,7 @@ domains:
     tags: [dev]
   - domain: login.live.com
     ips: ["20.190.159.64", "20.190.160.64"]
-    tags: [background]
+    tags: [saas]
   - domain: slack.com
     ips: ["34.237.161.42", "34.237.162.42"]
     tags: [saas]
@@ -231,7 +231,7 @@ domains:
     tags: [saas]
   - domain: login.salesforce.com
     ips: ["13.108.0.20", "13.108.0.21"]
-    tags: [background]
+    tags: [saas]
   - domain: na139.salesforce.com
     ips: ["13.110.54.8", "13.110.54.9"]
     tags: [saas]
