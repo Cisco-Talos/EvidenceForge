@@ -1,5 +1,9 @@
 # Config File Dependency Graph
 
+> **This is a reference document for the /eforge:config skill.** If you are trying to add, modify, or remove config entries, invoke /eforge:config instead of using this reference directly. This file contains schema details that the config skill reads during execution.
+>
+> To discover config file paths, run `eforge info <field>` (e.g., `eforge info paths.activity`). Run `eforge info --fields` to see all available fields.
+
 This document maps every cross-file dependency in the EvidenceForge config system. Use it to determine which files need coordinated edits when making any change.
 
 ## Project-Local Overlay

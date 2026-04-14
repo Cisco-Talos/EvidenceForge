@@ -1,5 +1,9 @@
 # Config Validation Checks Reference
 
+> **This is a reference document for the /eforge:config skill.** If you are trying to add, modify, or remove config entries, invoke /eforge:config instead of using this reference directly. This file contains schema details that the config skill reads during execution.
+>
+> To discover config file paths, run `eforge info <field>` (e.g., `eforge info paths.activity`). Run `eforge info --fields` to see all available fields.
+
 27 checks for verifying config file integrity. Run via the config skill's validation operation ("validate config files", "check config", etc.) or automatically after edits (scoped to affected files).
 
 Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activity`, `eforge info overlay.exists`). Run `eforge info --fields` to see all available fields. Use `eforge info --json` if you need everything at once.
