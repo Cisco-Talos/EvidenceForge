@@ -72,6 +72,17 @@ def _collect_formats(formats_dir: Path) -> list[str]:
     return sorted(f.stem for f in formats_dir.glob("*.yaml"))
 
 
+def _collect_valid_dns_tags() -> list[str]:
+    """Collect the defined valid DNS tags from the registry.
+
+    Reads from the valid_tags section of dns_registry.yaml.
+    """
+    from evidenceforge.generation.activity.dns_registry import load_dns_registry
+
+    data = load_dns_registry()
+    return sorted(data.get("valid_tags", {}).keys())
+
+
 def _collect_dns_tags() -> list[str]:
     """Collect all DNS tags in use from the registry.
 
@@ -148,6 +159,7 @@ def gather_info() -> dict[str, Any]:
         },
         "personas": _collect_personas(),
         "formats": _collect_formats(formats_dir),
+        "valid_dns_tags": _collect_valid_dns_tags(),
         "dns_tags": _collect_dns_tags(),
         "application_ids": _collect_application_ids(),
         "system_roles": _collect_system_roles(),
@@ -224,7 +236,8 @@ def format_human_readable(data: dict[str, Any]) -> str:
 _FIELD_DESCRIPTIONS: dict[str, str] = {
     "application_ids": "Application IDs in the catalog",
     "config_writable": "Whether package config files are directly editable",
-    "dns_tags": "DNS tags in use across all domains",
+    "valid_dns_tags": "All defined valid DNS tags (from dns_registry.yaml valid_tags section)",
+    "dns_tags": "DNS tags currently in use across all domains",
     "formats": "Supported log format names",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",

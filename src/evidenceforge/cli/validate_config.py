@@ -39,23 +39,6 @@ from evidenceforge.config import (
     get_personas_directory,
 )
 
-VALID_DNS_TAGS = frozenset(
-    {
-        "web",
-        "saas",
-        "cdn",
-        "email",
-        "git",
-        "background",
-        "windows",
-        "linux",
-        "internal",
-        "storage",
-        "dev",
-        "social",
-    }
-)
-
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
 VALID_BROWSING_INTENSITIES = frozenset({"light", "normal", "heavy"})
 
@@ -159,6 +142,8 @@ def validate_config() -> ValidationResult:
             result.issues.append(Issue("ERROR", path.name, "File is empty"))
 
     # --- Checks 3-6: DNS Registry Integrity ---
+    # Read valid tags from the YAML data (data-driven, extensible via overlay)
+    valid_dns_tags = frozenset(dns_data.get("valid_tags", {}).keys())
     domains = dns_data.get("domains", [])
     seen_domains: dict[str, int] = {}
     dns_domain_set: set[str] = set()
@@ -192,7 +177,7 @@ def validate_config() -> ValidationResult:
         # Check 6: Invalid tags
         for tag in tags:
             all_dns_tags.add(tag)
-            if tag not in VALID_DNS_TAGS:
+            if tag not in valid_dns_tags:
                 result.issues.append(
                     Issue(
                         "WARNING", "dns_registry.yaml", f'Domain "{domain}" has invalid tag "{tag}"'

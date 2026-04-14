@@ -1,15 +1,7 @@
 # Unified DNS registry — single source of truth for all domain↔IP mappings.
 #
-# Tags determine which connection types use each domain:
-#   web        — baseline user web browsing
-#   saas       — SaaS application traffic
-#   email      — email server connections
-#   git        — source control
-#   background — OS-level background HTTPS (updates, telemetry, CRL)
-#   windows    — Windows-specific background traffic
-#   linux      — Linux-specific background traffic
-#   internal   — internal infrastructure (DB servers, etc.)
-#   storage    — cloud storage (potential exfiltration targets)
+# Valid tags are defined in the `valid_tags` section below. Each tag controls
+# which connection types use the domain. Custom tags can be added via overlay.
 #
 # Each domain can have multiple IPs (realistic for CDN/cloud services).
 # The loader builds REVERSE_DNS, FORWARD_DNS, and tag-based lookups from this data.
@@ -19,6 +11,22 @@
 # Depends on: nothing — this is the root data source
 #
 # Full schema: see commands/eforge/references/config-dns-registry.md
+
+# Valid tags for domain classification. The validator checks domains
+# against this list. Add custom tags here or via overlay.
+valid_tags:
+  web:        "Baseline user web browsing targets"
+  saas:       "SaaS application traffic"
+  cdn:        "CDN/API endpoints (not directly browsed)"
+  email:      "Email server connections"
+  git:        "Source control services"
+  background: "OS-level background HTTPS (updates, telemetry, CRL)"
+  windows:    "Windows-specific background traffic"
+  linux:      "Linux-specific background traffic"
+  internal:   "Internal infrastructure (DB servers, etc.)"
+  storage:    "Cloud storage (potential exfiltration targets)"
+  dev:        "Developer tool API endpoints"
+  social:     "Social media sites"
 
 domains:
   # === Google ===
