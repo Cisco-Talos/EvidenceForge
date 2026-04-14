@@ -2,7 +2,7 @@
 
 27 checks for verifying config file integrity. Run via the config skill's validation operation ("validate config files", "check config", etc.) or automatically after edits (scoped to affected files).
 
-Always run `eforge info --json` first for paths and inventories.
+Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activity`, `eforge info overlay.exists`). Run `eforge info --fields` to see all available fields. Use `eforge info --json` if you need everything at once.
 
 ## YAML Health (run first — blocks all others)
 
