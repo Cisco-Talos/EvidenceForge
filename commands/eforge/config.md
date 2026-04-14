@@ -14,31 +14,30 @@ description: >
 
 # EvidenceForge Configuration Manager
 
-You are helping the user modify EvidenceForge's configuration files. Follow these steps in order.
-
-## Step 1: Run `eforge info --json`
-
-This is your FIRST action. Do it before reading any files, before searching for anything, before any other tool call. Run:
+Before doing anything else, run this command:
 
 ```bash
 eforge info --json
 ```
 
-This gives you everything you need: config file paths, overlay directory status, and inventories of all personas, formats, DNS tags, application IDs, and system roles.
+Do not read files. Do not search. Do not explore. Run the command above first.
 
-Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files. The paths come from `eforge info` and nowhere else. Do NOT look in or edit files under `.claude/commands/` — those are read-only skill references, not engine config.
+This gives you config paths, overlay status, and inventories. From the output, establish two things:
 
-## Step 2: Decide Where to Write
+**Where to READ** (package defaults): use `paths.activity`, `paths.personas`, etc.
 
-Based on the `eforge info` output:
+**Where to WRITE** (user changes): determined by `overlay` and `config_writable`:
+- `config_writable` is `false` → WRITE to `.eforge/config/` (create it if `overlay.exists` is false)
+- `config_writable` is `true` (dev install) → ask the user: overlay or edit source files directly?
 
-- If `overlay.exists` is `true` → write to the overlay directory (`overlay.path`)
-- If `overlay.exists` is `false` AND `config_writable` is `true` (dev install) → ask the user: create an overlay, or edit the source files at `paths.*` directly?
-- If `overlay.exists` is `false` AND `config_writable` is `false` (package install) → create `.eforge/config/` automatically and write there
+When writing to the overlay, files are partial — they contain ONLY the user's new or changed entries. The engine merges them with package defaults automatically. Mirror the package directory structure: `activity/`, `personas/`, etc.
 
-Overlay files contain ONLY the user's additions (partial files). The engine merges them with package defaults at load time. Structure mirrors the package layout: `activity/`, `personas/`, `evaluation/`, `formats/`.
+**Rules:**
+- Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files
+- Do NOT read or edit files under `.claude/commands/` (those are read-only skill copies)
+- Do NOT edit files under `paths.*` when `config_writable` is `false` — those are inside the installed Python package
 
-## Step 3: Classify the Operation
+## Step 2: Classify the Operation
 
 | Operation | Primary File(s) | Cascade Files |
 |-----------|-----------------|---------------|
@@ -56,11 +55,11 @@ Overlay files contain ONLY the user's additions (partial files). The engine merg
 
 Compound operations touch multiple types — identify all of them. For the full dependency map, read `references/config-dependency-graph.md`.
 
-For **validation** requests ("check my config", "validate config files"), read `references/config-validation.md` for the 27-check procedure.
+For **validation** requests ("check my config", "validate config files"), read `references/config-validation.md`.
 
-## Step 4: Read Affected Files and Reference Docs
+## Step 3: Read Affected Files and Reference Docs
 
-Read the files you'll modify AND the relevant reference doc for field schemas and conventions:
+Read package default files from `paths.*` (READ path) to understand existing content. Also read the relevant reference doc for field schemas and conventions:
 
 | Topic | Reference Doc |
 |-------|---------------|
@@ -73,9 +72,7 @@ Read the files you'll modify AND the relevant reference doc for field schemas an
 | Cross-file dependencies | `references/config-dependency-graph.md` |
 | Validation checks | `references/config-validation.md` |
 
-These references contain the field schemas, valid values, formatting conventions, and examples you need. Read the relevant one before making changes.
-
-## Step 5: Interview for Completeness
+## Step 4: Interview for Completeness
 
 Ask targeted follow-up questions to ensure the change achieves what the user actually wants. Ask one question at a time.
 
@@ -85,29 +82,30 @@ Ask targeted follow-up questions to ensure the change achieves what the user act
 
 **Creating a persona:** Role description? Typical activities? Work hours (format: "9am-5pm (lunch 12pm-1pm)")? Risk profile (low/medium/high)? Browsing intensity (light/normal/heavy)? Applications? Custom traffic? Linux user?
 
-**When to ask vs. when to use domain knowledge:** If you have clear domain knowledge (e.g., "API endpoints get `dev` tag" or "Slack is an Electron app"), use it. Only ask about genuinely ambiguous decisions the user needs to make.
+If you have clear domain knowledge (e.g., "API endpoints get `dev` tag"), use it. Only ask about genuinely ambiguous decisions.
 
-## Step 6: Execute All Changes
+## Step 5: Execute All Changes
 
-Make changes to ALL affected files:
+Write ALL changes to the WRITE path established in Step 1 — the overlay directory, NOT the package files (unless the user explicitly chose source editing in a dev install).
 
+For overlay files: create them mirroring the package structure (e.g., `<overlay>/activity/application_catalog.yaml`). Include ONLY the new/changed entries — the engine merges with package defaults automatically. You do not need to copy existing entries from the package.
+
+Order of changes:
 1. **Primary file first** — the file the user explicitly asked about
 2. **Upstream dependencies** — files that need to exist for the primary to work
 3. **Downstream cascades** — files that should reflect the primary change
 
-When writing to the overlay: create files mirroring the package structure. Include ONLY new entries — the engine merges automatically.
+Match existing style from the package files (indentation, quoting, comment grouping).
 
-Match existing style in the package files (indentation, quoting, comment grouping). The reference docs have examples.
+## Step 6: Verify and Auto-Fix
 
-## Step 7: Verify and Auto-Fix
-
-Run cross-reference checks on the **merged** data (package + overlay). Auto-fix simple issues in the same location as the user's changes (overlay or package source).
+Run cross-reference checks on the **merged** data (package + overlay). Write auto-fixes to the same WRITE path as the user's changes.
 
 **Auto-fix** (fix and report): missing proxy templates for web/saas domains, missing site maps, persona not in app catalog persona lists, app not in spawn rules.
 
 **Advisory only** (report): app with network traffic but no process_network_map entry, new server role missing traffic profiles, evaluation rules referencing missing fields.
 
-## Step 8: Report
+## Step 7: Report
 
 1. **Files modified** — list each and what changed
 2. **Auto-fixes applied** — what was added and why
