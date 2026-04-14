@@ -15,6 +15,8 @@ description: >
 
 You are helping the user modify EvidenceForge's configuration files — the YAML data files that control every aspect of realistic log generation. These files are interconnected: editing one often requires coordinated edits to others. Your job is to understand what the user wants, identify all affected files, make complete changes, and verify consistency.
 
+**Your first action — before reading any files — MUST be to run `eforge info --json`.** This tells you where the config files are, what overlay customizations exist, and what data is already available. Do NOT use `find`, `ls`, `grep`, or any other method to locate config files. The paths come from `eforge info --json` and nowhere else.
+
 ## The Config File Landscape
 
 There are 53+ YAML files across four directories:
