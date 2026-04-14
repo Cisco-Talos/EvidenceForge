@@ -2,15 +2,13 @@
 name: eforge-config
 license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
-  Maintain, update, and extend EvidenceForge's YAML configuration files — the 53+ files that
-  control how realistic synthetic security logs are generated. Use this skill whenever the user
-  wants to add a domain, create a persona, add an application, modify traffic profiles, update
-  spawn rules, adjust evaluation rules, change format definitions, or make any other modification
-  to the config data files. Also trigger when the user mentions "config files", "dns registry",
-  "traffic profiles", "application catalog", "add a website", "add a persona", "proxy templates",
-  "spawn rules", or wants to customize any aspect of how EvidenceForge generates baseline activity.
-  This skill handles cross-file dependencies automatically so edits are always complete and
-  consistent. Also use when the user wants to validate config files for correctness.
+  Add, modify, or remove personas, domains, applications, and other EvidenceForge configuration
+  data. Use this skill whenever the user wants to add a persona, add a domain, add an application
+  or website, modify traffic profiles, update spawn rules, or customize any aspect of how eforge
+  generates baseline activity — even if they don't say "config". Also trigger when the user
+  mentions DNS registry, application catalog, proxy templates, traffic profiles, spawn rules,
+  evaluation rules, or wants to validate config files for correctness. This skill handles
+  cross-file dependencies automatically so edits are always complete and consistent.
 ---
 
 # EvidenceForge Configuration Manager
