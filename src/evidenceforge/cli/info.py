@@ -72,25 +72,20 @@ def _collect_formats(formats_dir: Path) -> list[str]:
     return sorted(f.stem for f in formats_dir.glob("*.yaml"))
 
 
-def _collect_valid_dns_tags() -> list[str]:
-    """Collect the defined valid DNS tags from the registry.
-
-    Reads from the valid_tags section of dns_registry.yaml.
-    """
-    from evidenceforge.generation.activity.dns_registry import load_dns_registry
-
-    data = load_dns_registry()
-    return sorted(data.get("valid_tags", {}).keys())
-
-
 def _collect_dns_tags() -> list[str]:
-    """Collect all DNS tags in use from the registry.
+    """Collect defined valid DNS tags from the registry.
 
-    Uses the same loader the generation engine uses to guarantee consistency.
+    Returns the authoritative list of tags from the valid_tags section
+    of dns_registry.yaml. Tags in use on domains but not defined here
+    are caught by eforge validate-config, not reported by eforge info.
     """
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
 
     data = load_dns_registry()
+    valid_tags = data.get("valid_tags", {})
+    if valid_tags:
+        return sorted(valid_tags.keys())
+    # Fallback for older configs without valid_tags section
     tags: set[str] = set()
     for entry in data.get("domains", []):
         tags.update(entry.get("tags", []))
@@ -159,7 +154,6 @@ def gather_info() -> dict[str, Any]:
         },
         "personas": _collect_personas(),
         "formats": _collect_formats(formats_dir),
-        "valid_dns_tags": _collect_valid_dns_tags(),
         "dns_tags": _collect_dns_tags(),
         "application_ids": _collect_application_ids(),
         "system_roles": _collect_system_roles(),
@@ -236,8 +230,7 @@ def format_human_readable(data: dict[str, Any]) -> str:
 _FIELD_DESCRIPTIONS: dict[str, str] = {
     "application_ids": "Application IDs in the catalog",
     "config_writable": "Whether package config files are directly editable",
-    "valid_dns_tags": "All defined valid DNS tags (from dns_registry.yaml valid_tags section)",
-    "dns_tags": "DNS tags currently in use across all domains",
+    "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
     "formats": "Supported log format names",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",
