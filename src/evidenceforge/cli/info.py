@@ -221,6 +221,27 @@ def format_human_readable(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def resolve_field(data: dict[str, Any], field: str) -> Any:
+    """Resolve a dot-path field reference against the info data.
+
+    Examples:
+        resolve_field(data, "paths.activity") → "/path/to/config/activity"
+        resolve_field(data, "overlay.exists") → True
+        resolve_field(data, "personas") → ["accountant", "analyst", ...]
+        resolve_field(data, "version") → "0.1.0"
+
+    Returns:
+        The resolved value, or None if the field path doesn't exist.
+    """
+    current: Any = data
+    for part in field.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
 def format_json(data: dict[str, Any]) -> str:
     """Format info data as compact-but-readable JSON.
 

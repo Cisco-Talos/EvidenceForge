@@ -14,28 +14,32 @@ description: >
 
 # EvidenceForge Configuration Manager
 
-Before doing anything else, run this command:
+Before doing anything else, run these commands to establish where to read and write:
 
 ```bash
-eforge info --json
+eforge info config_writable
+eforge info overlay.exists
+eforge info overlay.path
+eforge info paths.activity
+eforge info paths.personas
 ```
 
-Do not read files. Do not search. Do not explore. Run the command above first.
+Do not read files. Do not search. Do not explore. Run the commands above first.
 
-This gives you config paths, overlay status, and inventories. From the output, establish two things:
+`eforge info <field>` gives you exactly what you need. You can query any field: `paths.activity`, `paths.personas`, `paths.formats`, `paths.evaluation`, `overlay.exists`, `overlay.path`, `overlay.files`, `config_writable`, `version`, `personas`, `formats`, `dns_tags`, `application_ids`, `system_roles`. Use `eforge info --json` only if you need everything at once.
 
-**Where to READ** (package defaults): use `paths.activity`, `paths.personas`, etc.
+**Where to READ** (package defaults): use the paths from `eforge info paths.*`.
 
-**Where to WRITE** (user changes): determined by `overlay` and `config_writable`:
-- `config_writable` is `false` → WRITE to `.eforge/config/` (create it if `overlay.exists` is false)
-- `config_writable` is `true` (dev install) → ask the user: overlay or edit source files directly?
+**Where to WRITE** (user changes):
+- `config_writable` is `False` → WRITE to the overlay directory from `eforge info overlay.path` (create it if `overlay.exists` is False)
+- `config_writable` is `True` (dev install) → ask the user: overlay or edit source files directly?
 
 When writing to the overlay, files are partial — they contain ONLY the user's new or changed entries. The engine merges them with package defaults automatically. Mirror the package directory structure: `activity/`, `personas/`, etc.
 
 **Rules:**
-- Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files
+- Do NOT use `find`, `ls`, `grep`, or `glob` to locate config files — use `eforge info`
 - Do NOT read or edit files under `.claude/commands/` (those are read-only skill copies)
-- Do NOT edit files under `paths.*` when `config_writable` is `false` — those are inside the installed Python package
+- Do NOT edit files under `paths.*` when `config_writable` is `False` — those are inside the installed Python package
 
 ## Step 2: Classify the Operation
 
