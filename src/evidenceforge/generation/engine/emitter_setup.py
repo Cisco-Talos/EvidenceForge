@@ -35,6 +35,7 @@ import logging
 import random
 from datetime import timedelta
 
+from evidenceforge.config.overlay import extend_list, load_with_overlay
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
@@ -131,6 +132,16 @@ DB_SERVICE_MAP = {
     "postgres": (5432, "postgresql"),
     "postgresql": (5432, "postgresql"),
 }
+
+
+def _merge_network_params(default: dict, overlay: dict) -> dict:
+    """Merge overlay network params into defaults (extend OUI prefix list)."""
+    result = dict(default)
+    if "oui_prefixes" in overlay:
+        result["oui_prefixes"] = extend_list(
+            default.get("oui_prefixes", []), overlay["oui_prefixes"]
+        )
+    return result
 
 
 class EmitterSetupMixin:
@@ -292,13 +303,12 @@ class EmitterSetupMixin:
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
         # Load OUI prefixes for diverse MAC generation
-        import yaml as _yaml
-
         from evidenceforge.config import get_activity_directory
 
         _oui_path = get_activity_directory() / "network_params.yaml"
-        with open(_oui_path) as _f:
-            _net_params = _yaml.safe_load(_f)
+        _net_params = load_with_overlay(
+            _oui_path, "activity/network_params.yaml", _merge_network_params
+        )
         _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])
         _oui_weights = [o["weight"] for o in _oui_prefixes]
         _oui_values = [o["prefix"] for o in _oui_prefixes]

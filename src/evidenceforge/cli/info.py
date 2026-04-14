@@ -54,11 +54,15 @@ def _detect_install_type(config_path: Path) -> tuple[str, bool]:
     return "editable", True
 
 
-def _collect_personas(personas_dir: Path) -> list[str]:
-    """Collect built-in persona names from YAML files."""
-    if not personas_dir.is_dir():
-        return []
-    return sorted(p.stem for p in personas_dir.glob("*.yaml"))
+def _collect_personas() -> list[str]:
+    """Collect all persona names (package + overlay).
+
+    Uses the same loader the generation engine uses to guarantee consistency.
+    """
+    from evidenceforge.utils.personas import load_builtin_personas
+
+    personas = load_builtin_personas()
+    return sorted(p["name"] for p in personas if "name" in p)
 
 
 def _collect_formats(formats_dir: Path) -> list[str]:
@@ -121,6 +125,11 @@ def gather_info() -> dict[str, Any]:
 
     install_type, config_writable = _detect_install_type(config_root)
 
+    from evidenceforge.config.overlay import get_overlay_directory, list_overlay_files
+
+    overlay_dir = get_overlay_directory()
+    overlay_files = list_overlay_files(overlay_dir) if overlay_dir else []
+
     return {
         "version": __version__,
         "install_type": install_type,
@@ -132,7 +141,12 @@ def gather_info() -> dict[str, Any]:
             "formats": str(formats_dir),
             "evaluation": str(evaluation_dir),
         },
-        "personas": _collect_personas(personas_dir),
+        "overlay": {
+            "path": str(Path.cwd() / ".eforge" / "config"),
+            "exists": overlay_dir is not None,
+            "files": overlay_files,
+        },
+        "personas": _collect_personas(),
         "formats": _collect_formats(formats_dir),
         "dns_tags": _collect_dns_tags(),
         "application_ids": _collect_application_ids(),
@@ -158,6 +172,19 @@ def format_human_readable(data: dict[str, Any]) -> str:
     lines.append(f"  Personas:   {paths['personas']}")
     lines.append(f"  Formats:    {paths['formats']}")
     lines.append(f"  Evaluation: {paths['evaluation']}")
+    lines.append("")
+
+    # Overlay status
+    overlay = data["overlay"]
+    if overlay["exists"]:
+        file_count = len(overlay["files"])
+        lines.append(
+            f"Overlay config: {overlay['path']} (found, {file_count} file{'s' if file_count != 1 else ''})"
+        )
+        for f in overlay["files"]:
+            lines.append(f"  {f}")
+    else:
+        lines.append(f"Overlay config: {overlay['path']} (not found — using package defaults only)")
     lines.append("")
 
     # Data inventories

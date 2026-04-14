@@ -91,20 +91,10 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
         rel_path = str(md_file.relative_to(skills_dir))
         manifest[rel_path] = md_file
 
-    # Persona files — installed: _data/personas/, dev: config/personas/
-    personas_dir = data_root / "personas"
-    if not personas_dir.is_dir():
-        # Dev-mode: personas live in src/evidenceforge/config/personas/
-        from evidenceforge.config import get_personas_directory
-
-        try:
-            personas_dir = get_personas_directory()
-        except Exception:
-            personas_dir = None
-    if personas_dir and personas_dir.is_dir():
-        for yaml_file in sorted(personas_dir.glob("*.yaml")):
-            rel_path = f"personas/{yaml_file.name}"
-            manifest[rel_path] = yaml_file
+    # Persona YAML files are NOT installed here. Skills that need persona
+    # data should run `eforge info --json` to get the persona list and read
+    # files from `paths.personas`. This avoids stale copies and ensures
+    # overlay personas are visible.
 
     return manifest
 

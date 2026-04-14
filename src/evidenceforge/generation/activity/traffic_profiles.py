@@ -15,21 +15,28 @@ Follows the same cached-loader pattern as dns_registry.py, spawn_rules.py, etc.
 
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _PROFILES_PATH = get_activity_directory() / "traffic_profiles.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 
+def _merge_traffic_profiles(default: dict, overlay: dict) -> dict:
+    """Merge traffic profiles overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_traffic_profiles() -> dict[str, Any]:
-    """Load traffic profiles from YAML. Cached after first call."""
+    """Load traffic profiles from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
-    with open(_PROFILES_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _PROFILES_PATH,
+        "activity/traffic_profiles.yaml",
+        _merge_traffic_profiles,
+    )
     return _CACHED_DATA
 
 

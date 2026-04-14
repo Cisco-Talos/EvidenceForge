@@ -11,22 +11,29 @@ import random
 import uuid
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 
+def _merge_proxy_uri_templates(default: dict, overlay: dict) -> dict:
+    """Merge proxy URI templates overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_proxy_uri_templates() -> dict[str, Any]:
-    """Load proxy URI templates from YAML. Cached after first call."""
+    """Load proxy URI templates from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
 
-    with open(_TEMPLATES_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _TEMPLATES_PATH,
+        "activity/proxy_uri_templates.yaml",
+        _merge_proxy_uri_templates,
+    )
     return _CACHED_DATA
 
 

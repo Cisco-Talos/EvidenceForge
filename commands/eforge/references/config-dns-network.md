@@ -1,6 +1,6 @@
 # DNS & Network Configuration Reference
 
-Schema documentation for the network-related config files in `src/evidenceforge/config/activity/`.
+Schema documentation for the network-related config files. User customizations go in the project-local overlay at `.eforge/config/activity/` — partial files that merge with package defaults. See `config-dependency-graph.md` for details.
 
 ## Table of Contents
 

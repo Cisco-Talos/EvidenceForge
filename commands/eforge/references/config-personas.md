@@ -6,7 +6,11 @@ Schema documentation for persona definition files in `src/evidenceforge/config/p
 
 ## Overview
 
-Each persona is a single YAML file that defines a user role's behavior profile. The filename must match the persona name (e.g., `developer.yaml` defines persona `developer`). Personas are referenced by name in:
+Each persona is a single YAML file that defines a user role's behavior profile. The filename must match the persona name (e.g., `developer.yaml` defines persona `developer`).
+
+Custom personas can be added in the project-local overlay at `.eforge/config/personas/`. Overlay personas are merged with package built-ins at load time — overlay personas with the same name replace built-ins (with a warning). The effective precedence is: scenario inline > overlay > package.
+
+Personas are referenced by name in:
 
 - `application_catalog.yaml` `personas:` lists — controls which apps the persona can spawn
 - `traffic_profiles.yaml` `persona_traffic:` section — custom network patterns

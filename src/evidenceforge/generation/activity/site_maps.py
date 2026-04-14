@@ -15,21 +15,28 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _SITE_MAPS_PATH = get_activity_directory() / "site_maps.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 
+def _merge_site_maps(default: dict, overlay: dict) -> dict:
+    """Merge site maps overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_site_maps() -> dict[str, Any]:
-    """Load site map definitions from YAML. Cached after first call."""
+    """Load site map definitions from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
-    with open(_SITE_MAPS_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _SITE_MAPS_PATH,
+        "activity/site_maps.yaml",
+        _merge_site_maps,
+    )
     return _CACHED_DATA
 
 

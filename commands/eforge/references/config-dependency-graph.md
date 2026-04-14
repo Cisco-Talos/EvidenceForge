@@ -1,6 +1,12 @@
 # Config File Dependency Graph
 
-This document maps every cross-file dependency in `src/evidenceforge/config/`. Use it to determine which files need coordinated edits when making any change.
+This document maps every cross-file dependency in the EvidenceForge config system. Use it to determine which files need coordinated edits when making any change.
+
+## Project-Local Overlay
+
+Users can customize configs without modifying the package by placing partial YAML files in `.eforge/config/` in their project root. The engine merges overlay entries with package defaults at load time. Run `eforge info --json` to check if an overlay exists and what files it contains.
+
+When adding new entries via the config skill, they go in the overlay directory (not the package files) unless the user is a developer editing the source directly.
 
 ## Table of Contents
 

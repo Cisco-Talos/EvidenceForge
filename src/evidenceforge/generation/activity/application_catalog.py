@@ -13,9 +13,8 @@ from __future__ import annotations
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 
 _CATALOG_PATH = get_activity_directory() / "application_catalog.yaml"
 _CACHED_CATALOG: dict[str, Any] | None = None
@@ -98,14 +97,29 @@ _SYSTEM_BINARIES = frozenset(
 )
 
 
+def _merge_catalog(default: dict, overlay: dict) -> dict:
+    """Merge application catalog overlay with package defaults."""
+    result = dict(default)
+    if "applications" in overlay:
+        result["applications"] = merge_keyed_list(
+            default.get("applications", []),
+            overlay["applications"],
+            key_field="id",
+        )
+    return result
+
+
 def load_catalog() -> dict[str, Any]:
-    """Load the application catalog YAML. Cached after first call."""
+    """Load the application catalog YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_CATALOG
     if _CACHED_CATALOG is not None:
         return _CACHED_CATALOG
 
-    with open(_CATALOG_PATH) as f:
-        _CACHED_CATALOG = yaml.safe_load(f)
+    _CACHED_CATALOG = load_with_overlay(
+        _CATALOG_PATH,
+        "activity/application_catalog.yaml",
+        _merge_catalog,
+    )
     return _CACHED_CATALOG
 
 

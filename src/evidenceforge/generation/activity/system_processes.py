@@ -10,22 +10,29 @@ scheduled tasks and system service processes by host role.
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _PROCESSES_PATH = get_activity_directory() / "system_processes.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 
+def _merge_system_processes(default: dict, overlay: dict) -> dict:
+    """Merge system processes overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_system_processes() -> dict[str, Any]:
-    """Load system process configurations from YAML. Cached after first call."""
+    """Load system process configurations from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
 
-    with open(_PROCESSES_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _PROCESSES_PATH,
+        "activity/system_processes.yaml",
+        _merge_system_processes,
+    )
     return _CACHED_DATA
 
 

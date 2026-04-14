@@ -59,7 +59,7 @@ This is the critical knowledge that makes this skill valuable. Read `references/
 
 ## Workflow
 
-### Step 0: Discover Config Paths
+### Step 0: Discover Config Paths and Overlay
 
 Before reading or editing any config files, run:
 
@@ -67,13 +67,33 @@ Before reading or editing any config files, run:
 eforge info --json
 ```
 
-This returns the actual filesystem paths to all config directories, the list of available personas/formats/tags/apps/roles, and whether the config files are writable.
+This returns:
+- `paths` — filesystem paths to all config directories
+- `overlay` — the project-local overlay directory path, whether it exists, and what files it contains
+- `config_writable` — whether the package config files are directly editable
+- Inventories: persona names, format names, dns_tags, application IDs, system roles (reflecting both package defaults and overlay data)
 
-Use the paths from the `paths` object for all file operations — for example, `paths.activity` is the directory containing `dns_registry.yaml`. Never hardcode paths like `src/evidenceforge/config/`; the actual location depends on how eforge is installed.
+**Decide where to write changes based on the overlay and install type:**
 
-If `config_writable` is `false`, warn the user that their eforge installation doesn't support direct config editing (package install). They would need an editable/development install.
+- If `overlay.exists` is `true` → edit files in the overlay directory (`overlay.path`). The overlay contains only the user's customizations; the engine merges them with package defaults at load time.
+- If `overlay.exists` is `false` AND `config_writable` is `true` (editable/dev install) → ask the user: create an overlay directory for their customizations, or edit the development source files directly? The latter is appropriate for EvidenceForge developers who want changes committed upstream.
+- If `overlay.exists` is `false` AND `config_writable` is `false` (package install) → create the overlay directory (`.eforge/config/` in the project root) automatically and edit there. Tell the user what you created.
 
-The `eforge info` output also gives you the current inventories (persona names, format names, dns_tags, application IDs, system roles) which you can use for cross-reference validation without having to parse YAML yourself.
+**Overlay file structure** mirrors the package config layout. Only include the user's additions — partial files, not full copies:
+
+```
+.eforge/config/
+├── activity/
+│   ├── dns_registry.yaml      # Only the user's new domains
+│   └── application_catalog.yaml # Only the user's new apps
+├── personas/
+│   └── nurse.yaml             # New custom persona
+└── evaluation/                # Rare, but supported
+```
+
+Use `paths` from `eforge info` for reading package defaults. Use `overlay.path` for writing user changes. Never hardcode paths like `src/evidenceforge/config/`.
+
+**Important: do NOT edit files in `.claude/commands/eforge/`.** That directory contains installed skill files and read-only reference copies of personas. Those files are for Claude Code skills to read — they are NOT the config files the generation engine uses. The engine reads config from the paths reported by `eforge info --json` (`paths.activity`, `paths.personas`, etc.) and the overlay directory. Editing `.claude/commands/eforge/personas/` has no effect on log generation.
 
 ### Step 1: Understand the Request
 
@@ -160,11 +180,15 @@ Make changes to ALL affected files in the correct order:
 2. **Upstream dependencies** — files that need to exist for the primary to work (e.g., dns_registry entries before traffic_profiles references them)
 3. **Downstream cascades** — files that should reflect the primary change (e.g., proxy_uri_templates after a new domain is added)
 
+**Where to write:** If using an overlay directory, create files mirroring the package structure (e.g., `<overlay>/activity/dns_registry.yaml`). The overlay file should contain ONLY the user's new entries — the engine merges them with package defaults automatically. If editing package source files directly (dev install, user's choice), edit them in place.
+
 Follow the schema and style conventions documented in the reference docs. Match the formatting of existing entries — indentation, quoting style, comment grouping.
 
 ### Step 5: Verify and Auto-Fix
 
 After all edits are complete, run cross-reference checks. For each issue found, auto-fix simple cases and report what you did. For complex cases, advise the user.
+
+**Where auto-fixes go:** If the issue was caused by an overlay entry (e.g., a domain added in the overlay needs proxy_uri_templates), the auto-fix goes in the **overlay directory**, not the package files. This keeps all user-originated changes in the overlay. If editing package source files directly (dev mode), auto-fixes go in the package files.
 
 **Auto-fix rules** (fix and report):
 - Domain with `web` or `saas` tag missing from `proxy_uri_templates.yaml` → add a basic template entry with generic paths, standard user-agent, and a `# TODO: Add domain-specific URI paths` comment

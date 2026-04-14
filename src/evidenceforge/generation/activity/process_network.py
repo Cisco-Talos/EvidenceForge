@@ -12,9 +12,8 @@ Follows the same cached-loader pattern as dns_registry.py, spawn_rules.py, etc.
 
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import extend_list, load_with_overlay
 
 _MAP_PATH = get_activity_directory() / "process_network_map.yaml"
 _CACHED_DATA: list[dict[str, Any]] | None = None
@@ -22,13 +21,24 @@ _CACHED_EXE_TO_SERVICE: dict[str, dict[str, Any]] | None = None
 _CACHED_SERVICE_TO_EXES: dict[str, list[str]] | None = None
 
 
+def _merge_process_network_map(default: dict, overlay: dict) -> dict:
+    """Merge process network map overlay with package defaults."""
+    result = dict(default)
+    if "mappings" in overlay:
+        result["mappings"] = extend_list(default.get("mappings", []), overlay["mappings"])
+    return result
+
+
 def load_process_network_map() -> list[dict[str, Any]]:
-    """Load process-network mappings from YAML. Cached after first call."""
+    """Load process-network mappings from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
-    with open(_MAP_PATH) as f:
-        data = yaml.safe_load(f)
+    data = load_with_overlay(
+        _MAP_PATH,
+        "activity/process_network_map.yaml",
+        _merge_process_network_map,
+    )
     _CACHED_DATA = data.get("mappings", [])
     return _CACHED_DATA
 

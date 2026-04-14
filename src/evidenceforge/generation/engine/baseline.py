@@ -37,9 +37,8 @@ import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import extend_list, load_with_overlay
 from evidenceforge.generation.activity.generator import _dns_rtt
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
@@ -237,14 +236,23 @@ _DAY_NAME_TO_INT = {
 }
 
 
+def _merge_systemd_schedules(default: dict, overlay: dict) -> dict:
+    """Merge overlay systemd schedules into defaults (extend the list)."""
+    result = dict(default)
+    if "schedules" in overlay:
+        result["schedules"] = extend_list(default.get("schedules", []), overlay["schedules"])
+    return result
+
+
 def _load_systemd_schedules() -> list[dict[str, Any]]:
     """Load systemd/cron schedule definitions from YAML. Cached after first call."""
     global _CACHED_SCHEDULES
     if _CACHED_SCHEDULES is not None:
         return _CACHED_SCHEDULES
 
-    with open(_SCHEDULES_PATH) as f:
-        data = yaml.safe_load(f)
+    data = load_with_overlay(
+        _SCHEDULES_PATH, "activity/systemd_schedules.yaml", _merge_systemd_schedules
+    )
     _CACHED_SCHEDULES = data.get("schedules", [])
     return _CACHED_SCHEDULES
 

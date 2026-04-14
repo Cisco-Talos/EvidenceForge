@@ -12,9 +12,8 @@ Follows the same data-driven pattern as spawn_rules.py.
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.utils.rng import _stable_seed
 
 _COMMANDS_PATH = get_activity_directory() / "bash_commands.yaml"
@@ -25,14 +24,22 @@ _CACHED_COMMANDS: dict[str, Any] | None = None
 _TYPO_MODES = ["adjacent_key", "transposition", "omission", "doubling"]
 
 
+def _merge_bash_commands(default: dict, overlay: dict) -> dict:
+    """Merge bash commands overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_bash_commands() -> dict[str, Any]:
-    """Load bash command vocabularies from YAML. Cached after first call."""
+    """Load bash command vocabularies from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_COMMANDS
     if _CACHED_COMMANDS is not None:
         return _CACHED_COMMANDS
 
-    with open(_COMMANDS_PATH) as f:
-        _CACHED_COMMANDS = yaml.safe_load(f)
+    _CACHED_COMMANDS = load_with_overlay(
+        _COMMANDS_PATH,
+        "activity/bash_commands.yaml",
+        _merge_bash_commands,
+    )
     return _CACHED_COMMANDS
 
 
