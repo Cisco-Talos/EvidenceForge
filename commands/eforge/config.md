@@ -2,13 +2,14 @@
 name: eforge-config
 license: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates; SPDX-License-Identifier: MIT
 description: >
-  Add, modify, or remove personas, domains, applications, and other EvidenceForge configuration
-  data. Use this skill whenever the user wants to add a persona, add a domain, add an application
-  or website, modify traffic profiles, update spawn rules, or customize any aspect of how eforge
-  generates baseline activity — even if they don't say "config". Also trigger when the user
-  mentions DNS registry, application catalog, proxy templates, traffic profiles, spawn rules,
-  evaluation rules, or wants to validate config files for correctness. This skill handles
-  cross-file dependencies automatically so edits are always complete and consistent.
+  Add, modify, or remove EvidenceForge personas, DNS domains, applications, traffic profiles,
+  spawn rules, and other configuration data that controls how eforge generates realistic baseline
+  activity. Use this skill when the user wants to add a persona, add a domain or website, add an
+  application, change browsing intensity, update traffic weights, add bash commands, customize
+  proxy URI templates, or validate config file integrity — even if they don't say "config".
+  This is for changing the underlying data library, not for creating scenarios (use eforge:scenario
+  for that) or running generation (use eforge:generate). Trigger on phrases like "add a persona",
+  "new domain", "new application", "check my config", "dns registry", "application catalog".
 ---
 
 # EvidenceForge Configuration Manager
