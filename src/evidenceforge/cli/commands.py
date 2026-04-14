@@ -684,6 +684,31 @@ def install_skills_cmd(
 
 
 @app.command()
+def info(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON for machine parsing"),
+) -> None:
+    """Show EvidenceForge installation info: version, config paths, available data.
+
+    Displays version, install type, config file paths, and inventories of
+    available personas, formats, DNS tags, application IDs, and system roles.
+    Use --json for machine-readable output (used by Claude Code skills).
+    """
+    from evidenceforge.cli.info import format_human_readable, format_json, gather_info
+
+    try:
+        data = gather_info()
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if json_output:
+        # JSON goes to stdout without Rich formatting
+        print(format_json(data))
+    else:
+        console.print(format_human_readable(data))
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     console.print("EvidenceForge v0.1.0")

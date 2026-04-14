@@ -1,5 +1,18 @@
-# Co-occurrence rules for Tier B record-level fidelity checks.
-# Each rule checks that when a condition matches, required field constraints hold.
+# co_occurrence.yaml — Tier B record-level fidelity rules
+#
+# Purpose: Checks that when a condition matches in a generated record,
+#   required field constraints hold (e.g., network logon has valid IP).
+#
+# Depends on: format definitions in config/formats/ (field names must exist)
+# Depended on by: evaluation engine (eforge eval)
+#
+# To add a new rule:
+#   1. Add under the format name key (e.g., windows_event_security:)
+#   2. Define condition: fields that must match for the rule to apply
+#   3. Define checks: constraints that must hold when condition matches
+#   4. Valid check types: not_equal, present, min_length, matches
+#
+# Full schema: see commands/eforge/references/config-evaluation.md
 
 windows_event_security:
   - name: "Network logon (type 3) requires valid IP"

@@ -1,6 +1,14 @@
 # Per-role baseline system processes for Windows hosts.
 # Generates diverse process creation events independently of user activity.
 # {placeholder} tokens resolved at generation time from the params section.
+#
+# Depended on by: spawn_rules.yaml (system processes used as parents)
+# Depends on: nothing — standalone system process definitions
+#
+# parent: values (services, svchost_netsvcs, etc.) are symbolic names
+# resolved at generation time.
+#
+# Full schema: see commands/eforge/references/config-system-processes.md
 
 scheduled_tasks:
   - image: "C:\\Windows\\System32\\svchost.exe"

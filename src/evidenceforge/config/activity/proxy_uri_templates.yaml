@@ -6,6 +6,11 @@
 #   {tenant_id} - random UUID for Azure AD tenant
 #   {hex8}      - 8-char hex string
 #   {hex16}     - 16-char hex string
+#
+# Depended on by: generation engine (proxy log URI paths)
+# Depends on: dns_registry.yaml (domain keys should exist in registry)
+#
+# Full schema: see commands/eforge/references/config-proxy-uri-templates.md
 
 domains:
   # --- Windows Update / Delivery Optimization ---

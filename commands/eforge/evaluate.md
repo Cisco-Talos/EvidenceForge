@@ -18,8 +18,7 @@ You are helping the user evaluate the quality of generated synthetic security lo
 If the user has a generated output directory and scenario file:
 
 ```bash
-cd /Users/dabianco/projects/SURGe/data-gen-test
-uv run eforge eval <output_dir> --scenario <scenario.yaml> --verbose
+eforge eval <output_dir> --scenario <scenario.yaml> --verbose
 ```
 
 If they don't have generated output yet, suggest using `/eforge generate` first.
@@ -51,13 +50,13 @@ If they don't specify, look for scenario directories under `scenarios/`. Ask if 
 Run both text and JSON output:
 
 ```bash
-uv run eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --verbose
+eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --verbose
 ```
 
 Also capture the JSON for programmatic analysis:
 
 ```bash
-uv run eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --format json 2>/dev/null
+eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --format json 2>/dev/null
 ```
 
 ### Step 3: Interpret Results

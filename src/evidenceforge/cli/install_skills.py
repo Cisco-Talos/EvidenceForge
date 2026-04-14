@@ -28,20 +28,6 @@ from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
 
-# Relative paths within the installed eforge/ directory that we expect to exist.
-# Used both to copy files and to identify stale files for cleanup.
-SKILL_FILES = [
-    "scenario.md",
-    "generate.md",
-    "validate.md",
-    "evaluate.md",
-]
-
-REFERENCE_FILES = [
-    "references/scenario-reference.md",
-    "references/evidence-formats.md",
-]
-
 
 def _get_data_root() -> Path:
     """Resolve the root directory containing bundled data files.
@@ -80,8 +66,12 @@ def _get_data_root() -> Path:
 def _collect_source_files(data_root: Path) -> dict[str, Path]:
     """Build a mapping of relative target paths to source file paths.
 
-    Handles both installed layout (_data/commands/eforge/, _data/personas/, _data/references/)
-    and development layout (commands/eforge/, personas/, docs/).
+    Auto-discovers all files under commands/eforge/ so that adding new skills
+    or references doesn't require updating a manifest. Also discovers persona
+    YAML files from the config directory.
+
+    Handles both installed layout (_data/commands/eforge/) and development
+    layout (commands/eforge/).
 
     Returns:
         Dict mapping relative path within eforge/ -> absolute source path.
@@ -94,23 +84,12 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
     else:
         raise FileNotFoundError(f"Command files not found under {data_root}")
 
-    # Skill markdown files
-    for skill_file in SKILL_FILES:
-        source = skills_dir / skill_file
-        if source.exists():
-            manifest[skill_file] = source
-
-    # Reference docs — installed: _data/references/, dev: docs/reference/
-    for ref_name, dev_name in [
-        ("scenario-reference.md", "scenario-reference.md"),
-        ("evidence-formats.md", "EVIDENCE_FORMATS.md"),
-    ]:
-        installed_ref = data_root / "references" / ref_name
-        dev_ref = data_root / "docs" / "reference" / dev_name
-        if installed_ref.exists():
-            manifest[f"references/{ref_name}"] = installed_ref
-        elif dev_ref.exists():
-            manifest[f"references/{ref_name}"] = dev_ref
+    # Auto-discover all .md files under commands/eforge/ (skills + references).
+    # The directory structure mirrors the installed layout, so relative paths
+    # map directly to target paths.
+    for md_file in sorted(skills_dir.rglob("*.md")):
+        rel_path = str(md_file.relative_to(skills_dir))
+        manifest[rel_path] = md_file
 
     # Persona files — installed: _data/personas/, dev: config/personas/
     personas_dir = data_root / "personas"

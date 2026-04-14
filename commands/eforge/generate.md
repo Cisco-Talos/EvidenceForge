@@ -17,9 +17,8 @@ You are helping the user generate synthetic security log datasets from an Eviden
 If the user has a scenario file ready:
 
 ```bash
-cd /Users/dabianco/projects/SURGe/data-gen-test
-uv run eforge validate <scenario-file>
-uv run eforge generate <scenario-file> --verbose
+eforge validate <scenario-file>
+eforge generate <scenario-file> --verbose
 ```
 
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
@@ -67,14 +66,13 @@ Exit codes:
 Before running generation:
 - Verify the scenario file exists and is valid YAML
 - Read the scenario to understand what will be generated (users, systems, time window, formats)
-- Run `uv run eforge validate <scenario-file>` to catch issues early
+- Run `eforge validate <scenario-file>` to catch issues early
 - Give the user a brief summary: "This will generate ~X hours of logs for Y users across Z formats"
 
 ### 2. Run Generation
 
 ```bash
-cd /Users/dabianco/projects/SURGe/data-gen-test
-uv run eforge generate <scenario-file> --verbose
+eforge generate <scenario-file> --verbose
 ```
 
 Always use `--verbose` so you can see progress and diagnose issues.

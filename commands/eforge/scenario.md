@@ -652,11 +652,11 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 - Flag the specific storyline event(s) that may not be discoverable
 - Suggest concrete fixes: add a sensor, enable a log format, or adjust the network topology
 - Let the user decide whether to fix the gap or accept it (some scenarios intentionally have blind spots to test whether hunters notice)
-4. **Validate** — Run `uv run eforge validate <scenario-file>` to check schema and cross-references
+4. **Validate** — Run `eforge validate <scenario-file>` to check schema and cross-references
 5. If validation fails, fix the issues and re-validate
 6. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
 
-If the user wants to immediately generate logs, suggest using `/eforge generate` or running `uv run eforge generate <scenario-file>`.
+If the user wants to immediately generate logs, suggest using `/eforge generate` or running `eforge generate <scenario-file>`.
 
 When generation completes, the output directory will contain a `GROUND_TRUTH.md` file with the full attack timeline, IOCs, and answer key. Let the user know this exists and where to find it.
 

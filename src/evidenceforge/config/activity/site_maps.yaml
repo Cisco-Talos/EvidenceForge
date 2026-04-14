@@ -12,6 +12,11 @@
 #   {search_term} - random search term
 #   {n}           - random integer 1-20
 #   {slug}        - random URL slug
+#
+# Depended on by: generation engine (browsing session depth)
+# Depends on: dns_registry.yaml (domain keys should exist in registry)
+#
+# Full schema: see commands/eforge/references/config-site-maps.md
 
 # ─── Search terms for template substitution ───────────────────────────
 search_terms:

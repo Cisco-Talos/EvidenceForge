@@ -1,3 +1,11 @@
+# ecar format definition — eCAR (extended Cyber Analytics Repository) - EDR/XDR host telemetry
+#
+# Category: host
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: ecar
 version: "1.0"
 description: "eCAR (extended Cyber Analytics Repository) - EDR/XDR host telemetry"

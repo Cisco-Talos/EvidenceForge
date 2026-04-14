@@ -1,3 +1,11 @@
+# web_access format definition — W3C web server access logs (Apache/Nginx)
+#
+# Category: application
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: web_access
 version: "1.0"
 description: "W3C web server access logs (Apache/Nginx)"

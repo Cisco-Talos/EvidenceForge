@@ -1,3 +1,11 @@
+# zeek_ntp format definition — Zeek ntp.log format (JSON output) - NTP protocol logging
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_ntp
 version: "1.0"
 description: "Zeek ntp.log format (JSON output) - NTP protocol logging"

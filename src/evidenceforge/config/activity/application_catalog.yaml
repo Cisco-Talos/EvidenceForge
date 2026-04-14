@@ -12,6 +12,11 @@
 #   categories: List of category tags matching PERSONA_PROCESS_WEIGHTS keys
 #     (user_app, code, build, query, browser, office)
 #   personas: Which persona names may spawn this app (others never see it)
+#
+# Depended on by: spawn_rules.yaml (exe basenames), process_network_map.yaml (exe basenames)
+# Depends on: persona files (personas: list must use valid persona names)
+#
+# Full schema: see commands/eforge/references/config-application-catalog.md
 
 applications:
   # ===== Windows User Apps (process_user_apps) =====
@@ -39,7 +44,7 @@ applications:
         command_templates:
           - "google-chrome --new-tab {internal_url}"
     categories: [user_app, browser]
-    personas: [developer, analyst, sysadmin, security_analyst, hr, finance, intern, help_desk, default]
+    personas: [developer, analyst, sysadmin, security_analyst, hr, accountant, intern, help_desk, default]
 
   - id: firefox
     display_name: "Mozilla Firefox"
@@ -65,7 +70,7 @@ applications:
           - "firefox --new-tab {internal_url}"
           - "firefox -P default"
     categories: [user_app, browser]
-    personas: [developer, analyst, sysadmin, security_analyst, hr, finance, intern, help_desk, default]
+    personas: [developer, analyst, sysadmin, security_analyst, hr, accountant, intern, help_desk, default]
 
   - id: outlook
     display_name: "Microsoft Outlook"
@@ -82,7 +87,7 @@ applications:
           - '"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"'
           - 'OUTLOOK.EXE /recycle'
     categories: [user_app, office]
-    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, finance, intern, help_desk, default]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]
 
   - id: word
     display_name: "Microsoft Word"
@@ -99,7 +104,7 @@ applications:
           - 'WINWORD.EXE /n "{doc_path}"'
           - '"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE" /t "Normal.dotm"'
     categories: [user_app, office]
-    personas: [executive, analyst, hr, finance, intern, help_desk, default]
+    personas: [executive, analyst, hr, accountant, intern, help_desk, default]
 
   - id: excel
     display_name: "Microsoft Excel"
@@ -116,7 +121,7 @@ applications:
           - 'EXCEL.EXE "{spreadsheet_path}"'
           - '"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE" /e'
     categories: [user_app, office]
-    personas: [analyst, executive, hr, finance, intern, help_desk, default]
+    personas: [analyst, executive, hr, accountant, intern, help_desk, default]
 
   - id: edge
     display_name: "Microsoft Edge"
@@ -136,7 +141,7 @@ applications:
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer'
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=gpu-process'
     categories: [user_app, browser]
-    personas: [executive, sysadmin, analyst, hr, finance, help_desk, default]
+    personas: [executive, sysadmin, analyst, hr, accountant, help_desk, default]
 
   - id: teams
     display_name: "Microsoft Teams"
@@ -155,7 +160,7 @@ applications:
         children:
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility'
     categories: [user_app]
-    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, finance, intern, help_desk, default]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]
 
   - id: onedrive
     display_name: "Microsoft OneDrive"
@@ -173,7 +178,7 @@ applications:
         children:
           - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
     categories: [user_app]
-    personas: [developer, analyst, sysadmin, executive, hr, finance, intern, help_desk, default]
+    personas: [developer, analyst, sysadmin, executive, hr, accountant, intern, help_desk, default]
 
   - id: acrobat
     display_name: "Adobe Acrobat"
@@ -189,7 +194,7 @@ applications:
         command_templates:
           - '"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"'
     categories: [user_app, office]
-    personas: [executive, analyst, hr, finance, help_desk, default]
+    personas: [executive, analyst, hr, accountant, help_desk, default]
 
   - id: 7zip
     display_name: "7-Zip"
@@ -338,7 +343,7 @@ applications:
         command_templates:
           - "thunderbird"
     categories: [user_app, office]
-    personas: [executive, hr, finance, default]
+    personas: [executive, hr, accountant, default]
 
   - id: git
     display_name: "Git"

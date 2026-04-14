@@ -1,3 +1,11 @@
+# zeek_weird format definition — Zeek weird.log format (JSON output) - Network anomaly logging
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_weird
 version: "1.0"
 description: "Zeek weird.log format (JSON output) - Network anomaly logging"

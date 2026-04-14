@@ -1,3 +1,11 @@
+# zeek_x509 format definition — Zeek x509.log format (JSON output) - X.509 certificate logging
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_x509
 version: "1.0"
 description: "Zeek x509.log format (JSON output) - X.509 certificate logging"

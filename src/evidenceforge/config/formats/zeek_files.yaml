@@ -1,3 +1,11 @@
+# zeek_files format definition — Zeek files.log format (JSON output) - File transfer metadata
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_files
 version: "1.0"
 description: "Zeek files.log format (JSON output) - File transfer metadata"

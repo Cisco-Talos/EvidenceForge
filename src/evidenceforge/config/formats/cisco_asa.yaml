@@ -1,3 +1,11 @@
+# cisco_asa format definition — Cisco ASA firewall syslog format
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: cisco_asa
 version: "1.0"
 description: "Cisco ASA firewall syslog format"

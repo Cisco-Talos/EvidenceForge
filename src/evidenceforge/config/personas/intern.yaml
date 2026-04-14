@@ -1,3 +1,17 @@
+# Persona: intern — Entry-level intern who performs basic tasks, learns company processes, and assists team members with routine work
+#
+# Required fields: name, description, typical_activities, work_hours,
+#   application_usage, risk_profile, browsing_intensity
+# Valid risk_profile: low, medium, high
+# Valid browsing_intensity: light, normal, heavy
+#
+# Cross-references:
+#   - Persona name must match this filename (without .yaml)
+#   - Referenced by application_catalog.yaml personas: lists
+#   - May be referenced by traffic_profiles.yaml persona_traffic: keys
+#
+# Full schema: see commands/eforge/references/config-personas.md
+
 name: intern
 description: "Entry-level intern who performs basic tasks, learns company processes, and assists team members with routine work"
 typical_activities:

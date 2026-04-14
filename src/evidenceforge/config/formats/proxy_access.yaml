@@ -1,3 +1,11 @@
+# proxy_access format definition — HTTP/HTTPS forward proxy access log (W3C Extended Log Format)
+#
+# Category: host
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: proxy_access
 version: "1.0"
 description: "HTTP/HTTPS forward proxy access log (W3C Extended Log Format)"

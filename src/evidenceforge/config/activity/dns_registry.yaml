@@ -13,6 +13,12 @@
 #
 # Each domain can have multiple IPs (realistic for CDN/cloud services).
 # The loader builds REVERSE_DNS, FORWARD_DNS, and tag-based lookups from this data.
+#
+# Depended on by: traffic_profiles.yaml (dns_tags), proxy_uri_templates.yaml (domain keys),
+#                 site_maps.yaml (domain keys)
+# Depends on: nothing — this is the root data source
+#
+# Full schema: see commands/eforge/references/config-dns-registry.md
 
 domains:
   # === Google ===
@@ -46,7 +52,7 @@ domains:
   # === Reddit / Fastly ===
   - domain: www.reddit.com
     ips: ["151.101.1.140", "151.101.65.140"]
-    tags: [web]
+    tags: [web, social]
   - domain: i.redd.it
     ips: ["151.101.65.140", "151.101.129.140"]
     tags: [cdn]
@@ -114,7 +120,7 @@ domains:
     tags: [web]
   - domain: www.facebook.com
     ips: ["31.13.65.36", "31.13.65.37"]
-    tags: [web]
+    tags: [web, social]
   - domain: stackoverflow.com
     ips: ["44.238.149.75", "44.238.150.75"]
     tags: [web]

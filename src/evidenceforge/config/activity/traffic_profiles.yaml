@@ -22,6 +22,12 @@
 #   dns_tags:  list of dns_registry tags for _external resolution (optional)
 #              Falls back to ["background", <source_os>] if omitted.
 #   description: human-readable note (optional, not used by engine)
+#
+# Depended on by: generation engine (drives all baseline network connections)
+# Depends on: dns_registry.yaml (dns_tags must exist as tags on domains),
+#             persona files (persona_traffic keys must match persona names)
+#
+# Full schema: see commands/eforge/references/config-traffic-profiles.md
 
 role_traffic:
 

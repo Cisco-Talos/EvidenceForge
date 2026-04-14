@@ -22,6 +22,11 @@
 # For cron type:
 #   cron_user        - User running the cron job
 #   cron_commands    - Distro-keyed command strings
+#
+# Depended on by: generation engine (periodic syslog events on Linux)
+# Depends on: nothing — standalone (distro/role filters are soft matches)
+#
+# Full schema: see commands/eforge/references/config-systemd-schedules.md
 
 schedules:
   # === Systemd timers ===
