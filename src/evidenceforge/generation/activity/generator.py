@@ -453,6 +453,8 @@ _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 
 # OS-aware proxy User-Agent pools
 _PROXY_UAS_WINDOWS = (
+    # Browser UAs only — system-level UAs (Microsoft-CryptoAPI, Windows-Update-Agent)
+    # are handled by domain-specific overrides in proxy_uri_templates.yaml.
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
@@ -460,8 +462,6 @@ _PROXY_UAS_WINDOWS = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-    "Microsoft-CryptoAPI/10.0",
-    "Windows-Update-Agent/10.0.19041.1",
 )
 
 _PROXY_UAS_LINUX = (
