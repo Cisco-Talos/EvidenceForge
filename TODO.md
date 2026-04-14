@@ -231,10 +231,10 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] HTTP MIME type mismatches with URI — _URI_MIME_MAP in baseline.py and generator.py pairs URIs to correct MIME types
 - [ ] Proxy format doesn't match standard Squid or Bluecoat output
 - [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
-- [ ] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — paths need hostname-aware selection
-- [ ] Proxy lacks session depth — 1 request per site, no cascading subresource loads (CSS/JS/images/API)
-- [ ] Proxy user-agent mismatch — Windows-Update-Agent UA appearing on Reddit/StackOverflow browsing sessions (flagged by all 4 experts); session UA selection doesn't filter OS-specific system UAs from user browsing
-- [ ] Web access log referrer headers — random system URLs (windowsupdate.com, ocsp.digicert.com) appearing as referrers for local page navigation; referrer chain crosses unrelated browsing sessions
+- [x] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — site map data layer with 12 curated domains + 8 tag-based synthesis templates; browsing session generator selects paths from site-specific page definitions
+- [x] Proxy lacks session depth — browsing session model generates landing page + subresource cascade (CSS/JS/images/fonts/favicon/API) + navigation to additional pages with referrer chains; persona-driven intensity (light/normal/heavy); cross-domain CDN fan-out; CONNECT tunnel deduplication with 5-min timeout
+- [x] Proxy user-agent mismatch — removed system UAs (Windows-Update-Agent, Microsoft-CryptoAPI) from general _PROXY_UAS_WINDOWS pool; restricted workstation role traffic dns_tags to [background, windows]; added dns_tags to all persona profiles; retagged CDN/API domains in dns_registry
+- [x] Web access log referrer headers — tightened web_access emitter can_handle() to require dst_host (destination is a scenario system); prevents outbound HTTPS connections from creating entries on source workstation
 - [x] DHCP shows full discovery instead of renewals in mid-scenario windows — initial leases emitted during warm-up (suppressed); periodic REQUEST/ACK renewals at T/2 in _generate_system_traffic()
 
 **Cisco ASA:**
