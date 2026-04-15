@@ -57,8 +57,8 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names |
 | Modify systemd schedules | `systemd_schedules.yaml` | (standalone) |
-| Modify format definition | `formats/{name}.yaml` | `evaluation/*.yaml` (may need new rules) |
-| Modify evaluation rules | `evaluation/{name}.yaml` | (validate field names exist in formats) |
+| ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
+| ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
 
 Compound operations touch multiple types — identify all of them. For the full dependency map, read `references/config-dependency-graph.md`.
 
@@ -74,8 +74,8 @@ Read package default files from `paths.*` (READ path) to understand existing con
 | Applications, spawn rules, processes | `references/config-apps-processes.md` |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog) | `references/config-host-activity.md` |
-| Format definitions | `references/config-formats.md` |
-| Evaluation rules | `references/config-evaluation.md` |
+| Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |
+| Evaluation rules | `references/config-evaluation.md` (read-only reference — not user-customizable) |
 | Cross-file dependencies | `references/config-dependency-graph.md` |
 | Validation checks | `references/config-validation.md` |
 
