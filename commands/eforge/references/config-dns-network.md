@@ -91,15 +91,26 @@ domains:
 
 New domains (no matching `domain` in defaults) are appended to the registry.
 
-**Modify an existing domain's tags** (e.g., retag reddit to add `social`):
+**Add a tag to an existing domain** (default — lists extend):
 
 ```yaml
 domains:
   - domain: www.reddit.com
-    tags: [web, social]
+    tags: [social]
 ```
 
-This **replaces** the `tags` field on the existing reddit entry — the overlay value wins. The `ips` and other fields you don't mention are preserved from the package default. This is the correct behavior for retagging: `tags: [web, social]` means exactly those tags, not "add social to whatever was there before."
+This **extends** reddit's tags — `social` is appended to the existing `[web]`, producing `[web, social]`. The `ips` and other fields are preserved.
+
+**Replace tags entirely** (use `_replace: true`):
+
+```yaml
+domains:
+  - domain: graph.microsoft.com
+    tags: [dev]
+    _replace: true
+```
+
+With `_replace: true`, the `tags` field is **replaced** — the result is exactly `[dev]`, not `[saas, dev]`. Use this when retagging a domain to a different category. Unmentioned fields (`ips`) are still preserved.
 
 ### Common Mistakes
 

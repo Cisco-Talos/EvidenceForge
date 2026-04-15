@@ -126,20 +126,20 @@ def merge_keyed_list(
     default_list: list[dict],
     overlay_list: list[dict],
     key_field: str,
-    extend_keys: frozenset[str] = frozenset(),
 ) -> list[dict]:
     """Merge two lists of dicts using a unique key field.
 
-    When an overlay entry matches a default entry by key, fields are merged:
-    - Fields named in ``extend_keys`` are list-extended (appended)
-    - All other fields are replaced by the overlay value (including lists)
-    - Dict fields are deep-merged recursively
+    By default, matched entries are merged with ``deep_merge_dict`` —
+    list fields are **extended** (appended) and scalar fields are replaced.
+    This is the common case: ``{id: chrome, personas: [nurse]}`` adds
+    ``nurse`` to Chrome's persona list.
 
-    This means ``tags: [dev]`` on a DNS domain overlay **replaces** the
-    default tags (correct for retagging), while ``personas: [nurse]`` on
-    an app catalog overlay **extends** the default personas list (correct
-    for adding a persona to an existing app) — as long as the caller
-    passes ``extend_keys=frozenset({"personas"})``.
+    If an overlay entry includes ``_replace: true``, all its fields
+    **replace** the default's fields (including lists). This is for cases
+    like retagging a DNS domain: ``{domain: x.com, tags: [dev], _replace: true}``
+    sets tags to exactly ``[dev]`` instead of extending. Unmentioned fields
+    are still preserved from the default. The ``_replace`` key is stripped
+    from the merged result.
 
     Overlay entries with new keys (no match in defaults) are appended.
 
@@ -147,8 +147,6 @@ def merge_keyed_list(
         default_list: Package default entries.
         overlay_list: User overlay entries.
         key_field: Field name used as the unique identifier (e.g., "domain", "id").
-        extend_keys: Field names whose list values should be extended rather
-            than replaced when merging matched entries.
 
     Returns:
         Merged list.
@@ -159,50 +157,48 @@ def merge_keyed_list(
     for entry in default_list:
         key = entry.get(key_field)
         if key and key in overlay_by_key:
-            overlay_entry = overlay_by_key.pop(key)
+            overlay_entry = dict(overlay_by_key.pop(key))  # copy so pop doesn't mutate
+            replace_mode = overlay_entry.pop("_replace", False)
             logger.info(
-                "Config overlay: merging fields into %s=%r",
+                "Config overlay: %s fields into %s=%r",
+                "replacing" if replace_mode else "merging",
                 key_field,
                 key,
             )
-            merged = _merge_keyed_entry(entry, overlay_entry, extend_keys, f"{key_field}={key}")
+            if replace_mode:
+                merged = _replace_entry(entry, overlay_entry, f"{key_field}={key}")
+            else:
+                merged = deep_merge_dict(entry, overlay_entry, f"{key_field}={key}")
             result.append(merged)
         else:
             result.append(entry)
 
-    # Append remaining overlay entries (new additions)
-    result.extend(overlay_by_key.values())
+    # Append remaining overlay entries (new additions); strip _replace if present
+    for new_entry in overlay_by_key.values():
+        cleaned = {k: v for k, v in new_entry.items() if k != "_replace"}
+        result.append(cleaned)
     return result
 
 
-def _merge_keyed_entry(
+def _replace_entry(
     default: dict[str, Any],
     overlay: dict[str, Any],
-    extend_keys: frozenset[str],
     path: str,
 ) -> dict[str, Any]:
-    """Merge an overlay entry into a default entry within a keyed list.
+    """Merge an overlay entry into a default using replace semantics.
 
-    Fields in ``extend_keys`` are list-extended. All other fields are
-    replaced by the overlay value. Dict fields are deep-merged.
+    Every field present in the overlay replaces the default's value
+    (including lists). Fields not in the overlay are preserved from
+    the default. Dict fields are still deep-merged.
     """
     result = dict(default)
     for key, overlay_value in overlay.items():
         full_key = f"{path}.{key}"
         if key in result:
             default_value = result[key]
-            if (
-                key in extend_keys
-                and isinstance(default_value, list)
-                and isinstance(overlay_value, list)
-            ):
-                # Extend: append overlay items to default list
-                result[key] = default_value + overlay_value
-            elif isinstance(default_value, dict) and isinstance(overlay_value, dict):
-                # Deep-merge dicts
+            if isinstance(default_value, dict) and isinstance(overlay_value, dict):
                 result[key] = deep_merge_dict(default_value, overlay_value, full_key)
             else:
-                # Replace (including list fields not in extend_keys)
                 if default_value != overlay_value:
                     logger.warning("Config overlay: replacing value at %r", full_key)
                 result[key] = overlay_value

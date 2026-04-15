@@ -120,6 +120,17 @@ applications:
 
 The engine merges this with the package defaults: Chrome keeps all its existing fields (image_path, pe_metadata, command_templates, categories, etc.) and `nurse` is appended to its `personas` list. You do NOT need to copy the full entry.
 
+**Replace an app's persona list entirely** (use `_replace: true`):
+
+```yaml
+applications:
+  - id: chrome
+    personas: [nurse, doctor]
+    _replace: true
+```
+
+With `_replace: true`, Chrome's personas become exactly `[nurse, doctor]` — the default list is discarded. All other fields (image_path, etc.) are still preserved. Use this when you want to restrict an app to specific personas rather than add to the existing list.
+
 **Add a completely new application:**
 
 ```yaml

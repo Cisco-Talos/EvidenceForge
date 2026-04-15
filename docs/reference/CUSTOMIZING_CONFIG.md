@@ -20,7 +20,8 @@ your-project/
 
 **How merging works:**
 - New entries (new domain, new app, new persona) are appended to package defaults
-- Entries matching an existing key (same domain name, same app ID) are merged field-by-field — list fields are extended, scalar fields are replaced, unmentioned fields are preserved
+- Entries matching an existing key (same domain name, same app ID) are merged field-by-field — list fields are extended (appended), scalar fields are replaced, unmentioned fields are preserved
+- Add `_replace: true` to an overlay entry to switch list fields from extend to replace (e.g., to retag a domain instead of adding a tag)
 - Package defaults you don't override pass through unchanged
 
 Your overlay is never touched by package upgrades. Run `eforge info overlay.exists` to check if you have one.
