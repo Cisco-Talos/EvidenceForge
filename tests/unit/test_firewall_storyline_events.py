@@ -98,6 +98,14 @@ class TestBlockedC2EventSpec:
         with pytest.raises((ValueError, ValidationError)):
             BlockedC2EventSpec(dst_ip="198.51.100.30", jitter=1.5)
 
+    def test_interval_must_be_greater_than_zero(self):
+        with pytest.raises((ValueError, ValidationError)):
+            BlockedC2EventSpec(dst_ip="198.51.100.30", interval="0s")
+
+    def test_duration_must_be_greater_than_zero(self):
+        with pytest.raises((ValueError, ValidationError)):
+            BlockedC2EventSpec(dst_ip="198.51.100.30", duration="0s")
+
 
 class TestDropMode:
     def test_default_is_drop(self):
