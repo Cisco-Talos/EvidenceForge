@@ -187,15 +187,16 @@ def validate_config() -> ValidationResult:
             # Look up file-specific schema
             file_schema = _OVERLAY_FILE_SCHEMAS.get(rel_path)
 
-            # Warn on unknown overlay files (personas/ handled separately below)
+            # Reject unknown overlay files (personas/ handled separately below)
             if file_schema is None and not rel_path.startswith("personas/"):
                 result.issues.append(
                     Issue(
-                        "WARNING",
+                        "ERROR",
                         f"overlay/{rel_path}",
                         "Unknown overlay file — not a recognized config path. Check filename for typos.",
                     )
                 )
+                overlay_errors = True
                 continue
 
             if file_schema is None:
@@ -204,18 +205,19 @@ def validate_config() -> ValidationResult:
             list_fields = file_schema.get("list_fields", {})
             dict_fields = file_schema.get("dict_fields", set())
 
-            # Warn on unexpected top-level keys
+            # Reject unexpected top-level keys (they will be silently ignored by the engine)
             known_keys = set(list_fields.keys()) | dict_fields
             if known_keys:
                 for key in data:
                     if key not in known_keys and key != "_replace":
                         result.issues.append(
                             Issue(
-                                "WARNING",
+                                "ERROR",
                                 f"overlay/{rel_path}",
-                                f'Unexpected top-level key "{key}" — will be ignored or may indicate a typo',
+                                f'Unexpected top-level key "{key}" — this will be ignored by the engine. Check for typos.',
                             )
                         )
+                        overlay_errors = True
 
             # Check list fields for correct structure
             for field_name, key_field in list_fields.items():
@@ -250,6 +252,23 @@ def validate_config() -> ValidationResult:
                                     )
                                 )
                                 overlay_errors = True
+
+                        # Check for duplicate keys within this overlay list
+                        if key_field:
+                            seen_overlay_keys: dict[str, int] = {}
+                            for j, item in enumerate(value):
+                                if isinstance(item, dict) and key_field in item:
+                                    k = item[key_field]
+                                    if k in seen_overlay_keys:
+                                        result.issues.append(
+                                            Issue(
+                                                "ERROR",
+                                                f"overlay/{rel_path}",
+                                                f'Duplicate {key_field}="{k}" in "{field_name}" (entries #{seen_overlay_keys[k]} and #{j + 1}) — last entry wins, first is lost',
+                                            )
+                                        )
+                                        overlay_errors = True
+                                    seen_overlay_keys[k] = j + 1
 
             # Check dict fields for correct structure
             for field_name in dict_fields:
