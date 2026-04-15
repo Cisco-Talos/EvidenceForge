@@ -91,7 +91,7 @@ domains:
 
 New domains (no matching `domain` in defaults) are appended to the registry.
 
-**Modify an existing domain's tags** (e.g., add `social` tag to reddit):
+**Modify an existing domain's tags** (e.g., retag reddit to add `social`):
 
 ```yaml
 domains:
@@ -99,7 +99,7 @@ domains:
     tags: [web, social]
 ```
 
-This merges into the existing reddit entry — the `tags` field is updated while `ips` and other fields are preserved from the package default.
+This **replaces** the `tags` field on the existing reddit entry — the overlay value wins. The `ips` and other fields you don't mention are preserved from the package default. This is the correct behavior for retagging: `tags: [web, social]` means exactly those tags, not "add social to whatever was there before."
 
 ### Common Mistakes
 

@@ -105,6 +105,33 @@ def validate_config() -> ValidationResult:
     formats_dir = get_formats_directory()
     evaluation_dir = get_evaluation_directory()
 
+    # --- Pre-check: Validate overlay files first ---
+    # Overlay files must parse cleanly before merged loaders use them.
+    # If an overlay file has bad YAML, report it as an error rather than
+    # letting it crash the merged loaders.
+    from evidenceforge.config.overlay import get_overlay_directory
+
+    overlay_dir = get_overlay_directory()
+    overlay_yaml_files: list[Path] = []
+    if overlay_dir and overlay_dir.is_dir():
+        overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
+
+    overlay_errors = False
+    for path in overlay_yaml_files:
+        data, err = _safe_load_yaml(path)
+        rel_path = str(path.relative_to(overlay_dir))
+        if err:
+            result.issues.append(Issue("ERROR", f"overlay/{rel_path}", f"YAML parse error: {err}"))
+            overlay_errors = True
+        elif data is None:
+            result.issues.append(Issue("ERROR", f"overlay/{rel_path}", "File is empty"))
+            overlay_errors = True
+
+    if overlay_errors:
+        # Cannot proceed with merged loading — overlay files would crash loaders
+        result.files_checked = len(overlay_yaml_files)
+        return result
+
     # Load all data through overlay-aware loaders for consistency.
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
@@ -126,14 +153,14 @@ def validate_config() -> ValidationResult:
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
 
-    # Collect file count
+    # Collect file count (package + overlay)
     yaml_files: list[Path] = []
     for d in [activity_dir, personas_dir, formats_dir, evaluation_dir]:
         if d.is_dir():
             yaml_files.extend(d.glob("*.yaml"))
-    result.files_checked = len(yaml_files)
+    result.files_checked = len(yaml_files) + len(overlay_yaml_files)
 
-    # --- Checks 1-2: YAML Health ---
+    # --- Checks 1-2: YAML Health (package files) ---
     for path in yaml_files:
         data, err = _safe_load_yaml(path)
         if err:
@@ -424,7 +451,13 @@ def validate_config() -> ValidationResult:
             )
 
     # --- Checks 21-25: Persona Integrity ---
-    for yaml_file in sorted(personas_dir.glob("*.yaml")):
+    # Check both package and overlay persona files
+    all_persona_files = sorted(personas_dir.glob("*.yaml"))
+    if overlay_dir:
+        overlay_personas_dir = overlay_dir / "personas"
+        if overlay_personas_dir.is_dir():
+            all_persona_files.extend(sorted(overlay_personas_dir.glob("*.yaml")))
+    for yaml_file in all_persona_files:
         data, err = _safe_load_yaml(yaml_file)
         if err or not data:
             continue  # Already caught in YAML health check

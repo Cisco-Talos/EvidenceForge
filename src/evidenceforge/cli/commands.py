@@ -796,7 +796,10 @@ def validate_config_cmd(
             "warnings": [{"file": i.file, "message": i.message} for i in result.warnings],
             "info": [{"file": i.file, "message": i.message} for i in result.infos],
         }
+        # JSON mode: only JSON on stdout, exit non-zero on errors
         print(json.dumps(output, indent=2))
+        if result.errors:
+            raise typer.Exit(EXIT_SCHEMA_VALIDATION)
     else:
         if result.errors:
             status_console.print("\n[bold red]ERRORS (must fix):[/bold red]")
@@ -825,10 +828,10 @@ def validate_config_cmd(
         if result.errors:
             raise typer.Exit(EXIT_SCHEMA_VALIDATION)
 
-    if not result.issues:
-        console.print(
-            f"\n[bold green]All config files validated successfully. No issues found across {result.files_checked} files.[/bold green]"
-        )
+        if not result.issues:
+            status_console.print(
+                f"\n[bold green]All config files validated successfully. No issues found across {result.files_checked} files.[/bold green]"
+            )
 
 
 @app.command()

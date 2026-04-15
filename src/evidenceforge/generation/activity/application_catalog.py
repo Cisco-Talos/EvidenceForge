@@ -36,6 +36,7 @@ def _merge_catalog(default: dict, overlay: dict) -> dict:
             default.get("applications", []),
             overlay["applications"],
             key_field="id",
+            extend_keys=frozenset({"personas", "categories"}),
         )
     return result
 
