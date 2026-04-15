@@ -146,7 +146,7 @@ class User(BaseModel):
     Represents a user in the simulated environment who may generate log activity.
 
     Attributes:
-        username: Username (alphanumeric, dash, underscore only)
+        username: Username (alphanumeric, dot, dollar sign, dash, underscore)
         full_name: User's full name
         email: Email address (basic format validation)
         groups: List of group names this user belongs to
@@ -155,7 +155,7 @@ class User(BaseModel):
         primary_system: Primary system hostname for this user (optional)
     """
 
-    username: str = Field(..., pattern=r"^[a-zA-Z0-9._-]+$")
+    username: str = Field(..., pattern=r"^[a-zA-Z0-9._$-]+$")
     full_name: str
     email: str
     groups: list[str] = Field(default_factory=list)
@@ -172,7 +172,7 @@ class User(BaseModel):
     @classmethod
     def validate_email(cls, v: str) -> str:
         """Basic email validation (format check only)."""
-        if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v):
+        if not re.match(r"^[a-zA-Z0-9._%+$-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v):
             raise ValueError(f"Invalid email format: {v}")
         return v
 
