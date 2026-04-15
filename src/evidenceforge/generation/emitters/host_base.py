@@ -130,15 +130,16 @@ class HostMultiplexEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
 
     def _get_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        writer = self._writers.get(host_fqdn)
+        routed_host = self._sanitize_host_fqdn(host_fqdn) if host_fqdn else ""
+        writer = self._writers.get(routed_host)
         if writer is not None:
             return writer
         with self._writers_lock:
-            writer = self._writers.get(host_fqdn)
+            writer = self._writers.get(routed_host)
             if writer is not None:
                 return writer
-            if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / self._log_filename
+            if routed_host and not self._direct_file_mode:
+                path = self._base_dir / routed_host / self._log_filename
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:
@@ -146,9 +147,23 @@ class HostMultiplexEmitter(LogEmitter):
                 path = self._base_dir / flat_name
             sort = self._sort_flat_file
             writer = _SingleHostWriter(path, self._buffer_size, sort_on_flush=sort)
-            self._writers[host_fqdn] = writer
+            self._writers[routed_host] = writer
             logger.debug(f"Created host writer: {path}")
             return writer
+
+    @staticmethod
+    def _sanitize_host_fqdn(host_fqdn: str) -> str:
+        """Sanitize host routing key before using it as a path component."""
+        sanitized = "".join(
+            character if character.isalnum() or character in "._-" else "_"
+            for character in host_fqdn.strip()
+        )
+        sanitized = sanitized.strip(" .")
+        while ".." in sanitized:
+            sanitized = sanitized.replace("..", ".")
+        if sanitized in {"", ".", ".."}:
+            return "unknown-host"
+        return sanitized
 
     def emit_to_host(self, rendered: str, host_fqdn: str = "") -> None:
         """Route a rendered line to the appropriate host writer."""

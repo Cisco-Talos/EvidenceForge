@@ -82,6 +82,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] **CI runs tests 3 times** — 3 separate pytest invocations (unit, integration, both again for coverage). Consolidate to single run.
 - [x] **No pre-commit hooks** — ruff issues only caught in CI. Add pre-commit framework with ruff check + format hooks.
 - [ ] **Re-generation appends to existing output** — `GenerationEngine` creates output directories with `exist_ok=True` and emitters append to existing files. Re-running a scenario without manually clearing the output directory produces mixed old+new data. Should clean the output directory (or at least its per-sensor subdirectories) before writing.
+- [x] Security fix: sanitize host-based emitter routing keys to prevent path traversal from scenario-derived FQDN values (proxy_access and any `_host_fqdn` routes).
 
 ### Tier 1: Foundational Correctness
 
