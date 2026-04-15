@@ -63,10 +63,13 @@ def get_system_binary_exes() -> set[str]:
     return exes
 
 
-def get_system_binary_path(exe_name: str) -> str | None:
+def get_system_binary_path(exe_name: str, username: str | None = None) -> str | None:
     """Look up the full image path for a system binary by exe name.
 
-    Case-insensitive lookup. Returns None if not found.
+    Case-insensitive lookup. Resolves ``{username}`` placeholders if
+    username is provided, consistent with catalog path resolution.
+
+    Returns None if not found.
     """
     global _CACHED_BINARY_PATHS
     if _CACHED_BINARY_PATHS is None:
@@ -81,7 +84,14 @@ def get_system_binary_path(exe_name: str) -> str | None:
                         paths[exe.lower()] = path
         _CACHED_BINARY_PATHS = paths
 
-    return _CACHED_BINARY_PATHS.get(exe_name.lower())
+    path = _CACHED_BINARY_PATHS.get(exe_name.lower())
+    if path and "{username}" in path:
+        if username:
+            path = path.replace("{username}", username)
+        else:
+            # No username context — return None to let caller fall back
+            return None
+    return path
 
 
 def _resolve_template(template: str, rng: random.Random, entry_params: dict | None) -> str:

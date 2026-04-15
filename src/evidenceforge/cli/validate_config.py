@@ -560,7 +560,9 @@ def validate_config() -> ValidationResult:
     #   keyboard_adjacency — typo model data
     #   dba, webadmin, security — sub-role pools mapped from personas by _get_role_pool()
     _BASH_SPECIAL_KEYS = {"common", "params", "keyboard_adjacency", "dba", "webadmin", "security"}
-    bash_data, _ = _safe_load_yaml(activity_dir / "bash_commands.yaml")
+    from evidenceforge.generation.activity.bash_commands import load_bash_commands
+
+    bash_data = load_bash_commands()
     if bash_data:
         for role_key in bash_data:
             if role_key in _BASH_SPECIAL_KEYS:

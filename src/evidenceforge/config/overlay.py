@@ -151,6 +151,28 @@ def merge_keyed_list(
     Returns:
         Merged list.
     """
+    # Validate overlay entries before merging
+    seen_keys: dict[str, int] = {}
+    for i, entry in enumerate(overlay_list):
+        if key_field not in entry:
+            logger.warning(
+                "Config overlay: entry #%d is missing required key field %r — skipping: %s",
+                i + 1,
+                key_field,
+                {k: v for k, v in entry.items() if k != "_replace"},
+            )
+        else:
+            key = entry[key_field]
+            if key in seen_keys:
+                logger.warning(
+                    "Config overlay: duplicate %s=%r (entries #%d and #%d) — last entry wins",
+                    key_field,
+                    key,
+                    seen_keys[key],
+                    i + 1,
+                )
+            seen_keys[key] = i + 1
+
     overlay_by_key = {entry[key_field]: entry for entry in overlay_list if key_field in entry}
     result = []
 

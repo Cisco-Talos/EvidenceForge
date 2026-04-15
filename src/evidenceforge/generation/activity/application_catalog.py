@@ -253,7 +253,7 @@ def resolve_image_path(exe_basename: str, os_category: str = "windows", username
         return _SPECIAL_PATHS[lower]
 
     # 3. Data-driven system binary path lookup
-    sys_path = get_system_binary_path(exe_basename)
+    sys_path = get_system_binary_path(exe_basename, username=username)
     if sys_path:
         return sys_path
 
