@@ -716,7 +716,7 @@ def info(
     )
 
     try:
-        data = gather_info()
+        data = gather_info(field=field)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)

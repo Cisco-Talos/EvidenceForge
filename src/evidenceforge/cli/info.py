@@ -116,19 +116,12 @@ def _collect_system_roles() -> list[str]:
     return sorted(data.get("role_traffic", {}).keys())
 
 
-def gather_info() -> dict[str, Any]:
-    """Gather all installation info into a single dict.
+def _gather_lightweight() -> dict[str, Any]:
+    """Gather lightweight fields that don't require overlay-backed loaders.
 
-    Returns:
-        Dict with version, install_type, config_writable, paths,
-        personas, formats, dns_tags, application_ids, and system_roles.
+    These always succeed even if the overlay has broken YAML.
     """
     config_root = get_config_directory()
-    activity_dir = get_activity_directory()
-    personas_dir = get_personas_directory()
-    formats_dir = get_formats_directory()
-    evaluation_dir = get_evaluation_directory()
-
     install_type, config_writable = _detect_install_type(config_root)
 
     from evidenceforge.config.overlay import get_overlay_directory, list_overlay_files
@@ -142,22 +135,60 @@ def gather_info() -> dict[str, Any]:
         "config_writable": config_writable,
         "paths": {
             "config_root": str(config_root),
-            "activity": str(activity_dir),
-            "personas": str(personas_dir),
-            "formats": str(formats_dir),
-            "evaluation": str(evaluation_dir),
+            "activity": str(get_activity_directory()),
+            "personas": str(get_personas_directory()),
+            "formats": str(get_formats_directory()),
+            "evaluation": str(get_evaluation_directory()),
         },
         "overlay": {
             "path": str(Path.cwd() / ".eforge" / "config"),
             "exists": overlay_dir is not None,
             "files": overlay_files,
         },
-        "personas": _collect_personas(),
-        "formats": _collect_formats(formats_dir),
-        "dns_tags": _collect_dns_tags(),
-        "application_ids": _collect_application_ids(),
-        "system_roles": _collect_system_roles(),
     }
+
+
+# Fields that can be resolved from lightweight data alone
+_LIGHTWEIGHT_PREFIXES = {"version", "install_type", "config_writable", "paths", "overlay"}
+
+
+def gather_info(field: str | None = None) -> dict[str, Any]:
+    """Gather installation info into a single dict.
+
+    If ``field`` is provided and it's a lightweight field (version, paths,
+    overlay, etc.), only compute those — no overlay-backed loaders are
+    called. This ensures ``eforge info overlay.path`` works even when
+    the overlay has broken YAML.
+
+    For inventory fields (personas, dns_tags, etc.) or full output,
+    each inventory is loaded with error handling so a single broken
+    loader doesn't crash the entire command.
+    """
+    data = _gather_lightweight()
+
+    # If requesting a lightweight field, return early — no loaders needed
+    if field:
+        top_level = field.split(".")[0]
+        if top_level in _LIGHTWEIGHT_PREFIXES:
+            return data
+
+    # Inventory fields — each wrapped in try/except so one broken
+    # overlay doesn't prevent the rest from being reported
+    formats_dir = get_formats_directory()
+    inventories = {
+        "personas": _collect_personas,
+        "formats": lambda: _collect_formats(formats_dir),
+        "dns_tags": _collect_dns_tags,
+        "application_ids": _collect_application_ids,
+        "system_roles": _collect_system_roles,
+    }
+    for key, collector in inventories.items():
+        try:
+            data[key] = collector()
+        except Exception as e:
+            data[key] = f"<error: {e}>"
+
+    return data
 
 
 def format_human_readable(data: dict[str, Any]) -> str:

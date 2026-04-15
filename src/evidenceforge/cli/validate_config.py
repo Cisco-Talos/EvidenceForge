@@ -181,6 +181,15 @@ def validate_config() -> ValidationResult:
                                     )
                                 )
                                 overlay_errors = True
+                            elif _key_field and _key_field not in item:
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        f"overlay/{rel_path}",
+                                        f'"{field_name}" entry #{i + 1} missing required "{_key_field}" field',
+                                    )
+                                )
+                                overlay_errors = True
             # Check known dict fields for correct structure
             for field_name in _EXPECTED_DICT_FIELDS:
                 if field_name in data and not isinstance(data[field_name], dict):
@@ -222,6 +231,14 @@ def validate_config() -> ValidationResult:
                         )
                     )
                     overlay_errors = True
+                elif pdata["name"] != persona_file.stem:
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            f"overlay/{rel_path}",
+                            f'Persona name "{pdata["name"]}" does not match filename "{persona_file.stem}" — is this intentional?',
+                        )
+                    )
 
     if overlay_errors:
         # Cannot proceed with merged loading — overlay files would crash loaders
