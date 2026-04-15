@@ -43,6 +43,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -523,6 +524,23 @@ class BlockedC2EventSpec(_EventSpecBase):
     interval: str = "30m"
     duration: str = "6h"
     jitter: float = Field(default=0.2, ge=0.0, le=1.0)
+
+    @field_validator("interval", "duration")
+    @classmethod
+    def validate_positive_duration(cls, v: str, info: ValidationInfo) -> str:
+        """Validate blocked_c2 interval/duration format and enforce > 0 seconds."""
+        if not re.match(r"^(\d+(ms|[hdms]))+$", v):
+            raise ValueError(
+                f"{info.field_name} must match pattern like '30m', '6h', or '5m30s' "
+                "(digits followed by d/h/m/s/ms units)"
+            )
+
+        from evidenceforge.utils.time import parse_duration
+
+        seconds = parse_duration(v).total_seconds()
+        if seconds <= 0:
+            raise ValueError(f"{info.field_name} must be greater than 0 seconds (got '{v}')")
+        return v
 
 
 class RawEventSpec(_EventSpecBase):
