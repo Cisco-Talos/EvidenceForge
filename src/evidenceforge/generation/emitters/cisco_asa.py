@@ -31,6 +31,7 @@ Per-sensor directory routing: each firewall sensor gets its own cisco_asa.log.
 
 import hashlib
 import ipaddress
+from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -102,7 +103,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._vip_to_real_ip: dict[str, str] = {}
 
         # Threat detection: per-(sensor, src_ip) deny rate tracking
-        self._deny_timestamps: dict[tuple[str, str], list[datetime]] = {}
+        self._deny_timestamps: dict[tuple[str, str], deque[datetime]] = {}
         self._last_alert_time: dict[tuple[str, str], datetime | None] = {}
         # Configurable thresholds (ASA defaults for scanning detection)
         self._td_burst_threshold: int = 10  # drops/sec to trigger burst alert
@@ -504,23 +505,32 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         key = (sensor_hostname, src_ip)
 
         # Track this deny
-        self._deny_timestamps.setdefault(key, []).append(timestamp)
+        timestamps = self._deny_timestamps.setdefault(key, deque())
+        timestamps.append(timestamp)
+
+        # Keep only the data needed for active burst/average windows.
+        # This bounds memory growth for sustained deny traffic.
+        max_window = max(self._td_burst_window, self._td_avg_window)
+        max_cutoff = timestamp - timedelta(seconds=max_window)
+        while timestamps and timestamps[0] < max_cutoff:
+            timestamps.popleft()
 
         # Cooldown check: don't fire more than once per burst period
         last_alert = self._last_alert_time.get(key)
         if last_alert and (timestamp - last_alert).total_seconds() < self._td_cooldown:
             return
 
-        timestamps = self._deny_timestamps[key]
-
         # Calculate burst rate (drops in last burst_window seconds)
         burst_cutoff = timestamp - timedelta(seconds=self._td_burst_window)
-        burst_count = sum(1 for t in timestamps if t >= burst_cutoff)
-        burst_rate = burst_count / self._td_burst_window
-
-        # Calculate average rate (drops in last avg_window seconds)
         avg_cutoff = timestamp - timedelta(seconds=self._td_avg_window)
-        avg_count = sum(1 for t in timestamps if t >= avg_cutoff)
+        burst_count = 0
+        avg_count = 0
+        for deny_ts in timestamps:
+            if deny_ts >= avg_cutoff:
+                avg_count += 1
+            if deny_ts >= burst_cutoff:
+                burst_count += 1
+        burst_rate = burst_count / self._td_burst_window
         avg_rate = avg_count / self._td_avg_window
 
         # Both rates must exceed thresholds (matching real ASA behavior)
