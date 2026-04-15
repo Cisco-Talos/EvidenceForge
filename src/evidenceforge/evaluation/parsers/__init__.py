@@ -88,33 +88,56 @@ def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
         Dict mapping format_name to list of file paths.
     """
     result: dict[str, list[Path]] = {}
+    output_root = output_dir.resolve()
+
+    def _is_safe_directory(path: Path) -> bool:
+        if path.is_symlink() or not path.is_dir():
+            return False
+        try:
+            path.resolve().relative_to(output_root)
+        except ValueError:
+            return False
+        return True
+
+    def _is_safe_file(path: Path) -> bool:
+        if path.is_symlink() or not path.is_file():
+            return False
+        try:
+            path.resolve().relative_to(output_root)
+        except ValueError:
+            return False
+        return True
 
     # Collect all candidate files: top-level + one level of subdirectories
     candidates: list[Path] = []
     for child in output_dir.iterdir():
-        if child.is_file():
+        if _is_safe_file(child):
             candidates.append(child)
-        elif child.is_dir():
+        elif _is_safe_directory(child):
             if child.name == "bash_history":
                 # Special case: bash_history has its own discovery
-                files = list(child.rglob("*.history")) + list(child.rglob("*.bash_history"))
+                files = [
+                    f
+                    for f in list(child.rglob("*.history")) + list(child.rglob("*.bash_history"))
+                    if _is_safe_file(f)
+                ]
                 if files:
                     result["bash_history"] = files
             else:
                 # Per-host FQDN or per-sensor subdirectory
                 for subfile in child.iterdir():
-                    if subfile.is_file():
+                    if _is_safe_file(subfile):
                         candidates.append(subfile)
-                    elif subfile.is_dir():
+                    elif _is_safe_directory(subfile):
                         if subfile.name == "bash_history":
                             # Bash history nested in per-host dir
-                            files = list(subfile.rglob("*.bash_history"))
+                            files = [f for f in subfile.rglob("*.bash_history") if _is_safe_file(f)]
                             if files:
                                 result.setdefault("bash_history", []).extend(files)
                         else:
                             # Deeper subdirectory (e.g., per-sensor logs)
                             for deepfile in subfile.iterdir():
-                                if deepfile.is_file():
+                                if _is_safe_file(deepfile):
                                     candidates.append(deepfile)
 
     for format_name, parser_cls in _PARSER_CLASSES.items():

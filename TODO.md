@@ -75,6 +75,9 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Tier 0: Infrastructure
 
+- [x] Security: hardened evaluation log discovery against symlink/path traversal in per-sensor directories (reject symlinked dirs/files and enforce resolved-path containment under output_dir).
+
+
 - [x] Security: blocked symlinked `eforge` install target in `install-skills` to prevent arbitrary overwrite/deletion and stale-file cleanup outside target.
 
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.

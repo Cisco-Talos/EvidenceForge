@@ -280,6 +280,42 @@ class TestParserDiscovery:
         assert "web_access" in files
         assert "bash_history" in files
 
+    def test_skips_symlinked_sensor_directories(self, tmp_path):
+        from evidenceforge.evaluation.parsers import discover_log_files
+
+        safe_conn = tmp_path / "zeek_conn.json"
+        safe_conn.write_text('{"ts": 1.0}\n', encoding="utf-8")
+
+        outside_dir = tmp_path.parent / "outside_sensor"
+        outside_dir.mkdir(exist_ok=True)
+        (outside_dir / "conn.json").write_text('{"ts": 2.0}\n', encoding="utf-8")
+
+        sensor_link = tmp_path / "zeek-fw01"
+        try:
+            sensor_link.symlink_to(outside_dir, target_is_directory=True)
+        except OSError:
+            return
+
+        files = discover_log_files(tmp_path)
+        discovered = files.get("zeek_conn", [])
+        assert safe_conn in discovered
+        assert all(path.resolve().is_relative_to(tmp_path.resolve()) for path in discovered)
+
+    def test_skips_symlinked_top_level_files(self, tmp_path):
+        from evidenceforge.evaluation.parsers import discover_log_files
+
+        outside_file = tmp_path.parent / "outside_conn.json"
+        outside_file.write_text('{"ts": 3.0}\n', encoding="utf-8")
+
+        linked_file = tmp_path / "zeek_conn.json"
+        try:
+            linked_file.symlink_to(outside_file)
+        except OSError:
+            return
+
+        files = discover_log_files(tmp_path)
+        assert "zeek_conn" not in files
+
     def test_all_parsers_registered(self):
         from evidenceforge.evaluation.parsers import _PARSER_CLASSES
 
