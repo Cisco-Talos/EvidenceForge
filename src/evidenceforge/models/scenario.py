@@ -744,7 +744,15 @@ class NetworkSensor(BaseModel):
     interfaces: dict[str, str] = Field(default_factory=dict)
     policy: list[FirewallRule] = Field(default_factory=list)
     default_action: str = Field(default="deny", pattern="^(deny|permit)$")
-    deny_ratio: float = Field(default=5.0, ge=0.0)
+    deny_ratio: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=50.0,
+        description=(
+            "For firewall sensors, deny events generated per estimated allow event. "
+            "Capped at 50.0 to prevent runaway baseline generation."
+        ),
+    )
     drop_mode: str = Field(default="drop", pattern="^(drop|reject)$")
     threat_detection_rate: int = Field(
         default=10,

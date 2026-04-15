@@ -22,6 +22,9 @@
 
 """Tests for firewall deny baseline generation and FirewallRule model."""
 
+import pytest
+from pydantic import ValidationError
+
 from evidenceforge.models.scenario import FirewallRule, NetworkSensor
 
 
@@ -96,3 +99,12 @@ class TestNetworkSensorFirewallFields:
         # Fields exist but are at defaults
         assert sensor.policy == []
         assert sensor.default_action == "deny"
+
+    def test_deny_ratio_rejects_excessive_values(self):
+        with pytest.raises(ValidationError):
+            NetworkSensor(
+                type="firewall",
+                name="fw01",
+                monitoring_segments=["internal"],
+                deny_ratio=100.0,
+            )
