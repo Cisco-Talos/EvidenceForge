@@ -332,6 +332,8 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 - [ ] Additional skills: create-persona, create-log-format, create-network, analyze-output
 - [ ] Example scenario collection (ransomware, credential stuffing, insider threat)
 - [ ] Config file inheritance/templating
+- [ ] Overlay `_replace: true` recursive propagation — currently `_replace` only affects top-level list fields within a keyed entry; nested lists (e.g., `platforms.windows.command_templates`) still extend. Low impact: replacing entire app definitions with nested platform configs is rare.
+- [ ] Overlay `_delete: true` for removing built-in entries — users cannot suppress stock domains/apps/personas from generation. Deferred until a real use case surfaces.
 - [ ] Subset sensor format support (e.g., `log_formats: [zeek, -zeek_dns]`)
 - [ ] PyPI package distribution
 - [ ] Network diagram ingestion for auto-inferred sensor placement
