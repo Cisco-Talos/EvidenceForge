@@ -158,8 +158,19 @@ def _generate_internal_hostname(rng, ip: str, domain: str = "corp.local") -> str
 
 
 def _detect_ip_provider(ip: str) -> str:
-    """Detect the cloud/CDN provider for an IP based on first-octet ranges."""
-    first = int(ip.split(".")[0])
+    """Detect cloud/CDN provider for a public IPv4 address.
+
+    Returns "generic" for invalid inputs and non-IPv4 addresses.
+    """
+    try:
+        parsed_ip = ipaddress.ip_address(ip)
+    except ValueError:
+        return "generic"
+
+    if not isinstance(parsed_ip, ipaddress.IPv4Address):
+        return "generic"
+
+    first = int(str(parsed_ip).split(".")[0])
     if first in (172, 142, 209, 74, 108):
         return "google"
     if first in (140, 185) and ip.startswith("140.82."):
@@ -172,9 +183,8 @@ def _detect_ip_provider(ip: str) -> str:
         return "aws"
     if first in (13, 20, 40, 204) and not ip.startswith("13.108."):
         return "microsoft"
-    if (
-        first in (104,)
-        and ip.startswith("104.16.")
+    if first in (104,) and (
+        ip.startswith("104.16.")
         or ip.startswith("104.18.")
         or ip.startswith("104.21.")
         or ip.startswith("104.26.")
