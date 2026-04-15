@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-08
+**Last Updated:** 2026-04-15
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -47,6 +47,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Recently Resolved
 
+- [x] Prevent sensor hostname path traversal in Zeek SensorMultiplexEmitter output routing — reject unsafe sensor hostnames (path separators, dot segments, invalid chars) and fall back to flat output routing
 - [x] Evaluator grace period for causal ordering (logon→process rule skips events within logon_grace_period from scenario start)
 - [x] Evaluator event type detection from typed EventSpec fields (replaces fragile keyword matching) + 9 new record matchers
 - [x] Evaluator per-sub-event indicator accuracy (fixes last-writer-wins IP merge for compound storyline steps) + tighter eCAR FLOW matching

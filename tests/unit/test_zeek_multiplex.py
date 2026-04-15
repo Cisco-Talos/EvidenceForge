@@ -91,6 +91,30 @@ class TestPerSensorDirectoryRouting:
             emitter.close()
             assert (base / "sensor-1" / "conn.json").exists()
 
+    def test_unsafe_sensor_hostname_routes_to_flat_output(self):
+        """Unsafe sensor hostnames are rejected to prevent path traversal."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["../../escape"])
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "proto": "tcp",
+                    "conn_state": "SF",
+                    "_sensor_hostnames": ["../../escape"],
+                }
+            )
+            emitter.close()
+
+            assert (base / "zeek_conn.json").exists()
+            assert not (base.parent / "escape" / "conn.json").exists()
+
     def test_no_sensors_flat_output(self):
         """No sensors configured → flat output using _flat_filename."""
         fmt = load_format("zeek_conn")

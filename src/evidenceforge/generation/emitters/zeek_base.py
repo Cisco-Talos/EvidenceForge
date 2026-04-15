@@ -38,6 +38,7 @@ When no sensors are configured (backward compat), writes directly to:
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from queue import Empty
@@ -48,6 +49,7 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
 logger = logging.getLogger(__name__)
+_SENSOR_HOSTNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class _SingleZeekWriter:
@@ -130,15 +132,16 @@ class SensorMultiplexEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
 
     def _get_writer(self, sensor_hostname: str) -> _SingleZeekWriter:
-        writer = self._writers.get(sensor_hostname)
+        normalized_hostname = self._normalize_sensor_hostname(sensor_hostname)
+        writer = self._writers.get(normalized_hostname)
         if writer is not None:
             return writer
         with self._writers_lock:
-            writer = self._writers.get(sensor_hostname)
+            writer = self._writers.get(normalized_hostname)
             if writer is not None:
                 return writer
-            if sensor_hostname:
-                path = self._base_dir / sensor_hostname / self._log_filename
+            if normalized_hostname:
+                path = self._base_dir / normalized_hostname / self._log_filename
             elif self._direct_file_path:
                 # Direct file mode (test/simple usage): output_path was a file
                 path = self._direct_file_path
@@ -152,9 +155,27 @@ class SensorMultiplexEmitter(LogEmitter):
                 sort_before_flush=self._sort_before_flush,
                 sort_key=getattr(self, "_sort_key_func", None),
             )
-            self._writers[sensor_hostname] = writer
+            self._writers[normalized_hostname] = writer
             logger.debug(f"Created Zeek writer: {path}")
             return writer
+
+    def _normalize_sensor_hostname(self, sensor_hostname: str) -> str:
+        """Return a safe sensor directory name or empty string for fallback routing."""
+        if not sensor_hostname:
+            return ""
+        if (
+            sensor_hostname in {".", ".."}
+            or "/" in sensor_hostname
+            or "\\" in sensor_hostname
+            or not _SENSOR_HOSTNAME_PATTERN.fullmatch(sensor_hostname)
+        ):
+            logger.warning(
+                "Ignoring unsafe sensor hostname %s for %s; routing to flat output",
+                sensor_hostname,
+                self.format_def.name,
+            )
+            return ""
+        return sensor_hostname
 
     def _get_default_writer(self) -> _SingleZeekWriter:
         """Get the backward-compat flat writer (no sensor subdirectory)."""
