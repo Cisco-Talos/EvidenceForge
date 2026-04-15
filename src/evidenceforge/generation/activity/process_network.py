@@ -43,6 +43,41 @@ def load_process_network_map() -> list[dict[str, Any]]:
     return _CACHED_DATA
 
 
+_CACHED_DEDUPED: list[dict[str, Any]] | None = None
+
+
+def _deduplicated_mappings() -> list[dict[str, Any]]:
+    """Return mappings with duplicate exes resolved (last wins).
+
+    When overlays append entries for exes that already have mappings,
+    this ensures both forward and inverse indexes see the same data.
+    """
+    global _CACHED_DEDUPED
+    if _CACHED_DEDUPED is not None:
+        return _CACHED_DEDUPED
+
+    raw = load_process_network_map()
+    # Map each exe to its final mapping entry (last wins)
+    exe_to_mapping: dict[str, dict[str, Any]] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        for exe in entry.get("exe", []):
+            exe_to_mapping[exe] = entry
+
+    # Rebuild unique mapping list preserving order
+    seen_ids: set[int] = set()
+    deduped: list[dict[str, Any]] = []
+    for mapping in exe_to_mapping.values():
+        mid = id(mapping)
+        if mid not in seen_ids:
+            seen_ids.add(mid)
+            deduped.append(mapping)
+
+    _CACHED_DEDUPED = deduped
+    return deduped
+
+
 def get_exe_to_service() -> dict[str, dict[str, Any]]:
     """Build exe→service index. Returns dict mapping exe name to {port, service, external}.
 
@@ -51,7 +86,7 @@ def get_exe_to_service() -> dict[str, dict[str, Any]]:
     global _CACHED_EXE_TO_SERVICE
     if _CACHED_EXE_TO_SERVICE is not None:
         return _CACHED_EXE_TO_SERVICE
-    mappings = load_process_network_map()
+    mappings = _deduplicated_mappings()
     result: dict[str, dict[str, Any]] = {}
     for entry in mappings:
         info = {
@@ -73,7 +108,7 @@ def get_service_to_exes() -> dict[str, list[str]]:
     global _CACHED_SERVICE_TO_EXES
     if _CACHED_SERVICE_TO_EXES is not None:
         return _CACHED_SERVICE_TO_EXES
-    mappings = load_process_network_map()
+    mappings = _deduplicated_mappings()
     result: dict[str, list[str]] = {}
     for entry in mappings:
         service = entry["service"]

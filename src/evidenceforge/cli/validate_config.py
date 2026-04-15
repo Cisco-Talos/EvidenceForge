@@ -175,11 +175,12 @@ def validate_config() -> ValidationResult:
                             if not isinstance(item, dict):
                                 result.issues.append(
                                     Issue(
-                                        "WARNING",
+                                        "ERROR",
                                         f"overlay/{rel_path}",
                                         f'"{field_name}" entry #{i + 1} should be a mapping, got {type(item).__name__}',
                                     )
                                 )
+                                overlay_errors = True
             # Check known dict fields for correct structure
             for field_name in _EXPECTED_DICT_FIELDS:
                 if field_name in data and not isinstance(data[field_name], dict):
@@ -188,6 +189,36 @@ def validate_config() -> ValidationResult:
                             "ERROR",
                             f"overlay/{rel_path}",
                             f'Field "{field_name}" should be a mapping, got {type(data[field_name]).__name__}',
+                        )
+                    )
+                    overlay_errors = True
+
+    # Validate overlay persona files specifically (one-file-per-persona pattern)
+    if overlay_dir:
+        overlay_personas_dir = overlay_dir / "personas"
+        if overlay_personas_dir.is_dir():
+            for persona_file in sorted(overlay_personas_dir.glob("*.yaml")):
+                rel_path = str(persona_file.relative_to(overlay_dir))
+                pdata, perr = _safe_load_yaml(persona_file)
+                if perr:
+                    continue  # Already caught in YAML health check above
+                if pdata is None:
+                    continue  # Already caught above
+                if not isinstance(pdata, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f"Persona file should be a mapping, got {type(pdata).__name__}",
+                        )
+                    )
+                    overlay_errors = True
+                elif "name" not in pdata:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            'Persona file missing required "name" field — it will be silently ignored by the loader',
                         )
                     )
                     overlay_errors = True
