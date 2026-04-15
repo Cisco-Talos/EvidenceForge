@@ -23,6 +23,7 @@
 """Install EvidenceForge Claude Code commands to .claude/commands/ directory."""
 
 import importlib.resources
+import os
 import shutil
 from pathlib import Path
 
@@ -157,6 +158,31 @@ def _remove_stale_files(eforge_dir: Path, manifest: dict[str, Path]) -> list[str
     return removed
 
 
+def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
+    """Create or validate a safe install directory for eforge skills.
+
+    Rejects symlinked destination directories to prevent writes/deletes from
+    being redirected outside the intended install location.
+    """
+    eforge_dir = target_dir / "eforge"
+    if eforge_dir.exists() and eforge_dir.is_symlink():
+        raise PermissionError(f"Refusing to install skills into symlinked directory: {eforge_dir}")
+
+    ensure_directory(target_dir)
+    eforge_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check again after creation to avoid races where the path is swapped.
+    if eforge_dir.is_symlink():
+        raise PermissionError(f"Refusing to install skills into symlinked directory: {eforge_dir}")
+
+    target_real = target_dir.resolve()
+    eforge_real = eforge_dir.resolve()
+    if os.path.commonpath([str(eforge_real), str(target_real)]) != str(target_real):
+        raise PermissionError(f"Refusing to install skills outside target directory: {eforge_dir}")
+
+    return eforge_dir
+
+
 def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     """Install EvidenceForge skills to the target directory.
 
@@ -175,7 +201,7 @@ def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     if not manifest:
         raise FileNotFoundError("No skill files found to install.")
 
-    eforge_dir = ensure_directory(target_dir / "eforge")
+    eforge_dir = _ensure_safe_eforge_directory(target_dir)
 
     # Copy all files from manifest
     installed = []

@@ -24,6 +24,7 @@
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import EXIT_SUCCESS, app
@@ -126,6 +127,15 @@ class TestInstallSkills:
 
         assert outside_file.exists(), "File outside eforge/ should not be touched"
 
+    def test_rejects_symlinked_eforge_directory(self, tmp_path):
+        """install_skills rejects a symlinked eforge/ directory."""
+        victim_dir = tmp_path / "victim"
+        victim_dir.mkdir()
+        (tmp_path / "eforge").symlink_to(victim_dir, target_is_directory=True)
+
+        with pytest.raises(PermissionError, match="symlinked directory"):
+            install_skills(tmp_path)
+
     def test_returns_installed_and_removed_lists(self, tmp_path):
         """install_skills returns lists of installed and removed files."""
         installed, removed = install_skills(tmp_path)
@@ -173,3 +183,15 @@ class TestInstallSkillsCli:
         assert "generate.md" in result.stdout
         assert "validate.md" in result.stdout
         assert "installed" in result.stdout.lower() or "Installed" in result.stdout
+
+    def test_install_skills_rejects_symlink_target(self, tmp_path, monkeypatch):
+        """CLI returns input error when eforge target is a symlink."""
+        monkeypatch.chdir(tmp_path)
+        commands_dir = tmp_path / ".claude" / "commands"
+        commands_dir.mkdir(parents=True)
+        (commands_dir / "eforge").symlink_to(tmp_path / "victim", target_is_directory=True)
+
+        result = runner.invoke(app, ["install-skills"])
+
+        assert result.exit_code == 1
+        assert "symlinked directory" in result.stdout
