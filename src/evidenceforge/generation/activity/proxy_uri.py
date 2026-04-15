@@ -11,22 +11,29 @@ import random
 import uuid
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 
+def _merge_proxy_uri_templates(default: dict, overlay: dict) -> dict:
+    """Merge proxy URI templates overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_proxy_uri_templates() -> dict[str, Any]:
-    """Load proxy URI templates from YAML. Cached after first call."""
+    """Load proxy URI templates from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
 
-    with open(_TEMPLATES_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _TEMPLATES_PATH,
+        "activity/proxy_uri_templates.yaml",
+        _merge_proxy_uri_templates,
+    )
     return _CACHED_DATA
 
 
@@ -82,12 +89,19 @@ def pick_proxy_uri(
     rng: random.Random,
     hostname: str,
     domain_tags: list[str],
+    source_os: str | None = None,
 ) -> tuple[str, str, str, str | None]:
     """Pick a URI path, content type, HTTP method, and optional user-agent override.
 
     Lookup order: exact domain match -> first matching tag -> generic fallback.
     MIME type is inferred from path extension when possible, overriding the
     domain default.
+
+    Args:
+        source_os: OS category of the source host ("windows" or "linux").
+            When set, domain-specific user_agent overrides are only returned
+            if the entry's ``os`` field matches.  This prevents Windows-only
+            UAs (e.g. Windows-Update-Agent) from being applied to Linux hosts.
 
     Returns:
         (path, content_type, method, user_agent_override) tuple.
@@ -115,6 +129,12 @@ def pick_proxy_uri(
     content_type = entry.get("content_type", "text/html")
     methods = entry.get("methods", ["GET"])
     user_agent = entry.get("user_agent")
+
+    # OS-aware UA filtering: suppress OS-specific UA overrides when source
+    # OS doesn't match (e.g., don't assign Windows-Update-Agent to Linux hosts)
+    entry_os = entry.get("os")
+    if user_agent and entry_os and source_os and entry_os != source_os:
+        user_agent = None
 
     # Per-path content_types override (parallel list alongside paths)
     content_types = entry.get("content_types")

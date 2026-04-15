@@ -41,18 +41,25 @@ class WebEmitter(HostMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        """Handle connection events that carry an HttpContext and target a web server."""
+        """Handle connection events that carry an HttpContext and target a web server.
+
+        Only fires when dst_host is set (the destination is a known scenario
+        system).  The src_host fallback was causing external HTTPS connections
+        with HttpContext (from browsing sessions) to write web_access entries
+        on the *source* workstation — incorrect since web access logs belong
+        on the server receiving the request, not the client sending it.
+        """
         return (
             event.event_type in self._supported_types
             and event.http is not None
-            and (event.dst_host is not None or event.src_host is not None)
+            and event.dst_host is not None
         )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render HttpContext to Combined Log Format."""
         http = event.http
         # Web access logs are written on the web server (dst_host)
-        host = event.dst_host or event.src_host
+        host = event.dst_host
         net = event.network
 
         event_data = {

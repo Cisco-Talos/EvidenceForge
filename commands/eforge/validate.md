@@ -15,8 +15,7 @@ You are helping the user validate an EvidenceForge scenario YAML file before gen
 ## Run Validation
 
 ```bash
-cd /Users/dabianco/projects/SURGe/data-gen-test
-uv run eforge validate <scenario-file>
+eforge validate <scenario-file>
 ```
 
 Exit codes:

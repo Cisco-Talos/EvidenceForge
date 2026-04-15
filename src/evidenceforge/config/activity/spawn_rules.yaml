@@ -7,6 +7,12 @@
 #   spawn_delay: [min_sec, max_sec] before spawning children (default: [0.5, 3.0])
 #   max_children: optional cap (omit for unlimited — the common case)
 #   children: list of exe names this parent can spawn
+#
+# Depended on by: generation engine (process tree generation)
+# Depends on: application_catalog.yaml (child exe names),
+#             system_processes.yaml (system process names)
+#
+# Full schema: see commands/eforge/references/config-spawn-rules.md
 
 windows:
   explorer.exe:
@@ -18,16 +24,16 @@ windows:
       - firefox.exe
       - msedge.exe
       - iexplore.exe
-      - outlook.exe
-      - winword.exe
-      - excel.exe
+      - OUTLOOK.EXE
+      - WINWORD.EXE
+      - EXCEL.EXE
       - powerpnt.exe
-      - teams.exe
-      - onedrive.exe
-      - acrobat.exe
-      - 7zfm.exe
+      - Teams.exe
+      - OneDrive.exe
+      - Acrobat.exe
+      - 7zFM.exe
       - notepad++.exe
-      - code.exe
+      - Code.exe
       - idea64.exe
       - sublime_text.exe
       - cmd.exe
@@ -39,6 +45,7 @@ windows:
       - taskmgr.exe
       - regedit.exe
       - notepad.exe
+      - mstsc.exe
 
   # Applications that spawn child/utility subprocesses of the same exe name
   chrome.exe:
@@ -113,6 +120,12 @@ windows:
       - powershell.exe
       - conhost.exe
       - reg.exe
+      - docker.exe
+      - kubectl.exe
+      - psql.exe
+      - ssh.exe
+      - npm.cmd
+      - dsquery.exe
 
   powershell.exe:
     command_templates:
@@ -143,6 +156,12 @@ windows:
       - powershell.exe
       - conhost.exe
       - reg.exe
+      - docker.exe
+      - kubectl.exe
+      - psql.exe
+      - ssh.exe
+      - npm.cmd
+      - dsquery.exe
 
   code.exe:
     command_templates:
@@ -276,6 +295,11 @@ linux:
       - wc
       - bash
       - sh
+      - firefox
+      - google-chrome
+      - thunderbird
+      - ldapsearch
+      - redis-cli
 
   sh:
     command_templates:

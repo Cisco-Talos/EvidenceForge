@@ -1,6 +1,18 @@
-# Reference distribution profiles for Tier C population statistics checks.
-# Each format lists fields with expected distributions and divergence tolerances.
-# Distributions are educated estimates; refine with real-world data over time.
+# distributions.yaml — Tier C population statistics reference distributions
+#
+# Purpose: Defines expected distributions for field values across all
+#   generated records, with divergence tolerances. Used to verify
+#   that the overall data mix is realistic.
+#
+# Depends on: format definitions in config/formats/ (field names must exist)
+# Depended on by: evaluation engine (eforge eval)
+#
+# To add a new distribution profile:
+#   1. Add under the format name key (e.g., zeek_conn:)
+#   2. Specify field name and reference proportions (should sum to ~1.0)
+#   3. Set tolerance (0.30 = 30% max divergence via Jensen-Shannon)
+#
+# Full schema: see commands/eforge/references/config-evaluation.md
 
 windows_event_security:
   - field: EventID

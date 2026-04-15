@@ -1,4 +1,12 @@
-# Network parameters for realistic DHCP and MAC address generation.
+# network_params.yaml — Network parameters for realistic DHCP and MAC address generation.
+#
+# Purpose: Defines OUI prefixes and vendor weights for generating realistic
+#          MAC addresses in DHCP and network logs.
+#
+# Depended on by: generation engine (MAC address generation)
+# Depends on: nothing — standalone
+#
+# Full schema: see commands/eforge/references/config-network-params.md
 
 oui_prefixes:
   - prefix: "D4:BE:D9"

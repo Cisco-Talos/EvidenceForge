@@ -1,3 +1,11 @@
+# zeek_pe format definition — Zeek pe.log format (JSON output) - Portable Executable analysis
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_pe
 version: "1.0"
 description: "Zeek pe.log format (JSON output) - Portable Executable analysis"

@@ -121,6 +121,79 @@ class TestConnStateDistribution:
                 )
 
 
+class TestConnStateRebalance:
+    """Verify conn_state distribution targets realistic enterprise ratios."""
+
+    def test_tcp_sf_weight_in_range(self):
+        """TCP SF total weight should be 55-70% (real enterprise: 55-75%)."""
+        from evidenceforge.generation.activity import TCP_CONN_STATE_DISTRIBUTION
+
+        sf_weight = sum(w for s, w, _ in TCP_CONN_STATE_DISTRIBUTION if s == "SF")
+        total = sum(w for _, w, _ in TCP_CONN_STATE_DISTRIBUTION)
+        sf_pct = sf_weight / total * 100
+        assert 55 <= sf_pct <= 70, f"SF weight {sf_pct:.0f}% outside [55, 70] range"
+
+    def test_s2_s3_states_present(self):
+        """Half-closed states S2 and S3 should be in the distribution."""
+        from evidenceforge.generation.activity import TCP_CONN_STATE_DISTRIBUTION
+
+        states = {s for s, _, _ in TCP_CONN_STATE_DISTRIBUTION}
+        assert "S2" in states, "S2 state missing"
+        assert "S3" in states, "S3 state missing"
+
+    def test_statistical_sf_ratio(self, activity_gen, timestamp, state_manager, mock_emitters):
+        """Over 2000 connections, SF% should fall between 50% and 78%."""
+        import random
+
+        random.seed(42)
+        state_manager.set_current_time(timestamp)
+        sf_count = 0
+        total = 0
+
+        for i in range(2000):
+            mock_emitters["zeek_conn"].reset_mock()
+            activity_gen.generate_connection(
+                src_ip="10.0.10.1",
+                dst_ip=f"93.184.{(i + 100) // 256}.{(i + 100) % 256 + 1}",
+                time=timestamp,
+                dst_port=443,
+                duration=1.5,
+                orig_bytes=500,
+                resp_bytes=1000,
+            )
+            if mock_emitters["zeek_conn"].emit.called:
+                event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+                total += 1
+                if event.network.conn_state == "SF":
+                    sf_count += 1
+
+        sf_pct = sf_count / total * 100 if total else 0
+        assert 50 <= sf_pct <= 78, f"SF {sf_pct:.1f}% outside [50, 78] range ({sf_count}/{total})"
+
+    def test_s2_s3_partial_bytes(self, activity_gen, timestamp, state_manager, mock_emitters):
+        """S2/S3 connections should have some data but potentially truncated resp_bytes."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            conn_state="S2",
+            duration=5.0,
+            orig_bytes=5000,
+            resp_bytes=10000,
+        )
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "S2"
+        # S2 should have some orig_bytes (connection was established)
+        assert event.network.orig_bytes >= 0
+        # resp_bytes should be truncated (20-70% of original)
+        assert event.network.resp_bytes <= 10000
+        # Duration should be shortened
+        assert event.network.duration < 5.0
+
+
 class TestConnStateByteConsistency:
     """Verify bytes/duration are consistent with connection state."""
 

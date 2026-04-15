@@ -1,3 +1,11 @@
+# zeek_dhcp format definition — Zeek dhcp.log format (JSON output) - DHCP transaction logging
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_dhcp
 version: "1.0"
 description: "Zeek dhcp.log format (JSON output) - DHCP transaction logging"

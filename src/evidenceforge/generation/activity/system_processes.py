@@ -10,23 +10,88 @@ scheduled tasks and system service processes by host role.
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _PROCESSES_PATH = get_activity_directory() / "system_processes.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 
 
+def _merge_system_processes(default: dict, overlay: dict) -> dict:
+    """Merge system processes overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_system_processes() -> dict[str, Any]:
-    """Load system process configurations from YAML. Cached after first call."""
+    """Load system process configurations from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
 
-    with open(_PROCESSES_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _PROCESSES_PATH,
+        "activity/system_processes.yaml",
+        _merge_system_processes,
+    )
     return _CACHED_DATA
+
+
+_CACHED_BINARY_EXES: set[str] | None = None
+_CACHED_BINARY_PATHS: dict[str, str] | None = None
+
+
+def get_system_binary_exes() -> set[str]:
+    """Return the set of all system binary exe names (both OSes).
+
+    Reads from the ``system_binaries`` section of system_processes.yaml
+    (including overlay). This replaces the hardcoded ``_SYSTEM_BINARIES``
+    frozenset that was previously in application_catalog.py.
+    """
+    global _CACHED_BINARY_EXES
+    if _CACHED_BINARY_EXES is not None:
+        return _CACHED_BINARY_EXES
+
+    data = load_system_processes()
+    exes: set[str] = set()
+    for os_binaries in data.get("system_binaries", {}).values():
+        if isinstance(os_binaries, list):
+            for entry in os_binaries:
+                exe = entry.get("exe", "")
+                if exe:
+                    exes.add(exe)
+    _CACHED_BINARY_EXES = exes
+    return exes
+
+
+def get_system_binary_path(exe_name: str, username: str | None = None) -> str | None:
+    """Look up the full image path for a system binary by exe name.
+
+    Case-insensitive lookup. Resolves ``{username}`` placeholders if
+    username is provided, consistent with catalog path resolution.
+
+    Returns None if not found.
+    """
+    global _CACHED_BINARY_PATHS
+    if _CACHED_BINARY_PATHS is None:
+        data = load_system_processes()
+        paths: dict[str, str] = {}
+        for os_binaries in data.get("system_binaries", {}).values():
+            if isinstance(os_binaries, list):
+                for entry in os_binaries:
+                    exe = entry.get("exe", "")
+                    path = entry.get("path", "")
+                    if exe and path:
+                        paths[exe.lower()] = path
+        _CACHED_BINARY_PATHS = paths
+
+    path = _CACHED_BINARY_PATHS.get(exe_name.lower())
+    if path and "{username}" in path:
+        if username:
+            path = path.replace("{username}", username)
+        else:
+            # No username context — return None to let caller fall back
+            return None
+    return path
 
 
 def _resolve_template(template: str, rng: random.Random, entry_params: dict | None) -> str:

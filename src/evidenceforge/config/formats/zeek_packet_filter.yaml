@@ -1,3 +1,11 @@
+# zeek_packet_filter format definition — Zeek packet_filter.log format (JSON output) - Packet filter state
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_packet_filter
 version: "1.0"
 description: "Zeek packet_filter.log format (JSON output) - Packet filter state"

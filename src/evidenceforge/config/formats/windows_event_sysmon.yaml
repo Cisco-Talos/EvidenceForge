@@ -1,3 +1,11 @@
+# windows_event_sysmon format definition — Windows Sysmon Event Log format (XML output)
+#
+# Category: host
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: windows_event_sysmon
 version: "1.0"
 description: "Windows Sysmon Event Log format (XML output)"

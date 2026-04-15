@@ -16,9 +16,8 @@ import hashlib
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay, merge_keyed_list
 from evidenceforge.utils.rng import _stable_seed
 
 _REGISTRY_PATH = get_activity_directory() / "dns_registry.yaml"
@@ -29,14 +28,38 @@ _CACHED_TAG_INDEX: dict[str, list[dict]] | None = None
 _CACHED_DOMAIN_TAGS: dict[str, list[str]] | None = None
 
 
+def _merge_dns_registry(default: dict, overlay: dict) -> dict:
+    """Merge DNS registry overlay with package defaults."""
+    result = dict(default)
+    if "domains" in overlay:
+        result["domains"] = merge_keyed_list(
+            default.get("domains", []),
+            overlay["domains"],
+            key_field="domain",
+        )
+    # Merge remaining top-level keys (long_tail, cdn_ranges, ipv6_map)
+    for key in overlay:
+        if key != "domains":
+            if key in result and isinstance(result[key], dict) and isinstance(overlay[key], dict):
+                result[key] = deep_merge_dict(result[key], overlay[key])
+            elif key in result and isinstance(result[key], list) and isinstance(overlay[key], list):
+                result[key] = result[key] + overlay[key]
+            else:
+                result[key] = overlay[key]
+    return result
+
+
 def load_dns_registry() -> dict[str, Any]:
-    """Load the DNS registry YAML. Cached after first call."""
+    """Load the DNS registry YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
 
-    with open(_REGISTRY_PATH) as f:
-        _CACHED_DATA = yaml.safe_load(f)
+    _CACHED_DATA = load_with_overlay(
+        _REGISTRY_PATH,
+        "activity/dns_registry.yaml",
+        _merge_dns_registry,
+    )
     return _CACHED_DATA
 
 

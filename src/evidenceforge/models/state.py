@@ -60,6 +60,8 @@ class ActiveSession:
     start_time: datetime
     source_ip: str
     explorer_pid: int | None = None
+    session_shell_pid: int | None = None  # Linux: per-session bash login shell
+    session_winlogon_pid: int | None = None  # Windows: per-RDP-session winlogon
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
     source_port: int = 0

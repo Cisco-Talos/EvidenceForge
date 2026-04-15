@@ -261,8 +261,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 "lunch_start_offset": rng.gauss(0, 0.17),  # ~+/-10min lunch start
                 "lunch_duration_offset": rng.gauss(0, 0.12),  # ~+/-7min lunch length
                 "intensity_bias": rng.uniform(0.8, 1.2),  # +/-20% event intensity
-                "cluster_size_bias": rng.gauss(0, 0.2),  # +/-20% cluster size
-                "inter_gap_bias": rng.gauss(0, 0.15),  # +/-15% gap timing
+                "cluster_size_bias": rng.gauss(0, 0.12),  # +/-12% cluster size
+                "inter_gap_bias": rng.gauss(0, 0.10),  # +/-10% gap timing
             }
 
         # Initialize event dispatcher and activity generator
@@ -307,6 +307,22 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.world_model = WorldModel(self.scenario, self._ad_domain)
         self.activity_generator._world_model = self.world_model
         self.activity_generator._ip_to_system = dict(self.world_model.systems_by_ip)
+
+        # Cache org CIDR networks for external IP exclusion
+        import ipaddress as _ipa_core
+
+        self._org_cidr_networks: list = []
+        if self.scenario.environment.network:
+            for seg in self.scenario.environment.network.segments:
+                try:
+                    self._org_cidr_networks.append(_ipa_core.ip_network(seg.cidr, strict=False))
+                except ValueError:
+                    pass
+            for cidr in self.scenario.environment.network.public_cidrs or []:
+                try:
+                    self._org_cidr_networks.append(_ipa_core.ip_network(cidr, strict=False))
+                except ValueError:
+                    pass
 
         # Register VIPs in IP-to-system so host context resolves for VIP-addressed connections
         ve = self.dispatcher.visibility_engine

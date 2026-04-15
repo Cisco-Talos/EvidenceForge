@@ -3,6 +3,14 @@
 # {placeholder} tokens are resolved at generation time from the params section.
 #
 # Follows the same data-driven pattern as spawn_rules.yaml.
+#
+# Depended on by: generation engine (bash_history log generation)
+# Depends on: persona names (role keys should match persona names)
+#
+# Role keys (sysadmin, developer, etc.) must match persona filenames
+# in config/personas/.
+#
+# Full schema: see commands/eforge/references/config-bash-commands.md
 
 common:
   - "pwd"

@@ -684,6 +684,157 @@ def install_skills_cmd(
 
 
 @app.command()
+def info(
+    field: str = typer.Argument(
+        None, help="Dot-path to a specific field (e.g., paths.activity, overlay.exists, personas)"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON for machine parsing"),
+    list_fields_flag: bool = typer.Option(
+        False, "--fields", help="List all valid dot-path field names"
+    ),
+) -> None:
+    """Show EvidenceForge installation info: version, config paths, available data.
+
+    Displays version, install type, config file paths, and inventories of
+    available personas, formats, DNS tags, application IDs, and system roles.
+    Use --json for machine-readable output (used by Claude Code skills).
+
+    Optionally pass a dot-path field to get just that value:
+
+        eforge info paths.activity
+
+        eforge info overlay.exists
+
+        eforge info personas
+    """
+    from evidenceforge.cli.info import (
+        format_human_readable,
+        format_json,
+        gather_info,
+        list_fields,
+        resolve_field,
+    )
+
+    try:
+        data = gather_info(field=field)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to gather info: {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if list_fields_flag and field:
+        console.print(
+            "[bold red]Error:[/bold red] Cannot use --fields with a field argument. "
+            "Use 'eforge info --fields' to list fields, or 'eforge info <field>' to get a value.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if list_fields_flag:
+        fields = list_fields(data)
+        if json_output:
+            import json
+
+            print(json.dumps({name: desc for name, desc in fields}, indent=2))
+        else:
+            max_name = max(len(name) for name, _ in fields)
+            for name, desc in fields:
+                if desc:
+                    print(f"{name:<{max_name}}  {desc}")
+                else:
+                    print(name)
+    elif field:
+        value = resolve_field(data, field)
+        if value is None:
+            console.print(f"[bold red]Error:[/bold red] Unknown field: {field}", style="red")
+            raise typer.Exit(EXIT_INPUT_ERROR)
+        if isinstance(value, list):
+            print("\n".join(str(v) for v in value))
+        elif isinstance(value, dict):
+            import json
+
+            print(json.dumps(value))
+        else:
+            print(value)
+    elif json_output:
+        # JSON goes to stdout without Rich formatting
+        print(format_json(data))
+    else:
+        console.print(format_human_readable(data))
+
+
+@app.command("validate-config")
+def validate_config_cmd(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Validate config files for integrity and cross-reference consistency.
+
+    Runs 27 checks across all config YAML files (activity, personas, formats,
+    evaluation) including any overlay customizations. Reports errors, warnings,
+    and info items.
+
+    Exit codes:
+    - 0: All checks passed (may include warnings/info)
+    - 2: Errors found
+    """
+    from evidenceforge.cli.validate_config import validate_config
+
+    status_console = Console(stderr=True) if json_output else console
+    status_console.print("[bold blue]EvidenceForge Config Validator[/bold blue]")
+
+    try:
+        result = validate_config()
+    except Exception as e:
+        status_console.print(f"[bold red]Error:[/bold red] Validation failed: {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if json_output:
+        import json
+
+        output = {
+            "files_checked": result.files_checked,
+            "errors": [{"file": i.file, "message": i.message} for i in result.errors],
+            "warnings": [{"file": i.file, "message": i.message} for i in result.warnings],
+            "info": [{"file": i.file, "message": i.message} for i in result.infos],
+        }
+        # JSON mode: only JSON on stdout, exit non-zero on errors
+        print(json.dumps(output, indent=2))
+        if result.errors:
+            raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+    else:
+        if result.errors:
+            status_console.print("\n[bold red]ERRORS (must fix):[/bold red]")
+            for issue in result.errors:
+                status_console.print(f"  [red]{issue.file}:[/red] {issue.message}")
+
+        if result.warnings:
+            status_console.print(
+                "\n[bold yellow]WARNINGS (may degrade output quality):[/bold yellow]"
+            )
+            for issue in result.warnings:
+                status_console.print(f"  [yellow]{issue.file}:[/yellow] {issue.message}")
+
+        if result.infos:
+            status_console.print("\n[bold cyan]INFO (suggestions):[/bold cyan]")
+            for issue in result.infos:
+                status_console.print(f"  [cyan]{issue.file}:[/cyan] {issue.message}")
+
+        total_e = len(result.errors)
+        total_w = len(result.warnings)
+        total_i = len(result.infos)
+        status_console.print(
+            f"\n{total_e} errors, {total_w} warnings, {total_i} info items across {result.files_checked} files checked."
+        )
+
+        if result.errors:
+            raise typer.Exit(EXIT_SCHEMA_VALIDATION)
+
+        if not result.issues:
+            status_console.print(
+                f"\n[bold green]All config files validated successfully. No issues found across {result.files_checked} files.[/bold green]"
+            )
+
+
+@app.command()
 def version() -> None:
     """Show version information."""
     console.print("EvidenceForge v0.1.0")

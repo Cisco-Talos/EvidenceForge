@@ -284,6 +284,12 @@ HTTP access logs for web server systems.
 
 Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. HTTPS connections emit a CONNECT entry followed by the actual request. Includes cache hit/miss status and full destination URLs.
 
+**Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
+
+**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT.
+
+**Session depth:** Persona HTTP traffic generates multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, and fonts, producing realistic request clusters in the proxy log. The number of pages and subresources per session is controlled by the persona's `browsing_intensity` setting (light/normal/heavy).
+
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
 - Cache hit/miss status is probabilistic, not based on actual content caching logic

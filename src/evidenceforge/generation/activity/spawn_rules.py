@@ -11,9 +11,8 @@ everything from explorer.exe.
 
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _RULES_PATH = get_activity_directory() / "spawn_rules.yaml"
 _CACHED_RULES: dict[str, Any] | None = None
@@ -21,14 +20,22 @@ _CACHED_REVERSE_WIN: dict[str, list[str]] | None = None
 _CACHED_REVERSE_LINUX: dict[str, list[str]] | None = None
 
 
+def _merge_spawn_rules(default: dict, overlay: dict) -> dict:
+    """Merge spawn rules overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_spawn_rules() -> dict[str, Any]:
-    """Load spawn rules from YAML. Cached after first call."""
+    """Load spawn rules from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_RULES
     if _CACHED_RULES is not None:
         return _CACHED_RULES
 
-    with open(_RULES_PATH) as f:
-        _CACHED_RULES = yaml.safe_load(f)
+    _CACHED_RULES = load_with_overlay(
+        _RULES_PATH,
+        "activity/spawn_rules.yaml",
+        _merge_spawn_rules,
+    )
     return _CACHED_RULES
 
 

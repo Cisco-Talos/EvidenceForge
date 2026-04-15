@@ -35,6 +35,7 @@ import logging
 import random
 from datetime import timedelta
 
+from evidenceforge.config.overlay import extend_list, load_with_overlay
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
@@ -131,6 +132,16 @@ DB_SERVICE_MAP = {
     "postgres": (5432, "postgresql"),
     "postgresql": (5432, "postgresql"),
 }
+
+
+def _merge_network_params(default: dict, overlay: dict) -> dict:
+    """Merge overlay network params into defaults (extend OUI prefix list)."""
+    result = dict(default)
+    if "oui_prefixes" in overlay:
+        result["oui_prefixes"] = extend_list(
+            default.get("oui_prefixes", []), overlay["oui_prefixes"]
+        )
+    return result
 
 
 class EmitterSetupMixin:
@@ -292,13 +303,12 @@ class EmitterSetupMixin:
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
         # Load OUI prefixes for diverse MAC generation
-        import yaml as _yaml
-
         from evidenceforge.config import get_activity_directory
 
         _oui_path = get_activity_directory() / "network_params.yaml"
-        with open(_oui_path) as _f:
-            _net_params = _yaml.safe_load(_f)
+        _net_params = load_with_overlay(
+            _oui_path, "activity/network_params.yaml", _merge_network_params
+        )
         _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])
         _oui_weights = [o["weight"] for o in _oui_prefixes]
         _oui_values = [o["prefix"] for o in _oui_prefixes]
@@ -727,10 +737,17 @@ class EmitterSetupMixin:
                 return seg.exposure
         return "internal"
 
-    @staticmethod
-    def _generate_external_client_ip(rng) -> str:
-        """Generate a random external (non-RFC1918) IP for web server clients."""
-        while True:
+    def _generate_external_client_ip(self, rng) -> str:
+        """Generate a random external (non-RFC1918) IP for web server clients.
+
+        Excludes RFC 1918, RFC 5737, loopback, and the scenario's own
+        org CIDRs (internal segments + public_cidrs) so generated external
+        client IPs never accidentally land inside the org's address space.
+        """
+        import ipaddress as _ipa_ext
+
+        org_nets = getattr(self, "_org_cidr_networks", [])
+        for _ in range(1000):  # safety bound
             ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
             first = int(ip.split(".")[0])
             if first == 10 or first == 127:
@@ -746,4 +763,10 @@ class EmitterSetupMixin:
                 or ip.startswith("192.0.2.")
             ):
                 continue
+            # Exclude org's own CIDRs
+            if org_nets:
+                addr = _ipa_ext.ip_address(ip)
+                if any(addr in net for net in org_nets):
+                    continue
             return ip
+        return ip  # fallback after safety bound

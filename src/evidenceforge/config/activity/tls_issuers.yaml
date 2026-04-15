@@ -1,6 +1,15 @@
-# TLS certificate issuer configurations for realistic x509 generation.
+# tls_issuers.yaml — TLS certificate issuer configurations for realistic x509 generation.
+#
+# Purpose: Defines CA issuers, validity ranges, and key type distributions
+#          for generating realistic Zeek x509/SSL certificate log entries.
+#
 # Each issuer has validity parameters matching real CA practices.
 # validity_days_min/max define a range; the engine picks uniformly within it.
+#
+# Depended on by: generation engine (Zeek x509/SSL certificate generation)
+# Depends on: nothing — standalone
+#
+# Full schema: see commands/eforge/references/config-tls-issuers.md
 
 issuers:
   - name: "CN=R3, O=Let's Encrypt, C=US"

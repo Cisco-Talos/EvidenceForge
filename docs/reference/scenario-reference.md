@@ -286,6 +286,32 @@ Work hours are automatically parsed into a `work_hours_parsed` dict containing:
 - `hours`: List of active integer hours (excluding lunch)
 - `peak_hours`: Mid-morning and mid-afternoon hours
 
+### Browsing Intensity
+
+The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity.
+
+```yaml
+personas:
+  - name: developer
+    browsing_intensity: normal    # Optional: light | normal | heavy (default: "normal")
+```
+
+| Value | Behavior |
+|-------|----------|
+| `light` | 1 page load, few subresources (CSS, 1-2 images) |
+| `normal` | 1-2 page loads, typical subresource cascade |
+| `heavy` | 2-4 page loads, full subresource cascades (JS, CSS, images, fonts, API calls) |
+
+Available on persona definitions and as a per-user override on user entries. Per-user override takes precedence over the persona default:
+
+```yaml
+users:
+  - username: marcus.chen
+    persona: developer
+    browsing_intensity: heavy    # Overrides developer persona's default
+    primary_system: WS-DEV-01
+```
+
 ### Phase 2.4+ Optional Fields
 
 These fields are for future LLM expansion (Phase 3.1) and are not required:
@@ -561,6 +587,8 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
 ```
 
 HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent.
+
+**Byte and connection state overrides:** `orig_bytes` (originator payload bytes), `resp_bytes` (responder payload bytes), `conn_state` (Zeek connection outcome: SF, S0, REJ, etc.). When omitted, the engine auto-sizes bytes based on the event's `technique` and `description` fields (exfiltration -> large `orig_bytes`; C2 -> small bidirectional; download -> large `resp_bytes`), and defaults `conn_state` to SF. Set `conn_state` explicitly to model failed connections (e.g., `S0` for a dead C2 channel, `REJ` for a blocked exfil attempt).
 
 ### Raw Events
 

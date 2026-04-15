@@ -12,9 +12,8 @@ Follows the same data-driven pattern as spawn_rules.py.
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.utils.rng import _stable_seed
 
 _COMMANDS_PATH = get_activity_directory() / "bash_commands.yaml"
@@ -25,14 +24,22 @@ _CACHED_COMMANDS: dict[str, Any] | None = None
 _TYPO_MODES = ["adjacent_key", "transposition", "omission", "doubling"]
 
 
+def _merge_bash_commands(default: dict, overlay: dict) -> dict:
+    """Merge bash commands overlay with package defaults."""
+    return deep_merge_dict(default, overlay)
+
+
 def load_bash_commands() -> dict[str, Any]:
-    """Load bash command vocabularies from YAML. Cached after first call."""
+    """Load bash command vocabularies from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_COMMANDS
     if _CACHED_COMMANDS is not None:
         return _CACHED_COMMANDS
 
-    with open(_COMMANDS_PATH) as f:
-        _CACHED_COMMANDS = yaml.safe_load(f)
+    _CACHED_COMMANDS = load_with_overlay(
+        _COMMANDS_PATH,
+        "activity/bash_commands.yaml",
+        _merge_bash_commands,
+    )
     return _CACHED_COMMANDS
 
 
@@ -73,11 +80,17 @@ def _resolve_template(template: str, rng: random.Random, params: dict[str, list[
 
 
 def _get_role_pool(persona: str, server_role: str) -> str:
-    """Map persona + server role to the command pool key in the YAML."""
+    """Map persona + server role to the command pool key in the YAML.
+
+    Built-in alias mappings (developer→dba on DB servers, etc.) are checked
+    first. Then checks for an exact persona name match in the loaded data
+    (supports custom/overlay personas with their own command pools).
+    Falls back to sysadmin for unknown personas.
+    """
+    data = load_bash_commands()
     persona_lower = persona.lower() if persona else ""
 
-    if persona_lower == "sysadmin":
-        return "sysadmin"
+    # Built-in alias mappings that depend on server_role context
     if persona_lower in ("developer",):
         if server_role == "db":
             return "dba"
@@ -90,7 +103,13 @@ def _get_role_pool(persona: str, server_role: str) -> str:
         return "dba"
     if persona_lower == "help_desk":
         return "sysadmin"
-    return "sysadmin"  # Default for unknown admin personas
+
+    # Exact match: persona has its own command pool in the YAML
+    # (custom/overlay personas, or stock personas like sysadmin)
+    if persona_lower in data:
+        return persona_lower
+
+    return "sysadmin"  # Default for unknown personas without a custom pool
 
 
 def _apply_typo_mode(

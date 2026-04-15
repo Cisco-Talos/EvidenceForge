@@ -1,3 +1,11 @@
+# bash_history format definition — Bash command history with timestamps
+#
+# Category: host
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: bash_history
 version: "1.0"
 description: "Bash command history with timestamps"

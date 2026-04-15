@@ -28,6 +28,7 @@ from pathlib import Path
 import yaml
 
 from evidenceforge.config import get_personas_directory
+from evidenceforge.config.overlay import get_overlay_directory
 
 logger = logging.getLogger(__name__)
 
@@ -40,24 +41,75 @@ def get_builtin_personas_dir() -> Path:
 def load_builtin_personas() -> list[dict]:
     """Load all pre-built persona YAML files from the package data directory.
 
+    After loading package personas, checks the overlay directory
+    (``get_overlay_directory() / "personas"``) for additional ``.yaml``
+    files.  Overlay personas with the same *name* as a package persona
+    replace it (a warning is logged); new overlay personas are appended.
+
     Returns:
         List of persona dicts ready for merging into scenario data.
-        Empty list if the directory doesn't exist.
+        Empty list if neither directory exists.
     """
+    # -- 1. Package personas -------------------------------------------------
     personas_dir = get_builtin_personas_dir()
     if not personas_dir.exists():
         logger.debug(f"Pre-built personas directory not found: {personas_dir}")
-        return []
+        package_personas: list[dict] = []
+    else:
+        package_personas = []
+        for path in sorted(personas_dir.glob("*.yaml")):
+            try:
+                with open(path) as f:
+                    data = yaml.safe_load(f)
+                if data and isinstance(data, dict) and "name" in data:
+                    package_personas.append(data)
+            except Exception as e:
+                logger.warning(f"Failed to load persona {path.name}: {e}")
 
-    personas = []
-    for path in sorted(personas_dir.glob("*.yaml")):
-        try:
-            with open(path) as f:
-                data = yaml.safe_load(f)
-            if data and isinstance(data, dict) and "name" in data:
-                personas.append(data)
-        except Exception as e:
-            logger.warning(f"Failed to load persona {path.name}: {e}")
+    # -- 2. Overlay personas -------------------------------------------------
+    overlay_dir = get_overlay_directory()
+    overlay_personas: list[dict] = []
+    if overlay_dir is not None:
+        overlay_personas_dir = overlay_dir / "personas"
+        if overlay_personas_dir.is_dir():
+            for path in sorted(overlay_personas_dir.glob("*.yaml")):
+                try:
+                    with open(path) as f:
+                        data = yaml.safe_load(f)
+                    if data and isinstance(data, dict) and "name" in data:
+                        if data["name"] != path.stem:
+                            logger.warning(
+                                "Overlay persona %s: name %r does not match filename %r — skipping",
+                                path.name,
+                                data["name"],
+                                path.stem,
+                            )
+                            continue
+                        overlay_personas.append(data)
+                except Exception as e:
+                    logger.warning(f"Failed to load overlay persona {path.name}: {e}")
+
+    # -- 3. Merge: overlay fields merged into package on name collision ------
+    if overlay_personas:
+        from evidenceforge.config.overlay import deep_merge_dict
+
+        overlay_by_name = {p["name"]: p for p in overlay_personas}
+        merged: list[dict] = []
+        for persona in package_personas:
+            name = persona["name"]
+            if name in overlay_by_name:
+                logger.info(
+                    "Overlay persona %r merging fields into package persona",
+                    name,
+                )
+                merged.append(deep_merge_dict(persona, overlay_by_name.pop(name)))
+            else:
+                merged.append(persona)
+        # Append remaining overlay personas (new additions)
+        merged.extend(overlay_by_name.values())
+        personas = merged
+    else:
+        personas = package_personas
 
     logger.debug(f"Loaded {len(personas)} pre-built personas")
     return personas

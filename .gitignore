@@ -57,6 +57,9 @@ checkpoints/
 # Claude Code sessions
 .claude/
 
+# EvidenceForge project-local config overlay
+.eforge/
+
 # Ignore any scenarios we might produce
 scenarios/
 !scenarios/COVERAGE-TEST-PROMPT.md

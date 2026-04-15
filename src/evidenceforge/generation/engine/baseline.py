@@ -37,9 +37,8 @@ import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 from evidenceforge.generation.activity.generator import _dns_rtt
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
@@ -89,9 +88,9 @@ PERSONA_CLUSTER_CONFIG = {
 # No hardcoded persona names — new personas work automatically.
 # Ratios tuned to produce CV > 1.0 for users with 30+ events.
 _HAWKES_RISK_PARAMS = {
-    "high": {"alpha_beta_ratio": 0.80, "beta": 0.04},  # strong bursts, slow decay (~25s)
-    "medium": {"alpha_beta_ratio": 0.65, "beta": 0.05},  # moderate bursts (~20s decay)
-    "low": {"alpha_beta_ratio": 0.45, "beta": 0.08},  # mild bursts, faster decay (~12s)
+    "high": {"alpha_beta_ratio": 0.60, "beta": 0.06},  # moderate bursts, ~17s decay
+    "medium": {"alpha_beta_ratio": 0.50, "beta": 0.07},  # mild bursts, ~14s decay
+    "low": {"alpha_beta_ratio": 0.35, "beta": 0.10},  # gentle bursts, ~10s decay
 }
 
 
@@ -237,14 +236,27 @@ _DAY_NAME_TO_INT = {
 }
 
 
+def _merge_systemd_schedules(default: dict, overlay: dict) -> dict:
+    """Merge overlay systemd schedules into defaults (keyed by service name)."""
+    result = dict(default)
+    if "schedules" in overlay:
+        result["schedules"] = merge_keyed_list(
+            default.get("schedules", []),
+            overlay["schedules"],
+            key_field="service",
+        )
+    return result
+
+
 def _load_systemd_schedules() -> list[dict[str, Any]]:
     """Load systemd/cron schedule definitions from YAML. Cached after first call."""
     global _CACHED_SCHEDULES
     if _CACHED_SCHEDULES is not None:
         return _CACHED_SCHEDULES
 
-    with open(_SCHEDULES_PATH) as f:
-        data = yaml.safe_load(f)
+    data = load_with_overlay(
+        _SCHEDULES_PATH, "activity/systemd_schedules.yaml", _merge_systemd_schedules
+    )
     _CACHED_SCHEDULES = data.get("schedules", [])
     return _CACHED_SCHEDULES
 
@@ -633,8 +645,8 @@ class BaselineMixin:
                     source_ip=source_system.ip,
                 )
 
-            # Pattern 2: Kerberos pre-auth failure on DC (~5%/hour)
-            if rng.random() < 0.05 and dcs:
+            # Pattern 2: Kerberos pre-auth failure on DC (~15%/hour)
+            if rng.random() < 0.15 and dcs:
                 dc = rng.choice(dcs)
                 source_system = rng.choice(target_systems)
                 event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
@@ -783,6 +795,27 @@ class BaselineMixin:
                     logon_type=3,  # network
                     source_ip=rng.choice(servers).ip,
                 )
+
+        # Pattern 4: Active-user Kerberos pre-auth failure (password typo at lock screen).
+        # ~2% chance per active user per hour → 0-2 events total in a 10-user scenario.
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        if dcs:
+            for user in enabled_users:
+                if rng.random() < 0.02:
+                    dc = rng.choice(dcs)
+                    user_system = next(
+                        (s for s in systems if s.assigned_user == user.username),
+                        rng.choice(systems),
+                    )
+                    event_time = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    self.state_manager.set_current_time(event_time)
+                    self.activity_generator.generate_kerberos_preauth_failed(
+                        username=user.username,
+                        source_ip=user_system.ip,
+                        dc_hostname=dc.hostname,
+                        time=event_time,
+                        status="0x18",  # KDC_ERR_PREAUTH_FAILED (bad password)
+                    )
 
     def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
         """Generate legitimate service account lateral movement between servers.
@@ -1372,7 +1405,7 @@ class BaselineMixin:
                 else:
                     max_hours = rng.uniform(0.5, 2.0)
 
-                if proc_age_hours > max_hours and rng.random() < 0.5:
+                if proc_age_hours > max_hours and rng.random() < 0.85:
                     actor = self._find_actor(proc.username)
                     if not actor:
                         continue
@@ -1918,9 +1951,9 @@ class BaselineMixin:
         if username and hasattr(self, "_user_time_offsets"):
             user_offsets = self._user_time_offsets.get(username, {})
             size_bias = 1.0 + user_offsets.get("cluster_size_bias", 0)
-            alpha_beta_ratio = min(0.95, alpha_beta_ratio * size_bias)
+            alpha_beta_ratio = min(0.75, alpha_beta_ratio * size_bias)
             gap_bias = 1.0 + user_offsets.get("inter_gap_bias", 0)
-            beta = max(0.01, beta * gap_bias)
+            beta = max(0.03, beta * gap_bias)
 
         alpha = alpha_beta_ratio * beta
         # Adaptive mu: calibrate base rate so expected count ≈ num_events
@@ -2199,7 +2232,67 @@ class BaselineMixin:
                         filtered.append(ip)
                 if filtered:
                     candidates = filtered
-        return (rng.choice(candidates), None) if candidates else (None, None)
+        result = (rng.choice(candidates), None) if candidates else (None, None)
+        if result[0]:
+            self._validate_ip_in_segments(result[0], f"_resolve_role({role})")
+        return result
+
+    def _validate_ip_in_segments(self, ip: str, context: str) -> None:
+        """Warn if a private IP doesn't belong to any defined network segment."""
+        import ipaddress as _ipa_val
+
+        if not self.scenario.environment.network:
+            return
+        try:
+            addr = _ipa_val.ip_address(ip)
+        except ValueError:
+            return
+        if not addr.is_private:
+            return  # External IPs don't need segment validation
+        for seg in self.scenario.environment.network.segments:
+            try:
+                if addr in _ipa_val.ip_network(seg.cidr, strict=False):
+                    return
+            except ValueError:
+                continue
+        logger.warning("Internal IP %s not in any defined segment (%s)", ip, context)
+
+    def _emit_smb_logon_pair(
+        self,
+        user: Any,
+        file_server: Any,
+        source_ip: str,
+        time: datetime,
+        rng: Any,
+    ) -> str | None:
+        """Emit type 3 network logon + logoff pair on a file server for SMB access.
+
+        In real Windows, every authenticated SMB share access produces:
+        - 4624 type 3 (network logon) on the file server
+        - 4634 (logoff) after the file access session closes
+        """
+        from evidenceforge.generation.activity.generator import _get_os_category
+
+        if _get_os_category(file_server.os) != "windows":
+            return None
+
+        logon_id = self.activity_generator.generate_logon(
+            user=user,
+            system=file_server,
+            time=time,
+            logon_type=3,
+            source_ip=source_ip,
+        )
+        logoff_delay = rng.uniform(5.0, 60.0)
+        logoff_time = time + timedelta(seconds=logoff_delay)
+        self.activity_generator.generate_logoff(
+            user=user,
+            system=file_server,
+            time=logoff_time,
+            logon_id=logon_id,
+            logon_type=3,
+        )
+        return logon_id
 
     def _generate_profile_traffic(
         self,
@@ -2489,6 +2582,30 @@ class BaselineMixin:
                             hostname=dst_hostname,
                         )
 
+                        # SMB access to file servers produces type 3 logon
+                        if (
+                            conn.get("service") == "smb"
+                            and is_internal_src
+                            and src_sys
+                            and "file_server" in roles
+                        ):
+                            src_sessions = self.state_manager.get_sessions_on_system(
+                                src_sys.hostname
+                            )
+                            for sess in src_sessions:
+                                if sess.logon_type in (2, 10, 11):
+                                    smb_user = next(
+                                        (
+                                            u
+                                            for u in self.scenario.environment.users
+                                            if u.username == sess.username
+                                        ),
+                                        None,
+                                    )
+                                    if smb_user:
+                                        self._emit_smb_logon_pair(smb_user, system, src_ip, ts, rng)
+                                        break
+
         # --- Persona traffic (user-level, during active sessions) ---
         # Only real interactive user sessions get persona traffic — skip
         # SYSTEM, LOCAL SERVICE, NETWORK SERVICE, machine accounts, etc.
@@ -2570,21 +2687,153 @@ class BaselineMixin:
                     )
 
                 self.state_manager.set_current_time(ts)
-                self.activity_generator.generate_connection(
-                    src_ip=system.ip,
-                    dst_ip=dst_ip,
-                    time=ts,
-                    dst_port=conn["port"],
-                    proto=conn.get("proto", "tcp"),
-                    service=conn.get("service"),
-                    duration=rng.uniform(0.1, 10.0),
-                    orig_bytes=rng.randint(200, 8000),
-                    resp_bytes=rng.randint(500, 80000),
-                    emit_dns=conn.get("emit_dns", False),
-                    source_system=system,
-                    hostname=hostname,
-                    pid=persona_pid,
-                )
+
+                # For HTTP/HTTPS: generate browsing session with subresources,
+                # referrer chains, and cross-domain CDN fan-out.
+                svc = conn.get("service", "")
+                if svc in ("ssl", "http") and hostname:
+                    self._emit_browsing_session(
+                        system=system,
+                        user_obj=user_obj,
+                        session=session,
+                        hostname=hostname,
+                        dst_ip=dst_ip,
+                        conn=conn,
+                        base_ts=ts,
+                        persona_pid=persona_pid,
+                        os_cat=os_cat,
+                        rng=rng,
+                    )
+                else:
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        time=ts,
+                        dst_port=conn["port"],
+                        proto=conn.get("proto", "tcp"),
+                        service=conn.get("service"),
+                        duration=rng.uniform(0.1, 10.0),
+                        orig_bytes=rng.randint(200, 8000),
+                        resp_bytes=rng.randint(500, 80000),
+                        emit_dns=conn.get("emit_dns", False),
+                        source_system=system,
+                        hostname=hostname,
+                        pid=persona_pid,
+                    )
+
+    def _emit_browsing_session(
+        self,
+        system: Any,
+        user_obj: Any,
+        session: Any,
+        hostname: str,
+        dst_ip: str,
+        conn: dict,
+        base_ts: datetime,
+        persona_pid: int,
+        os_cat: str,
+        rng: Any,
+    ) -> None:
+        """Generate a multi-request browsing session for an HTTP/HTTPS persona connection.
+
+        Replaces the single generate_connection() call with a session model
+        that produces a landing page, subresource cascade, navigation, and
+        referrer chains.
+        """
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.browsing_session import (
+            generate_browsing_session,
+        )
+        from evidenceforge.generation.activity.dns_registry import (
+            get_domain_tags,
+            pick_domain_and_ip,
+        )
+
+        domain_tags = get_domain_tags(hostname) if hostname else []
+
+        # Resolve browsing intensity: user override > persona > default
+        intensity = "normal"
+        if user_obj and getattr(user_obj, "browsing_intensity", None):
+            intensity = user_obj.browsing_intensity
+        elif user_obj and user_obj.persona:
+            for p in self.scenario.personas:
+                if p.name == user_obj.persona:
+                    intensity = getattr(p, "browsing_intensity", "normal")
+                    break
+
+        session_requests = generate_browsing_session(
+            rng=rng,
+            hostname=hostname,
+            domain_tags=domain_tags,
+            source_os=os_cat,
+            browsing_intensity=intensity,
+            port=conn.get("port", 443),
+        )
+
+        if not session_requests:
+            return
+
+        # Pick a consistent UA for the entire session
+        if os_cat == "linux":
+            _session_uas = [
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+            ]
+        else:
+            _session_uas = [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+            ]
+        session_ua = rng.choice(_session_uas)
+
+        for req in session_requests:
+            req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+            self.state_manager.set_current_time(req_ts)
+
+            # Resolve destination IP for CDN subresources
+            req_dst_ip = dst_ip
+            req_hostname = hostname
+            if req.hostname != hostname:
+                req_hostname = req.hostname
+                # Resolve CDN domain to an IP
+                _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
+                if cdn_ip:
+                    req_dst_ip = cdn_ip
+
+            http_ctx = HttpContext(
+                method=req.method,
+                host=req_hostname,
+                uri=req.path,
+                version="1.1",
+                user_agent=session_ua,
+                request_body_len=req.request_body_len,
+                response_body_len=req.response_body_len,
+                status_code=200,
+                status_msg="OK",
+                referrer=req.referrer,
+                trans_depth=req.trans_depth,
+                resp_mime_types=[req.content_type] if req.content_type else [],
+                tags=[],
+            )
+
+            self.activity_generator.generate_connection(
+                src_ip=system.ip,
+                dst_ip=req_dst_ip,
+                time=req_ts,
+                dst_port=conn.get("port", 443),
+                proto=conn.get("proto", "tcp"),
+                service=conn.get("service"),
+                duration=rng.uniform(0.05, 2.0),
+                orig_bytes=req.request_body_len,
+                resp_bytes=req.response_body_len,
+                emit_dns=req.is_page_load,  # DNS only for page loads, not subresources
+                source_system=system,
+                hostname=req_hostname,
+                pid=persona_pid,
+                http=http_ctx,
+            )
 
     def _generate_system_traffic(
         self,
@@ -2728,13 +2977,26 @@ class BaselineMixin:
                     )
                     dhcp_state["last_renewal"] = next_renewal
 
-            # SMB browsing: Windows workstations only
+            # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
 
+            # Include file servers in SMB targets for workstations
+            fs_targets = [
+                s
+                for s in self.scenario.environment.systems
+                if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
+            ]
+
             if "smb-client" in services and os_cat == "windows" and dc_targets:
+                # Combine DC + file server IPs as SMB targets
+                smb_targets = list(dc_targets)
+                for fs in fs_targets:
+                    if fs.ip not in smb_targets:
+                        smb_targets.append(fs.ip)
+
                 smb_interval = 1200 + (_stable_seed(f"smb_iv_{system.hostname}") % 1800)
                 smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
                 hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
@@ -2746,9 +3008,10 @@ class BaselineMixin:
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    smb_dst_ip = rng.choice(smb_targets)
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(dc_targets),
+                        dst_ip=smb_dst_ip,
                         time=ts,
                         dst_port=445,
                         proto="tcp",
@@ -2760,6 +3023,26 @@ class BaselineMixin:
                         source_system=system,
                         pid=4,  # SMB: kernel System process
                     )
+                    # Emit type 3 logon on file server for SMB access
+                    smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                    if smb_dst_sys:
+                        # Find active user on this workstation
+                        ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+                        for sess in ws_sessions:
+                            if sess.logon_type in (2, 10, 11):
+                                ws_user = next(
+                                    (
+                                        u
+                                        for u in self.scenario.environment.users
+                                        if u.username == sess.username
+                                    ),
+                                    None,
+                                )
+                                if ws_user:
+                                    self._emit_smb_logon_pair(
+                                        ws_user, smb_dst_sys, system.ip, ts, rng
+                                    )
+                                    break
                     t += smb_interval
 
             # Kerberos
@@ -3884,7 +4167,17 @@ class BaselineMixin:
 
                     # Bots only from external IPs; browsers from anywhere
                     is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
-                    ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
+                    # OS-aware UA selection for internal clients
+                    ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+                    client_sys = ip_map.get(client_ip)
+                    if client_sys and _get_os_category(client_sys.os) == "linux":
+                        ua_pool = [
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                            "curl/7.88.1",
+                            "python-requests/2.31.0",
+                        ]
+                    else:
+                        ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
                     _URI_MIME = {
                         "/": "text/html",

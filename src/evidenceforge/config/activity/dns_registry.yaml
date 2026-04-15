@@ -1,18 +1,32 @@
 # Unified DNS registry — single source of truth for all domain↔IP mappings.
 #
-# Tags determine which connection types use each domain:
-#   web        — baseline user web browsing
-#   saas       — SaaS application traffic
-#   email      — email server connections
-#   git        — source control
-#   background — OS-level background HTTPS (updates, telemetry, CRL)
-#   windows    — Windows-specific background traffic
-#   linux      — Linux-specific background traffic
-#   internal   — internal infrastructure (DB servers, etc.)
-#   storage    — cloud storage (potential exfiltration targets)
+# Valid tags are defined in the `valid_tags` section below. Each tag controls
+# which connection types use the domain. Custom tags can be added via overlay.
 #
 # Each domain can have multiple IPs (realistic for CDN/cloud services).
 # The loader builds REVERSE_DNS, FORWARD_DNS, and tag-based lookups from this data.
+#
+# Depended on by: traffic_profiles.yaml (dns_tags), proxy_uri_templates.yaml (domain keys),
+#                 site_maps.yaml (domain keys)
+# Depends on: nothing — this is the root data source
+#
+# Full schema: see commands/eforge/references/config-dns-registry.md
+
+# Valid tags for domain classification. The validator checks domains
+# against this list. Add custom tags here or via overlay.
+valid_tags:
+  web:        "Baseline user web browsing targets"
+  saas:       "SaaS application traffic"
+  cdn:        "CDN/API endpoints (not directly browsed)"
+  email:      "Email server connections"
+  git:        "Source control services"
+  background: "OS-level background HTTPS (updates, telemetry, CRL)"
+  windows:    "Windows-specific background traffic"
+  linux:      "Linux-specific background traffic"
+  internal:   "Internal infrastructure (DB servers, etc.)"
+  storage:    "Cloud storage (potential exfiltration targets)"
+  dev:        "Developer tool API endpoints"
+  social:     "Social media sites"
 
 domains:
   # === Google ===
@@ -38,7 +52,7 @@ domains:
     tags: [web]
   - domain: api.cloudflare.com
     ips: ["104.18.25.35", "104.18.26.35"]
-    tags: [web]
+    tags: [cdn]
   - domain: blog.cloudflare.com
     ips: ["104.21.67.152", "104.21.68.152"]
     tags: [web]
@@ -46,16 +60,16 @@ domains:
   # === Reddit / Fastly ===
   - domain: www.reddit.com
     ips: ["151.101.1.140", "151.101.65.140"]
-    tags: [web]
+    tags: [web, social]
   - domain: i.redd.it
     ips: ["151.101.65.140", "151.101.129.140"]
-    tags: [web]
+    tags: [cdn]
   - domain: old.reddit.com
     ips: ["151.101.129.140", "151.101.193.140"]
-    tags: [web]
+    tags: [cdn]
   - domain: v.redd.it
     ips: ["151.101.193.140", "151.101.1.140"]
-    tags: [web]
+    tags: [cdn]
 
   # === Akamai ===
   - domain: download.windowsupdate.com
@@ -63,15 +77,15 @@ domains:
     tags: [background, windows]
   - domain: static.akamai.net
     ips: ["23.72.134.56", "23.72.135.56"]
-    tags: [web]
+    tags: [cdn]
   - domain: media.akamai.net
     ips: ["23.205.100.42", "23.205.101.42"]
-    tags: [web]
+    tags: [cdn]
 
   # === AWS CloudFront ===
   - domain: cdn.jsdelivr.net
     ips: ["54.230.129.180", "54.230.130.180"]
-    tags: [web]
+    tags: [cdn]
   - domain: aws.amazon.com
     ips: ["52.85.83.55", "52.85.84.55"]
     tags: [web]
@@ -114,13 +128,13 @@ domains:
     tags: [web]
   - domain: www.facebook.com
     ips: ["31.13.65.36", "31.13.65.37"]
-    tags: [web]
+    tags: [web, social]
   - domain: stackoverflow.com
     ips: ["44.238.149.75", "44.238.150.75"]
     tags: [web]
   - domain: registry.npmjs.org
     ips: ["199.232.64.133", "199.232.65.133"]
-    tags: [web]
+    tags: [dev]
   - domain: pages.github.io
     ips: ["185.199.108.153", "185.199.109.153"]
     tags: [web]
@@ -195,13 +209,13 @@ domains:
     tags: [saas]
   - domain: cdn.onenote.net
     ips: ["52.109.8.20", "52.109.8.21"]
-    tags: [saas]
+    tags: [cdn]
   - domain: onenote.officeapps.live.com
     ips: ["52.109.12.22", "52.109.12.23"]
     tags: [saas]
   - domain: graph.microsoft.com
     ips: ["40.126.28.19", "40.126.29.19"]
-    tags: [saas]
+    tags: [dev]
   - domain: login.live.com
     ips: ["20.190.159.64", "20.190.160.64"]
     tags: [saas]
@@ -210,10 +224,10 @@ domains:
     tags: [saas]
   - domain: api.slack.com
     ips: ["52.26.132.56", "52.26.133.56"]
-    tags: [saas]
+    tags: [dev]
   - domain: files.slack.com
     ips: ["54.187.91.57", "54.187.92.57"]
-    tags: [saas]
+    tags: [cdn]
   - domain: zoom.us
     ips: ["3.21.137.128", "3.21.138.128"]
     tags: [saas]

@@ -1,6 +1,14 @@
 # Per-role baseline system processes for Windows hosts.
 # Generates diverse process creation events independently of user activity.
 # {placeholder} tokens resolved at generation time from the params section.
+#
+# Depended on by: spawn_rules.yaml (system processes used as parents)
+# Depends on: nothing — standalone system process definitions
+#
+# parent: values (services, svchost_netsvcs, etc.) are symbolic names
+# resolved at generation time.
+#
+# Full schema: see commands/eforge/references/config-system-processes.md
 
 scheduled_tasks:
   - image: "C:\\Windows\\System32\\svchost.exe"
@@ -129,3 +137,221 @@ system_services:
       command_templates:
         - "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun"
       parent: svchost_local_system
+
+# System binaries: exe name -> full image path mapping.
+# Used by the engine for path resolution and by validation for
+# cross-reference checking. Replaces the hardcoded _SYSTEM_BINARIES set.
+#
+# To add a custom system binary, create an overlay:
+#   .eforge/config/activity/system_processes.yaml
+# with a system_binaries section containing your additions.
+
+system_binaries:
+  windows:
+    # --- Core OS boot / session processes ---
+    - {exe: "smss.exe",                  path: "C:\\Windows\\System32\\smss.exe"}
+    - {exe: "csrss.exe",                 path: "C:\\Windows\\System32\\csrss.exe"}
+    - {exe: "wininit.exe",               path: "C:\\Windows\\System32\\wininit.exe"}
+    - {exe: "winlogon.exe",              path: "C:\\Windows\\System32\\winlogon.exe"}
+    - {exe: "services.exe",              path: "C:\\Windows\\System32\\services.exe"}
+    - {exe: "lsass.exe",                 path: "C:\\Windows\\System32\\lsass.exe"}
+    - {exe: "lsaiso.exe",               path: "C:\\Windows\\System32\\lsaiso.exe"}
+    - {exe: "dwm.exe",                   path: "C:\\Windows\\System32\\dwm.exe"}
+
+    # --- Service host and session managers ---
+    - {exe: "svchost.exe",               path: "C:\\Windows\\System32\\svchost.exe"}
+    - {exe: "taskhostw.exe",             path: "C:\\Windows\\System32\\taskhostw.exe"}
+    - {exe: "sihost.exe",                path: "C:\\Windows\\System32\\sihost.exe"}
+    - {exe: "conhost.exe",               path: "C:\\Windows\\System32\\conhost.exe"}
+    - {exe: "dllhost.exe",               path: "C:\\Windows\\System32\\dllhost.exe"}
+    - {exe: "RuntimeBroker.exe",         path: "C:\\Windows\\System32\\RuntimeBroker.exe"}
+    - {exe: "backgroundTaskHost.exe",    path: "C:\\Windows\\System32\\backgroundTaskHost.exe"}
+
+    # --- Shells and terminals ---
+    - {exe: "cmd.exe",                   path: "C:\\Windows\\System32\\cmd.exe"}
+    - {exe: "powershell.exe",            path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"}
+    - {exe: "pwsh.exe",                  path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe"}
+    - {exe: "WindowsTerminal.exe",       path: "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.19\\WindowsTerminal.exe"}
+
+    # --- Windows system services / daemons ---
+    - {exe: "spoolsv.exe",              path: "C:\\Windows\\System32\\spoolsv.exe"}
+    - {exe: "WmiPrvSE.exe",             path: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"}
+    - {exe: "msdtc.exe",                path: "C:\\Windows\\System32\\msdtc.exe"}
+    - {exe: "SearchIndexer.exe",         path: "C:\\Windows\\System32\\SearchIndexer.exe"}
+    - {exe: "SearchProtocolHost.exe",    path: "C:\\Windows\\System32\\SearchProtocolHost.exe"}
+    - {exe: "SearchFilterHost.exe",      path: "C:\\Windows\\System32\\SearchFilterHost.exe"}
+
+    # --- Windows Update and telemetry ---
+    - {exe: "usoclient.exe",             path: "C:\\Windows\\System32\\usoclient.exe"}
+    - {exe: "TiWorker.exe",             path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_\\TiWorker.exe"}
+    - {exe: "cleanmgr.exe",             path: "C:\\Windows\\System32\\cleanmgr.exe"}
+    - {exe: "wsqmcons.exe",             path: "C:\\Windows\\System32\\wsqmcons.exe"}
+    - {exe: "CompatTelRunner.exe",       path: "C:\\Windows\\System32\\CompatTelRunner.exe"}
+
+    # --- Windows Defender / security ---
+    - {exe: "MsMpEng.exe",              path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe"}
+    - {exe: "MpCmdRun.exe",             path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpCmdRun.exe"}
+
+    # --- Active Directory / domain controller ---
+    - {exe: "dns.exe",                   path: "C:\\Windows\\System32\\dns.exe"}
+    - {exe: "dfsr.exe",                  path: "C:\\Windows\\System32\\dfsr.exe"}
+    - {exe: "ntdsutil.exe",             path: "C:\\Windows\\System32\\ntdsutil.exe"}
+    - {exe: "ismserv.exe",              path: "C:\\Windows\\System32\\ismserv.exe"}
+
+    # --- Admin GUI tools ---
+    - {exe: "taskmgr.exe",              path: "C:\\Windows\\System32\\taskmgr.exe"}
+    - {exe: "mmc.exe",                   path: "C:\\Windows\\System32\\mmc.exe"}
+    - {exe: "eventvwr.exe",             path: "C:\\Windows\\System32\\eventvwr.exe"}
+    - {exe: "regedit.exe",              path: "C:\\Windows\\regedit.exe"}
+    - {exe: "notepad.exe",              path: "C:\\Windows\\System32\\notepad.exe"}
+
+    # --- Installer / registration utilities ---
+    - {exe: "msiexec.exe",              path: "C:\\Windows\\System32\\msiexec.exe"}
+    - {exe: "regsvr32.exe",             path: "C:\\Windows\\System32\\regsvr32.exe"}
+    - {exe: "rundll32.exe",             path: "C:\\Windows\\System32\\rundll32.exe"}
+    - {exe: "mshta.exe",                path: "C:\\Windows\\System32\\mshta.exe"}
+
+    # --- Scripting hosts ---
+    - {exe: "cscript.exe",              path: "C:\\Windows\\System32\\cscript.exe"}
+    - {exe: "wscript.exe",              path: "C:\\Windows\\System32\\wscript.exe"}
+
+    # --- Command-line admin / diagnostic tools ---
+    - {exe: "sc.exe",                    path: "C:\\Windows\\System32\\sc.exe"}
+    - {exe: "net.exe",                   path: "C:\\Windows\\System32\\net.exe"}
+    - {exe: "net1.exe",                  path: "C:\\Windows\\System32\\net1.exe"}
+    - {exe: "netsh.exe",                path: "C:\\Windows\\System32\\netsh.exe"}
+    - {exe: "reg.exe",                   path: "C:\\Windows\\System32\\reg.exe"}
+    - {exe: "schtasks.exe",             path: "C:\\Windows\\System32\\schtasks.exe"}
+    - {exe: "wevtutil.exe",             path: "C:\\Windows\\System32\\wevtutil.exe"}
+    - {exe: "bcdedit.exe",              path: "C:\\Windows\\System32\\bcdedit.exe"}
+    - {exe: "icacls.exe",               path: "C:\\Windows\\System32\\icacls.exe"}
+    - {exe: "takeown.exe",              path: "C:\\Windows\\System32\\takeown.exe"}
+    - {exe: "fsutil.exe",               path: "C:\\Windows\\System32\\fsutil.exe"}
+    - {exe: "attrib.exe",               path: "C:\\Windows\\System32\\attrib.exe"}
+
+    # --- Network diagnostic tools ---
+    - {exe: "ipconfig.exe",             path: "C:\\Windows\\System32\\ipconfig.exe"}
+    - {exe: "ping.exe",                  path: "C:\\Windows\\System32\\ping.exe"}
+    - {exe: "tracert.exe",              path: "C:\\Windows\\System32\\tracert.exe"}
+    - {exe: "nslookup.exe",             path: "C:\\Windows\\System32\\nslookup.exe"}
+    - {exe: "netstat.exe",              path: "C:\\Windows\\System32\\netstat.exe"}
+    - {exe: "whoami.exe",               path: "C:\\Windows\\System32\\whoami.exe"}
+
+    # --- Information / enumeration tools ---
+    - {exe: "systeminfo.exe",           path: "C:\\Windows\\System32\\systeminfo.exe"}
+    - {exe: "tasklist.exe",             path: "C:\\Windows\\System32\\tasklist.exe"}
+    - {exe: "findstr.exe",              path: "C:\\Windows\\System32\\findstr.exe"}
+
+    # --- File-copy and transfer tools ---
+    - {exe: "xcopy.exe",                path: "C:\\Windows\\System32\\xcopy.exe"}
+    - {exe: "robocopy.exe",             path: "C:\\Windows\\System32\\robocopy.exe"}
+    - {exe: "certutil.exe",             path: "C:\\Windows\\System32\\certutil.exe"}
+    - {exe: "bitsadmin.exe",            path: "C:\\Windows\\System32\\bitsadmin.exe"}
+
+    # --- WMI provider ---
+    - {exe: "wmic.exe",                  path: "C:\\Windows\\System32\\wbem\\WMIC.exe"}
+
+    # --- Developer runtimes (OS / language installs) ---
+    - {exe: "python.exe",               path: "C:\\Windows\\py.exe"}
+    - {exe: "python3.exe",              path: "C:\\Users\\{username}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"}
+    - {exe: "pip.exe",                   path: "C:\\Users\\{username}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\pip.exe"}
+    - {exe: "java.exe",                  path: "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe"}
+    - {exe: "javac.exe",                path: "C:\\Program Files\\Java\\jdk-21\\bin\\javac.exe"}
+    - {exe: "gradle.exe",               path: "C:\\Program Files\\Gradle\\bin\\gradle.bat"}
+    - {exe: "go.exe",                    path: "C:\\Program Files\\Go\\bin\\go.exe"}
+    - {exe: "npm.exe",                   path: "C:\\Program Files\\nodejs\\npm.cmd"}
+
+    # --- Microsoft Office (not in application catalog as standalone) ---
+    - {exe: "powerpnt.exe",             path: "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE"}
+
+    # --- Legacy / built-in browser ---
+    - {exe: "iexplore.exe",             path: "C:\\Program Files\\Internet Explorer\\iexplore.exe"}
+
+  linux:
+    # --- Shells ---
+    - {exe: "sh",                        path: "/bin/sh"}
+    - {exe: "bash",                      path: "/bin/bash"}
+    - {exe: "zsh",                       path: "/usr/bin/zsh"}
+
+    # --- File and text utilities ---
+    - {exe: "ls",                        path: "/usr/bin/ls"}
+    - {exe: "cat",                       path: "/usr/bin/cat"}
+    - {exe: "grep",                      path: "/usr/bin/grep"}
+    - {exe: "find",                      path: "/usr/bin/find"}
+    - {exe: "sort",                      path: "/usr/bin/sort"}
+    - {exe: "head",                      path: "/usr/bin/head"}
+    - {exe: "tail",                      path: "/usr/bin/tail"}
+    - {exe: "less",                      path: "/usr/bin/less"}
+    - {exe: "awk",                       path: "/usr/bin/awk"}
+    - {exe: "sed",                       path: "/usr/bin/sed"}
+    - {exe: "wc",                        path: "/usr/bin/wc"}
+
+    # --- File management ---
+    - {exe: "cp",                        path: "/usr/bin/cp"}
+    - {exe: "mv",                        path: "/usr/bin/mv"}
+    - {exe: "rm",                        path: "/usr/bin/rm"}
+    - {exe: "ln",                        path: "/usr/bin/ln"}
+    - {exe: "mkdir",                     path: "/usr/bin/mkdir"}
+    - {exe: "chmod",                     path: "/usr/bin/chmod"}
+    - {exe: "chown",                     path: "/usr/bin/chown"}
+
+    # --- Archive / compression ---
+    - {exe: "unzip",                     path: "/usr/bin/unzip"}
+    - {exe: "gzip",                      path: "/usr/bin/gzip"}
+    - {exe: "tar",                       path: "/usr/bin/tar"}
+    - {exe: "rsync",                     path: "/usr/bin/rsync"}
+
+    # --- System information ---
+    - {exe: "df",                        path: "/usr/bin/df"}
+    - {exe: "free",                      path: "/usr/bin/free"}
+    - {exe: "ps",                        path: "/usr/bin/ps"}
+    - {exe: "top",                       path: "/usr/bin/top"}
+    - {exe: "htop",                      path: "/usr/bin/htop"}
+    - {exe: "uptime",                    path: "/usr/bin/uptime"}
+
+    # --- Identity / session info ---
+    - {exe: "id",                        path: "/usr/bin/id"}
+    - {exe: "w",                         path: "/usr/bin/w"}
+    - {exe: "whoami",                    path: "/usr/bin/whoami"}
+    - {exe: "uname",                     path: "/usr/bin/uname"}
+    - {exe: "hostname",                  path: "/usr/bin/hostname"}
+
+    # --- Network diagnostic tools ---
+    - {exe: "ip",                        path: "/usr/sbin/ip"}
+    - {exe: "ss",                        path: "/usr/sbin/ss"}
+    - {exe: "netstat",                   path: "/usr/bin/netstat"}
+    - {exe: "wget",                      path: "/usr/bin/wget"}
+    - {exe: "scp",                       path: "/usr/bin/scp"}
+
+    # --- Network analysis ---
+    - {exe: "nmap",                      path: "/usr/bin/nmap"}
+    - {exe: "tshark",                    path: "/usr/bin/tshark"}
+
+    # --- System management (systemd) ---
+    - {exe: "journalctl",               path: "/usr/bin/journalctl"}
+    - {exe: "systemctl",                path: "/usr/bin/systemctl"}
+
+    # --- System daemons ---
+    - {exe: "sshd",                      path: "/usr/sbin/sshd"}
+    - {exe: "nginx",                     path: "/usr/sbin/nginx"}
+    - {exe: "apache2",                   path: "/usr/sbin/apache2"}
+    - {exe: "mysqld",                    path: "/usr/sbin/mysqld"}
+    - {exe: "mysqldump",                path: "/usr/bin/mysqldump"}
+    - {exe: "dockerd",                   path: "/usr/bin/dockerd"}
+    - {exe: "containerd",               path: "/usr/bin/containerd"}
+    - {exe: "runc",                      path: "/usr/bin/runc"}
+    - {exe: "cron",                      path: "/usr/sbin/cron"}
+    - {exe: "rsyslogd",                 path: "/usr/sbin/rsyslogd"}
+    - {exe: "chronyd",                   path: "/usr/sbin/chronyd"}
+    - {exe: "sftp-server",              path: "/usr/lib/openssh/sftp-server"}
+
+    # --- systemd helper daemons ---
+    - {exe: "NetworkManager",            path: "/usr/sbin/NetworkManager"}
+    - {exe: "systemd-resolved",          path: "/usr/lib/systemd/systemd-resolved"}
+    - {exe: "systemd-logind",            path: "/usr/lib/systemd/systemd-logind"}
+    - {exe: "systemd-timesyncd",         path: "/usr/lib/systemd/systemd-timesyncd"}
+
+    # --- Developer runtimes (OS / language installs) ---
+    - {exe: "python3",                   path: "/usr/bin/python3"}
+    - {exe: "pip",                       path: "/usr/bin/pip"}
+    - {exe: "pip3",                      path: "/usr/bin/pip3"}

@@ -945,6 +945,38 @@ class WorldPlanner:
         if session is None:
             raise RuntimeError(f"Failed to resolve SSH session {logon_id}")
         session.last_activity_time = activity_time
+
+        # Create per-session sshd child + bash login shell for realistic
+        # Linux process trees.  Each SSH session gets its own sshd fork
+        # (privilege separation) and bash PID so user commands have
+        # distinct parent PIDs per session.
+        sys_pids = getattr(self.activity_generator, "_system_pids", {}).get(
+            plan.target_system.hostname, {}
+        )
+        global_sshd = sys_pids.get("sshd")
+        if global_sshd and self.state_manager.get_process(plan.target_system.hostname, global_sshd):
+            # Per-session sshd child (privilege separation fork)
+            session_sshd_pid = self.state_manager.create_process(
+                plan.target_system.hostname,
+                global_sshd,
+                "/usr/sbin/sshd",
+                f"sshd: {user.username} [priv]",
+                "root",
+                "System",
+                logon_id=logon_id,
+            )
+            # Per-session bash login shell
+            bash_pid = self.state_manager.create_process(
+                plan.target_system.hostname,
+                session_sshd_pid,
+                "/bin/bash",
+                "-bash",
+                user.username,
+                "Medium",
+                logon_id=logon_id,
+            )
+            session.session_shell_pid = bash_pid
+
         return SessionBootstrapResult(session=session, network_uid=uid)
 
     def _bootstrap_rdp_session(

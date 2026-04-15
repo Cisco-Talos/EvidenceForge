@@ -62,13 +62,15 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
 
+**Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls proxy session depth — how many pages and subresources each browsing session produces. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
+
 **Stale accounts** — Does the organization have any disabled or inactive accounts that haven't been fully cleaned up? Former employees, decommissioned service accounts, or un-revoked contractor access are common in real environments. Add 2-4 stale accounts to `environment.stale_accounts` with `username`, `last_active` (ISO date), and `reason`. The engine automatically generates background noise from these: failed logons, Kerberos pre-auth failures on DCs, scheduled task failures, and service startup failures — creating realistic "why is this disabled account still here?" ambiguity for analysts.
 
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
 
 ### Persona Selection
 
-EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Only define personas inline if you need to customize behavior. Read the YAML files in `personas/` for full details.
+EvidenceForge includes a library of 15 pre-built personas that are resolved automatically by name. Reference them in user definitions without defining them inline — the validator and engine resolve them from the built-in library. Custom personas in the project overlay (`.eforge/config/personas/`) are also available. Only define personas inline if you need to customize behavior for a single scenario. Run `eforge info personas` to see the full list of available persona names (including any overlay additions), or `eforge info --fields` to see all available queries.
 
 | Persona | Work Hours | Risk Profile | Typical Role |
 |---------|-----------|--------------|-------------|
@@ -650,11 +652,11 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 - Flag the specific storyline event(s) that may not be discoverable
 - Suggest concrete fixes: add a sensor, enable a log format, or adjust the network topology
 - Let the user decide whether to fix the gap or accept it (some scenarios intentionally have blind spots to test whether hunters notice)
-4. **Validate** — Run `uv run eforge validate <scenario-file>` to check schema and cross-references
+4. **Validate** — Run `eforge validate <scenario-file>` to check schema and cross-references
 5. If validation fails, fix the issues and re-validate
 6. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
 
-If the user wants to immediately generate logs, suggest using `/eforge generate` or running `uv run eforge generate <scenario-file>`.
+If the user wants to immediately generate logs, suggest using `/eforge generate` or running `eforge generate <scenario-file>`.
 
 When generation completes, the output directory will contain a `GROUND_TRUTH.md` file with the full attack timeline, IOCs, and answer key. Let the user know this exists and where to find it.
 

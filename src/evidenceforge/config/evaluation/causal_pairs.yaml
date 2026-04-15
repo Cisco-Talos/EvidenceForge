@@ -1,6 +1,19 @@
-# Causal pair definitions for Temporal Realism (Dimension 4).
-# Each pair defines a "before" and "after" event that must be correctly ordered.
-# match_fields lists field names that must match between the two records to form a pair.
+# causal_pairs.yaml — Temporal realism (Dimension 4) causal ordering rules
+#
+# Purpose: Defines before/after event pairs that must be correctly
+#   ordered when they share matching field values (e.g., logon
+#   must precede process creation for the same LogonId).
+#
+# Depends on: format definitions in config/formats/ (field names must exist)
+# Depended on by: evaluation engine (eforge eval)
+#
+# To add a new causal pair:
+#   1. Add under the pairs: list
+#   2. Define before/after events with format and condition
+#   3. Specify match_fields to link the two events
+#   4. Use exclude_accounts for system accounts that don't follow normal chains
+#
+# Full schema: see commands/eforge/references/config-evaluation.md
 
 pairs:
   - name: "Logon before process creation"

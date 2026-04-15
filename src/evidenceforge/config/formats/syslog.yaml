@@ -1,3 +1,11 @@
+# syslog format definition — Linux syslog - OS-level authentication and daemon logs
+#
+# Category: host
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: syslog
 version: "1.0"
 description: "Linux syslog - OS-level authentication and daemon logs"

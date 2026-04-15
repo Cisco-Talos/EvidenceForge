@@ -9,6 +9,11 @@
 #   service: Zeek service label
 #   port: destination port
 #   external: true if the connection targets external IPs, false for internal
+#
+# Depended on by: generation engine (process-network correlation)
+# Depends on: application_catalog.yaml (exe basenames should match catalog entries)
+#
+# Full schema: see commands/eforge/references/config-process-network-map.md
 
 mappings:
   # Browsers → external HTTPS

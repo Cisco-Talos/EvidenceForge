@@ -8,6 +8,11 @@
 #   transient: optional - true if the process forks per invocation (random PID)
 #
 # If distro/roles are omitted, the entry appears on all Linux hosts.
+#
+# Depended on by: generation engine (syslog baseline diversity)
+# Depends on: nothing — standalone (distro/role filters are soft matches)
+#
+# Full schema: see commands/eforge/references/config-extra-syslog-messages.md
 
 programs:
   - app: NetworkManager

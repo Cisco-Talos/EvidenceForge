@@ -62,12 +62,9 @@ build-backend = "hatchling.build"
 packages = ["src/evidenceforge"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"commands/eforge/scenario.md" = "evidenceforge/_data/commands/eforge/scenario.md"
-"commands/eforge/generate.md" = "evidenceforge/_data/commands/eforge/generate.md"
-"commands/eforge/validate.md" = "evidenceforge/_data/commands/eforge/validate.md"
-"commands/eforge/evaluate.md" = "evidenceforge/_data/commands/eforge/evaluate.md"
-"docs/reference/scenario-reference.md" = "evidenceforge/_data/references/scenario-reference.md"
-"docs/reference/EVIDENCE_FORMATS.md" = "evidenceforge/_data/references/evidence-formats.md"
+# Recursively includes all skills, references, and future additions.
+# No need to add individual files — just put them in commands/eforge/.
+"commands/eforge" = "evidenceforge/_data/commands/eforge"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

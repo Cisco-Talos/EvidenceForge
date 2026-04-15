@@ -1,3 +1,11 @@
+# zeek_conn format definition — Zeek conn.log format (JSON output)
+#
+# Category: network
+# Standalone: yes (no cross-file dependencies)
+# Note: Field names may be referenced by evaluation rules in config/evaluation/
+#
+# Full schema: see commands/eforge/references/config-formats.md
+
 name: zeek_conn
 version: "1.0"
 description: "Zeek conn.log format (JSON output)"

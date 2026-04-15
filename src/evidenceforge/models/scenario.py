@@ -162,6 +162,11 @@ class User(BaseModel):
     enabled: bool = Field(default=True)
     persona: str | None = Field(None, description="Reference to persona name")
     primary_system: str | None = Field(None, description="Primary system hostname")
+    browsing_intensity: str | None = Field(
+        None,
+        pattern="^(light|normal|heavy)$",
+        description="Per-user browsing intensity override (takes precedence over persona)",
+    )
 
     @field_validator("email")
     @classmethod
@@ -265,6 +270,11 @@ class Persona(BaseModel):
     work_hours: str = Field(default="9am-5pm")
     application_usage: list[str] = Field(default_factory=list)
     risk_profile: str = Field(default="medium", pattern="^(low|medium|high)$")
+    browsing_intensity: str = Field(
+        default="normal",
+        pattern="^(light|normal|heavy)$",
+        description="Browsing session depth: light (1 page), normal (1-2 pages), heavy (2-4 pages)",
+    )
 
     # Phase 2.4 optional fields (backward compatible - prepare for future LLM expansion)
     expanded_activities: list[dict[str, Any]] | None = Field(
@@ -387,6 +397,10 @@ class ConnectionEventSpec(_EventSpecBase):
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
     response_body_len: int | None = None  # Override auto-sized response bytes
+    # Override auto-sized byte counts and connection outcome
+    orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
+    resp_bytes: int | None = None  # Responder payload bytes (large for downloads)
+    conn_state: str | None = None  # Connection outcome (default: SF for storyline)
 
     @field_validator("hostname")
     @classmethod

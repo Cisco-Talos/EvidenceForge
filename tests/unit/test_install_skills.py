@@ -31,9 +31,9 @@ from evidenceforge.cli.install_skills import install_skills
 
 runner = CliRunner()
 
-EXPECTED_SKILL_FILES = {"scenario.md", "generate.md", "validate.md"}
-EXPECTED_PERSONA_COUNT = 15
-EXPECTED_REFERENCES = {
+# Minimum expected files — auto-discovery may find more, but these must exist.
+EXPECTED_SKILL_FILES = {"scenario.md", "generate.md", "validate.md", "evaluate.md", "config.md"}
+EXPECTED_REFERENCES_MIN = {
     "references/scenario-reference.md",
     "references/evidence-formats.md",
 }
@@ -43,13 +43,12 @@ class TestInstallSkills:
     """Tests for install_skills() function."""
 
     def test_creates_directory_structure(self, tmp_path):
-        """install_skills creates eforge/, eforge/references/, and eforge/personas/."""
+        """install_skills creates eforge/ and eforge/references/."""
         install_skills(tmp_path)
 
         eforge_dir = tmp_path / "eforge"
         assert eforge_dir.is_dir()
         assert (eforge_dir / "references").is_dir()
-        assert (eforge_dir / "personas").is_dir()
 
     def test_copies_all_skill_files(self, tmp_path):
         """All three skill markdown files are installed."""
@@ -63,21 +62,26 @@ class TestInstallSkills:
         """Reference docs are copied to references/."""
         install_skills(tmp_path)
 
-        for ref_path in EXPECTED_REFERENCES:
+        for ref_path in EXPECTED_REFERENCES_MIN:
             ref = tmp_path / "eforge" / ref_path
             assert ref.is_file(), f"Missing reference: {ref_path}"
             content = ref.read_text()
             assert len(content) > 100, f"Reference doc appears empty or truncated: {ref_path}"
 
-    def test_copies_all_personas(self, tmp_path):
-        """All 15 persona YAML files are installed."""
+        # Auto-discovery should find all .md files in references/
+        refs_dir = tmp_path / "eforge" / "references"
+        all_refs = list(refs_dir.glob("*.md"))
+        assert len(all_refs) >= len(EXPECTED_REFERENCES_MIN), (
+            f"Expected at least {len(EXPECTED_REFERENCES_MIN)} references, got {len(all_refs)}"
+        )
+
+    def test_no_persona_files_installed(self, tmp_path):
+        """Persona YAMLs are NOT installed (skills use eforge info instead)."""
         install_skills(tmp_path)
 
         personas_dir = tmp_path / "eforge" / "personas"
-        yaml_files = list(personas_dir.glob("*.yaml"))
-        assert len(yaml_files) == EXPECTED_PERSONA_COUNT, (
-            f"Expected {EXPECTED_PERSONA_COUNT} personas, got {len(yaml_files)}: "
-            f"{[f.name for f in yaml_files]}"
+        assert not personas_dir.exists(), (
+            "personas/ should not be installed — skills use eforge info"
         )
 
     def test_scenario_uses_subskill_references(self, tmp_path):
@@ -104,15 +108,10 @@ class TestInstallSkills:
         stale_file = tmp_path / "eforge" / "old-skill.md"
         stale_file.write_text("this skill was removed")
 
-        stale_persona = tmp_path / "eforge" / "personas" / "obsolete.yaml"
-        stale_persona.write_text("name: obsolete")
-
         _, removed = install_skills(tmp_path)
 
         assert "old-skill.md" in removed
-        assert "personas/obsolete.yaml" in removed
         assert not stale_file.exists()
-        assert not stale_persona.exists()
 
     def test_stale_removal_does_not_touch_outside_eforge(self, tmp_path):
         """Stale file cleanup only affects eforge/ directory."""
@@ -131,12 +130,13 @@ class TestInstallSkills:
         installed, removed = install_skills(tmp_path)
 
         assert len(installed) > 0
-        assert "scenario.md" in installed
-        assert "generate.md" in installed
-        assert "validate.md" in installed
-        for ref in EXPECTED_REFERENCES:
-            assert ref in installed
-        assert any(f.startswith("personas/") for f in installed)
+        for skill in EXPECTED_SKILL_FILES:
+            assert skill in installed, f"Missing skill in installed list: {skill}"
+        for ref in EXPECTED_REFERENCES_MIN:
+            assert ref in installed, f"Missing reference in installed list: {ref}"
+        assert not any(f.startswith("personas/") for f in installed), (
+            "Personas should not be installed"
+        )
         assert isinstance(removed, list)
 
 
@@ -153,6 +153,7 @@ class TestInstallSkillsCli:
         assert (tmp_path / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
         assert (tmp_path / ".claude" / "commands" / "eforge" / "generate.md").is_file()
         assert (tmp_path / ".claude" / "commands" / "eforge" / "validate.md").is_file()
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "config.md").is_file()
 
     def test_install_skills_global(self, tmp_path, monkeypatch):
         """eforge install-skills --global copies files to ~/.claude/commands/."""
@@ -162,6 +163,7 @@ class TestInstallSkillsCli:
 
         assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
         assert (tmp_path / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "config.md").is_file()
 
     def test_install_skills_shows_file_list(self, tmp_path, monkeypatch):
         """Command output lists installed files."""
@@ -172,4 +174,5 @@ class TestInstallSkillsCli:
         assert "scenario.md" in result.stdout
         assert "generate.md" in result.stdout
         assert "validate.md" in result.stdout
+        assert "config.md" in result.stdout
         assert "installed" in result.stdout.lower() or "Installed" in result.stdout

@@ -286,3 +286,126 @@ class TestRawIpStorylineConnection:
         conn_hostname = spec.hostname
         assert conn_hostname == "cdn-assets-update.com"
         assert (conn_hostname is not None) is True
+
+
+# ---------------------------------------------------------------------------
+# Connection byte sizing and conn_state tests
+# ---------------------------------------------------------------------------
+
+
+class TestConnectionEventSpecFields:
+    """Test new orig_bytes, resp_bytes, and conn_state fields."""
+
+    def test_accepts_byte_fields(self):
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            dst_port=443,
+            orig_bytes=5_000_000,
+            resp_bytes=200,
+        )
+        assert spec.orig_bytes == 5_000_000
+        assert spec.resp_bytes == 200
+
+    def test_accepts_conn_state(self):
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            dst_port=443,
+            conn_state="S0",
+        )
+        assert spec.conn_state == "S0"
+
+    def test_defaults_to_none(self):
+        spec = ConnectionEventSpec(dst_ip="10.0.0.1")
+        assert spec.orig_bytes is None
+        assert spec.resp_bytes is None
+        assert spec.conn_state is None
+
+
+class TestSizeStorylineConnection:
+    """Test _size_storyline_connection heuristic."""
+
+    def test_exfil_large_orig_bytes(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            technique="T1041",
+            description="Exfiltrate patient records",
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert ob >= 1_000_000, f"Exfil orig_bytes too small: {ob}"
+        assert rb <= 50_000, f"Exfil resp_bytes too large: {rb}"
+
+    def test_c2_small_bidirectional(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            technique="T1071.001",
+            description="C2 beacon callback",
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert ob <= 5_000, f"C2 orig_bytes too large: {ob}"
+        assert rb <= 10_000, f"C2 resp_bytes too large: {rb}"
+
+    def test_download_large_resp_bytes(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            technique="T1105",
+            description="Download second-stage payload",
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert ob <= 2_000, f"Download orig_bytes too large: {ob}"
+        assert rb >= 50_000, f"Download resp_bytes too small: {rb}"
+
+    def test_explicit_overrides_heuristic(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            technique="T1041",
+            description="Exfiltrate data",
+            orig_bytes=999,
+            resp_bytes=111,
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert ob == 999
+        assert rb == 111
+
+    def test_default_range(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            description="Generic connection",
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert 1_000 <= ob <= 10_000
+        assert 5_000 <= rb <= 50_000

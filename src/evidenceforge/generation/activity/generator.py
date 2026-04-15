@@ -327,50 +327,54 @@ PERSONA_APP_INDICES_LINUX = {
 
 # Zeek TCP connection state distribution with matching history strings
 # Format: (conn_state, weight, history_string)
-# Phase 6.3: Expanded from 7 to 20+ patterns for realism
+# Rebalanced: SF ~62% (real enterprise: 55-75%), non-SF states expanded
 TCP_CONN_STATE_DISTRIBUTION = [
-    # Normal completions (SF) — various data exchange patterns
-    ("SF", 28, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
-    ("SF", 14, "ShADaDadfF"),  # Multiple data exchanges before FIN
-    ("SF", 8, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
-    ("SF", 7, "ShADadfFa"),  # FIN-ACK with trailing ACK
-    ("SF", 6, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
-    ("SF", 5, "ShADadFf"),  # Originator FIN first (client closes)
-    ("SF", 5, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
-    ("SF", 4, "ShADadTFf"),  # Retransmit then FIN
-    ("SF", 3, "ShADaDadFf"),  # Multi data then client closes
-    ("SF", 2, "ShADaDaTtdfF"),  # Multi data with retransmissions
-    # Connection attempts (S0)
-    ("S0", 3, "S"),  # Single SYN, no reply
-    ("S0", 2, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
-    # Partial handshakes (S1)
+    # Normal completions (SF) — ~62% total (real: 55-75%)
+    ("SF", 21, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
+    ("SF", 11, "ShADaDadfF"),  # Multiple data exchanges before FIN
+    ("SF", 6, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
+    ("SF", 5, "ShADadfFa"),  # FIN-ACK with trailing ACK
+    ("SF", 5, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
+    ("SF", 4, "ShADadFf"),  # Originator FIN first (client closes)
+    ("SF", 4, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
+    ("SF", 3, "ShADadTFf"),  # Retransmit then FIN
+    ("SF", 2, "ShADaDadFf"),  # Multi data then client closes
+    ("SF", 1, "ShADaDaTtdfF"),  # Multi data with retransmissions
+    # Connection attempts (S0) — ~14% (timeouts, unreachable hosts, scanning)
+    ("S0", 9, "S"),  # Single SYN, no reply
+    ("S0", 5, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
+    # Partial handshakes (S1) — ~3%
     ("S1", 2, "ShR"),  # SYN-ACK seen, RST
     ("S1", 1, "Sh"),  # SYN-ACK seen, no further data
-    # Rejected connections (REJ)
-    ("REJ", 2, "Sr"),  # RST from responder immediately
-    ("REJ", 1, "Srr"),  # Multiple RSTs from responder
-    # Reset by originator (RSTO)
-    ("RSTO", 2, "ShADaR"),  # Data exchange then originator RST
-    ("RSTO", 1, "ShADadTR"),  # Data + retransmit then RST
-    ("RSTO", 1, "ShAR"),  # Quick RST after handshake
-    # Reset by responder (RSTR)
-    ("RSTR", 1, "ShADadR"),  # Data exchange then responder RST
-    ("RSTR", 1, "ShAdR"),  # Partial data then responder RST
-    # Midstream (OTH) — rare in enterprise (<0.3%), only from partial captures
+    # Rejected connections (REJ) — ~5% (refused ports, firewall rejects)
+    ("REJ", 3, "Sr"),  # RST from responder immediately
+    ("REJ", 2, "Srr"),  # Multiple RSTs from responder
+    # Reset by originator (RSTO) — ~8% (client aborts, load balancer health checks)
+    ("RSTO", 4, "ShADaR"),  # Data exchange then originator RST
+    ("RSTO", 2, "ShADadTR"),  # Data + retransmit then RST
+    ("RSTO", 2, "ShAR"),  # Quick RST after handshake
+    # Reset by responder (RSTR) — ~5% (server resets, IDS/WAF termination)
+    ("RSTR", 3, "ShADadR"),  # Data exchange then responder RST
+    ("RSTR", 2, "ShAdR"),  # Partial data then responder RST
+    # Half-closed states — ~2% (one side closed, other didn't respond)
+    ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
+    ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied
+    # Midstream (OTH) — ~1% (partial captures, NAT state loss)
     ("OTH", 1, "Cc"),  # Midstream traffic (no SYN/SYN-ACK seen)
 ]
 
 # Zeek UDP connection state distribution
 # UDP has no TCP handshake — only D/d datagram flags
+# Rebalanced: SF ~72% (more S0 timeouts for realistic DNS/NTP failures)
 UDP_CONN_STATE_DISTRIBUTION = [
-    ("SF", 65, "Dd"),  # Normal bidirectional exchange (query + response)
+    ("SF", 55, "Dd"),  # Normal bidirectional exchange (query + response)
     ("SF", 8, "DdDd"),  # Multi-packet exchange
-    ("SF", 4, "DdDdDd"),  # Extended multi-packet exchange
-    ("SF", 3, "DdA"),  # Additional acknowledgment packet
-    ("S0", 10, "D"),  # Originator only, no response (timeout)
-    ("S0", 3, "DD"),  # Retransmitted datagram, no response
-    ("OTH", 4, "Dd"),  # Midstream UDP exchange
-    ("OTH", 3, "DdDdA"),  # Midstream multi-packet with ACK
+    ("SF", 5, "DdDdDd"),  # Extended multi-packet exchange
+    ("SF", 4, "DdA"),  # Additional acknowledgment packet
+    ("S0", 12, "D"),  # Originator only, no response (timeout)
+    ("S0", 6, "DD"),  # Retransmitted datagram, no response
+    ("OTH", 6, "Dd"),  # Midstream UDP exchange
+    ("OTH", 4, "DdDdA"),  # Midstream multi-packet with ACK
 ]
 
 # Pre-extract for random.choices — TCP (select full tuples, not just states)
@@ -449,6 +453,8 @@ _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 
 # OS-aware proxy User-Agent pools
 _PROXY_UAS_WINDOWS = (
+    # Browser UAs only — system-level UAs (Microsoft-CryptoAPI, Windows-Update-Agent)
+    # are handled by domain-specific overrides in proxy_uri_templates.yaml.
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
@@ -456,8 +462,6 @@ _PROXY_UAS_WINDOWS = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-    "Microsoft-CryptoAPI/10.0",
-    "Windows-Update-Agent/10.0.19041.1",
 )
 
 _PROXY_UAS_LINUX = (
@@ -871,25 +875,64 @@ class ActivityGenerator:
                 os_cat = _get_os_category(system.os)
                 if os_cat == "windows":
                     sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-                    # Find a valid parent: userinit, winlogon, or any seeded system PID
-                    parent_pid = None
-                    for candidate in ("userinit", "winlogon", "explorer", "services"):
-                        pid = sys_pids.get(candidate)
-                        if pid and self.state_manager.get_process(system.hostname, pid):
-                            parent_pid = pid
-                            break
-                    if parent_pid is not None:
-                        explorer_pid = self.state_manager.create_process(
-                            system.hostname,
-                            parent_pid,
-                            r"C:\Windows\explorer.exe",
-                            "explorer.exe",
-                            user.username,
-                            "Medium",
-                            logon_id=logon_id,
-                        )
-                        session.explorer_pid = explorer_pid
-                        session.process_tree_root = explorer_pid
+                    if logon_type == 10:
+                        # RDP: per-session winlogon → userinit → explorer chain
+                        # Windows creates a new session subsystem for each RDP logon
+                        smss_pid = sys_pids.get("smss")
+                        parent_for_chain = smss_pid or sys_pids.get("wininit")
+                        if parent_for_chain and self.state_manager.get_process(
+                            system.hostname, parent_for_chain
+                        ):
+                            winlogon_pid = self.state_manager.create_process(
+                                system.hostname,
+                                parent_for_chain,
+                                r"C:\Windows\System32\winlogon.exe",
+                                "winlogon.exe",
+                                "SYSTEM",
+                                "System",
+                                logon_id=logon_id,
+                            )
+                            session.session_winlogon_pid = winlogon_pid
+                            userinit_pid = self.state_manager.create_process(
+                                system.hostname,
+                                winlogon_pid,
+                                r"C:\Windows\System32\userinit.exe",
+                                "userinit.exe",
+                                user.username,
+                                "Medium",
+                                logon_id=logon_id,
+                            )
+                            explorer_pid = self.state_manager.create_process(
+                                system.hostname,
+                                userinit_pid,
+                                r"C:\Windows\explorer.exe",
+                                "explorer.exe",
+                                user.username,
+                                "Medium",
+                                logon_id=logon_id,
+                            )
+                            session.explorer_pid = explorer_pid
+                            session.process_tree_root = winlogon_pid
+                    else:
+                        # Interactive/cached: use system-wide userinit/winlogon
+                        parent_pid = None
+                        for candidate in ("userinit", "winlogon", "explorer", "services"):
+                            pid = sys_pids.get(candidate)
+                            if pid and self.state_manager.get_process(system.hostname, pid):
+                                parent_pid = pid
+                                break
+                        if parent_pid is not None:
+                            explorer_pid = self.state_manager.create_process(
+                                system.hostname,
+                                parent_pid,
+                                r"C:\Windows\explorer.exe",
+                                "explorer.exe",
+                                user.username,
+                                "Medium",
+                                logon_id=logon_id,
+                            )
+                            session.explorer_pid = explorer_pid
+                            session.process_tree_root = explorer_pid
                 session.last_activity_time = time
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
@@ -1140,10 +1183,17 @@ class ActivityGenerator:
             logon_id: LogonID from the logon event
             logon_type: Logon type for the session being ended
         """
-        # Terminate session-specific explorer.exe before ending session
+        # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
-        if session and session.explorer_pid is not None:
-            self.state_manager.end_process(session.system, session.explorer_pid)
+        if session:
+            if session.explorer_pid is not None:
+                self.state_manager.end_process(session.system, session.explorer_pid)
+            # Clean up per-RDP-session winlogon chain
+            if session.session_winlogon_pid is not None:
+                self.state_manager.end_process(session.system, session.session_winlogon_pid)
+            # Clean up per-SSH-session bash
+            if session.session_shell_pid is not None:
+                self.state_manager.end_process(session.system, session.session_shell_pid)
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
@@ -1561,13 +1611,31 @@ class ActivityGenerator:
             dst_port = 0
         elif conn_state is not None:
             # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
-            history = {"REJ": "Sr", "S0": "S", "SF": "ShADadfF", "OTH": "Cc"}.get(
-                conn_state, "ShADadfF"
-            )
+            history = {
+                "REJ": "Sr",
+                "S0": "S",
+                "SF": "ShADadfF",
+                "OTH": "Cc",
+                "S2": "ShADadF",
+                "S3": "ShADadf",
+                "RSTO": "ShADaR",
+                "RSTR": "ShADadR",
+                "S1": "ShR",
+            }.get(conn_state, "ShADadfF")
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
                 orig_bytes = 0
+            elif conn_state in ("S2", "S3"):
+                if duration is not None:
+                    duration = duration * rng.uniform(0.3, 0.8)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
+            elif conn_state in ("RSTO", "RSTR"):
+                if duration is not None:
+                    duration = duration * rng.uniform(0.1, 0.5)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
         elif proto == "udp":
             # DNS connections with responses must not be S0 (no-response)
             if service == "dns" and resp_bytes and resp_bytes > 0:
@@ -1607,6 +1675,13 @@ class ActivityGenerator:
                 resp_bytes = 0
                 if duration is not None:
                     duration = rng.uniform(0.0, 0.5)
+            elif conn_state in ("S2", "S3"):
+                # S2/S3 = half-closed: connection established, one side sent FIN
+                # but the other never replied. Some data transferred before close.
+                if duration is not None:
+                    duration = duration * rng.uniform(0.3, 0.8)
+                if resp_bytes:
+                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
             elif conn_state in ("RSTO", "RSTR"):
                 if duration is not None:
                     duration = duration * rng.uniform(0.1, 0.5)
@@ -1768,31 +1843,44 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-                # HTTPS: forward proxies log CONNECT tunnels, not decrypted content
-                # HTTP: proxies log full URL with verb
-                if dst_port == 443:
-                    proxy_method = "CONNECT"
-                    proxy_host_port = (
-                        proxy_hostname if ":" in proxy_hostname else f"{proxy_hostname}:443"
+                # When a pre-built HttpContext exists (from browsing session
+                # generator), derive proxy fields from it.  The proxy emitter
+                # handles CONNECT tunnel deduplication automatically.
+                if event.http is not None:
+                    scheme = "https" if dst_port == 443 else "http"
+                    proxy_method = event.http.method
+                    url = f"{scheme}://{proxy_hostname}{event.http.uri}"
+                    proxy_content_type = (
+                        event.http.resp_mime_types[0] if event.http.resp_mime_types else "text/html"
                     )
-                    url = proxy_host_port
+                    proxy_ua_override = None  # session UA is already on HttpContext
+                    user_agent = event.http.user_agent
+                    proxy_referrer = event.http.referrer
+                elif dst_port == 443:
+                    # Legacy single-connection HTTPS path
                     domain_tags = get_domain_tags(proxy_hostname)
-                    _, proxy_content_type, _, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags
+                    _src_os = _get_os_category(source_system.os) if source_system else None
+                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
+                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
+                    url = f"https://{proxy_hostname}{path}"
+                    proxy_referrer = ""
                 else:
                     domain_tags = get_domain_tags(proxy_hostname)
+                    _src_os = _get_os_category(source_system.os) if source_system else None
                     path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags
+                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
                     url = f"http://{proxy_hostname}{path}"
-                # OS-aware proxy User-Agent selection
-                if proxy_ua_override:
-                    user_agent = proxy_ua_override
-                elif source_system and _get_os_category(source_system.os) == "linux":
-                    user_agent = rng.choice(_PROXY_UAS_LINUX)
-                else:
-                    user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+                    proxy_referrer = ""
+                # OS-aware proxy User-Agent selection (skip when session set it)
+                if event.http is None:
+                    if proxy_ua_override:
+                        user_agent = proxy_ua_override
+                    elif source_system and _get_os_category(source_system.os) == "linux":
+                        user_agent = rng.choice(_PROXY_UAS_LINUX)
+                    else:
+                        user_agent = rng.choice(_PROXY_UAS_WINDOWS)
                 cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
@@ -1822,6 +1910,7 @@ class ActivityGenerator:
                     user_agent=user_agent,
                     content_type=proxy_content_type,
                     cache_result=cache_result,
+                    referrer=proxy_referrer,
                     proxy_fqdn=proxy_fqdn,
                 )
 
@@ -2006,8 +2095,9 @@ class ActivityGenerator:
             if web_host == "":
                 web_host = dst_ip
             web_domain_tags = get_domain_tags(web_host)
+            _src_os_http = _get_os_category(source_system.os) if source_system else None
             uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
-                rng, web_host, web_domain_tags
+                rng, web_host, web_domain_tags, source_os=_src_os_http
             )
             if http_ua_override:
                 ua = http_ua_override
@@ -3423,7 +3513,11 @@ class ActivityGenerator:
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
-                ticket_options="0x40810010",
+                ticket_options=rng.choices(
+                    ["0x40810010", "0x40810000", "0x40000010", "0x50800000", "0x10"],
+                    weights=[60, 20, 10, 5, 5],
+                    k=1,
+                )[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 pre_auth_type=15,
                 source_ip=f"::ffff:{source_ip}",
@@ -3457,7 +3551,7 @@ class ActivityGenerator:
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
-                ticket_options="0x2",
+                ticket_options=rng.choices(["0x2", "0x60810010"], weights=[80, 20], k=1)[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
@@ -3492,7 +3586,11 @@ class ActivityGenerator:
                 service_sid=self._get_sid(
                     f"{service_name.split('/')[1]}$" if "/" in service_name else service_name
                 ),
-                ticket_options="0x40810000",
+                ticket_options=rng.choices(
+                    ["0x40810000", "0x40810010", "0x40000000", "0x10"],
+                    weights=[50, 25, 15, 10],
+                    k=1,
+                )[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
@@ -4608,6 +4706,14 @@ class ActivityGenerator:
             shells = [(pid, name) for pid, name in alive_history if name in self._LINUX_SHELLS]
             if shells:
                 return shells[-1][0]
+            # Prefer per-session bash from the user's SSH session
+            for sess in self.state_manager.get_sessions_for_user(user.username):
+                if (
+                    sess.system == system.hostname
+                    and sess.session_shell_pid is not None
+                    and self._is_pid_alive(system, sess.session_shell_pid)
+                ):
+                    return sess.session_shell_pid
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
     def _resolve_parent(

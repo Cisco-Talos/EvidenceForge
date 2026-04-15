@@ -10,22 +10,36 @@ for weighted issuer selection with per-issuer validity and key type parameters.
 import random
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 
 _ISSUERS_PATH = get_activity_directory() / "tls_issuers.yaml"
 _CACHED_ISSUERS: dict[str, Any] | None = None
 
 
+def _merge_tls_issuers(default: dict, overlay: dict) -> dict:
+    """Merge TLS issuers overlay with package defaults (keyed by issuer name)."""
+    result = dict(default)
+    if "issuers" in overlay:
+        result["issuers"] = merge_keyed_list(
+            default.get("issuers", []),
+            overlay["issuers"],
+            key_field="name",
+        )
+    return result
+
+
 def load_tls_issuers() -> dict[str, Any]:
-    """Load TLS issuer configurations from YAML. Cached after first call."""
+    """Load TLS issuer configurations from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_ISSUERS
     if _CACHED_ISSUERS is not None:
         return _CACHED_ISSUERS
 
-    with open(_ISSUERS_PATH) as f:
-        _CACHED_ISSUERS = yaml.safe_load(f)
+    _CACHED_ISSUERS = load_with_overlay(
+        _ISSUERS_PATH,
+        "activity/tls_issuers.yaml",
+        _merge_tls_issuers,
+    )
     return _CACHED_ISSUERS
 
 

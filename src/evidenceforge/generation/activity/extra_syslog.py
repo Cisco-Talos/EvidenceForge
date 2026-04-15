@@ -11,21 +11,31 @@ Follows the same cached-loader pattern as dns_registry.py, spawn_rules.py, etc.
 
 from typing import Any
 
-import yaml
-
 from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import extend_list, load_with_overlay
 
 _MESSAGES_PATH = get_activity_directory() / "extra_syslog_messages.yaml"
 _CACHED_DATA: list[dict[str, Any]] | None = None
 
 
+def _merge_extra_syslog(default: dict, overlay: dict) -> dict:
+    """Merge extra syslog messages overlay with package defaults."""
+    result = dict(default)
+    if "programs" in overlay:
+        result["programs"] = extend_list(default.get("programs", []), overlay["programs"])
+    return result
+
+
 def load_extra_syslog_messages() -> list[dict[str, Any]]:
-    """Load extra syslog message definitions from YAML. Cached after first call."""
+    """Load extra syslog message definitions from YAML, merged with overlay if present. Cached after first call."""
     global _CACHED_DATA
     if _CACHED_DATA is not None:
         return _CACHED_DATA
-    with open(_MESSAGES_PATH) as f:
-        data = yaml.safe_load(f)
+    data = load_with_overlay(
+        _MESSAGES_PATH,
+        "activity/extra_syslog_messages.yaml",
+        _merge_extra_syslog,
+    )
     _CACHED_DATA = data.get("programs", [])
     return _CACHED_DATA
 
