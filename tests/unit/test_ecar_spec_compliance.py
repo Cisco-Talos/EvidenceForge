@@ -216,3 +216,21 @@ class TestParentImagePath:
         )
         record = json.loads(rendered)
         assert record["properties"]["parent_image_path"] == "C:\\Windows\\explorer.exe"
+
+
+class TestRawEventHardening:
+    def test_missing_required_keys_do_not_raise(self, emitter):
+        """Malformed raw event should not crash eCAR rendering."""
+        rendered = emitter._render_event({"hostname": "host1"})
+        record = json.loads(rendered)
+        assert record["timestamp_ms"] == 0
+        assert record["object"] == "UNKNOWN"
+        assert record["action"] == "UNKNOWN"
+
+    def test_numeric_timestamp_still_supported(self, emitter):
+        """Numeric timestamp input should remain supported for raw events."""
+        rendered = emitter._render_event(
+            {"timestamp": 1710496800, "object": "FLOW", "action": "CONNECT"}
+        )
+        record = json.loads(rendered)
+        assert record["timestamp_ms"] == 1710496800000

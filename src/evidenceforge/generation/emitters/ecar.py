@@ -449,15 +449,20 @@ class EcarEmitter(HostMultiplexEmitter):
         pid/tid always present (-1 sentinel), all property values are strings.
         """
         # Convert timestamp to milliseconds since epoch
-        ts = event_data["timestamp"]
-        timestamp_ms = int(ts.timestamp() * 1000) if isinstance(ts, datetime) else int(ts * 1000)
+        ts = event_data.get("timestamp")
+        if isinstance(ts, datetime):
+            timestamp_ms = int(ts.timestamp() * 1000)
+        elif isinstance(ts, (int, float)):
+            timestamp_ms = int(ts * 1000)
+        else:
+            timestamp_ms = 0
 
         record: dict[str, Any] = {
             "timestamp_ms": timestamp_ms,
             "id": event_data.get("id") or str(uuid.uuid4()),
             "hostname": event_data.get("hostname", ""),
-            "object": event_data["object"],
-            "action": event_data["action"],
+            "object": str(event_data.get("object", "UNKNOWN")),
+            "action": str(event_data.get("action", "UNKNOWN")),
             "objectID": event_data.get("objectID") or str(uuid.uuid4()),
         }
 
