@@ -263,11 +263,12 @@ def validate_config() -> ValidationResult:
                 elif pdata["name"] != persona_file.stem:
                     result.issues.append(
                         Issue(
-                            "WARNING",
+                            "ERROR",
                             f"overlay/{rel_path}",
-                            f'Persona name "{pdata["name"]}" does not match filename "{persona_file.stem}" — is this intentional?',
+                            f'Persona name "{pdata["name"]}" does not match filename "{persona_file.stem}" — filename must match the name field',
                         )
                     )
+                    overlay_errors = True
 
     if overlay_errors:
         # Cannot proceed with merged loading — overlay files would crash loaders

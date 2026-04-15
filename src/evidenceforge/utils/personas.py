@@ -77,6 +77,14 @@ def load_builtin_personas() -> list[dict]:
                     with open(path) as f:
                         data = yaml.safe_load(f)
                     if data and isinstance(data, dict) and "name" in data:
+                        if data["name"] != path.stem:
+                            logger.warning(
+                                "Overlay persona %s: name %r does not match filename %r — skipping",
+                                path.name,
+                                data["name"],
+                                path.stem,
+                            )
+                            continue
                         overlay_personas.append(data)
                 except Exception as e:
                     logger.warning(f"Failed to load overlay persona {path.name}: {e}")

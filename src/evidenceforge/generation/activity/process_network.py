@@ -43,78 +43,55 @@ def load_process_network_map() -> list[dict[str, Any]]:
     return _CACHED_DATA
 
 
-_CACHED_DEDUPED: list[dict[str, Any]] | None = None
+def _build_canonical_exe_index() -> dict[str, dict[str, Any]]:
+    """Build canonical per-exe mapping. Last wins for duplicate exes.
 
-
-def _deduplicated_mappings() -> list[dict[str, Any]]:
-    """Return mappings with duplicate exes resolved (last wins).
-
-    When overlays append entries for exes that already have mappings,
-    this ensures both forward and inverse indexes see the same data.
+    This is the single source of truth that both forward and inverse
+    indexes derive from. Ensures an overridden exe appears under exactly
+    one service, not both old and new.
     """
-    global _CACHED_DEDUPED
-    if _CACHED_DEDUPED is not None:
-        return _CACHED_DEDUPED
-
     raw = load_process_network_map()
-    # Map each exe to its final mapping entry (last wins)
-    exe_to_mapping: dict[str, dict[str, Any]] = {}
+    result: dict[str, dict[str, Any]] = {}
     for entry in raw:
         if not isinstance(entry, dict):
             continue
+        info = {
+            "dst_port": entry.get("port", 0),
+            "service": entry.get("service", ""),
+            "external": entry.get("external", True),
+        }
         for exe in entry.get("exe", []):
-            exe_to_mapping[exe] = entry
-
-    # Rebuild unique mapping list preserving order
-    seen_ids: set[int] = set()
-    deduped: list[dict[str, Any]] = []
-    for mapping in exe_to_mapping.values():
-        mid = id(mapping)
-        if mid not in seen_ids:
-            seen_ids.add(mid)
-            deduped.append(mapping)
-
-    _CACHED_DEDUPED = deduped
-    return deduped
+            result[exe] = info  # last wins
+    return result
 
 
 def get_exe_to_service() -> dict[str, dict[str, Any]]:
-    """Build exe→service index. Returns dict mapping exe name to {port, service, external}.
+    """Build exe→service index. Returns dict mapping exe name to {dst_port, service, external}.
 
-    Cached after first call.
+    Cached after first call. Derived from canonical per-exe index.
     """
     global _CACHED_EXE_TO_SERVICE
     if _CACHED_EXE_TO_SERVICE is not None:
         return _CACHED_EXE_TO_SERVICE
-    mappings = _deduplicated_mappings()
-    result: dict[str, dict[str, Any]] = {}
-    for entry in mappings:
-        info = {
-            "dst_port": entry["port"],
-            "service": entry["service"],
-            "external": entry["external"],
-        }
-        for exe in entry["exe"]:
-            result[exe] = info
-    _CACHED_EXE_TO_SERVICE = result
-    return result
+    _CACHED_EXE_TO_SERVICE = _build_canonical_exe_index()
+    return _CACHED_EXE_TO_SERVICE
 
 
 def get_service_to_exes() -> dict[str, list[str]]:
     """Build service→exe inverse index. Returns dict mapping service name to exe list.
 
-    Cached after first call.
+    Cached after first call. Derived from the same canonical per-exe index
+    as get_exe_to_service(), so forward and inverse always agree.
     """
     global _CACHED_SERVICE_TO_EXES
     if _CACHED_SERVICE_TO_EXES is not None:
         return _CACHED_SERVICE_TO_EXES
-    mappings = _deduplicated_mappings()
+    exe_index = _build_canonical_exe_index()
     result: dict[str, list[str]] = {}
-    for entry in mappings:
-        service = entry["service"]
+    for exe, info in exe_index.items():
+        service = info["service"]
         if service not in result:
             result[service] = []
-        for exe in entry["exe"]:
-            result[service].append(exe.lower())
+        result[service].append(exe.lower())
     _CACHED_SERVICE_TO_EXES = result
     return result

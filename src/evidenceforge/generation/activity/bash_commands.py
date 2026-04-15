@@ -80,11 +80,17 @@ def _resolve_template(template: str, rng: random.Random, params: dict[str, list[
 
 
 def _get_role_pool(persona: str, server_role: str) -> str:
-    """Map persona + server role to the command pool key in the YAML."""
+    """Map persona + server role to the command pool key in the YAML.
+
+    Built-in alias mappings (developer→dba on DB servers, etc.) are checked
+    first. Then checks for an exact persona name match in the loaded data
+    (supports custom/overlay personas with their own command pools).
+    Falls back to sysadmin for unknown personas.
+    """
+    data = load_bash_commands()
     persona_lower = persona.lower() if persona else ""
 
-    if persona_lower == "sysadmin":
-        return "sysadmin"
+    # Built-in alias mappings that depend on server_role context
     if persona_lower in ("developer",):
         if server_role == "db":
             return "dba"
@@ -97,7 +103,13 @@ def _get_role_pool(persona: str, server_role: str) -> str:
         return "dba"
     if persona_lower == "help_desk":
         return "sysadmin"
-    return "sysadmin"  # Default for unknown admin personas
+
+    # Exact match: persona has its own command pool in the YAML
+    # (custom/overlay personas, or stock personas like sysadmin)
+    if persona_lower in data:
+        return persona_lower
+
+    return "sysadmin"  # Default for unknown personas without a custom pool
 
 
 def _apply_typo_mode(
