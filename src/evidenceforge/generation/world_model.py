@@ -12,7 +12,7 @@ exists. This module adds the missing "why would this happen here?" layer:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.generation.activity.generator import _ephemeral_port
@@ -902,8 +902,16 @@ class WorldPlanner:
         if session_kind:
             exact = [s for s in host_sessions if s.session_kind == session_kind]
             if exact:
-                return max(exact, key=lambda s: s.start_time)
-        return max(host_sessions, key=lambda s: s.start_time)
+                return max(exact, key=self._session_start_sort_key)
+        return max(host_sessions, key=self._session_start_sort_key)
+
+    @staticmethod
+    def _session_start_sort_key(session: ActiveSession) -> datetime:
+        """Normalize session start_time so mixed aware/naive datetimes can be ordered safely."""
+        start_time = session.start_time
+        if start_time.tzinfo is None:
+            return start_time.replace(tzinfo=UTC)
+        return start_time.astimezone(UTC)
 
     def _bootstrap_ssh_session(
         self,
