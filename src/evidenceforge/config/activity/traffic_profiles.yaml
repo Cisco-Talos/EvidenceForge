@@ -134,6 +134,7 @@ persona_traffic:
       - {role: database, port: 5432, service: postgresql, weight: 15, description: "Dev DB access"}
       - {role: database, port: 1433, service: mssql, weight: 10}
       - {role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, dns_tags: [web, saas], description: "Docker Hub/CI-CD"}
+      - {role: _external, port: 443, service: ssl, weight: 10, emit_dns: true, dns_tags: [storage], description: "Cloud storage sync (Drive/Dropbox/OneDrive)"}
 
   sysadmin:
     outbound:
@@ -148,18 +149,21 @@ persona_traffic:
       - {role: _any_server, port: 22, service: ssh, weight: 20, description: "Investigation access"}
       - {role: log_server, port: 443, service: ssl, weight: 30, description: "SIEM/log access"}
       - {role: _external, port: 443, service: ssl, weight: 25, emit_dns: true, dns_tags: [web], description: "Threat intel feeds"}
+      - {role: _external, port: 443, service: ssl, weight: 8, emit_dns: true, dns_tags: [storage], description: "Cloud storage for reports/evidence"}
 
   data_analyst:
     outbound:
       - {role: database, port: 1433, service: mssql, weight: 30, description: "Data warehouse queries"}
       - {role: database, port: 5432, service: postgresql, weight: 25}
       - {role: _external, port: 443, service: ssl, weight: 30, emit_dns: true, description: "BI tools/dashboards"}
+      - {role: _external, port: 443, service: ssl, weight: 10, emit_dns: true, dns_tags: [storage], description: "Cloud storage for datasets/reports"}
       - {role: file_server, port: 445, service: smb, weight: 15, os: windows}
 
   analyst:
     outbound:
       - {role: database, port: 1433, service: mssql, weight: 25, description: "Report queries"}
       - {role: _external, port: 443, service: ssl, weight: 40, emit_dns: true, dns_tags: [web, saas], description: "Dashboards/SaaS"}
+      - {role: _external, port: 443, service: ssl, weight: 8, emit_dns: true, dns_tags: [storage], description: "Cloud storage for reports"}
       - {role: file_server, port: 445, service: smb, weight: 15, os: windows}
 
   executive:
@@ -197,11 +201,13 @@ persona_traffic:
     outbound:
       - {role: _any_server, port: 3389, service: rdp, weight: 25, os: windows, description: "Remote support"}
       - {role: _external, port: 443, service: ssl, weight: 40, emit_dns: true, dns_tags: [web, saas], description: "Ticketing/KB"}
+      - {role: _external, port: 443, service: ssl, weight: 5, emit_dns: true, dns_tags: [storage], description: "Cloud storage for tools/docs"}
       - {role: domain_controller, port: 389, service: ldap, weight: 15, description: "AD password resets"}
 
   project_manager:
     outbound:
       - {role: _external, port: 443, service: ssl, weight: 60, emit_dns: true, dns_tags: [saas, web], description: "PM tools/email"}
+      - {role: _external, port: 443, service: ssl, weight: 8, emit_dns: true, dns_tags: [storage], description: "Cloud storage for project docs"}
       - {role: file_server, port: 445, service: smb, weight: 20, os: windows}
 
   intern:
