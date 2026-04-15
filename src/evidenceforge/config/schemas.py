@@ -6,6 +6,8 @@
 These models define the expected structure of each config file type.
 Used by validate_config.py to validate merged data — not used by loaders
 (loaders stay fast, validation is opt-in via eforge validate-config).
+
+All models use extra="forbid" so misspelled fields are caught as errors.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from pydantic import BaseModel, field_validator
 # --- DNS Registry ---
 
 
-class DnsEntry(BaseModel):
+class DnsEntry(BaseModel, extra="forbid"):
     """A single domain entry in dns_registry.yaml."""
 
     domain: str
@@ -42,7 +44,7 @@ class DnsEntry(BaseModel):
 # --- Application Catalog ---
 
 
-class PlatformConfig(BaseModel, extra="allow"):
+class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
     image_path: str
@@ -51,7 +53,7 @@ class PlatformConfig(BaseModel, extra="allow"):
     children: list[str] | None = None
 
 
-class ApplicationEntry(BaseModel, extra="allow"):
+class ApplicationEntry(BaseModel, extra="forbid"):
     """A single application entry in application_catalog.yaml."""
 
     id: str
@@ -64,7 +66,7 @@ class ApplicationEntry(BaseModel, extra="allow"):
 # --- Persona ---
 
 
-class PersonaEntry(BaseModel, extra="allow"):
+class PersonaEntry(BaseModel, extra="forbid"):
     """A single persona definition."""
 
     name: str
@@ -79,7 +81,7 @@ class PersonaEntry(BaseModel, extra="allow"):
 # --- Systemd Schedules ---
 
 
-class SystemdScheduleEntry(BaseModel, extra="allow"):
+class SystemdScheduleEntry(BaseModel, extra="forbid"):
     """A single schedule entry in systemd_schedules.yaml."""
 
     service: str
@@ -88,12 +90,25 @@ class SystemdScheduleEntry(BaseModel, extra="allow"):
     typical_hour: int
     jitter_minutes: int
     distro: str
+    # Optional fields for systemd_timer type
+    process_path: str | None = None
+    start_message: str | None = None
+    finish_message: str | None = None
+    timer_message: str | None = None
+    detail_messages: dict[str, list[str]] | None = None
+    # Optional fields for weekly frequency
+    typical_day: str | None = None
+    # Optional role filter
+    role: str | None = None
+    # Optional fields for cron type
+    cron_user: str | None = None
+    cron_commands: dict[str, str] | None = None
 
 
 # --- Extra Syslog Messages ---
 
 
-class SyslogProgramEntry(BaseModel, extra="allow"):
+class SyslogProgramEntry(BaseModel, extra="forbid"):
     """A single program entry in extra_syslog_messages.yaml."""
 
     app: str
@@ -106,7 +121,7 @@ class SyslogProgramEntry(BaseModel, extra="allow"):
 # --- TLS Issuers ---
 
 
-class TlsKeyType(BaseModel):
+class TlsKeyType(BaseModel, extra="forbid"):
     """A key type within a TLS issuer."""
 
     type: str
@@ -114,7 +129,7 @@ class TlsKeyType(BaseModel):
     weight: int
 
 
-class TlsIssuerEntry(BaseModel, extra="allow"):
+class TlsIssuerEntry(BaseModel, extra="forbid"):
     """A single issuer entry in tls_issuers.yaml."""
 
     name: str
@@ -128,7 +143,7 @@ class TlsIssuerEntry(BaseModel, extra="allow"):
 # --- Network Params ---
 
 
-class OuiEntry(BaseModel):
+class OuiEntry(BaseModel, extra="forbid"):
     """A single OUI prefix entry in network_params.yaml."""
 
     prefix: str
@@ -139,7 +154,7 @@ class OuiEntry(BaseModel):
 # --- Process Network Map ---
 
 
-class ProcessNetworkEntry(BaseModel, extra="allow"):
+class ProcessNetworkEntry(BaseModel, extra="forbid"):
     """A single mapping entry in process_network_map.yaml."""
 
     exe: list[str]
@@ -151,7 +166,7 @@ class ProcessNetworkEntry(BaseModel, extra="allow"):
 # --- Traffic Profile Connection ---
 
 
-class ConnectionEntry(BaseModel, extra="allow"):
+class ConnectionEntry(BaseModel, extra="forbid"):
     """A single connection entry within traffic_profiles.yaml."""
 
     role: str
@@ -168,7 +183,7 @@ class ConnectionEntry(BaseModel, extra="allow"):
 # --- Spawn Rules ---
 
 
-class SpawnRuleEntry(BaseModel, extra="allow"):
+class SpawnRuleEntry(BaseModel, extra="forbid"):
     """A single parent process entry within spawn_rules.yaml."""
 
     command_templates: list[str]
@@ -178,18 +193,35 @@ class SpawnRuleEntry(BaseModel, extra="allow"):
     max_children: int | None = None
 
 
-# --- System Binary ---
+# --- System Processes ---
 
 
-class SystemBinaryEntry(BaseModel):
+class ScheduledTaskEntry(BaseModel, extra="forbid"):
+    """A scheduled task entry in system_processes.yaml."""
+
+    image: str
+    command_templates: list[str]
+    parent: str
+    params: dict[str, list[str]] | None = None
+
+
+class SystemServiceEntry(BaseModel, extra="forbid"):
+    """A system service entry in system_processes.yaml."""
+
+    image: str
+    command_templates: list[str]
+    parent: str
+    params: dict[str, list[str]] | None = None
+
+
+class SystemBinaryEntry(BaseModel, extra="forbid"):
     """A single system binary entry in system_processes.yaml."""
 
     exe: str
     path: str
 
 
-# --- Registry mapping config sections to their schemas ---
-# Used by validate_config.py to validate merged data.
+# --- Validation helper ---
 
 
 def validate_entry(entry: dict[str, Any], schema: type[BaseModel], file_name: str) -> str | None:

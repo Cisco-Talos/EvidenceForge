@@ -116,25 +116,48 @@ def validate_config() -> ValidationResult:
     if overlay_dir and overlay_dir.is_dir():
         overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
 
-    # Known list fields within overlay files that should contain lists of dicts
-    _EXPECTED_LIST_FIELDS = {
-        "domains": "domain",  # dns_registry.yaml
-        "applications": "id",  # application_catalog.yaml
-        "mappings": None,  # process_network_map.yaml
-        "issuers": None,  # tls_issuers.yaml
-        "programs": None,  # extra_syslog_messages.yaml
-        "schedules": None,  # systemd_schedules.yaml
-        "oui_prefixes": None,  # network_params.yaml
-    }
-    # Known dict fields that should not be replaced with non-dict types
-    _EXPECTED_DICT_FIELDS = {
-        "role_traffic",  # traffic_profiles.yaml
-        "persona_traffic",  # traffic_profiles.yaml
-        "windows",  # spawn_rules.yaml
-        "linux",  # spawn_rules.yaml
-        "system_services",  # system_processes.yaml
-        "system_binaries",  # system_processes.yaml
-        "valid_tags",  # dns_registry.yaml
+    # File-scoped overlay structure schemas.
+    # Maps overlay file path → expected field types.
+    # "list_fields": {field_name: key_field_or_None} — must be list of dicts
+    # "dict_fields": {field_names} — must be dicts
+    _OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
+        "activity/dns_registry.yaml": {
+            "list_fields": {"domains": "domain"},
+            "dict_fields": {"valid_tags"},
+        },
+        "activity/application_catalog.yaml": {
+            "list_fields": {"applications": "id"},
+        },
+        "activity/traffic_profiles.yaml": {
+            "dict_fields": {"role_traffic", "persona_traffic"},
+        },
+        "activity/spawn_rules.yaml": {
+            "dict_fields": {"windows", "linux"},
+        },
+        "activity/proxy_uri_templates.yaml": {
+            "dict_fields": {"domains"},
+        },
+        "activity/site_maps.yaml": {
+            "dict_fields": {"domains"},
+        },
+        "activity/process_network_map.yaml": {
+            "list_fields": {"mappings": None},
+        },
+        "activity/system_processes.yaml": {
+            "dict_fields": {"system_services", "system_binaries"},
+        },
+        "activity/systemd_schedules.yaml": {
+            "list_fields": {"schedules": "service"},
+        },
+        "activity/extra_syslog_messages.yaml": {
+            "list_fields": {"programs": None},
+        },
+        "activity/tls_issuers.yaml": {
+            "list_fields": {"issuers": "name"},
+        },
+        "activity/network_params.yaml": {
+            "list_fields": {"oui_prefixes": None},
+        },
     }
 
     overlay_errors = False
@@ -157,8 +180,13 @@ def validate_config() -> ValidationResult:
             )
             overlay_errors = True
         else:
-            # Check known list fields for correct structure
-            for field_name, _key_field in _EXPECTED_LIST_FIELDS.items():
+            # Look up file-specific schema
+            file_schema = _OVERLAY_FILE_SCHEMAS.get(rel_path, {})
+            list_fields = file_schema.get("list_fields", {})
+            dict_fields = file_schema.get("dict_fields", set())
+
+            # Check list fields for correct structure
+            for field_name, key_field in list_fields.items():
                 if field_name in data:
                     value = data[field_name]
                     if not isinstance(value, list):
@@ -181,17 +209,18 @@ def validate_config() -> ValidationResult:
                                     )
                                 )
                                 overlay_errors = True
-                            elif _key_field and _key_field not in item:
+                            elif key_field and key_field not in item:
                                 result.issues.append(
                                     Issue(
                                         "ERROR",
                                         f"overlay/{rel_path}",
-                                        f'"{field_name}" entry #{i + 1} missing required "{_key_field}" field',
+                                        f'"{field_name}" entry #{i + 1} missing required "{key_field}" field',
                                     )
                                 )
                                 overlay_errors = True
-            # Check known dict fields for correct structure
-            for field_name in _EXPECTED_DICT_FIELDS:
+
+            # Check dict fields for correct structure
+            for field_name in dict_fields:
                 if field_name in data and not isinstance(data[field_name], dict):
                     result.issues.append(
                         Issue(
