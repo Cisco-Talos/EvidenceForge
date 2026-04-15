@@ -3,12 +3,17 @@
 
 """Tests for inbound traffic profile generation."""
 
+from datetime import UTC, datetime
+from random import Random
+from types import SimpleNamespace
+
 from evidenceforge.generation.activity.traffic_profiles import (
     get_persona_connections,
     get_role_connections,
     get_role_inbound_connections,
     load_traffic_profiles,
 )
+from evidenceforge.generation.engine.baseline import BaselineMixin
 
 
 class TestTrafficProfileSchema:
@@ -125,3 +130,71 @@ class TestEnsureConnectionProcessCommandLine:
         assert "applications" in catalog, "Catalog should have 'applications' key"
         assert "apps" not in catalog, "Catalog should NOT have 'apps' key"
         assert len(catalog["applications"]) > 0
+
+
+class TestInboundGenerationRegression:
+    """Regression tests for inbound generation edge cases."""
+
+    def test_inbound_only_profile_does_not_raise_when_outbound_is_empty(self, monkeypatch):
+        """Inbound generation should not depend on outbound profile count."""
+
+        class _FakeActivityGenerator:
+            def __init__(self) -> None:
+                self._ip_to_system = {}
+                self.calls = 0
+
+            def generate_connection(self, **kwargs) -> None:
+                self.calls += 1
+
+        class _FakeStateManager:
+            def set_current_time(self, _time) -> None:
+                return None
+
+            def get_sessions_on_system(self, _hostname):
+                return []
+
+        class _FakeBaseline(BaselineMixin):
+            def _resolve_role(self, *args, **kwargs):
+                return ("198.51.100.20", "external-client.example")
+
+            def _get_system_exposure(self, _system):
+                return "external"
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.traffic_profiles.get_role_connections",
+            lambda _roles, _os_cat: [],
+        )
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.traffic_profiles.get_role_inbound_connections",
+            lambda _roles, _os_cat: [{"role": "_external", "port": 443, "proto": "tcp"}],
+        )
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.traffic_profiles.get_persona_connections",
+            lambda _persona, _os_cat: [],
+        )
+
+        engine = object.__new__(_FakeBaseline)
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.state_manager = _FakeStateManager()
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(users=[], network=None),
+        )
+
+        system = SimpleNamespace(
+            hostname="WEB-01",
+            ip="172.16.0.10",
+            roles=["web_server"],
+            type="server",
+            public_hostnames=["www.example.com"],
+            assigned_user=None,
+        )
+
+        engine._generate_profile_traffic(
+            current_hour=datetime(2026, 4, 13, 13, tzinfo=UTC),
+            system=system,
+            rng=Random(7),
+            os_cat="linux",
+            local_dt=datetime(2026, 4, 13, 13, tzinfo=UTC),
+        )
+
+        assert engine.activity_generator.calls > 0
