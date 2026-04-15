@@ -129,16 +129,43 @@ class HostMultiplexEmitter(LogEmitter):
         self._buffer_size = buffer_size
         super().__init__(format_def, output_path, buffer_size, threaded)
 
+    @staticmethod
+    def _sanitize_host_key(host_fqdn: str) -> str:
+        """Return a safe host key for directory routing.
+
+        Invalid values (absolute paths, traversal segments, or path separators)
+        are rejected and mapped to flat-file routing.
+        """
+        host_key = host_fqdn.strip()
+        if not host_key:
+            return ""
+
+        if "\\" in host_key or ":" in host_key:
+            logger.warning("Invalid host routing key rejected: %s", host_fqdn)
+            return ""
+
+        path = Path(host_key)
+        if (
+            path.is_absolute()
+            or len(path.parts) != 1
+            or any(part in {".", ".."} for part in path.parts)
+        ):
+            logger.warning("Invalid host routing key rejected: %s", host_fqdn)
+            return ""
+
+        return host_key
+
     def _get_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        writer = self._writers.get(host_fqdn)
+        safe_host_key = self._sanitize_host_key(host_fqdn)
+        writer = self._writers.get(safe_host_key)
         if writer is not None:
             return writer
         with self._writers_lock:
-            writer = self._writers.get(host_fqdn)
+            writer = self._writers.get(safe_host_key)
             if writer is not None:
                 return writer
-            if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / self._log_filename
+            if safe_host_key and not self._direct_file_mode:
+                path = self._base_dir / safe_host_key / self._log_filename
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:
@@ -146,7 +173,7 @@ class HostMultiplexEmitter(LogEmitter):
                 path = self._base_dir / flat_name
             sort = self._sort_flat_file
             writer = _SingleHostWriter(path, self._buffer_size, sort_on_flush=sort)
-            self._writers[host_fqdn] = writer
+            self._writers[safe_host_key] = writer
             logger.debug(f"Created host writer: {path}")
             return writer
 
