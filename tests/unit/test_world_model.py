@@ -316,3 +316,31 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].protocol == "tcp"
     assert rdp_connections[0].initiating_pid > 0
     assert rdp_connections[0].source_system == "WKS-01"
+
+
+def test_find_user_session_handles_mixed_timezone_start_times(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+) -> None:
+    """Session lookup should not crash when start_time mixes naive and aware datetimes."""
+    state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0))
+    state_manager.create_session(
+        username="alice.admin",
+        system="APP-01",
+        logon_type=3,
+        source_ip="10.10.10.50",
+        session_kind="network",
+    )
+    state_manager.set_current_time(datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC))
+    latest_id = state_manager.create_session(
+        username="alice.admin",
+        system="APP-01",
+        logon_type=10,
+        source_ip="10.10.10.50",
+        session_kind="rdp",
+    )
+
+    selected = planner._find_user_session("alice.admin", "APP-01")
+
+    assert selected is not None
+    assert selected.logon_id == latest_id
