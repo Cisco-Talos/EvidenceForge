@@ -39,6 +39,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.path_safety import host_output_path
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -679,7 +680,7 @@ class SysmonEventEmitter(LogEmitter):
             if writer is not None:
                 return writer
             if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / "windows_event_sysmon.xml"
+                path = host_output_path(self._base_dir, host_fqdn, "windows_event_sysmon.xml")
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:

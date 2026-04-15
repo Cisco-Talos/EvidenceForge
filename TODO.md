@@ -36,6 +36,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Security fix: sanitize host FQDN-derived output paths to prevent path traversal writes outside output directory (added sink-side sanitization in host multiplex, Windows/Sysmon, and bash history emitters + path safety tests)
+
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
 ### World Model Refactor

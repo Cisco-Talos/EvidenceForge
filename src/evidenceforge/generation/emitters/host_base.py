@@ -38,6 +38,7 @@ from typing import Any
 
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.path_safety import host_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,7 @@ class HostMultiplexEmitter(LogEmitter):
             if writer is not None:
                 return writer
             if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / self._log_filename
+                path = host_output_path(self._base_dir, host_fqdn, self._log_filename)
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:

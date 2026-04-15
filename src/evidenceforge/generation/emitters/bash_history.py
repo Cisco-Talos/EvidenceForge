@@ -38,6 +38,7 @@ from jinja2 import Template
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.generation.emitters.path_safety import sanitize_host_directory_name
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,8 @@ class BashHistoryEmitter(LogEmitter):
             if writer is not None:
                 return writer
             # Nest under host FQDN dir: <base>/<fqdn>/bash_history/<user>.bash_history
-            path = self._base_dir / host_fqdn / "bash_history" / f"{username}.bash_history"
+            safe_host = sanitize_host_directory_name(host_fqdn)
+            path = self._base_dir / safe_host / "bash_history" / f"{username}.bash_history"
             writer = _SingleHistoryWriter(path, self._template, self._buffer_size)
             self._writers[key] = writer
             logger.debug(f"Created bash_history writer: {path}")
