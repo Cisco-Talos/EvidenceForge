@@ -50,6 +50,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] Fix `_find_user_session` mixed tz-aware/naive `start_time` comparison crash (Aardvark finding)
 - [x] Baseline inbound profile traffic no longer depends on outbound role traffic for business-hour gating (fixed UnboundLocalError when outbound profile is empty).
 - [x] Security: validate blocked_c2 interval/duration are > 0 to prevent zero-interval infinite loop DoS
+- [x] Harden temporal evaluator `exclude_ports` parsing against malformed `zeek_conn.id.resp_p` values (prevent eval crash on non-numeric ports)
 - [x] Evaluator grace period for causal ordering (logon→process rule skips events within logon_grace_period from scenario start)
 - [x] Evaluator event type detection from typed EventSpec fields (replaces fragile keyword matching) + 9 new record matchers
 - [x] Evaluator per-sub-event indicator accuracy (fixes last-writer-wins IP merge for compound storyline steps) + tighter eCAR FLOW matching

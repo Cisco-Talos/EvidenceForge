@@ -335,6 +335,37 @@ class TestCausalOrdering:
         # Within grace period → skipped → no pairs → perfect score
         assert result.score == 100.0
 
+    def test_dns_rule_handles_non_numeric_zeek_conn_port(self):
+        """Non-numeric zeek_conn id.resp_p should not crash exclude_ports evaluation."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "zeek_dns": [
+                _record(
+                    "zeek_dns",
+                    {
+                        "rcode_name": "NOERROR",
+                        "answers": ["93.184.216.34"],
+                    },
+                    ts=base,
+                ),
+            ],
+            "zeek_conn": [
+                _record(
+                    "zeek_conn",
+                    {
+                        "proto": "tcp",
+                        "id.resp_h": "93.184.216.34",
+                        "id.resp_p": "not-a-port",
+                    },
+                    ts=base + timedelta(seconds=5),
+                ),
+            ],
+        }
+        scenario = _make_scenario()
+        scorer = TemporalRealismScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
 
 class TestTimingPlausibility:
     def test_reasonable_rate(self):

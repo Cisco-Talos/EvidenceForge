@@ -513,8 +513,13 @@ class TemporalRealismScorer(DimensionScorer):
                 # Skip connections on excluded ports (e.g., DNS port 53)
                 if exclude_ports:
                     resp_p = rec.fields.get("id.resp_p")
-                    if resp_p is not None and int(resp_p) in exclude_ports:
-                        continue
+                    if resp_p is not None:
+                        try:
+                            resp_p_int = int(resp_p)
+                        except (TypeError, ValueError):
+                            resp_p_int = None
+                        if resp_p_int in exclude_ports:
+                            continue
 
                 # Skip built-in/machine accounts from causal checks
                 if exclude_accounts:
