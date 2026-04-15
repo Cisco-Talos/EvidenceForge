@@ -81,18 +81,20 @@ def load_builtin_personas() -> list[dict]:
                 except Exception as e:
                     logger.warning(f"Failed to load overlay persona {path.name}: {e}")
 
-    # -- 3. Merge: overlay wins over package on name collision ---------------
+    # -- 3. Merge: overlay fields merged into package on name collision ------
     if overlay_personas:
+        from evidenceforge.config.overlay import deep_merge_dict
+
         overlay_by_name = {p["name"]: p for p in overlay_personas}
         merged: list[dict] = []
         for persona in package_personas:
             name = persona["name"]
             if name in overlay_by_name:
-                logger.warning(
-                    "Overlay persona %r replaces package persona with the same name",
+                logger.info(
+                    "Overlay persona %r merging fields into package persona",
                     name,
                 )
-                merged.append(overlay_by_name.pop(name))
+                merged.append(deep_merge_dict(persona, overlay_by_name.pop(name)))
             else:
                 merged.append(persona)
         # Append remaining overlay personas (new additions)

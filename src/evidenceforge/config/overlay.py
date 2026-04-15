@@ -114,6 +114,14 @@ def load_with_overlay(
     if overlay_data is None:
         return data
 
+    if not isinstance(overlay_data, dict):
+        logger.warning(
+            "Config overlay %s has invalid structure (expected dict, got %s) — ignoring overlay",
+            overlay_path,
+            type(overlay_data).__name__,
+        )
+        return data
+
     return merge_fn(data, overlay_data)
 
 
@@ -151,9 +159,25 @@ def merge_keyed_list(
     Returns:
         Merged list.
     """
+    # Type-check overlay list before merging
+    if not isinstance(overlay_list, list):
+        logger.warning(
+            "Config overlay: expected a list for %s merge, got %s — ignoring overlay entries",
+            key_field,
+            type(overlay_list).__name__,
+        )
+        return list(default_list)
+
     # Validate overlay entries before merging
     seen_keys: dict[str, int] = {}
     for i, entry in enumerate(overlay_list):
+        if not isinstance(entry, dict):
+            logger.warning(
+                "Config overlay: entry #%d is not a dict (got %s) — skipping",
+                i + 1,
+                type(entry).__name__,
+            )
+            continue
         if key_field not in entry:
             logger.warning(
                 "Config overlay: entry #%d is missing required key field %r — skipping: %s",
@@ -173,7 +197,11 @@ def merge_keyed_list(
                 )
             seen_keys[key] = i + 1
 
-    overlay_by_key = {entry[key_field]: entry for entry in overlay_list if key_field in entry}
+    overlay_by_key = {
+        entry[key_field]: entry
+        for entry in overlay_list
+        if isinstance(entry, dict) and key_field in entry
+    }
     result = []
 
     for entry in default_list:
