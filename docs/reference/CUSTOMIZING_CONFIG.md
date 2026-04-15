@@ -26,6 +26,8 @@ your-project/
 
 Your overlay is never touched by package upgrades. Run `eforge info overlay.exists` to check if you have one.
 
+**Important:** The overlay is discovered from the current working directory. Always run `eforge` commands from your project root (where `.eforge/config/` lives). Running from a subdirectory will miss the overlay and fall back to package defaults silently.
+
 ## Recommended: Use `/eforge:config`
 
 The easiest way to customize configuration is through the Claude Code skill:
