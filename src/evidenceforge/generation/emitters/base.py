@@ -30,7 +30,8 @@ from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
 from typing import Any
 
-from jinja2 import Template
+from jinja2 import StrictUndefined
+from jinja2.sandbox import SandboxedEnvironment
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
@@ -76,7 +77,8 @@ class LogEmitter(ABC):
         self.buffer_size = buffer_size
         self.buffer: list[str] = []
         self.event_count = 0
-        self._template = Template(format_def.output.template)
+        self._template_env = SandboxedEnvironment(undefined=StrictUndefined, autoescape=False)
+        self._template = self._template_env.from_string(format_def.output.template)
         self._header_written = False
         self._file_lock = Lock()  # Thread-safe file I/O and buffer access
 
@@ -244,7 +246,7 @@ class LogEmitter(ABC):
         Private method called while already holding the lock.
         """
         if self.format_def.output.header_template and not self._header_written:
-            header_template = Template(self.format_def.output.header_template)
+            header_template = self._template_env.from_string(self.format_def.output.header_template)
             header = header_template.render()
 
             # Write header to file
@@ -314,9 +316,7 @@ class LogEmitter(ABC):
         """Write footer to output file if format has one."""
         footer_template = getattr(self.format_def.output, "footer_template", None)
         if footer_template and self._header_written:
-            from jinja2 import Template
-
-            tmpl = Template(footer_template)
+            tmpl = self._template_env.from_string(footer_template)
             footer = tmpl.render()
             with self._file_lock:
                 with open(self.output_path, "a", encoding=self.format_def.output.encoding) as f:
