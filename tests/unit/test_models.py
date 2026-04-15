@@ -185,6 +185,16 @@ class TestUser:
         with pytest.raises(ValidationError, match="Invalid email"):
             User(username="jdoe", full_name="John Doe", email="not-an-email")
 
+    def test_user_allows_machine_account_dollar_sign(self):
+        """Machine account usernames/emails containing '$' should validate."""
+        user = User(
+            username="BACKUP$",
+            full_name="BACKUP$",
+            email="BACKUP$@system.local",
+        )
+        assert user.username == "BACKUP$"
+        assert user.email == "BACKUP$@system.local"
+
 
 class TestSystem:
     """Tests for System model."""
