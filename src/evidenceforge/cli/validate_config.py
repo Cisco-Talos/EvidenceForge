@@ -126,6 +126,16 @@ def validate_config() -> ValidationResult:
         "schedules": None,  # systemd_schedules.yaml
         "oui_prefixes": None,  # network_params.yaml
     }
+    # Known dict fields that should not be replaced with non-dict types
+    _EXPECTED_DICT_FIELDS = {
+        "role_traffic",  # traffic_profiles.yaml
+        "persona_traffic",  # traffic_profiles.yaml
+        "windows",  # spawn_rules.yaml
+        "linux",  # spawn_rules.yaml
+        "system_services",  # system_processes.yaml
+        "system_binaries",  # system_processes.yaml
+        "valid_tags",  # dns_registry.yaml
+    }
 
     overlay_errors = False
     for path in overlay_yaml_files:
@@ -170,6 +180,17 @@ def validate_config() -> ValidationResult:
                                         f'"{field_name}" entry #{i + 1} should be a mapping, got {type(item).__name__}',
                                     )
                                 )
+            # Check known dict fields for correct structure
+            for field_name in _EXPECTED_DICT_FIELDS:
+                if field_name in data and not isinstance(data[field_name], dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"overlay/{rel_path}",
+                            f'Field "{field_name}" should be a mapping, got {type(data[field_name]).__name__}',
+                        )
+                    )
+                    overlay_errors = True
 
     if overlay_errors:
         # Cannot proceed with merged loading — overlay files would crash loaders

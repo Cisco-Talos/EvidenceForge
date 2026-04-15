@@ -66,7 +66,9 @@ For **validation** requests ("check my config", "validate config files"), run `e
 
 ## Step 3: Read Affected Files and Reference Docs
 
-Read package default files from `paths.*` (READ path) to understand existing content. Also read the relevant reference doc for field schemas and conventions:
+Read package default files from `paths.*` (READ path) to understand existing content. Also check `eforge info overlay.files` — if overlay files already exist for the configs you're modifying, read those too. Entries in the overlay take precedence and you must update them in place rather than creating duplicate entries.
+
+Also read the relevant reference doc for field schemas and conventions:
 
 | Topic | Reference Doc |
 |-------|---------------|
@@ -95,7 +97,7 @@ If you have clear domain knowledge (e.g., "API endpoints get `dev` tag"), use it
 
 Write ALL changes to the WRITE path established in Step 1 — the overlay directory, NOT the package files (unless the user explicitly chose source editing in a dev install).
 
-For overlay files: create them mirroring the package structure (e.g., `<overlay>/activity/application_catalog.yaml`). Include ONLY the new/changed entries — the engine merges with package defaults automatically. You do not need to copy existing entries from the package.
+For overlay files: if the overlay file already exists, read it first and update entries in place. If modifying an entry that's already in the overlay, edit it directly — do not create a second entry with the same key. If the overlay file doesn't exist yet, create it mirroring the package structure (e.g., `<overlay>/activity/application_catalog.yaml`). Include ONLY the new/changed entries — the engine merges with package defaults automatically.
 
 Order of changes:
 1. **Primary file first** — the file the user explicitly asked about

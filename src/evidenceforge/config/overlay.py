@@ -248,6 +248,12 @@ def _replace_entry(
             default_value = result[key]
             if isinstance(default_value, dict) and isinstance(overlay_value, dict):
                 result[key] = deep_merge_dict(default_value, overlay_value, full_key)
+            elif isinstance(default_value, dict) and not isinstance(overlay_value, dict):
+                logger.warning(
+                    "Config overlay: type mismatch at %r (expected dict, got %s) — skipping",
+                    full_key,
+                    type(overlay_value).__name__,
+                )
             else:
                 if default_value != overlay_value:
                     logger.warning("Config overlay: replacing value at %r", full_key)
@@ -285,6 +291,18 @@ def deep_merge_dict(
             elif isinstance(default_value, list) and isinstance(overlay_value, list):
                 # For leaf lists within a dict merge, extend rather than replace
                 result[key] = default_value + overlay_value
+            elif isinstance(default_value, dict) and not isinstance(overlay_value, dict):
+                logger.warning(
+                    "Config overlay: type mismatch at %r (expected dict, got %s) — skipping",
+                    full_key,
+                    type(overlay_value).__name__,
+                )
+            elif isinstance(default_value, list) and not isinstance(overlay_value, list):
+                logger.warning(
+                    "Config overlay: type mismatch at %r (expected list, got %s) — skipping",
+                    full_key,
+                    type(overlay_value).__name__,
+                )
             else:
                 if default_value != overlay_value:
                     logger.warning(
