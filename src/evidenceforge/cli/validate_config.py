@@ -158,6 +158,10 @@ def validate_config() -> ValidationResult:
         "activity/network_params.yaml": {
             "list_fields": {"oui_prefixes": None},
         },
+        "activity/bash_commands.yaml": {
+            # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
+            # No structural constraints — skip unexpected-key check
+        },
     }
 
     overlay_errors = False
@@ -181,9 +185,37 @@ def validate_config() -> ValidationResult:
             overlay_errors = True
         else:
             # Look up file-specific schema
-            file_schema = _OVERLAY_FILE_SCHEMAS.get(rel_path, {})
+            file_schema = _OVERLAY_FILE_SCHEMAS.get(rel_path)
+
+            # Warn on unknown overlay files (personas/ handled separately below)
+            if file_schema is None and not rel_path.startswith("personas/"):
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        f"overlay/{rel_path}",
+                        "Unknown overlay file — not a recognized config path. Check filename for typos.",
+                    )
+                )
+                continue
+
+            if file_schema is None:
+                continue  # personas handled in separate pre-check
+
             list_fields = file_schema.get("list_fields", {})
             dict_fields = file_schema.get("dict_fields", set())
+
+            # Warn on unexpected top-level keys
+            known_keys = set(list_fields.keys()) | dict_fields
+            if known_keys:
+                for key in data:
+                    if key not in known_keys and key != "_replace":
+                        result.issues.append(
+                            Issue(
+                                "WARNING",
+                                f"overlay/{rel_path}",
+                                f'Unexpected top-level key "{key}" — will be ignored or may indicate a typo',
+                            )
+                        )
 
             # Check list fields for correct structure
             for field_name, key_field in list_fields.items():
@@ -776,50 +808,115 @@ def validate_config() -> ValidationResult:
     # --- Schema validation: validate merged entries against Pydantic models ---
     from evidenceforge.config.schemas import (
         ApplicationEntry,
+        ConnectionEntry,
         DnsEntry,
+        OuiEntry,
         PersonaEntry,
         ProcessNetworkEntry,
+        ScheduledTaskEntry,
+        SpawnRuleEntry,
         SyslogProgramEntry,
         SystemBinaryEntry,
         SystemdScheduleEntry,
+        SystemServiceEntry,
         TlsIssuerEntry,
         validate_entry,
     )
 
-    _SCHEMA_CHECKS = [
+    _SCHEMA_CHECKS: list[tuple[list, type, str]] = [
         (domains, DnsEntry, "dns_registry.yaml"),
         (apps, ApplicationEntry, "application_catalog.yaml"),
         (all_merged_personas, PersonaEntry, "personas"),
     ]
-    # Add checks for configs loaded via loaders
+
+    # system_processes.yaml: scheduled_tasks, system_services, system_binaries
     if sys_proc_data:
-        for os_binaries in sys_proc_data.get("system_binaries", {}).values():
+        _SCHEMA_CHECKS.append(
+            (
+                sys_proc_data.get("scheduled_tasks", []),
+                ScheduledTaskEntry,
+                "system_processes.yaml (scheduled_tasks)",
+            )
+        )
+        for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
+            if isinstance(role_entries, list):
+                _SCHEMA_CHECKS.append(
+                    (
+                        role_entries,
+                        SystemServiceEntry,
+                        f"system_processes.yaml (system_services.{role_name})",
+                    )
+                )
+        for os_name, os_binaries in sys_proc_data.get("system_binaries", {}).items():
             if isinstance(os_binaries, list):
                 _SCHEMA_CHECKS.append(
-                    (os_binaries, SystemBinaryEntry, "system_processes.yaml (system_binaries)")
+                    (
+                        os_binaries,
+                        SystemBinaryEntry,
+                        f"system_processes.yaml (system_binaries.{os_name})",
+                    )
                 )
+
+    # process_network_map.yaml
     if isinstance(process_net_data, list):
         _SCHEMA_CHECKS.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
 
-    # Load additional configs for schema validation
+    # traffic_profiles.yaml: connection entries
+    all_traffic_connection_entries = []
+    for _rn, role_data in traffic_data.get("role_traffic", {}).items():
+        if isinstance(role_data, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_connection_entries.extend(role_data.get(direction, []))
+    for _pn, persona_entries in traffic_data.get("persona_traffic", {}).items():
+        if isinstance(persona_entries, dict):
+            for direction in ["outbound", "inbound"]:
+                all_traffic_connection_entries.extend(persona_entries.get(direction, []))
+        elif isinstance(persona_entries, list):
+            all_traffic_connection_entries.extend(persona_entries)
+    _SCHEMA_CHECKS.append(
+        (all_traffic_connection_entries, ConnectionEntry, "traffic_profiles.yaml")
+    )
+
+    # spawn_rules.yaml: spawn rule entries
+    all_spawn_entries = []
+    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+        for _parent, parent_data in os_rules.items():
+            if isinstance(parent_data, dict):
+                all_spawn_entries.append(parent_data)
+    _SCHEMA_CHECKS.append((all_spawn_entries, SpawnRuleEntry, "spawn_rules.yaml"))
+
+    # tls_issuers.yaml
     from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
 
     tls_data = load_tls_issuers()
     if tls_data:
         _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
 
+    # extra_syslog_messages.yaml
     from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
 
     syslog_data = load_extra_syslog_messages()
     if syslog_data:
         _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
 
-    # Validate systemd schedules
+    # systemd_schedules.yaml
     from evidenceforge.generation.engine.baseline import _load_systemd_schedules
 
     schedules = _load_systemd_schedules()
     if schedules:
         _SCHEMA_CHECKS.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
+
+    # network_params.yaml
+    from evidenceforge.generation.engine.emitter_setup import _merge_network_params
+
+    net_params_path = get_activity_directory() / "network_params.yaml"
+    from evidenceforge.config.overlay import load_with_overlay
+
+    net_params = load_with_overlay(
+        net_params_path, "activity/network_params.yaml", _merge_network_params
+    )
+    if net_params:
+        _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
 
     # Run all schema validations
     for entries, schema, file_name in _SCHEMA_CHECKS:
