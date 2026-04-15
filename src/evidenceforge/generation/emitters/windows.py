@@ -39,7 +39,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
-from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.host_base import _SingleHostWriter, sanitize_host_routing_key
 
 win_logger = logging.getLogger(__name__)
 
@@ -967,15 +967,16 @@ class WindowsEventEmitter(LogEmitter):
         self._record_id_counters: dict[str, int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        writer = self._host_writers.get(host_fqdn)
+        safe_host_fqdn = sanitize_host_routing_key(host_fqdn)
+        writer = self._host_writers.get(safe_host_fqdn)
         if writer is not None:
             return writer
         with self._host_writers_lock:
-            writer = self._host_writers.get(host_fqdn)
+            writer = self._host_writers.get(safe_host_fqdn)
             if writer is not None:
                 return writer
-            if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / "windows_event_security.xml"
+            if safe_host_fqdn and not self._direct_file_mode:
+                path = self._base_dir / safe_host_fqdn / "windows_event_security.xml"
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:
@@ -985,7 +986,7 @@ class WindowsEventEmitter(LogEmitter):
             header = self.format_def.output.header_template
             if header:
                 writer.write_header(header)
-            self._host_writers[host_fqdn] = writer
+            self._host_writers[safe_host_fqdn] = writer
             return writer
 
     def _buffer_event(self, rendered: str) -> None:
@@ -1053,7 +1054,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # Assign per-computer EventRecordIDs in sorted order
         for event in self._event_dicts:
-            computer = event.get("Computer", "")
+            computer = sanitize_host_routing_key(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
                 rng = random.Random(f"erid_{counter_key}")

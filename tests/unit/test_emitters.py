@@ -29,6 +29,7 @@ import pytest
 
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
 from evidenceforge.utils import generate_zeek_uid
 
 
@@ -785,6 +786,41 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "<EventID>4738</EventID>" in content
         assert '<Data Name="Dummy">-</Data>' in content  # 4738 unique Dummy field
+
+    def test_emit_event_with_unsafe_computer_routes_to_flat_output(self, format_def, tmp_path):
+        """Unsafe Computer values must not create traversing per-host paths."""
+        output_dir = tmp_path / "output"
+        emitter = WindowsEventEmitter(format_def, output_dir, buffer_size=1)
+        event_data = {
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, 0, tzinfo=UTC),
+            "Computer": "../../escape",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x3e7abc",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "192.168.1.100",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        assert (output_dir / "windows_event_security.xml").exists()
+        assert not (tmp_path / "escape" / "windows_event_security.xml").exists()
+
+
+def test_sanitize_host_routing_key_rejects_path_traversal() -> None:
+    """Path traversal and separators must be rejected for host routing keys."""
+    assert sanitize_host_routing_key("../../pwned") == ""
+    assert sanitize_host_routing_key("..\\..\\pwned") == ""
+    assert sanitize_host_routing_key("host/child") == ""
+    assert sanitize_host_routing_key("safe-host.corp.local") == "safe-host.corp.local"
 
 
 class TestZeekEmitter:

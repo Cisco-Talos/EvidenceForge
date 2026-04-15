@@ -31,6 +31,7 @@ host's FQDN. Each host gets its own subdirectory:
 """
 
 import logging
+import re
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -40,6 +41,33 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
 logger = logging.getLogger(__name__)
+
+
+_HOST_ROUTING_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def sanitize_host_routing_key(host_fqdn: str) -> str:
+    """Sanitize host routing key used for host-multiplexed output paths.
+
+    Returns an empty string when host_fqdn is unsafe so emitters fall back
+    to flat-file output under the configured base directory.
+    """
+    candidate = host_fqdn.strip()
+    if not candidate:
+        return ""
+    if "/" in candidate or "\\" in candidate:
+        logger.warning("Unsafe host routing key rejected: contains path separator")
+        return ""
+    if ".." in candidate:
+        logger.warning("Unsafe host routing key rejected: contains traversal sequence")
+        return ""
+    if candidate in {".", ".."}:
+        logger.warning("Unsafe host routing key rejected: invalid path token")
+        return ""
+    if not _HOST_ROUTING_RE.fullmatch(candidate):
+        logger.warning("Unsafe host routing key rejected: invalid characters")
+        return ""
+    return candidate
 
 
 class _SingleHostWriter:
@@ -130,15 +158,16 @@ class HostMultiplexEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
 
     def _get_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        writer = self._writers.get(host_fqdn)
+        safe_host_fqdn = sanitize_host_routing_key(host_fqdn)
+        writer = self._writers.get(safe_host_fqdn)
         if writer is not None:
             return writer
         with self._writers_lock:
-            writer = self._writers.get(host_fqdn)
+            writer = self._writers.get(safe_host_fqdn)
             if writer is not None:
                 return writer
-            if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / self._log_filename
+            if safe_host_fqdn and not self._direct_file_mode:
+                path = self._base_dir / safe_host_fqdn / self._log_filename
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:
@@ -146,7 +175,7 @@ class HostMultiplexEmitter(LogEmitter):
                 path = self._base_dir / flat_name
             sort = self._sort_flat_file
             writer = _SingleHostWriter(path, self._buffer_size, sort_on_flush=sort)
-            self._writers[host_fqdn] = writer
+            self._writers[safe_host_fqdn] = writer
             logger.debug(f"Created host writer: {path}")
             return writer
 
