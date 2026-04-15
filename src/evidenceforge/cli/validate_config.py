@@ -116,6 +116,17 @@ def validate_config() -> ValidationResult:
     if overlay_dir and overlay_dir.is_dir():
         overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
 
+    # Known list fields within overlay files that should contain lists of dicts
+    _EXPECTED_LIST_FIELDS = {
+        "domains": "domain",  # dns_registry.yaml
+        "applications": "id",  # application_catalog.yaml
+        "mappings": None,  # process_network_map.yaml
+        "issuers": None,  # tls_issuers.yaml
+        "programs": None,  # extra_syslog_messages.yaml
+        "schedules": None,  # systemd_schedules.yaml
+        "oui_prefixes": None,  # network_params.yaml
+    }
+
     overlay_errors = False
     for path in overlay_yaml_files:
         data, err = _safe_load_yaml(path)
@@ -126,6 +137,39 @@ def validate_config() -> ValidationResult:
         elif data is None:
             result.issues.append(Issue("ERROR", f"overlay/{rel_path}", "File is empty"))
             overlay_errors = True
+        elif not isinstance(data, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    f"overlay/{rel_path}",
+                    f"Expected a YAML mapping at root, got {type(data).__name__}",
+                )
+            )
+            overlay_errors = True
+        else:
+            # Check known list fields for correct structure
+            for field_name, _key_field in _EXPECTED_LIST_FIELDS.items():
+                if field_name in data:
+                    value = data[field_name]
+                    if not isinstance(value, list):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Field "{field_name}" should be a list, got {type(value).__name__}',
+                            )
+                        )
+                        overlay_errors = True
+                    else:
+                        for i, item in enumerate(value):
+                            if not isinstance(item, dict):
+                                result.issues.append(
+                                    Issue(
+                                        "WARNING",
+                                        f"overlay/{rel_path}",
+                                        f'"{field_name}" entry #{i + 1} should be a mapping, got {type(item).__name__}',
+                                    )
+                                )
 
     if overlay_errors:
         # Cannot proceed with merged loading — overlay files would crash loaders
@@ -450,48 +494,35 @@ def validate_config() -> ValidationResult:
                 )
             )
 
-    # --- Checks 21-25: Persona Integrity ---
-    # Check both package and overlay persona files
-    all_persona_files = sorted(personas_dir.glob("*.yaml"))
-    if overlay_dir:
-        overlay_personas_dir = overlay_dir / "personas"
-        if overlay_personas_dir.is_dir():
-            all_persona_files.extend(sorted(overlay_personas_dir.glob("*.yaml")))
-    for yaml_file in all_persona_files:
-        data, err = _safe_load_yaml(yaml_file)
-        if err or not data:
-            continue  # Already caught in YAML health check
+    # --- Checks 22-25: Persona Integrity ---
+    # Validate MERGED persona data (package + overlay) so partial overlay
+    # personas that modify a few fields don't fail for missing required fields.
+    # Check 21 (filename/name mismatch) removed — not applicable with merged data.
+    from evidenceforge.utils.personas import load_builtin_personas
 
-        name = data.get("name", "")
-        stem = yaml_file.stem
-
-        # Check 21: Filename/name mismatch
-        if name and name != stem:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    yaml_file.name,
-                    f'Persona name "{name}" does not match filename "{stem}"',
-                )
-            )
+    all_merged_personas = load_builtin_personas()
+    for persona in all_merged_personas:
+        name = persona.get("name", "<unnamed>")
 
         # Check 22: Missing required fields
         for req_field in REQUIRED_PERSONA_FIELDS:
-            if req_field not in data:
+            if req_field not in persona:
                 result.issues.append(
-                    Issue("ERROR", yaml_file.name, f"Missing required field: {req_field}")
+                    Issue("ERROR", f"persona:{name}", f"Missing required field: {req_field}")
                 )
 
         # Check 23: Invalid risk_profile
-        risk = data.get("risk_profile", "")
+        risk = persona.get("risk_profile", "")
         if risk and risk not in VALID_RISK_PROFILES:
-            result.issues.append(Issue("ERROR", yaml_file.name, f'Invalid risk_profile: "{risk}"'))
+            result.issues.append(
+                Issue("ERROR", f"persona:{name}", f'Invalid risk_profile: "{risk}"')
+            )
 
         # Check 24: Invalid browsing_intensity
-        intensity = data.get("browsing_intensity", "")
+        intensity = persona.get("browsing_intensity", "")
         if intensity and intensity not in VALID_BROWSING_INTENSITIES:
             result.issues.append(
-                Issue("ERROR", yaml_file.name, f'Invalid browsing_intensity: "{intensity}"')
+                Issue("ERROR", f"persona:{name}", f'Invalid browsing_intensity: "{intensity}"')
             )
 
     # Check 25: Phantom personas (referenced but no file)
