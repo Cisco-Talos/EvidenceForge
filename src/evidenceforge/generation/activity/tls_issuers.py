@@ -11,17 +11,21 @@ import random
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
-from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 
 _ISSUERS_PATH = get_activity_directory() / "tls_issuers.yaml"
 _CACHED_ISSUERS: dict[str, Any] | None = None
 
 
 def _merge_tls_issuers(default: dict, overlay: dict) -> dict:
-    """Merge TLS issuers overlay with package defaults."""
+    """Merge TLS issuers overlay with package defaults (keyed by issuer name)."""
     result = dict(default)
     if "issuers" in overlay:
-        result["issuers"] = extend_list(default.get("issuers", []), overlay["issuers"])
+        result["issuers"] = merge_keyed_list(
+            default.get("issuers", []),
+            overlay["issuers"],
+            key_field="name",
+        )
     return result
 
 

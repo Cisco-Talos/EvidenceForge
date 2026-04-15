@@ -743,6 +743,74 @@ def validate_config() -> ValidationResult:
                                     )
                                 )
 
+    # --- Schema validation: validate merged entries against Pydantic models ---
+    from evidenceforge.config.schemas import (
+        ApplicationEntry,
+        DnsEntry,
+        PersonaEntry,
+        ProcessNetworkEntry,
+        SyslogProgramEntry,
+        SystemBinaryEntry,
+        SystemdScheduleEntry,
+        TlsIssuerEntry,
+        validate_entry,
+    )
+
+    _SCHEMA_CHECKS = [
+        (domains, DnsEntry, "dns_registry.yaml"),
+        (apps, ApplicationEntry, "application_catalog.yaml"),
+        (all_merged_personas, PersonaEntry, "personas"),
+    ]
+    # Add checks for configs loaded via loaders
+    if sys_proc_data:
+        for os_binaries in sys_proc_data.get("system_binaries", {}).values():
+            if isinstance(os_binaries, list):
+                _SCHEMA_CHECKS.append(
+                    (os_binaries, SystemBinaryEntry, "system_processes.yaml (system_binaries)")
+                )
+    if isinstance(process_net_data, list):
+        _SCHEMA_CHECKS.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
+
+    # Load additional configs for schema validation
+    from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
+
+    tls_data = load_tls_issuers()
+    if tls_data:
+        _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
+
+    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+    syslog_data = load_extra_syslog_messages()
+    if syslog_data:
+        _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
+
+    # Validate systemd schedules
+    from evidenceforge.generation.engine.baseline import _load_systemd_schedules
+
+    schedules = _load_systemd_schedules()
+    if schedules:
+        _SCHEMA_CHECKS.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
+
+    # Run all schema validations
+    for entries, schema, file_name in _SCHEMA_CHECKS:
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            err = validate_entry(entry, schema, file_name)
+            if err:
+                entry_id = (
+                    entry.get("domain")
+                    or entry.get("id")
+                    or entry.get("name")
+                    or entry.get("service")
+                    or entry.get("app")
+                    or entry.get("exe")
+                    or "?"
+                )
+                result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
+
     # Deduplicate issues (some checks may flag the same thing multiple times)
     seen_issues: set[tuple[str, str, str]] = set()
     deduped: list[Issue] = []

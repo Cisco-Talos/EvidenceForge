@@ -38,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
-from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 from evidenceforge.generation.activity.generator import _dns_rtt
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.suspicious_benign import (
@@ -237,10 +237,14 @@ _DAY_NAME_TO_INT = {
 
 
 def _merge_systemd_schedules(default: dict, overlay: dict) -> dict:
-    """Merge overlay systemd schedules into defaults (extend the list)."""
+    """Merge overlay systemd schedules into defaults (keyed by service name)."""
     result = dict(default)
     if "schedules" in overlay:
-        result["schedules"] = extend_list(default.get("schedules", []), overlay["schedules"])
+        result["schedules"] = merge_keyed_list(
+            default.get("schedules", []),
+            overlay["schedules"],
+            key_field="service",
+        )
     return result
 
 
