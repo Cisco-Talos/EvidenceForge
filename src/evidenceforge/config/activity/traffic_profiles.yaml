@@ -129,7 +129,7 @@ persona_traffic:
 
   developer:
     outbound:
-      - {role: _external, port: 443, service: ssl, weight: 35, emit_dns: true, dns_tags: [git], description: "git/npm/pip/cargo registries"}
+      - {role: _external, port: 443, service: ssl, weight: 35, emit_dns: true, dns_tags: [git, dev], description: "git/npm/pip/cargo registries and dev APIs"}
       - {role: _any_server, port: 22, service: ssh, weight: 25, description: "SSH to dev/staging servers"}
       - {role: database, port: 5432, service: postgresql, weight: 15, description: "Dev DB access"}
       - {role: database, port: 1433, service: mssql, weight: 10}
@@ -140,6 +140,7 @@ persona_traffic:
       - {role: _any_server, port: 22, service: ssh, weight: 30, description: "Server management"}
       - {role: _any_server, port: 3389, service: rdp, weight: 20, os: windows, description: "RDP admin sessions"}
       - {role: _external, port: 443, service: ssl, weight: 15, emit_dns: true, dns_tags: [web, saas], description: "Monitoring dashboards"}
+      - {role: _external, port: 443, service: ssl, weight: 5, emit_dns: true, dns_tags: [storage], description: "Cloud storage/backup sync"}
       - {role: domain_controller, port: 389, service: ldap, weight: 15, description: "AD management"}
 
   security_analyst:

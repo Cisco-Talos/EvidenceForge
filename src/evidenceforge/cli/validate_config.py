@@ -480,6 +480,67 @@ def validate_config() -> ValidationResult:
             )
         )
 
+    # --- Checks 28-30: Defined But Unreachable ---
+
+    # Collect all dns_tags referenced by traffic profiles
+    all_traffic_dns_tags: set[str] = set()
+    for entry in all_traffic_entries:
+        all_traffic_dns_tags.update(entry.get("dns_tags", []))
+
+    # Check 28: DNS tags on domains that no traffic profile references
+    # Tags that reach domains through other mechanisms (not dns_tags):
+    #   cdn — loaded as subresources via site_maps
+    #   internal — reached via role-based connections (database, file_server, etc.)
+    _TAGS_REACHED_WITHOUT_DNS_TAGS = {"cdn", "internal"}
+    for tag in all_dns_tags - _TAGS_REACHED_WITHOUT_DNS_TAGS:
+        if tag not in all_traffic_dns_tags:
+            domains_with_tag = [e["domain"] for e in domains if tag in e.get("tags", [])]
+            if domains_with_tag:
+                example = domains_with_tag[0]
+                count = len(domains_with_tag)
+                result.issues.append(
+                    Issue(
+                        "INFO",
+                        "dns_registry.yaml",
+                        f'Tag "{tag}" used by {count} domain(s) (e.g., "{example}") but no traffic profile references it via dns_tags — these domains will never receive traffic',
+                    )
+                )
+
+    # Check 29: Personas not in any application's personas list
+    all_app_personas: set[str] = set()
+    for app in apps:
+        all_app_personas.update(app.get("personas", []))
+    for persona in persona_names:
+        if persona not in all_app_personas and "default" not in all_app_personas:
+            result.issues.append(
+                Issue(
+                    "INFO",
+                    f"personas/{persona}.yaml",
+                    f'Persona "{persona}" is not in any application\'s personas list — this persona will never spawn user apps',
+                )
+            )
+
+    # Check 30: Bash command roles with no matching persona
+    # Special keys that aren't persona roles:
+    #   common — shared commands for all roles
+    #   params — placeholder pools for template resolution
+    #   keyboard_adjacency — typo model data
+    #   dba, webadmin, security — sub-role pools mapped from personas by _get_role_pool()
+    _BASH_SPECIAL_KEYS = {"common", "params", "keyboard_adjacency", "dba", "webadmin", "security"}
+    bash_data, _ = _safe_load_yaml(activity_dir / "bash_commands.yaml")
+    if bash_data:
+        for role_key in bash_data:
+            if role_key in _BASH_SPECIAL_KEYS:
+                continue
+            if role_key not in persona_names:
+                result.issues.append(
+                    Issue(
+                        "INFO",
+                        "bash_commands.yaml",
+                        f'Role "{role_key}" has no matching persona — these commands will never be generated',
+                    )
+                )
+
     # --- Checks 26-27: Evaluation Rule Integrity ---
     format_names = {f.stem for f in formats_dir.glob("*.yaml")}
     format_fields: dict[str, set[str]] = {}
