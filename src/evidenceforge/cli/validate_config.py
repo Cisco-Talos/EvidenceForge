@@ -122,8 +122,8 @@ def validate_config() -> ValidationResult:
     # "dict_fields": {field_names} — must be dicts
     _OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "activity/dns_registry.yaml": {
-            "list_fields": {"domains": "domain"},
-            "dict_fields": {"valid_tags"},
+            "list_fields": {"domains": "domain", "cdn_ranges": None},
+            "dict_fields": {"valid_tags", "long_tail", "ipv6_map"},
         },
         "activity/application_catalog.yaml": {
             "list_fields": {"applications": "id"},
@@ -135,16 +135,17 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"windows", "linux"},
         },
         "activity/proxy_uri_templates.yaml": {
-            "dict_fields": {"domains"},
+            "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
         "activity/site_maps.yaml": {
-            "dict_fields": {"domains"},
+            "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
         "activity/process_network_map.yaml": {
             "list_fields": {"mappings": None},
         },
         "activity/system_processes.yaml": {
             "dict_fields": {"system_services", "system_binaries"},
+            "list_fields": {"scheduled_tasks": None},
         },
         "activity/systemd_schedules.yaml": {
             "list_fields": {"schedules": "service"},
@@ -154,6 +155,7 @@ def validate_config() -> ValidationResult:
         },
         "activity/tls_issuers.yaml": {
             "list_fields": {"issuers": "name"},
+            "dict_fields": {"domain_ca_overrides"},
         },
         "activity/network_params.yaml": {
             "list_fields": {"oui_prefixes": None},
