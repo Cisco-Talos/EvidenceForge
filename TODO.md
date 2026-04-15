@@ -268,6 +268,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 
 ### Tier 4: Eval Fixes
 
+- [x] Harden temporal causal-account exclusion against non-string SubjectUserName/principal values to prevent evaluator exceptions on malformed logs
 - [ ] Storyline Trace Coverage hostname normalization bug (traces exist but bare vs FQDN mismatch)
 - [ ] Ground truth File IOCs section truncated in GROUND_TRUTH.md output
 
