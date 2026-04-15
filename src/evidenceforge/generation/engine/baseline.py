@@ -2338,16 +2338,17 @@ class BaselineMixin:
             if not roles:
                 roles = [(system.type or "workstation").lower()]
 
+        # Use scenario-local time for business-hour gating, not UTC.
+        _local = local_dt if local_dt is not None else current_hour
+        dow = _local.weekday()
+        hour = _local.hour
+        is_business = 0 <= dow <= 4 and 7 <= hour <= 19
+
         # --- Role traffic (system-level, 24/7) ---
         role_conns = get_role_connections(roles, os_cat)
         if role_conns:
             weights = [c.get("weight", 1) for c in role_conns]
             # Scale connection count by time-of-day (fewer at night)
-            # Use scenario-local time for business-hour gating, not UTC
-            _local = local_dt if local_dt is not None else current_hour
-            dow = _local.weekday()
-            hour = _local.hour
-            is_business = 0 <= dow <= 4 and 7 <= hour <= 19
             base_count = rng.randint(8, 20) if is_business else rng.randint(2, 6)
 
             for _ in range(base_count):
