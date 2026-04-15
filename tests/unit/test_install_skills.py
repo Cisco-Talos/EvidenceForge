@@ -132,7 +132,7 @@ class TestInstallSkills:
         victim_dir.mkdir()
         (tmp_path / "eforge").symlink_to(victim_dir, target_is_directory=True)
 
-        with pytest.raises(PermissionError, match="symlinked directory"):
+        with pytest.raises(PermissionError, match="symlinked path"):
             install_skills(tmp_path)
 
     def test_returns_installed_and_removed_lists(self, tmp_path):
@@ -197,4 +197,4 @@ class TestInstallSkillsCli:
         result = runner.invoke(app, ["install-skills"])
 
         assert result.exit_code == 1
-        assert "symlinked directory" in result.stdout
+        assert "symlinked path" in result.stdout

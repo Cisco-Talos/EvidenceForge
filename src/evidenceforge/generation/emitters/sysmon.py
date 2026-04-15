@@ -39,6 +39,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -671,15 +672,16 @@ class SysmonEventEmitter(LogEmitter):
         self._erid_rngs: dict[str, random.Random] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        writer = self._host_writers.get(host_fqdn)
+        safe_host = sanitize_path_component(host_fqdn)
+        writer = self._host_writers.get(safe_host)
         if writer is not None:
             return writer
         with self._host_writers_lock:
-            writer = self._host_writers.get(host_fqdn)
+            writer = self._host_writers.get(safe_host)
             if writer is not None:
                 return writer
-            if host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / host_fqdn / "windows_event_sysmon.xml"
+            if safe_host and not self._direct_file_mode:
+                path = self._base_dir / safe_host / "windows_event_sysmon.xml"
             elif self._direct_file_path:
                 path = self._direct_file_path
             else:
@@ -688,7 +690,7 @@ class SysmonEventEmitter(LogEmitter):
             header = self.format_def.output.header_template
             if header:
                 writer.write_header(header)
-            self._host_writers[host_fqdn] = writer
+            self._host_writers[safe_host] = writer
             return writer
 
     def _buffer_event(self, rendered: str) -> None:

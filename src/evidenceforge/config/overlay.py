@@ -104,6 +104,17 @@ def load_with_overlay(
         return data
 
     overlay_path = overlay_dir / overlay_subpath
+
+    # Containment check: resolved overlay path must be inside overlay_dir
+    try:
+        overlay_path.resolve().relative_to(overlay_dir.resolve())
+    except ValueError:
+        logger.warning(
+            "Config overlay subpath %r escapes overlay directory — ignoring",
+            overlay_subpath,
+        )
+        return data
+
     if not overlay_path.exists():
         return data
 

@@ -46,6 +46,7 @@ from typing import Any
 
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
 
@@ -130,15 +131,16 @@ class SensorMultiplexEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
 
     def _get_writer(self, sensor_hostname: str) -> _SingleZeekWriter:
-        writer = self._writers.get(sensor_hostname)
+        safe_sensor = sanitize_path_component(sensor_hostname)
+        writer = self._writers.get(safe_sensor)
         if writer is not None:
             return writer
         with self._writers_lock:
-            writer = self._writers.get(sensor_hostname)
+            writer = self._writers.get(safe_sensor)
             if writer is not None:
                 return writer
-            if sensor_hostname:
-                path = self._base_dir / sensor_hostname / self._log_filename
+            if safe_sensor:
+                path = self._base_dir / safe_sensor / self._log_filename
             elif self._direct_file_path:
                 # Direct file mode (test/simple usage): output_path was a file
                 path = self._direct_file_path
@@ -152,7 +154,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 sort_before_flush=self._sort_before_flush,
                 sort_key=getattr(self, "_sort_key_func", None),
             )
-            self._writers[sensor_hostname] = writer
+            self._writers[safe_sensor] = writer
             logger.debug(f"Created Zeek writer: {path}")
             return writer
 

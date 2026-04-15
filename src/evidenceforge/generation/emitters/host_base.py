@@ -31,7 +31,6 @@ host's FQDN. Each host gets its own subdirectory:
 """
 
 import logging
-import re
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -39,35 +38,13 @@ from typing import Any
 
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
+from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
 
 
-_HOST_ROUTING_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
-def sanitize_host_routing_key(host_fqdn: str) -> str:
-    """Sanitize host routing key used for host-multiplexed output paths.
-
-    Returns an empty string when host_fqdn is unsafe so emitters fall back
-    to flat-file output under the configured base directory.
-    """
-    candidate = host_fqdn.strip()
-    if not candidate:
-        return ""
-    if "/" in candidate or "\\" in candidate:
-        logger.warning("Unsafe host routing key rejected: contains path separator")
-        return ""
-    if ".." in candidate:
-        logger.warning("Unsafe host routing key rejected: contains traversal sequence")
-        return ""
-    if candidate in {".", ".."}:
-        logger.warning("Unsafe host routing key rejected: invalid path token")
-        return ""
-    if not _HOST_ROUTING_RE.fullmatch(candidate):
-        logger.warning("Unsafe host routing key rejected: invalid characters")
-        return ""
-    return candidate
+# Backward-compat alias so existing imports (tests, etc.) still work.
+sanitize_host_routing_key = sanitize_path_component
 
 
 class _SingleHostWriter:
@@ -158,7 +135,7 @@ class HostMultiplexEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
 
     def _get_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        safe_host_fqdn = sanitize_host_routing_key(host_fqdn)
+        safe_host_fqdn = sanitize_path_component(host_fqdn)
         writer = self._writers.get(safe_host_fqdn)
         if writer is not None:
             return writer

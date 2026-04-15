@@ -133,17 +133,19 @@ def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
     Rejects symlinked destination directories to prevent writes/deletes from
     being redirected outside the intended install location.
     """
+    from evidenceforge.utils.paths import reject_symlink
+
     eforge_dir = target_dir / "eforge"
-    if eforge_dir.exists() and eforge_dir.is_symlink():
-        raise PermissionError(f"Refusing to install skills into symlinked directory: {eforge_dir}")
+    # Check symlink before and after creation (TOCTOU defense)
+    reject_symlink(eforge_dir)
 
     ensure_directory(target_dir)
     eforge_dir.mkdir(parents=True, exist_ok=True)
 
     # Check again after creation to avoid races where the path is swapped.
-    if eforge_dir.is_symlink():
-        raise PermissionError(f"Refusing to install skills into symlinked directory: {eforge_dir}")
+    reject_symlink(eforge_dir)
 
+    # Verify containment
     target_real = target_dir.resolve()
     eforge_real = eforge_dir.resolve()
     if os.path.commonpath([str(eforge_real), str(target_real)]) != str(target_real):

@@ -39,7 +39,8 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
-from evidenceforge.generation.emitters.host_base import _SingleHostWriter, sanitize_host_routing_key
+from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.utils.paths import sanitize_path_component
 
 win_logger = logging.getLogger(__name__)
 
@@ -967,7 +968,7 @@ class WindowsEventEmitter(LogEmitter):
         self._record_id_counters: dict[str, int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        safe_host_fqdn = sanitize_host_routing_key(host_fqdn)
+        safe_host_fqdn = sanitize_path_component(host_fqdn)
         writer = self._host_writers.get(safe_host_fqdn)
         if writer is not None:
             return writer
@@ -1054,7 +1055,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # Assign per-computer EventRecordIDs in sorted order
         for event in self._event_dicts:
-            computer = sanitize_host_routing_key(event.get("Computer", ""))
+            computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:
                 rng = random.Random(f"erid_{counter_key}")
