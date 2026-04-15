@@ -92,6 +92,7 @@ Data is *wrong* — a hunter hits dead ends. Fix these first; several unblock Ti
 - [x] **Migrate eCAR FLOW to SecurityEvent dispatch** — already complete: `"connection"` in `_supported_types`, `_render_connection()` implemented, all connections dispatch through SecurityEvent. `pid:-1` for system traffic is correct behavior.
 - [x] **No 4625 on DC for password spray** — sprays against domain accounts should produce 4625/4776 on the DC, not just the originating workstation. DC-focused Sigma/Splunk rules won't fire.
 - [x] **Ground truth Zeek UIDs missing from logs** — UIDs listed in GROUND_TRUTH.md IOC section don't exist in any sensor's conn.json. Answer key references evidence that isn't there.
+- [x] Raw storyline events path traversal hardening — sanitized host routing keys for host-multiplexed emitters and Windows per-host writers so raw event fields cannot escape output directory; unsafe keys now fall back to flat-file output.
 
 ### Tier 2: Huntability & Detection
 
