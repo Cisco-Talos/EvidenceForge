@@ -87,6 +87,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 Data is *wrong* — a hunter hits dead ends. Fix these first; several unblock Tier 2 work.
 
+- [x] Harden provider-aware DNS hostname generation against invalid/IPv6 storyline `dst_ip` values to prevent generation-time crashes (invalid/non-IPv4 inputs now fall back to `generic` provider safely).
 - [x] **LogonIDs leak across hosts** — remote processes on DC/file server use the originating-host LogonID instead of the destination host's 4624 TargetLogonId. Breaks every pivot-based hunting workflow.
 - [x] **services.exe PID changes within single boot session** — process tree references a parent PID that was replaced mid-scenario. Child processes become orphaned.
 - [x] **Extend canonical event model to baseline activity** — added SyslogContext, WeirdContext, extended DhcpContext. Syslog emitter renders from SyslogContext exclusively. All internal `generate_raw()` calls eliminated (was 12, now 0). `generate_raw()` exists solely for user-facing `raw` event type in scenario YAML.

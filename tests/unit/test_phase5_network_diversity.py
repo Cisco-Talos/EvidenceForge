@@ -33,6 +33,7 @@ from evidenceforge.generation.activity import (
     EXTERNAL_IPS,
     REVERSE_DNS,
     ActivityGenerator,
+    _detect_ip_provider,
     _generate_random_external_ip,
     _generate_random_hostname,
 )
@@ -121,6 +122,16 @@ class TestRandomIPGenerator:
         hostname = _generate_random_hostname(rng, "52.84.100.50")
         assert "." in hostname  # Has a domain
         assert len(hostname) > 5
+
+
+class TestProviderDetection:
+    """Test provider detection robustness for untrusted IP input."""
+
+    def test_detect_ip_provider_invalid_input_returns_generic(self):
+        assert _detect_ip_provider("not-an-ip") == "generic"
+
+    def test_detect_ip_provider_ipv6_returns_generic(self):
+        assert _detect_ip_provider("2001:db8::1") == "generic"
 
 
 class TestDnsLookupEmission:
