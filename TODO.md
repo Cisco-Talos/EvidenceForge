@@ -75,6 +75,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Tier 0: Infrastructure
 
+- [x] Security: sanitized sensor-hostname-based output paths to prevent traversal outside output_dir (path separators/traversal tokens now normalized to safe subdirectory names in SensorMultiplexEmitter; added unit tests).
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.
 - [x] **`eforge validate` can't find personas in dev mode** — works when installed (`eforge validate`) but not via `uv run eforge validate`. Blocks dev workflow.
 - [x] **511 ruff lint errors + 102 formatting issues** — CI lint job fails immediately. Auto-fix + suppress false positives (B008 for Typer, N806 for lookup tables, B904 for typer.Exit).

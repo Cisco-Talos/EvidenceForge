@@ -91,6 +91,56 @@ class TestPerSensorDirectoryRouting:
             emitter.close()
             assert (base / "sensor-1" / "conn.json").exists()
 
+    def test_sensor_hostname_path_traversal_is_sanitized(self):
+        """Traversal strings must not escape the configured base directory."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["../../pwned_dir"])
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "proto": "tcp",
+                    "conn_state": "SF",
+                    "_sensor_hostnames": ["../../pwned_dir"],
+                }
+            )
+            emitter.close()
+
+            expected_path = base / "pwned_dir" / "conn.json"
+            assert expected_path.exists()
+            assert expected_path.resolve().is_relative_to(base.resolve())
+
+    def test_sensor_hostname_absolute_path_is_sanitized(self):
+        """Absolute-path-like hostnames must be reduced to a safe local subdirectory."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["/tmp/evil"])
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "proto": "tcp",
+                    "conn_state": "SF",
+                    "_sensor_hostnames": ["/tmp/evil"],
+                }
+            )
+            emitter.close()
+
+            expected_path = base / "tmp_evil" / "conn.json"
+            assert expected_path.exists()
+            assert expected_path.resolve().is_relative_to(base.resolve())
+
     def test_no_sensors_flat_output(self):
         """No sensors configured → flat output using _flat_filename."""
         fmt = load_format("zeek_conn")

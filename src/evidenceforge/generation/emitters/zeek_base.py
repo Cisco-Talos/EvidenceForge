@@ -38,6 +38,7 @@ When no sensors are configured (backward compat), writes directly to:
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from queue import Empty
@@ -48,6 +49,7 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 
 logger = logging.getLogger(__name__)
+_SENSOR_DIR_SAFE_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class _SingleZeekWriter:
@@ -130,15 +132,16 @@ class SensorMultiplexEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
 
     def _get_writer(self, sensor_hostname: str) -> _SingleZeekWriter:
-        writer = self._writers.get(sensor_hostname)
+        writer_key = self._sanitize_sensor_dir_name(sensor_hostname) if sensor_hostname else ""
+        writer = self._writers.get(writer_key)
         if writer is not None:
             return writer
         with self._writers_lock:
-            writer = self._writers.get(sensor_hostname)
+            writer = self._writers.get(writer_key)
             if writer is not None:
                 return writer
             if sensor_hostname:
-                path = self._base_dir / sensor_hostname / self._log_filename
+                path = self._base_dir / writer_key / self._log_filename
             elif self._direct_file_path:
                 # Direct file mode (test/simple usage): output_path was a file
                 path = self._direct_file_path
@@ -152,9 +155,15 @@ class SensorMultiplexEmitter(LogEmitter):
                 sort_before_flush=self._sort_before_flush,
                 sort_key=getattr(self, "_sort_key_func", None),
             )
-            self._writers[sensor_hostname] = writer
+            self._writers[writer_key] = writer
             logger.debug(f"Created Zeek writer: {path}")
             return writer
+
+    @staticmethod
+    def _sanitize_sensor_dir_name(sensor_hostname: str) -> str:
+        """Normalize user-provided sensor hostnames into safe output directory names."""
+        sanitized = _SENSOR_DIR_SAFE_CHARS_RE.sub("_", sensor_hostname).strip("._-")
+        return sanitized or "sensor"
 
     def _get_default_writer(self) -> _SingleZeekWriter:
         """Get the backward-compat flat writer (no sensor subdirectory)."""
