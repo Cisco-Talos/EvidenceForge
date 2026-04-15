@@ -449,6 +449,29 @@ class TestThreatDetection:
         threat_lines = [line for line in lines if "733100" in line]
         assert len(threat_lines) == 0
 
+    def test_threat_detection_prunes_old_timestamps(self, asa_emitter):
+        """Deny timestamp state should stay bounded to configured tracking windows."""
+        from datetime import timedelta
+
+        asa_emitter._td_burst_window = 10
+        asa_emitter._td_avg_window = 30
+        asa_emitter._td_burst_threshold = 9999
+        asa_emitter._td_avg_threshold = 9999
+
+        for i in range(120):
+            event = self._make_deny_event(
+                "198.51.100.1",
+                "10.0.10.50",
+                445,
+                T0 + timedelta(seconds=i),
+            )
+            asa_emitter.emit(event)
+
+        key = ("fw01", "198.51.100.1")
+        assert key in asa_emitter._deny_timestamps
+        # max_window=30 seconds, inclusive cutoff allows at most 31 one-second events
+        assert len(asa_emitter._deny_timestamps[key]) <= 31
+
 
 class TestNatRecords:
     """Tests for NAT translation records (305011/305012) emitted alongside connection logs."""

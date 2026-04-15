@@ -238,6 +238,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] DHCP shows full discovery instead of renewals in mid-scenario windows — initial leases emitted during warm-up (suppressed); periodic REQUEST/ACK renewals at T/2 in _generate_system_traffic()
 
 **Cisco ASA:**
+- [x] Security: bound threat-detection deny timestamp tracking window to prevent unbounded memory/CPU growth
 - [ ] ASA Built/Teardown counts perfectly balanced — real logs have orphans from log rotation boundaries
 - [ ] ASA message type diversity limited to 106023/302013-16/305011-12 — missing 111008, 113004, 733100, 106001, 725001, 304001
 - [ ] ASA deny baseline uniformly spaced (3-7s) — real scans arrive in bursty patterns
