@@ -4252,6 +4252,53 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_image_load(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        image: str,
+        dll_path: str,
+        signed: bool = True,
+        signature: str = "Microsoft Windows",
+        signature_status: str = "Valid",
+    ) -> None:
+        """Generate Sysmon Event 7 (ImageLoaded) for DLL/module loading.
+
+        Args:
+            user: User running the process that loaded the DLL
+            system: System where the load occurs
+            time: Event timestamp
+            pid: PID of the process loading the DLL
+            image: Full path of the process image
+            dll_path: Full path of the loaded DLL
+            signed: Whether the DLL is signed
+            signature: Signer name (e.g., "Microsoft Windows")
+            signature_status: Signature validation status (Valid, Expired, etc.)
+        """
+        from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="image_load",
+            src_host=self._build_host_context(system),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=image,
+                command_line="",
+                username=user.username,
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=dll_path,
+                signed=signed,
+                signature=signature,
+                signature_status=signature_status,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
     def generate_account_changed(
         self,
         actor: User,

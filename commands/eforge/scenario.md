@@ -602,6 +602,18 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 - Describe what each sensor can see in straightforward terms (e.g., "Monitors all traffic between subnets via SPAN port on the core switch")
 - Do NOT editorialize about gaps or blind spots — just describe what each sensor covers
 
+**Sysmon configuration (when windows format is included):**
+- Document the Sysmon filtering policy under a "Security Tooling" or "Monitoring & Logging" section
+- Describe Sysmon as deployed with a community-based config (SwiftOnSecurity/Olaf Hartong style) that includes:
+  - Process creation and termination (Events 1, 5)
+  - Network connections for LOLBins and suspicious ports — browsers and system services excluded (Event 3)
+  - DLL/module loading for unsigned and third-party DLLs — Microsoft-signed System32 DLLs excluded (Event 7)
+  - File creation for executable types in suspicious locations — Startup, Downloads, Temp, scheduled tasks (Event 11)
+  - Registry persistence and tampering — Run keys, Winlogon, services, firewall/Defender/UAC modifications (Events 12/13)
+  - DNS queries from all processes (Event 22)
+  - Process injection and credential access detection (Events 8, 10)
+- This helps analysts understand why some expected events may be absent (filtered by config) and what telemetry is available
+
 **File location:**
 - Save as `ENVIRONMENT.md` in the same directory as the scenario YAML file
 - Name it `<scenario-name>-ENVIRONMENT.md` if the scenario name is available

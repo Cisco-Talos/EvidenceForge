@@ -1,0 +1,594 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Unit tests for new Sysmon events: 3, 7, 11, 12/13, 22."""
+
+from datetime import UTC, datetime
+from unittest.mock import patch
+
+import pytest
+
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import (
+    AuthContext,
+    DnsContext,
+    FileContext,
+    HostContext,
+    ImageLoadContext,
+    NetworkContext,
+    ProcessContext,
+    RegistryContext,
+)
+from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters import SysmonEventEmitter
+
+
+def _win_host():
+    return HostContext(
+        hostname="WKS-01",
+        ip="10.0.1.10",
+        os="Windows 10",
+        os_category="windows",
+        system_type="workstation",
+        domain="corp.local",
+        fqdn="WKS-01.corp.local",
+        netbios_domain="CORP",
+    )
+
+
+def _linux_host():
+    return HostContext(
+        hostname="SRV-01",
+        ip="10.0.2.10",
+        os="Ubuntu 22.04",
+        os_category="linux",
+        system_type="server",
+        domain="corp.local",
+        fqdn="SRV-01.corp.local",
+    )
+
+
+@pytest.fixture
+def format_def():
+    return load_format("windows_event_sysmon")
+
+
+@pytest.fixture
+def emitter(format_def, tmp_path):
+    return SysmonEventEmitter(format_def, tmp_path / "sysmon.xml", buffer_size=100)
+
+
+class TestCanHandle:
+    """Test can_handle for new event types."""
+
+    def test_connection_on_windows(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.2.20", src_port=49152, dst_port=443, protocol="tcp"
+            ),
+        )
+        assert emitter.can_handle(event) is True
+
+    def test_connection_on_linux_rejected(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_linux_host(),
+            network=NetworkContext(
+                src_ip="10.0.2.10", dst_ip="10.0.1.10", src_port=49152, dst_port=22, protocol="tcp"
+            ),
+        )
+        assert emitter.can_handle(event) is False
+
+    def test_file_create_on_windows(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="file_create",
+            src_host=_win_host(),
+            file=FileContext(path=r"C:\Windows\Temp\evil.exe", action="create"),
+        )
+        assert emitter.can_handle(event) is True
+
+    def test_image_load_on_windows(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\app.dll",
+                signed=False,
+                signature="-",
+                signature_status="Unavailable",
+            ),
+        )
+        assert emitter.can_handle(event) is True
+
+    def test_registry_modify_on_windows(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            registry=RegistryContext(
+                key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\evil",
+                value="evil.exe",
+                action="modify",
+            ),
+        )
+        assert emitter.can_handle(event) is True
+
+
+class TestEvent3Filter:
+    """Test Event 3 (NetworkConnect) filtering."""
+
+    def test_lolbin_passes_filter(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\System32\powershell.exe",
+                command_line="powershell",
+                username="user",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.2.20", src_port=49152, dst_port=443, protocol="tcp"
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is True
+
+    def test_browser_filtered_out(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=5678,
+                parent_pid=1,
+                image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                command_line="chrome",
+                username="user",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                src_port=49200,
+                dst_port=443,
+                protocol="tcp",
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is False
+
+    def test_suspicious_port_passes_filter(self, emitter):
+        """Any process connecting to a suspicious port should pass."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=5678,
+                parent_pid=1,
+                image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                command_line="chrome",
+                username="user",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="192.168.1.100",
+                src_port=49200,
+                dst_port=4444,
+                protocol="tcp",
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is True
+
+    def test_loopback_excluded(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\System32\powershell.exe",
+                command_line="powershell",
+                username="user",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="127.0.0.1", src_port=49152, dst_port=80, protocol="tcp"
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is False
+
+
+class TestEvent7Filter:
+    """Test Event 7 (ImageLoaded) filtering."""
+
+    def test_system32_dll_filtered(self, emitter):
+        """Microsoft-signed DLLs from System32 should be excluded."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1000,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Windows\System32\ntdll.dll",
+                signed=True,
+                signature="Microsoft Windows",
+                signature_status="Valid",
+            ),
+        )
+        assert emitter._passes_event7_filter(event) is False
+
+    def test_unsigned_thirdparty_dll_passes(self, emitter):
+        """Unsigned DLLs from non-system paths should pass."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1000,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\SomeApp\plugin.dll",
+                signed=False,
+                signature="-",
+                signature_status="Unavailable",
+            ),
+        )
+        assert emitter._passes_event7_filter(event) is True
+
+    def test_disabled_event7(self, emitter):
+        """Event 7 should be skipped when disabled in config."""
+        with patch.object(
+            emitter,
+            "_get_filters",
+            return_value={
+                "image_loaded": {"enabled": False},
+            },
+        ):
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                event_type="image_load",
+                src_host=_win_host(),
+                image_load=ImageLoadContext(
+                    image_loaded=r"C:\evil.dll",
+                    signed=False,
+                    signature="-",
+                    signature_status="Unavailable",
+                ),
+            )
+            assert emitter._passes_event7_filter(event) is False
+
+
+class TestEvent11Filter:
+    """Test Event 11 (FileCreate) filtering."""
+
+    def test_exe_in_temp_passes(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="file_create",
+            src_host=_win_host(),
+            file=FileContext(path=r"C:\Windows\Temp\payload.exe", action="create"),
+        )
+        assert emitter._passes_event11_filter(event) is True
+
+    def test_txt_file_filtered(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="file_create",
+            src_host=_win_host(),
+            file=FileContext(path=r"C:\Users\john\Documents\notes.txt", action="create"),
+        )
+        assert emitter._passes_event11_filter(event) is False
+
+    def test_startup_folder_passes(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="file_create",
+            src_host=_win_host(),
+            file=FileContext(
+                path=r"C:\Users\john\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\persist.lnk",
+                action="create",
+            ),
+        )
+        assert emitter._passes_event11_filter(event) is True
+
+
+class TestEventRegistryFilter:
+    """Test Events 12/13 (Registry) filtering."""
+
+    def test_run_key_modify_passes(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            registry=RegistryContext(
+                key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\Backdoor",
+                value="evil.exe",
+                action="modify",
+            ),
+        )
+        assert emitter._passes_event12_13_filter(event) is True
+
+    def test_create_key_filtered_by_default(self, emitter):
+        """CreateKey actions are filtered by default (log_create_key: false)."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            registry=RegistryContext(
+                key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
+                action="create",
+            ),
+        )
+        assert emitter._passes_event12_13_filter(event) is False
+
+    def test_non_matching_key_filtered(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            registry=RegistryContext(
+                key=r"HKLM\Software\SomeApp\Settings\Color",
+                value="blue",
+                action="modify",
+            ),
+        )
+        assert emitter._passes_event12_13_filter(event) is False
+
+
+class TestEvent22Filter:
+    """Test Event 22 (DNSQuery) filtering."""
+
+    def test_dns_query_passes_by_default(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            dns=DnsContext(query="evil.com", rcode="NOERROR", answers=["1.2.3.4"]),
+        )
+        assert emitter._passes_event22_filter(event) is True
+
+    def test_disabled_event22(self, emitter):
+        with patch.object(
+            emitter,
+            "_get_filters",
+            return_value={
+                "dns_query": {"enabled": False},
+            },
+        ):
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                event_type="connection",
+                src_host=_win_host(),
+                dns=DnsContext(query="evil.com", rcode="NOERROR"),
+            )
+            assert emitter._passes_event22_filter(event) is False
+
+
+class TestRenderEvent3:
+    """Test Event 3 (NetworkConnect) rendering."""
+
+    def test_renders_valid_event3(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd",
+                username="admin",
+            ),
+            auth=AuthContext(username="admin"),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.2.20",
+                src_port=49152,
+                dst_port=4444,
+                protocol="tcp",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>3</EventID>" in content
+        assert "cmd.exe" in content
+        assert "10.0.2.20" in content
+        assert "4444" in content
+        assert "tcp" in content
+
+
+class TestRenderEvent7:
+    """Test Event 7 (ImageLoaded) rendering."""
+
+    def test_renders_valid_event7(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\App\plugin.dll",
+                signed=False,
+                signature="-",
+                signature_status="Unavailable",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>7</EventID>" in content
+        assert "plugin.dll" in content
+        assert "Unavailable" in content
+        assert '<Data Name="Signed">false</Data>' in content
+
+
+class TestRenderEvent11:
+    """Test Event 11 (FileCreate) rendering."""
+
+    def test_renders_valid_event11(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="file_create",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\powershell.exe",
+                command_line="powershell",
+                username="admin",
+            ),
+            file=FileContext(path=r"C:\Windows\Temp\payload.exe", action="create"),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>11</EventID>" in content
+        assert "payload.exe" in content
+        assert "powershell.exe" in content
+
+
+class TestRenderEventRegistry:
+    """Test Events 12/13 (Registry) rendering."""
+
+    def test_modify_renders_event13(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\reg.exe",
+                command_line="reg add",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\Backdoor",
+                value="evil.exe",
+                action="modify",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>13</EventID>" in content
+        assert "SetValue" in content
+        assert "evil.exe" in content
+        assert "CurrentVersion\\Run" in content
+
+    def test_delete_renders_event12(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\regedit.exe",
+                command_line="regedit",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\OldEntry",
+                action="delete",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>12</EventID>" in content
+        assert "DeleteValue" in content
+
+
+class TestRenderEvent22:
+    """Test Event 22 (DNSQuery) rendering."""
+
+    def test_renders_valid_event22(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
+            ),
+            dns=DnsContext(query="evil-c2.com", rcode="NOERROR", answers=["1.2.3.4"]),
+        )
+        # Event 22 fires when DNS is present, even if Event 3 is filtered
+        emitter._render_sysmon_dns_query(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>22</EventID>" in content
+        assert "evil-c2.com" in content
+        assert "1.2.3.4;" in content
+        assert "svchost.exe" in content
+
+    def test_nxdomain_query_status(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
+            ),
+            dns=DnsContext(query="doesnotexist.com", rcode="NXDOMAIN", answers=[]),
+        )
+        emitter._render_sysmon_dns_query(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="QueryStatus">9003</Data>' in content
+        assert '<Data Name="QueryResults">-</Data>' in content
+
+    def test_servfail_query_status(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
+            ),
+            dns=DnsContext(query="flaky.com", rcode="SERVFAIL", answers=[]),
+        )
+        emitter._render_sysmon_dns_query(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="QueryStatus">9002</Data>' in content

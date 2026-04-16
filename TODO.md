@@ -157,8 +157,9 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ Sysmon Event 5 (ProcessTerminate), Event 8 baseline noise, Event 10 baseline noise — added to baseline + eCAR THREAD/REMOTE_CREATE and PROCESS/OPEN correlation
 - [x] ✓² Lsass ProcessAccess GrantedAccess hardcoded to 0x1010 for Mimikatz — changed to 0x1FFFFF (PROCESS_ALL_ACCESS) in causal expansion rule
 - [x] ✓² Benign lsass accessors limited to MsMpEng + svchost — added csrss.exe, svchost (netsvcs), services.exe as additional baseline lsass accessors
-- [ ] **P1** Sysmon Event 3 (NetworkConnect), 7 (ImageLoaded), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) not yet implemented — absence of these common EIDs is immediately suspicious to any analyst with real Sysmon experience
+- [x] **P1** Sysmon Event 3 (NetworkConnect), 7 (ImageLoaded), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) — implemented with data-driven filtering via sysmon_filters.yaml (SwiftOnSecurity/Olaf Hartong style). Event 3 include-filters LOLBins + suspicious ports; Event 7 excludes Microsoft-signed System32 DLLs; Event 11 include-filters executable extensions + suspicious paths; Events 12/13 include-filter persistence/tampering keys; Event 22 logs all DNS. User-configurable via .eforge/config/ overlay with per-event enabled toggle.
 - [x] ✓³ ParentCommandLine always "-" — added parent_command_line to ProcessContext; populated via _lookup_parent_command_line() from StateManager
+- [ ] Event 7 DLL load profiles per process — current baseline randomly assigns DLLs; real processes load characteristic DLL sets (explorer→shell32/uxtheme, lsass→kerberos/wdigest, etc.). Add sysmon_dll_profiles.yaml mapping process names to expected DLL pools.
 - [ ] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — real environments show 10-20+ distinct masks from AV, EDR, WMI, etc.
 - [ ] CallTrace offsets limited to 2 patterns — need diverse ntdll/KERNELBASE offsets per call path
 - [ ] Sysmon EventRecordIDs perfectly sequential (no gaps) — real systems drop events under load
@@ -296,7 +297,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 - [x] Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch (enables 4663 + Sysmon 11/12/13 correlation) — completed in Phase 8.2; probabilistic EDR events dispatch via SecurityEvent with EdrContext
 - [x] Migrate syslog system messages: CRON↔eCAR PROCESS, UFW BLOCK↔Zeek conn, systemd↔eCAR PROCESS — CRON and UFW were already working; systemd now uses paired generate_system_process/generate_system_process_termination lifecycle
-- [ ] Sysmon Event 3 (Network), 11 (FileCreate), 13 (Registry) emission
+- [x] Sysmon Event 3 (Network), 11 (FileCreate), 13 (Registry) emission — implemented alongside Sysmon P1
 
 ---
 

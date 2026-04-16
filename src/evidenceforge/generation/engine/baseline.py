@@ -3245,6 +3245,97 @@ class BaselineMixin:
                         granted_access=access,
                     )
 
+            # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
+            # DLL loads from common processes — most will be filtered by the exclude
+            # rule (Microsoft-signed DLLs in System32), but some third-party DLLs
+            # from Program Files pass through, providing realistic baseline noise.
+            if os_cat == "windows":
+                num_dll = rng.randint(15, 40)
+                _dll_procs = [
+                    ("explorer", r"C:\Windows\explorer.exe"),
+                    ("svchost", r"C:\Windows\System32\svchost.exe"),
+                    ("runtimebroker", r"C:\Windows\System32\RuntimeBroker.exe"),
+                    ("taskhostw", r"C:\Windows\System32\taskhostw.exe"),
+                    ("dllhost", r"C:\Windows\System32\dllhost.exe"),
+                ]
+                _dll_pool_signed = [
+                    r"C:\Windows\System32\ntdll.dll",
+                    r"C:\Windows\System32\kernel32.dll",
+                    r"C:\Windows\System32\user32.dll",
+                    r"C:\Windows\System32\ole32.dll",
+                    r"C:\Windows\System32\combase.dll",
+                    r"C:\Windows\System32\msvcrt.dll",
+                    r"C:\Windows\System32\advapi32.dll",
+                    r"C:\Windows\System32\clbcatq.dll",
+                    r"C:\Windows\System32\sechost.dll",
+                    r"C:\Windows\System32\rpcrt4.dll",
+                    r"C:\Windows\System32\bcryptprimitives.dll",
+                    r"C:\Windows\System32\ucrtbase.dll",
+                    r"C:\Windows\System32\shell32.dll",
+                    r"C:\Windows\System32\gdi32.dll",
+                    r"C:\Windows\System32\ws2_32.dll",
+                ]
+                _dll_pool_thirdparty = [
+                    (
+                        r"C:\Program Files\Common Files\System\Ole DB\sqloledb.dll",
+                        False,
+                        "-",
+                        "Unavailable",
+                    ),
+                    (
+                        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.dll",
+                        True,
+                        "Microsoft Corporation",
+                        "Valid",
+                    ),
+                    (
+                        r"C:\Program Files\Windows Defender\MpClient.dll",
+                        True,
+                        "Microsoft Corporation",
+                        "Valid",
+                    ),
+                    (
+                        r"C:\Program Files\VMware\VMware Tools\vmtools.dll",
+                        False,
+                        "-",
+                        "Unavailable",
+                    ),
+                    (r"C:\Program Files\Wireshark\wpcap.dll", False, "-", "Unavailable"),
+                ]
+                for _ in range(num_dll):
+                    proc_key, proc_image = rng.choice(_dll_procs)
+                    proc_pid = sys_pids.get(proc_key, rng.randint(1000, 5000))
+                    offset = rng.uniform(0, 3599)
+                    ts = current_hour + timedelta(seconds=offset)
+                    self.state_manager.set_current_time(ts)
+                    # 80% signed Microsoft DLLs, 20% third-party
+                    if rng.random() < 0.8:
+                        dll_path = rng.choice(_dll_pool_signed)
+                        self.activity_generator.generate_image_load(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            pid=proc_pid,
+                            image=proc_image,
+                            dll_path=dll_path,
+                            signed=True,
+                            signature="Microsoft Windows",
+                            signature_status="Valid",
+                        )
+                    else:
+                        dll_path, signed, sig, sig_status = rng.choice(_dll_pool_thirdparty)
+                        self.activity_generator.generate_image_load(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            pid=proc_pid,
+                            image=proc_image,
+                            dll_path=dll_path,
+                            signed=signed,
+                            signature=sig,
+                            signature_status=sig_status,
+                        )
+
             # ICMP monitoring pings are now handled by role_traffic profiles
 
             # SSH: connections to Linux servers

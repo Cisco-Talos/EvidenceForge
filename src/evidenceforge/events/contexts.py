@@ -169,6 +169,16 @@ class RegistryContext:
 
 
 @dataclass(slots=True)
+class ImageLoadContext:
+    """DLL/module load details for Sysmon Event 7."""
+
+    image_loaded: str  # Full path to loaded DLL
+    signed: bool = True
+    signature: str = "Microsoft Windows"
+    signature_status: str = "Valid"  # Valid, Expired, Revoked, Unavailable
+
+
+@dataclass(slots=True)
 class IdsContext:
     """IDS/IPS alert details for Snort."""
 

@@ -35,12 +35,43 @@ from queue import Empty
 from threading import Lock
 from typing import Any
 
+from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
+
+# Well-known Windows port names for Sysmon Event 3
+_PORT_NAMES: dict[int, str] = {
+    20: "ftp-data",
+    21: "ftp",
+    22: "ssh",
+    25: "smtp",
+    53: "domain",
+    80: "http",
+    110: "pop3",
+    135: "epmap",
+    139: "netbios-ssn",
+    143: "imap",
+    443: "https",
+    445: "microsoft-ds",
+    993: "imaps",
+    995: "pop3s",
+    3389: "ms-wbt-server",
+    5985: "wsman",
+    5986: "wsmans",
+}
+
+# DNS rcode → Windows DNS QueryStatus mapping
+_DNS_STATUS_MAP: dict[str, str] = {
+    "NOERROR": "0",
+    "SERVFAIL": "9002",
+    "NXDOMAIN": "9003",
+    "NOTIMP": "9501",
+    "REFUSED": "9005",
+}
 
 
 class SysmonEventEmitter(LogEmitter):
@@ -56,6 +87,11 @@ class SysmonEventEmitter(LogEmitter):
         "process_terminate",
         "create_remote_thread",
         "process_access",
+        "connection",  # Event 3 (NetworkConnect) + Event 22 (DNSQuery)
+        "file_create",  # Event 11 (FileCreate)
+        "file_modify",  # Event 11 (FileCreate — overwrites also trigger)
+        "registry_modify",  # Events 12/13 (RegistryEvent)
+        "image_load",  # Event 7 (ImageLoaded)
     }
     # Per-host boot datetimes for realistic parent ProcessGUID timestamps.
     # Set by emitter_setup after initialization.
@@ -366,15 +402,15 @@ class SysmonEventEmitter(LogEmitter):
         return cache[hostname]
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        """Sysmon emitter handles process events on Windows hosts."""
-        return (
-            event.event_type in self._supported_types
-            and event.src_host is not None
-            and event.src_host.os_category == "windows"
-        )
+        """Sysmon emitter handles supported event types on Windows hosts."""
+        if event.event_type not in self._supported_types:
+            return False
+        if event.src_host is None or event.src_host.os_category != "windows":
+            return False
+        return True
 
     def emit(self, event: SecurityEvent) -> None:
-        """Dispatch to per-type render method."""
+        """Dispatch to per-type render method, applying Sysmon filters."""
         if event.event_type in ("process_create", "system_process_create"):
             self._render_sysmon_process_create(event)
         elif event.event_type == "process_terminate":
@@ -383,10 +419,21 @@ class SysmonEventEmitter(LogEmitter):
             self._render_sysmon_create_remote_thread(event)
         elif event.event_type == "process_access":
             self._render_sysmon_process_access(event)
-        else:
-            raise NotImplementedError(
-                f"SysmonEventEmitter: no render method for {event.event_type}"
-            )
+        elif event.event_type == "connection":
+            # Connection events can produce Event 3 (NetworkConnect) and/or Event 22 (DNSQuery)
+            if self._passes_event3_filter(event):
+                self._render_sysmon_network_connect(event)
+            if event.dns and self._passes_event22_filter(event):
+                self._render_sysmon_dns_query(event)
+        elif event.event_type in ("file_create", "file_modify"):
+            if event.file and self._passes_event11_filter(event):
+                self._render_sysmon_file_create(event)
+        elif event.event_type == "registry_modify":
+            if event.registry:
+                self._render_sysmon_registry_event(event)
+        elif event.event_type == "image_load":
+            if event.image_load and self._passes_event7_filter(event):
+                self._render_sysmon_image_loaded(event)
 
     @staticmethod
     def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
@@ -651,6 +698,369 @@ class SysmonEventEmitter(LogEmitter):
         }
         self.emit_event(event_data)
 
+    # --- Sysmon filter methods (data-driven from sysmon_filters.yaml) ---
+
+    def _get_filters(self) -> dict:
+        """Return the loaded Sysmon filter config (cached)."""
+        if not hasattr(self, "_filters"):
+            self._filters = load_sysmon_filters()
+        return self._filters
+
+    def _passes_event3_filter(self, event: SecurityEvent) -> bool:
+        """Check if a connection event passes the Event 3 (NetworkConnect) filter."""
+        cfg = self._get_filters().get("network_connect", {})
+        if not cfg.get("enabled", True):
+            return False
+        if not event.network:
+            return False
+
+        mode = cfg.get("mode", "include")
+        if mode != "include":
+            return True  # No filtering
+
+        # Check excluded destination IPs
+        dst_ip = event.network.dst_ip or ""
+        exclude_ips = cfg.get("exclude_dest_ips", [])
+        if dst_ip in exclude_ips:
+            return False
+
+        # Check include rules — pass if image matches OR dest port matches
+        image = ""
+        if event.process:
+            image = event.process.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        include_images = [img.lower() for img in cfg.get("include_images", [])]
+        if image in include_images:
+            return True
+
+        dst_port = event.network.dst_port or 0
+        include_ports = cfg.get("include_dest_ports", [])
+        if dst_port in include_ports:
+            return True
+
+        return False
+
+    def _passes_event7_filter(self, event: SecurityEvent) -> bool:
+        """Check if an image_load event passes the Event 7 (ImageLoaded) filter."""
+        cfg = self._get_filters().get("image_loaded", {})
+        if not cfg.get("enabled", True):
+            return False
+        if not event.image_load:
+            return False
+
+        mode = cfg.get("mode", "exclude")
+        if mode != "exclude":
+            return True
+
+        dll_path = event.image_load.image_loaded
+        exclude_prefixes = cfg.get("exclude_image_loaded_prefixes", [])
+        for prefix in exclude_prefixes:
+            if dll_path.lower().startswith(prefix.lower()):
+                # Also check signature exclusion for Microsoft-signed DLLs
+                exclude_sigs = cfg.get("exclude_signatures", [])
+                sig = event.image_load.signature
+                if sig and any(s.lower() in sig.lower() for s in exclude_sigs):
+                    return False
+        return True
+
+    def _passes_event11_filter(self, event: SecurityEvent) -> bool:
+        """Check if a file event passes the Event 11 (FileCreate) filter."""
+        cfg = self._get_filters().get("file_create", {})
+        if not cfg.get("enabled", True):
+            return False
+        if not event.file:
+            return False
+
+        mode = cfg.get("mode", "include")
+        if mode != "include":
+            return True
+
+        path = event.file.path
+        path_lower = path.lower()
+
+        # Check path patterns
+        for pattern in cfg.get("include_target_paths", []):
+            if pattern.lower() in path_lower:
+                return True
+
+        # Check extensions
+        for ext in cfg.get("include_extensions", []):
+            if path_lower.endswith(ext.lower()):
+                return True
+
+        return False
+
+    def _passes_event12_13_filter(self, event: SecurityEvent) -> bool:
+        """Check if a registry event passes the Events 12/13 filter."""
+        cfg = self._get_filters().get("registry_event", {})
+        if not cfg.get("enabled", True):
+            return False
+        if not event.registry:
+            return False
+
+        # Determine if this is Event 12 (create/delete) or 13 (modify/set)
+        action = event.registry.action
+        if action == "create" and not cfg.get("log_create_key", False):
+            return False
+
+        mode = cfg.get("mode", "include")
+        if mode != "include":
+            return True
+
+        key = event.registry.key
+        key_lower = key.lower()
+        for pattern in cfg.get("include_key_patterns", []):
+            if pattern.lower() in key_lower:
+                return True
+
+        return False
+
+    def _passes_event22_filter(self, event: SecurityEvent) -> bool:
+        """Check if a DNS event passes the Event 22 (DNSQuery) filter."""
+        cfg = self._get_filters().get("dns_query", {})
+        if not cfg.get("enabled", True):
+            return False
+        if not event.dns:
+            return False
+
+        exclude_suffixes = cfg.get("exclude_query_suffixes", [])
+        query = event.dns.query.lower()
+        for suffix in exclude_suffixes:
+            if query.endswith(suffix.lower()):
+                return False
+
+        return True
+
+    # --- New render methods for Events 3, 7, 11, 12/13, 22 ---
+
+    def _render_sysmon_network_connect(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 3 (NetworkConnect)."""
+        rng = random.Random()
+        host = event.src_host
+        net = event.network
+        proc = event.process
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+        # Process info — use ProcessContext if available, else fallback to System
+        pid = proc.pid if proc else 4
+        image = proc.image if proc else "System"
+        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+
+        # User
+        if event.auth and event.auth.username:
+            user = f"{host.netbios_domain}\\{event.auth.username}"
+        else:
+            user = "NT AUTHORITY\\SYSTEM" if pid == 4 else f"{host.netbios_domain}\\SYSTEM"
+
+        src_ip = net.src_ip or host.ip
+        dst_ip = net.dst_ip or ""
+        src_port = net.src_port or 0
+        dst_port = net.dst_port or 0
+        proto = (net.protocol or "tcp").lower()
+
+        event_data = {
+            "EventID": 3,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": pid,
+            "Image": image,
+            "User": user,
+            "Protocol": proto,
+            "Initiated": "true",
+            "SourceIsIpv6": "true" if ":" in src_ip else "false",
+            "SourceIp": src_ip,
+            "SourceHostname": host.fqdn,
+            "SourcePort": src_port,
+            "SourcePortName": _PORT_NAMES.get(src_port, "-"),
+            "DestinationIsIpv6": "true" if ":" in dst_ip else "false",
+            "DestinationIp": dst_ip,
+            "DestinationHostname": "-",
+            "DestinationPort": dst_port,
+            "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
+        }
+        self.emit_event(event_data)
+
+    def _render_sysmon_image_loaded(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 7 (ImageLoaded)."""
+        rng = random.Random()
+        host = event.src_host
+        proc = event.process
+        il = event.image_load
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        pid = proc.pid if proc else rng.randint(1000, 5000)
+        image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
+        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+
+        # PE metadata for the loaded DLL
+        fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
+        hashes = self._generate_hashes(il.image_loaded, host.hostname)
+
+        event_data = {
+            "EventID": 7,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": pid,
+            "Image": image,
+            "ImageLoaded": il.image_loaded,
+            "FileVersion": fv,
+            "Description": desc,
+            "Product": prod,
+            "Company": company,
+            "OriginalFileName": orig,
+            "Hashes": hashes,
+            "Signed": "true" if il.signed else "false",
+            "Signature": il.signature if il.signed else "-",
+            "SignatureStatus": il.signature_status,
+        }
+        self.emit_event(event_data)
+
+    def _render_sysmon_file_create(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 11 (FileCreate)."""
+        rng = random.Random()
+        host = event.src_host
+        proc = event.process
+        fc = event.file
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        pid = proc.pid if proc else rng.randint(1000, 5000)
+        image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
+        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+
+        event_data = {
+            "EventID": 11,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": pid,
+            "Image": image,
+            "TargetFilename": fc.path,
+            "CreationUtcTime": utc_time,
+        }
+        self.emit_event(event_data)
+
+    def _render_sysmon_registry_event(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 12 (CreateKey/DeleteKey) or 13 (SetValue)."""
+        reg = event.registry
+        if not self._passes_event12_13_filter(event):
+            return
+
+        rng = random.Random()
+        host = event.src_host
+        proc = event.process
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        pid = proc.pid if proc else rng.randint(1000, 5000)
+        image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
+        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+
+        # Route to Event 12 or 13 based on action
+        action = reg.action
+        if action == "modify":
+            event_id = 13
+            event_type = "SetValue"
+        elif action == "delete":
+            event_id = 12
+            event_type = "DeleteValue"
+        elif action == "create":
+            event_id = 12
+            event_type = "CreateKey"
+        else:
+            event_id = 13
+            event_type = "SetValue"
+
+        event_data = {
+            "EventID": event_id,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": pid,
+            "Image": image,
+            "EventType": event_type,
+            "TargetObject": reg.key,
+        }
+
+        # Event 13 includes the Details field
+        if event_id == 13:
+            event_data["Details"] = reg.value or "-"
+
+        self.emit_event(event_data)
+
+    def _render_sysmon_dns_query(self, event: SecurityEvent) -> None:
+        """Render Sysmon Event 22 (DNSQuery)."""
+        rng = random.Random()
+        host = event.src_host
+        dns = event.dns
+
+        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+        # DNS queries are made by svchost.exe (DNS Client service)
+        dns_client_pid = self._get_dns_client_pid(host.hostname)
+        process_guid = self._generate_process_guid(host.hostname, dns_client_pid, event.timestamp)
+
+        # Map DNS rcode to Windows QueryStatus
+        query_status = _DNS_STATUS_MAP.get(dns.rcode, "0")
+
+        # QueryResults: semicolon-separated IP addresses with trailing semicolon
+        if dns.answers:
+            query_results = ";".join(dns.answers) + ";"
+        else:
+            query_results = "-"
+
+        event_data = {
+            "EventID": 22,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
+            "ExecutionThreadID": rng.randint(1000, 5000),
+            "UtcTime": utc_time,
+            "ProcessGuid": process_guid,
+            "ProcessId": dns_client_pid,
+            "QueryName": dns.query,
+            "QueryStatus": query_status,
+            "QueryResults": query_results,
+            "Image": r"C:\Windows\System32\svchost.exe",
+            "User": "NT AUTHORITY\\LOCAL SERVICE",
+        }
+        self.emit_event(event_data)
+
+    def _get_dns_client_pid(self, hostname: str) -> int:
+        """Return stable DNS Client svchost.exe PID for a given host."""
+        cache = getattr(self, "_dns_client_pids", None)
+        if cache is None:
+            cache = self._dns_client_pids = {}
+        if hostname not in cache:
+            h = int(
+                hashlib.md5(f"dns_client:{hostname}".encode(), usedforsecurity=False).hexdigest(),
+                16,
+            )
+            cache[hostname] = 900 + (h % 400)  # range 900-1299
+        return cache[hostname]
+
     # --- Infrastructure (same pattern as WindowsEventEmitter) ---
 
     def __init__(
@@ -758,9 +1168,8 @@ class SysmonEventEmitter(LogEmitter):
                     100_000, 500_000
                 )
             rng = self._erid_rngs[counter_key]
-            # Simulate gaps from event types we don't generate (3, 7, 11, 12-14, 22, etc.)
-            # Real Sysmon generates ~3-8x more events than just types 1/5/8/10
-            gap = rng.randint(1, 8)
+            # Simulate gaps from event types we don't generate (6, 9, 14-21, 23-29, etc.)
+            gap = rng.randint(1, 3)
             self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 

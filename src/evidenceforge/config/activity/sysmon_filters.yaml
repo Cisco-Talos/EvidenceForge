@@ -1,0 +1,117 @@
+# Sysmon event filtering policy.
+#
+# Simulates community Sysmon configs (SwiftOnSecurity / Olaf Hartong style).
+# All string matching is case-insensitive.
+#
+# Override via .eforge/config/activity/sysmon_filters.yaml — any top-level
+# key you include fully replaces the corresponding default section.
+
+network_connect:  # Event 3
+  enabled: true
+  mode: include  # Only log events matching include rules
+  include_images:
+    - powershell.exe
+    - cmd.exe
+    - rundll32.exe
+    - regsvr32.exe
+    - mshta.exe
+    - wscript.exe
+    - cscript.exe
+    - certutil.exe
+    - bitsadmin.exe
+    - msbuild.exe
+    - wmic.exe
+    - net.exe
+    - net1.exe
+    - psexec.exe
+    - psexesvc.exe
+    - msiexec.exe
+    - sc.exe
+    - schtasks.exe
+    - reg.exe
+    - installutil.exe
+    - cmstp.exe
+    - mmc.exe
+  include_dest_ports:
+    - 22     # SSH
+    - 25     # SMTP
+    - 3389   # RDP
+    - 4444   # Metasploit default
+    - 5985   # WinRM HTTP
+    - 5986   # WinRM HTTPS
+    - 8080   # Alt HTTP
+    - 8443   # Alt HTTPS
+    - 9001   # Tor
+  exclude_dest_ips:
+    - "127.0.0.1"
+    - "::1"
+
+image_loaded:  # Event 7
+  enabled: true
+  mode: exclude  # Log everything except matches
+  exclude_image_loaded_prefixes:
+    - C:\Windows\System32\
+    - C:\Windows\SysWOW64\
+    - C:\Windows\WinSxS\
+    - C:\Windows\assembly\
+    - C:\Windows\Microsoft.NET\
+  exclude_signatures:
+    - Microsoft Windows
+    - Microsoft Corporation
+
+file_create:  # Event 11
+  enabled: true
+  mode: include
+  include_target_paths:
+    - \Start Menu\
+    - \Startup\
+    - \Downloads\
+    - \AppData\Roaming\
+    - \Windows\Temp\
+    - \Windows\System32\Tasks\
+    - \Windows\System32\Drivers\
+    - \ProgramData\
+    - \Users\Public\
+    - \Temp\
+  include_extensions:
+    - .exe
+    - .dll
+    - .sys
+    - .ps1
+    - .bat
+    - .cmd
+    - .vbs
+    - .hta
+    - .scr
+    - .jar
+    - .lnk
+    - .docm
+    - .xlsm
+    - .pptm
+
+registry_event:  # Events 12/13
+  enabled: true
+  mode: include
+  include_key_patterns:
+    - CurrentVersion\Run
+    - CurrentVersion\RunOnce
+    - Winlogon\Shell
+    - Winlogon\Userinit
+    - Winlogon\Notify
+    - \ServiceDll
+    - \ImagePath
+    - \Start
+    - Group Policy\Scripts
+    - EnableFirewall
+    - DoNotAllowExceptions
+    - DisableAntiSpyware
+    - DisableRealtimeMonitoring
+    - EnableLUA
+    - LocalAccountTokenFilterPolicy
+    - fDenyTSConnections
+  log_create_key: false  # Only log SetValue (13) and Delete (12), not CreateKey
+
+dns_query:  # Event 22
+  enabled: true
+  mode: include_all  # Log all DNS queries
+  exclude_query_suffixes: []  # e.g., [".corp.local"] to suppress internal lookups
