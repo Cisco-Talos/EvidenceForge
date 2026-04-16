@@ -208,9 +208,11 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert "Existing output found" in result.stdout
         assert mock_engine.generate.called
-        # Previous files should have been cleaned
+        # Generated files should have been cleaned
         assert not (tmp_path / "GROUND_TRUTH.md").exists()
-        assert not (tmp_path / "ENVIRONMENT.md").exists()
+        # ENVIRONMENT.md is authored by /eforge scenario, not the engine — must be preserved
+        assert (tmp_path / "ENVIRONMENT.md").exists()
+        assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_aborts_on_existing_output_declined(
@@ -262,7 +264,9 @@ output:
         assert "Overwrite existing output?" not in result.stdout
         assert mock_engine.generate.called
         assert not (tmp_path / "GROUND_TRUTH.md").exists()
-        assert not (tmp_path / "ENVIRONMENT.md").exists()
+        # ENVIRONMENT.md must be preserved (not engine output)
+        assert (tmp_path / "ENVIRONMENT.md").exists()
+        assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_preserves_old_output_on_failure(

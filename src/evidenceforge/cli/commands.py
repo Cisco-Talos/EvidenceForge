@@ -244,16 +244,14 @@ def generate(
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
 
-    # Check for existing output
+    # Check for existing generated output (data/ and GROUND_TRUTH.md only).
+    # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
     existing = []
     if data_dir.exists():
         existing.append(f"  data/           ({data_dir})")
     gt_path = ground_truth_dir / "GROUND_TRUTH.md"
     if gt_path.exists():
         existing.append(f"  GROUND_TRUTH.md ({gt_path})")
-    env_path = ground_truth_dir / "ENVIRONMENT.md"
-    if env_path.exists():
-        existing.append(f"  ENVIRONMENT.md  ({env_path})")
 
     has_existing = bool(existing)
     if has_existing:
@@ -350,8 +348,6 @@ def generate(
                 shutil.rmtree(data_dir)
             if gt_path.exists():
                 gt_path.unlink()
-            if env_path.exists():
-                env_path.unlink()
             # Move staged data/ and GROUND_TRUTH.md to final location
             if gen_data_dir.exists():
                 shutil.move(str(gen_data_dir), str(data_dir))

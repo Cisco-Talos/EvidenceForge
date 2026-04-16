@@ -740,10 +740,18 @@ class SysmonEventEmitter(LogEmitter):
         if dst_ip in exclude_ips:
             return False
 
-        # Check include rules — pass if image matches OR dest port matches
+        # Check include rules — pass if image matches OR dest port matches.
+        # Resolve image from ProcessContext first, then fall back to PID lookup
+        # via StateManager (connection events often lack ProcessContext but carry
+        # initiating_pid on NetworkContext).
         image = ""
         if event.process:
             image = event.process.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        elif event.network and event.network.initiating_pid > 0 and event.src_host:
+            _pid, resolved_image = self._resolve_process_from_pid(
+                event.src_host.hostname, event.network.initiating_pid
+            )
+            image = resolved_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         include_images = [img.lower() for img in cfg.get("include_images", [])]
         if image in include_images:
             return True
@@ -1045,7 +1053,12 @@ class SysmonEventEmitter(LogEmitter):
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # DNS queries are made by svchost.exe (DNS Client service)
+        # On Windows, most DNS queries go through the DNS Client service
+        # (svchost.exe hosting dnscache). Sysmon Event 22 correctly attributes
+        # these to svchost.exe — this matches real-world Sysmon output.
+        # Tools that bypass the DNS Client (nslookup.exe, certain malware) are
+        # the exception; storyline-specific DNS could use the actual process
+        # in a future enhancement.
         dns_client_pid = self._get_dns_client_pid(host.hostname)
         process_guid = self._generate_process_guid(host.hostname, dns_client_pid, event.timestamp)
 

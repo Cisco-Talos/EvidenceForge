@@ -592,3 +592,199 @@ class TestRenderEvent22:
         output_path = list(emitter._host_writers.values())[0].output_path
         content = output_path.read_text()
         assert '<Data Name="QueryStatus">9002</Data>' in content
+
+
+class TestPidResolutionInFilter:
+    """Test that Event 3 filter resolves initiating_pid when ProcessContext is absent."""
+
+    def test_lolbin_connection_with_pid_only_passes_filter(self, emitter):
+        """powershell.exe connecting to port 443 with only initiating_pid should pass."""
+        from unittest.mock import MagicMock
+
+        # Mock StateManager with a running powershell.exe process
+        mock_sm = MagicMock()
+        mock_proc = MagicMock()
+        mock_proc.image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        mock_sm.get_process.return_value = mock_proc
+        emitter._state_manager = mock_sm
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            # No ProcessContext — only initiating_pid on NetworkContext
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                src_port=49200,
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=4567,
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is True
+
+    def test_browser_connection_with_pid_only_filtered(self, emitter):
+        """chrome.exe connecting to port 443 with only initiating_pid should be filtered."""
+        from unittest.mock import MagicMock
+
+        mock_sm = MagicMock()
+        mock_proc = MagicMock()
+        mock_proc.image = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        mock_sm.get_process.return_value = mock_proc
+        emitter._state_manager = mock_sm
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                src_port=49200,
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=5678,
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is False
+
+
+class TestTemplateCompleteness:
+    """Verify that rendered XML has no empty required fields (catches template variable typos)."""
+
+    def _get_required_fields(self, content: str, event_id: int) -> list[str]:
+        """Extract Data Name fields that have empty values."""
+        import re
+
+        empty = re.findall(r'<Data Name="(\w+)"></Data>', content)
+        # Also check for fields with just whitespace
+        whitespace = re.findall(r'<Data Name="(\w+)">\s*</Data>', content)
+        return list(set(empty + whitespace))
+
+    def test_event3_no_empty_required_fields(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd",
+                username="admin",
+            ),
+            auth=AuthContext(username="admin"),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.2.20",
+                src_port=49152,
+                dst_port=4444,
+                protocol="tcp",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        empty = self._get_required_fields(content, 3)
+        # RuleName, SourcePortName, DestinationHostname, DestinationPortName are optional
+        optional = {"RuleName", "SourcePortName", "DestinationHostname", "DestinationPortName"}
+        required_empty = [f for f in empty if f not in optional]
+        assert required_empty == [], f"Empty required fields in Event 3: {required_empty}"
+
+    def test_event7_no_empty_required_fields(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\App\plugin.dll",
+                signed=False,
+                signature="-",
+                signature_status="Unavailable",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        empty = self._get_required_fields(content, 7)
+        optional = {"RuleName"}
+        required_empty = [f for f in empty if f not in optional]
+        assert required_empty == [], f"Empty required fields in Event 7: {required_empty}"
+
+    def test_event11_no_empty_required_fields(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="file_create",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\powershell.exe",
+                command_line="powershell",
+                username="admin",
+            ),
+            file=FileContext(path=r"C:\Windows\Temp\payload.exe", action="create"),
+        )
+        emitter.emit(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        empty = self._get_required_fields(content, 11)
+        optional = {"RuleName"}
+        required_empty = [f for f in empty if f not in optional]
+        assert required_empty == [], f"Empty required fields in Event 11: {required_empty}"
+
+    def test_event13_no_empty_required_fields(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\reg.exe",
+                command_line="reg add",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\Test",
+                value="test.exe",
+                action="modify",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        empty = self._get_required_fields(content, 13)
+        optional = {"RuleName"}
+        required_empty = [f for f in empty if f not in optional]
+        assert required_empty == [], f"Empty required fields in Event 13: {required_empty}"
+
+    def test_event22_no_empty_required_fields(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.0.1",
+                src_port=49152,
+                dst_port=53,
+                protocol="udp",
+            ),
+            dns=DnsContext(query="example.com", rcode="NOERROR", answers=["93.184.216.34"]),
+        )
+        emitter._render_sysmon_dns_query(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        empty = self._get_required_fields(content, 22)
+        optional = {"RuleName"}
+        required_empty = [f for f in empty if f not in optional]
+        assert required_empty == [], f"Empty required fields in Event 22: {required_empty}"
