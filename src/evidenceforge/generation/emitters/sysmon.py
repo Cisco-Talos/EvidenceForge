@@ -417,6 +417,23 @@ class SysmonEventEmitter(LogEmitter):
             return (pid, proc.image)
         return (pid, r"C:\Windows\System32\svchost.exe")
 
+    def _get_stable_process_guid(
+        self, hostname: str, pid: int, fallback_timestamp: datetime
+    ) -> str:
+        """Generate ProcessGuid using the process creation time for stability.
+
+        Real Sysmon keyed ProcessGuid on the process start time, so the same
+        PID produces the same GUID across Events 1, 3, 5, 7, 11, 12/13, 22.
+        Falls back to the event timestamp when the process isn't in StateManager.
+        """
+        ts = fallback_timestamp
+        sm = getattr(self, "_state_manager", None)
+        if sm and pid > 0:
+            proc = sm.get_process(hostname, pid)
+            if proc is not None:
+                ts = proc.start_time
+        return self._generate_process_guid(hostname, pid, ts)
+
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
         if event.event_type not in self._supported_types:
@@ -873,7 +890,7 @@ class SysmonEventEmitter(LogEmitter):
         else:
             initiating_pid = net.initiating_pid if net else -1
             pid, image = self._resolve_process_from_pid(host.hostname, initiating_pid)
-        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
 
         # User — resolve from AuthContext, ProcessContext, or StateManager
         user = ""
@@ -934,7 +951,7 @@ class SysmonEventEmitter(LogEmitter):
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         pid = proc.pid if proc else rng.randint(1000, 5000)
         image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
-        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
 
         # PE metadata for the loaded DLL
         fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
@@ -979,7 +996,7 @@ class SysmonEventEmitter(LogEmitter):
         else:
             file_pid = fc.pid if fc else 0
             pid, image = self._resolve_process_from_pid(host.hostname, file_pid)
-        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
 
         event_data = {
             "EventID": 11,
@@ -1015,7 +1032,7 @@ class SysmonEventEmitter(LogEmitter):
         else:
             reg_pid = reg.pid if reg else 0
             pid, image = self._resolve_process_from_pid(host.hostname, reg_pid)
-        process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
 
         # Route to Event 12 or 13 based on action
         action = reg.action
@@ -1062,12 +1079,12 @@ class SysmonEventEmitter(LogEmitter):
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # On Windows, most DNS queries go through the DNS Client service
-        # (svchost.exe hosting dnscache). Sysmon Event 22 correctly attributes
-        # these to svchost.exe — this matches real-world Sysmon output.
-        # Tools that bypass the DNS Client (nslookup.exe, certain malware) are
-        # the exception; storyline-specific DNS could use the actual process
-        # in a future enhancement.
+        # DESIGN DECISION: svchost.exe is correct here. Windows DNS Client
+        # service (dnscache, hosted by svchost.exe -k LocalService) proxies
+        # all DnsQuery_A() / getaddrinfo() calls from applications. Real
+        # Sysmon Event 22 shows svchost.exe, not the originating process.
+        # Only tools that bypass the DNS Client (nslookup.exe, certain
+        # malware doing raw UDP to port 53) would show a different process.
         # Use the seeded svchost PID for the DNS Client service group
         # (svchost_local_svc = svchost.exe -k LocalService) so the PID
         # exists in StateManager's process tree and correlates with Event 1.
@@ -1076,7 +1093,7 @@ class SysmonEventEmitter(LogEmitter):
             "svchost_local_svc",
             sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
         )
-        process_guid = self._generate_process_guid(host.hostname, dns_client_pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(host.hostname, dns_client_pid, event.timestamp)
 
         # Map DNS rcode to Windows QueryStatus
         query_status = _DNS_STATUS_MAP.get(dns.rcode, "0")

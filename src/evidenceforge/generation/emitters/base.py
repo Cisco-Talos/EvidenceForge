@@ -76,6 +76,11 @@ class LogEmitter(ABC):
         self.buffer_size = buffer_size
         self.buffer: list[str] = []
         self.event_count = 0
+        # DESIGN DECISION: StrictUndefined intentionally removed (commit 5a4e7db).
+        # Templates use | default(...) for optional fields that legitimately
+        # render as empty. SandboxedEnvironment remains for SSTI protection.
+        # Template completeness tests in test_sysmon_new_events.py catch
+        # variable name mismatches for required fields.
         self._template_env = SandboxedEnvironment(autoescape=False)
         self._template = self._template_env.from_string(format_def.output.template)
         self._header_written = False
