@@ -1384,9 +1384,9 @@ class ActivityGenerator:
         auth_ctx = AuthContext(username=user.username)
         if rng.random() < 0.40:
             action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
-            pool = (
-                self._EDR_FILE_PATHS_WIN if os_category == "windows" else self._EDR_FILE_PATHS_LINUX
-            )
+            from evidenceforge.generation.activity.edr_pools import get_file_paths
+
+            pool = get_file_paths(os_category)
             path = (
                 rng.choice(pool)
                 .replace("{user}", user.username)
@@ -1415,7 +1415,9 @@ class ActivityGenerator:
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
-            dll_path = rng.choice(self._EDR_DLL_POOL)
+            from evidenceforge.generation.activity.edr_pools import get_dll_pool
+
+            dll_path = rng.choice(get_dll_pool())
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
@@ -1447,13 +1449,18 @@ class ActivityGenerator:
             _HKLM_WRITERS = {"svchost.exe", "services.exe", "reg.exe", "regedit.exe", "msiexec.exe"}
             # Emit 1-3 registry events per process (registry activity is high-volume)
             _reg_count = rng.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
+            from evidenceforge.generation.activity.edr_pools import (
+                get_registry_keys_hkcu,
+                get_registry_keys_hklm,
+            )
+
+            _pool_hkcu = get_registry_keys_hkcu()
+            _pool_hklm = get_registry_keys_hklm()
             for _ in range(_reg_count):
                 if _exe in _HKLM_WRITERS:
-                    key, value = rng.choice(
-                        self._EDR_REGISTRY_KEYS_HKLM + self._EDR_REGISTRY_KEYS_HKCU
-                    )
+                    key, value = rng.choice(_pool_hklm + _pool_hkcu)
                 else:
-                    key, value = rng.choice(self._EDR_REGISTRY_KEYS_HKCU)
+                    key, value = rng.choice(_pool_hkcu)
                 # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
                 reg_action = "delete" if rng.random() < 0.15 else "modify"
                 self.dispatcher.dispatch(
@@ -5233,90 +5240,8 @@ class ActivityGenerator:
         return "S-1-0-0"
 
     # Phase 5.2: EDR object type diversity data pools
-    _EDR_FILE_PATHS_WIN = [
-        # User documents
-        "C:\\Users\\{user}\\Documents\\report.docx",
-        "C:\\Users\\{user}\\Documents\\spreadsheet.xlsx",
-        "C:\\Users\\{user}\\Documents\\presentation.pptx",
-        "C:\\Users\\{user}\\Documents\\Q4-review.pdf",
-        "C:\\Users\\{user}\\Documents\\meeting-notes.txt",
-        # Downloads and desktop
-        "C:\\Users\\{user}\\Downloads\\file.pdf",
-        "C:\\Users\\{user}\\Downloads\\installer-{rand}.exe",
-        "C:\\Users\\{user}\\Desktop\\notes.txt",
-        "C:\\Users\\{user}\\Desktop\\shortcut.lnk",
-        # Temp files
-        "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp",
-        "C:\\Users\\{user}\\AppData\\Local\\Temp\\~DF{rand}.tmp",
-        # Application data
-        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Office\\16.0\\OfficeFileCache\\{rand}.dat",
-        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\data_{rand}",
-        "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\{rand}",
-        "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\report.docx.lnk",
-        # System paths
-        "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\Report.wer",
-        "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf",
-        "C:\\Windows\\Temp\\{rand}.tmp",
-        "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}",
-        "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx",
-    ]
-    _EDR_FILE_PATHS_LINUX = [
-        # User files
-        "/home/{user}/documents/report.odt",
-        "/home/{user}/documents/notes.md",
-        "/home/{user}/downloads/file.pdf",
-        "/home/{user}/downloads/archive-{rand}.tar.gz",
-        "/home/{user}/.bashrc",
-        "/home/{user}/.ssh/known_hosts",
-        # Temp files
-        "/tmp/tmp{rand}",
-        "/tmp/systemd-private-{rand}-apache2.service",
-        "/var/tmp/{rand}.lock",
-        # Application caches
-        "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}",
-        "/home/{user}/.cache/pip/http/{rand}",
-        "/home/{user}/.local/share/recently-used.xbel",
-        # Logs and system
-        "/var/log/syslog",
-        "/var/log/auth.log",
-        "/var/log/apache2/access.log",
-        "/proc/{rand}/status",
-        "/etc/passwd",
-        # Package manager
-        "/var/lib/dpkg/status",
-        "/var/cache/apt/archives/lock",
-        "/var/lib/apt/lists/lock",
-    ]
-    # HKCU keys: any user-mode process can write these
-    _EDR_REGISTRY_KEYS_HKCU = [
-        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
-        ("HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin"),
-        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "ProxyEnable"),
-        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "HideFileExt"),
-        (
-            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-            "AppsUseLightTheme",
-        ),
-    ]
-    # HKLM keys: only service-level processes (svchost, services, etc.) write these
-    _EDR_REGISTRY_KEYS_HKLM = [
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
-        ("HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters", "EnableFirewall"),
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA"),
-    ]
-    _EDR_DLL_POOL = [
-        "C:\\Windows\\System32\\ntdll.dll",
-        "C:\\Windows\\System32\\kernel32.dll",
-        "C:\\Windows\\System32\\user32.dll",
-        "C:\\Windows\\System32\\advapi32.dll",
-        "C:\\Windows\\System32\\msvcrt.dll",
-        "C:\\Windows\\System32\\rpcrt4.dll",
-        "C:\\Windows\\System32\\ole32.dll",
-        "C:\\Windows\\System32\\combase.dll",
-        "C:\\Windows\\System32\\sechost.dll",
-        "C:\\Windows\\System32\\gdi32.dll",
-    ]
+    # EDR file/registry/DLL pools moved to edr_pools.yaml (data-driven config).
+    # Access via: from evidenceforge.generation.activity.edr_pools import get_file_paths, etc.
 
     # _emit_ecar_file_event and _emit_ecar_registry_event removed in Phase 8.2
     # FILE/REGISTRY events now dispatched via SecurityEvent canonical model
