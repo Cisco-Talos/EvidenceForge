@@ -318,3 +318,52 @@ class TestEmitterThreadSafety:
                 lines = [line for line in f if line.strip()]
 
             assert len(lines) == num_threads * events_per_thread
+
+    def test_barrier_flush_raises_if_worker_thread_crashes(self):
+        """Test threaded emitter reports worker failures instead of hanging forever."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fmt = load_format("zeek_conn")
+            emitter = ZeekEmitter(fmt, Path(tmpdir) / "zeek.log", threaded=True)
+
+            try:
+                # ZeekEmitter requires datetime-like ts; invalid value triggers render failure.
+                emitter.emit_event(
+                    {
+                        "ts": "not-a-datetime",
+                        "uid": "C000000000001",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 50000,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "service": "-",
+                        "duration": 1.234,
+                        "orig_bytes": 1024,
+                        "resp_bytes": 2048,
+                        "conn_state": "SF",
+                        "local_orig": True,
+                        "local_resp": False,
+                        "missed_bytes": 0,
+                        "history": "ShADadfF",
+                        "orig_pkts": 10,
+                        "orig_ip_bytes": 1500,
+                        "resp_pkts": 10,
+                        "resp_ip_bytes": 2500,
+                    }
+                )
+
+                # Allow worker thread to process the queue item and fail.
+                time.sleep(0.1)
+
+                start = time.monotonic()
+                try:
+                    emitter.barrier_flush()
+                    raise AssertionError("Expected barrier_flush to raise after worker failure")
+                except RuntimeError as exc:
+                    assert "failed" in str(exc)
+                elapsed = time.monotonic() - start
+                assert elapsed < 1.0
+            finally:
+                # close() re-raises worker failure by design; stop thread explicitly.
+                if emitter.threaded and emitter._stop_event is not None:
+                    emitter._stop_event.set()
