@@ -561,6 +561,22 @@ class SysmonEventEmitter(LogEmitter):
             if event.image_load and self._passes_event7_filter(event):
                 self._render_sysmon_image_loaded(event)
 
+    # Processes that always run in user session context, never as SYSTEM.
+    # When the generator seeds these as SYSTEM (boot-time process tree),
+    # the emitter overrides to the host's assigned user.
+    _USER_SESSION_PROCESSES = {
+        "sihost.exe",
+        "searchhost.exe",
+        "searchprotocolhost.exe",
+        "searchfilterhost.exe",
+        "searchindexer.exe",
+        "runtimebroker.exe",
+        "textinputhost.exe",
+        "startmenuexperiencehost.exe",
+        "shellexperiencehost.exe",
+        "applicationframehost.exe",
+    }
+
     @staticmethod
     def _format_user(username: str, netbios_domain: str) -> str:
         """Format Sysmon User field with correct domain for well-known accounts.
@@ -645,6 +661,22 @@ class SysmonEventEmitter(LogEmitter):
         else:
             user = "NT AUTHORITY\\SYSTEM"
             logon_id = "0x3e7"
+
+        # Override SYSTEM for user-session processes (sihost, SearchHost, etc.)
+        # These always run under the logged-in user, never SYSTEM.
+        _img_basename = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if _img_basename in self._USER_SESSION_PROCESSES and user == "NT AUTHORITY\\SYSTEM":
+            # Look up the host's assigned user from StateManager sessions
+            sm = getattr(self, "_state_manager", None)
+            _session_user = None
+            if sm:
+                for sess in sm.state.active_sessions.values():
+                    if sess.system == host.hostname and sess.username != "SYSTEM":
+                        _session_user = sess.username
+                        break
+            if _session_user:
+                user = self._format_user(_session_user, host.netbios_domain)
+                logon_id = "0x10001"  # Typical interactive session logon ID
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
 

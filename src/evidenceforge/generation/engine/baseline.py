@@ -3187,22 +3187,62 @@ class BaselineMixin:
                         "HideFileExt",
                     ),
                     (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "Hidden",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "ShowSuperHidden",
+                    ),
+                    (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
                         "ProxyEnable",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                        "MigrateProxy",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
                         "AppsUseLightTheme",
                     ),
                     (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+                        "HRZR_PGYFRFFVBA",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*",
+                        "0",
+                    ),
+                    (
                         "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General",
                         "ShownFirstRunOptin",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1",
+                        "Datetime",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+                        "SubscribedContent-338389Enabled",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+                        "SearchboxTaskbarMode",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent",
+                        "AccentPalette",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
+                        "HarvestContacts",
                     ),
                 ]
                 _REG_KEYS_HKLM = [
                     ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
                     (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters",
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
                         "EnableFirewall",
                     ),
                     ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
@@ -3222,8 +3262,42 @@ class BaselineMixin:
                         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
                         "DhcpIPAddress",
                     ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config",
+                        "MaxPollInterval",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
+                        "EnableSecuritySignature",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending",
+                        "Servicing",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational",
+                        "Enabled",
+                    ),
+                    ("HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application", "MaxSize"),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection",
+                        "DisableRealtimeMonitoring",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
+                        "UseLogonCredential",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+                        "Common Startup",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters",
+                        "ListenAddresses",
+                    ),
+                    ("HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging"),
                 ]
-                _reg_count = rng.randint(15, 40)
+                _reg_count = rng.randint(50, 120)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
                 for _ri in range(_reg_count):
