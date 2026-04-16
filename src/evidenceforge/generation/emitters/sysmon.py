@@ -1059,7 +1059,10 @@ class SysmonEventEmitter(LogEmitter):
         # Tools that bypass the DNS Client (nslookup.exe, certain malware) are
         # the exception; storyline-specific DNS could use the actual process
         # in a future enhancement.
-        dns_client_pid = self._get_dns_client_pid(host.hostname)
+        # Use the seeded svchost PID so the PID exists in StateManager's
+        # process tree (correlates with Event 1).
+        sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+        dns_client_pid = sys_pids.get("svchost", self._get_dns_client_pid(host.hostname))
         process_guid = self._generate_process_guid(host.hostname, dns_client_pid, event.timestamp)
 
         # Map DNS rcode to Windows QueryStatus

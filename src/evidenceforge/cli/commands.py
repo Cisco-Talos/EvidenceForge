@@ -342,19 +342,48 @@ def generate(
             )
             engine.generate()
 
-        # Generation succeeded — swap staged output into place
+        # Generation succeeded — swap staged output into place using
+        # rename-first pattern so a swap-time failure doesn't lose both
+        # old and new output.
         if staging_dir:
+            data_backup = None
+            gt_backup = None
+            # Step 1: rename old output to backup (atomic on same fs)
             if data_dir.exists():
-                shutil.rmtree(data_dir)
+                data_backup = data_dir.with_name(data_dir.name + ".bak")
+                if data_backup.exists():
+                    shutil.rmtree(data_backup)
+                data_dir.rename(data_backup)
             if gt_path.exists():
-                gt_path.unlink()
-            # Move staged data/ and GROUND_TRUTH.md to final location
-            if gen_data_dir.exists():
-                shutil.move(str(gen_data_dir), str(data_dir))
-            staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
-            if staged_gt.exists():
-                shutil.move(str(staged_gt), str(gt_path))
-            shutil.rmtree(staging_dir, ignore_errors=True)
+                gt_backup = gt_path.with_name(gt_path.name + ".bak")
+                if gt_backup.exists():
+                    gt_backup.unlink()
+                gt_path.rename(gt_backup)
+            try:
+                # Step 2: move staged output into final location
+                if gen_data_dir.exists():
+                    shutil.move(str(gen_data_dir), str(data_dir))
+                staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
+                if staged_gt.exists():
+                    shutil.move(str(staged_gt), str(gt_path))
+                # Step 3: remove backups + staging dir
+                if data_backup and data_backup.exists():
+                    shutil.rmtree(data_backup)
+                if gt_backup and gt_backup.exists():
+                    gt_backup.unlink()
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            except Exception:
+                # Step 4: restore backups on swap failure
+                if data_backup and data_backup.exists():
+                    if data_dir.exists():
+                        shutil.rmtree(data_dir)
+                    data_backup.rename(data_dir)
+                if gt_backup and gt_backup.exists():
+                    if gt_path.exists():
+                        gt_path.unlink()
+                    gt_backup.rename(gt_path)
+                shutil.rmtree(staging_dir, ignore_errors=True)
+                raise
             console.print("[dim]Replaced previous output[/dim]")
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")

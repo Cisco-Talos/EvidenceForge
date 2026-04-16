@@ -356,6 +356,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             }
             self.emitters["sysmon"]._host_boot_times = _boot_times
             self.emitters["sysmon"]._state_manager = self.state_manager
+            self.emitters["sysmon"]._system_pids = self._system_pids
 
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)

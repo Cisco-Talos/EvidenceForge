@@ -3247,49 +3247,38 @@ class BaselineMixin:
 
             # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
             # Uses data-driven DLL profiles from system_processes.yaml and
-            # application_catalog.yaml. Each process gets its characteristic
-            # DLL set (common OS loader chain + process-specific modules).
+            # application_catalog.yaml. Picks from processes actually running
+            # on this system (from StateManager) so PIDs are always valid.
             if os_cat == "windows":
                 from evidenceforge.generation.activity.dll_load_profiles import (
                     get_dlls_for_process,
                 )
 
-                num_dll = rng.randint(15, 40)
-                _dll_procs = [
-                    # System processes
-                    ("explorer", r"C:\Windows\explorer.exe"),
-                    ("svchost", r"C:\Windows\System32\svchost.exe"),
-                    ("runtimebroker", r"C:\Windows\System32\RuntimeBroker.exe"),
-                    ("taskhostw", r"C:\Windows\System32\taskhostw.exe"),
-                    ("dllhost", r"C:\Windows\System32\dllhost.exe"),
-                    # User apps with third-party DLLs that survive Event 7 filter
-                    ("chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
-                    ("msedge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
-                    ("firefox", r"C:\Program Files\Mozilla Firefox\firefox.exe"),
-                    ("outlook", r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"),
-                ]
-                for _ in range(num_dll):
-                    proc_key, proc_image = rng.choice(_dll_procs)
-                    proc_pid = sys_pids.get(proc_key, rng.randint(1000, 5000))
-                    exe_name = proc_image.rsplit("\\", 1)[-1]
-                    dll_pool = get_dlls_for_process(exe_name)
-                    if not dll_pool:
-                        continue
-                    dll = rng.choice(dll_pool)
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_image_load(
-                        user=_SYSTEM_USER,
-                        system=system,
-                        time=ts,
-                        pid=proc_pid,
-                        image=proc_image,
-                        dll_path=dll["path"],
-                        signed=dll["signed"],
-                        signature=dll["signature"],
-                        signature_status=dll["signature_status"],
-                    )
+                running = self.state_manager.get_processes_on_system(system.hostname)
+                win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
+                if win_procs:
+                    num_dll = rng.randint(15, 40)
+                    for _ in range(num_dll):
+                        proc_pid, proc_image = rng.choice(win_procs)
+                        exe_name = proc_image.rsplit("\\", 1)[-1]
+                        dll_pool = get_dlls_for_process(exe_name)
+                        if not dll_pool:
+                            continue
+                        dll = rng.choice(dll_pool)
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_image_load(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            pid=proc_pid,
+                            image=proc_image,
+                            dll_path=dll["path"],
+                            signed=dll["signed"],
+                            signature=dll["signature"],
+                            signature_status=dll["signature_status"],
+                        )
 
             # ICMP monitoring pings are now handled by role_traffic profiles
 
