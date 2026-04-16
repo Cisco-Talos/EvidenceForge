@@ -75,6 +75,8 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Tier 0: Infrastructure
 
+- [x] Security: validate `environment.timezone.systems` overrides at schema load to prevent runtime `UnknownTimeZoneError` crashes during timezone conversion.
+
 - [x] Security: blocked symlinked `eforge` install target in `install-skills` to prevent arbitrary overwrite/deletion and stale-file cleanup outside target.
 
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.

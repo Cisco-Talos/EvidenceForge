@@ -637,6 +637,22 @@ class Timezone(BaseModel):
             raise ValueError(f"Unknown timezone: {v}") from e
         return v
 
+    @field_validator("systems")
+    @classmethod
+    def validate_system_timezones(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        """Validate per-system timezone overrides are valid pytz timezones."""
+        if v is None:
+            return v
+
+        for pattern, timezone_name in v.items():
+            try:
+                pytz.timezone(timezone_name)
+            except pytz.UnknownTimeZoneError as e:
+                raise ValueError(
+                    f"Unknown timezone override for pattern '{pattern}': {timezone_name}"
+                ) from e
+        return v
+
 
 class NetworkSegment(BaseModel):
     """Network segment definition.

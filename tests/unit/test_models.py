@@ -308,6 +308,11 @@ class TestTimezone:
         with pytest.raises(ValidationError, match="Unknown timezone"):
             Timezone(default="Invalid/Timezone")
 
+    def test_timezone_invalid_system_override(self):
+        """Test that invalid per-system timezone overrides are rejected."""
+        with pytest.raises(ValidationError, match="Unknown timezone override"):
+            Timezone(default="UTC", systems={"WS-.*": "Invalid/Timezone"})
+
 
 class TestEnvironment:
     """Tests for Environment model."""
