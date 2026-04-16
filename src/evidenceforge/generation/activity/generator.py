@@ -1279,6 +1279,11 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        # Determine integrity level: admin group users get "High"
+        _admin_groups = {"domain-admins", "domain admins", "administrators", "local-admins"}
+        _user_groups = {g.lower() for g in (user.groups or [])}
+        _integrity = "High" if _user_groups & _admin_groups else "Medium"
+
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
             system=system.hostname,
@@ -1286,7 +1291,7 @@ class ActivityGenerator:
             image=process_name,
             command_line=command_line,
             username=user.username,
-            integrity_level="Medium",
+            integrity_level=_integrity,
             logon_id=logon_id,
         )
 
@@ -1308,7 +1313,7 @@ class ActivityGenerator:
                 image=process_name,
                 command_line=command_line,
                 username=user.username,
-                integrity_level="Medium",
+                integrity_level=_integrity,
                 logon_id=logon_id,
                 parent_image=self._lookup_process_name(
                     system.hostname, parent_pid, _get_os_category(system.os)
@@ -1418,20 +1423,30 @@ class ActivityGenerator:
             "dllhost.exe",
         }
         _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if os_category == "windows" and _exe in _REGISTRY_WRITERS and rng.random() < 0.20:
-            key, value = rng.choice(self._EDR_REGISTRY_KEYS)
-            # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
-            reg_action = "delete" if rng.random() < 0.15 else "modify"
-            self.dispatcher.dispatch(
-                SecurityEvent(
-                    timestamp=time,
-                    event_type="registry_modify",
-                    src_host=host_ctx,
-                    auth=auth_ctx,
-                    registry=RegistryContext(key=key, value=value, action=reg_action, pid=pid),
-                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+        if os_category == "windows" and _exe in _REGISTRY_WRITERS and rng.random() < 0.50:
+            # Service-level processes can write HKLM; user processes only HKCU
+            _HKLM_WRITERS = {"svchost.exe", "services.exe", "reg.exe", "regedit.exe", "msiexec.exe"}
+            # Emit 1-3 registry events per process (registry activity is high-volume)
+            _reg_count = rng.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
+            for _ in range(_reg_count):
+                if _exe in _HKLM_WRITERS:
+                    key, value = rng.choice(
+                        self._EDR_REGISTRY_KEYS_HKLM + self._EDR_REGISTRY_KEYS_HKCU
+                    )
+                else:
+                    key, value = rng.choice(self._EDR_REGISTRY_KEYS_HKCU)
+                # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
+                reg_action = "delete" if rng.random() < 0.15 else "modify"
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time,
+                        event_type="registry_modify",
+                        src_host=host_ctx,
+                        auth=auth_ctx,
+                        registry=RegistryContext(key=key, value=value, action=reg_action, pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                    )
                 )
-            )
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
@@ -5253,12 +5268,23 @@ class ActivityGenerator:
         "/var/cache/apt/archives/lock",
         "/var/lib/apt/lists/lock",
     ]
-    _EDR_REGISTRY_KEYS = [
+    # HKCU keys: any user-mode process can write these
+    _EDR_REGISTRY_KEYS_HKCU = [
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
         ("HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin"),
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
         ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "ProxyEnable"),
+        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "HideFileExt"),
+        (
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            "AppsUseLightTheme",
+        ),
+    ]
+    # HKLM keys: only service-level processes (svchost, services, etc.) write these
+    _EDR_REGISTRY_KEYS_HKLM = [
+        ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
+        ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
+        ("HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters", "EnableFirewall"),
+        ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA"),
     ]
     _EDR_DLL_POOL = [
         "C:\\Windows\\System32\\ntdll.dll",

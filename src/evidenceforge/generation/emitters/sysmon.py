@@ -936,13 +936,16 @@ class SysmonEventEmitter(LogEmitter):
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         # Process info — use ProcessContext if available, else resolve from
-        # initiating_pid via StateManager lookup
+        # initiating_pid via StateManager lookup. Real Sysmon always knows the
+        # originating process; skip Event 3 if we can't resolve one.
         if proc:
             pid = proc.pid
             image = proc.image
         else:
             initiating_pid = net.initiating_pid if net else -1
             pid, image = self._resolve_process_from_pid(host.hostname, initiating_pid)
+        if pid <= 0 or image == "-":
+            return  # Cannot attribute to a process — don't emit phantom Event 3
         process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
 
         # User — resolve from AuthContext, ProcessContext, or StateManager
@@ -1297,7 +1300,11 @@ class SysmonEventEmitter(LogEmitter):
                 )
             rng = self._erid_rngs[counter_key]
             # Simulate gaps from event types we don't generate (6, 9, 14-21, 23-29, etc.)
-            gap = rng.randint(1, 3)
+            # Real Sysmon shares ETW session with other providers; gaps vary widely.
+            if rng.random() < 0.15:
+                gap = rng.randint(8, 50)  # Occasional large gap (batch ETW events)
+            else:
+                gap = rng.randint(1, 7)
             self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
