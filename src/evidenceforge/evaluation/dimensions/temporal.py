@@ -523,14 +523,14 @@ class TemporalRealismScorer(DimensionScorer):
 
                 # Skip built-in/machine accounts from causal checks
                 if exclude_accounts:
-                    subject = rec.fields.get("SubjectUserName", "") or rec.fields.get(
-                        "principal", ""
-                    )
-                    if any(
-                        subject.upper() == ea.upper() or subject.endswith("$")
-                        for ea in exclude_accounts
-                    ):
-                        continue
+                    subject = rec.fields.get("SubjectUserName") or rec.fields.get("principal")
+                    if isinstance(subject, str):
+                        normalized_subject = subject.upper()
+                        if any(
+                            isinstance(ea, str) and normalized_subject == ea.upper()
+                            for ea in exclude_accounts
+                        ) or subject.endswith("$"):
+                            continue
                 if after_field:
                     key_val = rec.fields.get(after_field)
                     if not key_val:

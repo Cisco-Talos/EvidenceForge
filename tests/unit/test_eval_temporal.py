@@ -366,6 +366,30 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
+    def test_non_string_principal_does_not_raise(self):
+        """Malformed principal values should not crash exclusion checks."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {"EventID": 4624, "TargetLogonId": "0x1a2b3c"},
+                    ts=base,
+                ),
+            ],
+            "ecar": [
+                _record(
+                    "ecar",
+                    {"event_type": "PROCESS", "action": "CREATE", "principal": {"name": "bad"}},
+                    ts=base + timedelta(seconds=10),
+                ),
+            ],
+        }
+        scenario = _make_scenario()
+        scorer = TemporalRealismScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
 
 class TestTimingPlausibility:
     def test_reasonable_rate(self):
