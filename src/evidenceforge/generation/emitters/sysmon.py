@@ -507,6 +507,16 @@ class SysmonEventEmitter(LogEmitter):
             return (pid, proc.image)
         return (pid, "-")
 
+    @staticmethod
+    def _resolve_destination_hostname(ip: str) -> str:
+        """Resolve destination IP to hostname via REVERSE_DNS.
+
+        Returns FQDN for known internal hosts (scenario systems), "-" for unknown.
+        """
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
+        return REVERSE_DNS.get(ip, "-")
+
     def _get_stable_process_guid(
         self, hostname: str, pid: int, fallback_timestamp: datetime
     ) -> str:
@@ -939,6 +949,13 @@ class SysmonEventEmitter(LogEmitter):
             if random.random() < sample_rate:
                 return True
 
+        # User application images: low sampling rate for non-zero presence
+        user_app_images = [img.lower() for img in cfg.get("include_user_app_images", [])]
+        if image in user_app_images:
+            rate = cfg.get("user_app_sample_rate", 0.05)
+            if random.random() < rate:
+                return True
+
         dst_port = event.network.dst_port or 0
         include_ports = cfg.get("include_dest_ports", [])
         if dst_port in include_ports:
@@ -1110,7 +1127,7 @@ class SysmonEventEmitter(LogEmitter):
             "SourcePortName": _PORT_NAMES.get(src_port, "-"),
             "DestinationIsIpv6": "true" if ":" in dst_ip else "false",
             "DestinationIp": dst_ip,
-            "DestinationHostname": "-",
+            "DestinationHostname": self._resolve_destination_hostname(dst_ip),
             "DestinationPort": dst_port,
             "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
         }

@@ -1298,7 +1298,25 @@ class ActivityGenerator:
             "psexesvc.exe",
         }
         _exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        _integrity = "High" if _exe_lower in _HIGH_INTEGRITY_EXES else "Medium"
+        if _exe_lower in _HIGH_INTEGRITY_EXES:
+            _integrity = "High"
+        else:
+            _integrity = "Medium"
+            # Browser child processes (renderers) run at Low integrity.
+            # ~65% of browser children are sandboxed renderers (Low),
+            # ~35% are GPU/utility processes (Medium).
+            _BROWSER_EXES = {"chrome.exe", "msedge.exe", "firefox.exe"}
+            if _exe_lower in _BROWSER_EXES:
+                _parent_image = (
+                    self._lookup_process_name(
+                        system.hostname, parent_pid, _get_os_category(system.os)
+                    )
+                    or ""
+                )
+                _parent_exe = _parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if _parent_exe in _BROWSER_EXES:
+                    rng = _get_rng()
+                    _integrity = "Low" if rng.random() < 0.65 else "Medium"
 
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
@@ -2982,12 +3000,17 @@ class ActivityGenerator:
             else:
                 answers = [_generate_rdns_name(rng, dst_ip)]
         elif qtype_roll < 0.98:
-            # SRV record: AD service discovery
+            # SRV record: AD service discovery — must resolve to DCs only
             qtype, qtype_name = 33, "SRV"
             domain = ad_domain
             query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
-            dc_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-            dc_ip = _get_rng().choice(dc_ips)
+            dc_systems = getattr(self, "_dc_systems", [])
+            if dc_systems:
+                dc_sys = _get_rng().choice(dc_systems)
+                dc_ip = dc_sys.ip
+            else:
+                dc_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
+                dc_ip = _get_rng().choice(dc_ips)
             dc_hostname = REVERSE_DNS.get(dc_ip, f"dc-01.{domain}")
             svc_prefix = query.split(".")[0]
             port = _SRV_PORT_MAP.get(svc_prefix, 389)

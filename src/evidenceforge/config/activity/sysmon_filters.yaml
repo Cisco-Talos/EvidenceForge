@@ -41,6 +41,18 @@ network_connect:  # Event 3
     - dns.exe
     - dfsr.exe
   baseline_sample_rate: 0.10  # Log 10% of matching connections
+  # User applications whose connections are sampled at a low rate.
+  # Provides non-zero Event 3 from normal apps without flooding.
+  include_user_app_images:
+    - slack.exe
+    - zoom.exe
+    - spotify.exe
+    - code.exe
+    - git.exe
+    - onedrive.exe
+    - teams.exe
+    - outlook.exe
+  user_app_sample_rate: 0.05  # 5% of connections logged
   include_dest_ports:
     - 22     # SSH
     - 25     # SMTP
