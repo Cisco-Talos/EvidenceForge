@@ -1379,6 +1379,13 @@ class ActivityGenerator:
                     event_type=event_type,
                     src_host=host_ctx,
                     auth=auth_ctx,
+                    process=ProcessContext(
+                        pid=pid,
+                        parent_pid=parent_pid,
+                        image=process_name,
+                        command_line=command_line,
+                        username=user.username,
+                    ),
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
@@ -1395,15 +1402,33 @@ class ActivityGenerator:
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
-        if os_category == "windows" and "system32" in process_name.lower() and rng.random() < 0.20:
+        # Only emit registry events for processes that realistically modify registry
+        # (services, shells, installers) — NOT command-line recon tools like net.exe/dsquery.exe
+        _REGISTRY_WRITERS = {
+            "svchost.exe",
+            "services.exe",
+            "explorer.exe",
+            "powershell.exe",
+            "rundll32.exe",
+            "msiexec.exe",
+            "reg.exe",
+            "regedit.exe",
+            "taskhostw.exe",
+            "usoclient.exe",
+            "dllhost.exe",
+        }
+        _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if os_category == "windows" and _exe in _REGISTRY_WRITERS and rng.random() < 0.20:
             key, value = rng.choice(self._EDR_REGISTRY_KEYS)
+            # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
+            reg_action = "delete" if rng.random() < 0.15 else "modify"
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
                     event_type="registry_modify",
                     src_host=host_ctx,
                     auth=auth_ctx,
-                    registry=RegistryContext(key=key, value=value, action="modify", pid=pid),
+                    registry=RegistryContext(key=key, value=value, action=reg_action, pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
@@ -2246,6 +2271,7 @@ class ActivityGenerator:
         # with S0/REJ cannot have served an HTTP response.
         if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
             event.network.conn_state = "SF"
+            event.network.history = "ShADadfF"  # Must match SF state
             if event.network.resp_bytes == 0:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 

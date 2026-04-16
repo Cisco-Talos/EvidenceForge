@@ -444,8 +444,6 @@ class SysmonEventEmitter(LogEmitter):
         unknown) when the PID is not found, rather than guessing svchost.exe
         which would produce misleading Event 3/11/12 attributions.
         """
-        if pid == -1:
-            return (4, "System")
         if pid <= 0:
             return (pid, "-")
         sm = getattr(self, "_state_manager", None)

@@ -2409,6 +2409,9 @@ class BaselineMixin:
                     "smb": "svchost_netsvcs",
                     "ssl": "svchost_netsvcs",
                     "http": "svchost_netsvcs",
+                    "smtp": "svchost_netsvcs",
+                    "ntp": "svchost_local_svc",
+                    "ssh": "sshd",
                 }
                 _pids = sys_pids or {}
                 pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
