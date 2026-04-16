@@ -45,6 +45,7 @@ from evidenceforge.events.contexts import (
     HostContext,
     HttpContext,
     IdsContext,
+    ImageLoadContext,
     KerberosContext,
     NatContext,
     NetworkContext,
@@ -92,6 +93,7 @@ class SecurityEvent:
     file: FileContext | None = None
     registry: RegistryContext | None = None
     ids: IdsContext | None = None
+    image_load: ImageLoadContext | None = None
     syslog: SyslogContext | None = None
     weird: WeirdContext | None = None
     kerberos: KerberosContext | None = None

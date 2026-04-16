@@ -51,6 +51,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add/retag domain | `dns_registry.yaml` | `traffic_profiles.yaml`, `proxy_uri_templates.yaml`, `site_maps.yaml` |
 | Modify traffic patterns | `traffic_profiles.yaml` | `dns_registry.yaml` (validate tags exist) |
 | Add/modify application | `application_catalog.yaml` | `spawn_rules.yaml`, `process_network_map.yaml` |
+| Add/modify DLL load profile | `application_catalog.yaml` or `system_processes.yaml` | `sysmon_filters.yaml` (Event 7 filter) |
 | Create/modify persona | `personas/{name}.yaml` | `application_catalog.yaml` (persona lists), `traffic_profiles.yaml` (persona_traffic) |
 | Modify spawn rules | `spawn_rules.yaml` | `application_catalog.yaml` (validate exe exists) |
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists) |

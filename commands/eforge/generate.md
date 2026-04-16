@@ -18,7 +18,7 @@ If the user has a scenario file ready:
 
 ```bash
 eforge validate <scenario-file>
-eforge generate <scenario-file> --verbose
+eforge generate <scenario-file> --verbose --force
 ```
 
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
@@ -48,6 +48,7 @@ eforge generate <scenario.yaml> [options]
 Options:
   --output, -o <dir>     Override output directory (default: from scenario's output.destination)
   --config, -c <file>    Path to config.yaml
+  --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
 ```
@@ -56,6 +57,7 @@ Exit codes:
 - 0 = Success
 - 1 = Input error (file not found, bad path)
 - 2 = Schema validation failed
+- 3 = User declined overwrite (aborted)
 - 21 = Generation error
 - 130 = User interrupted (Ctrl+C)
 
@@ -72,10 +74,10 @@ Before running generation:
 ### 2. Run Generation
 
 ```bash
-eforge generate <scenario-file> --verbose
+eforge generate <scenario-file> --verbose --force
 ```
 
-Always use `--verbose` so you can see progress and diagnose issues.
+Always use `--verbose` so you can see progress and diagnose issues. Always use `--force` to skip the interactive overwrite prompt — without it, re-running a scenario will block waiting for user input.
 
 **Warm-up phase:** Generation begins with a warm-up period (default 8 hours, minimum 1 hour, configurable via `time_window.warmup`). During warm-up, the engine runs baseline generation to pre-populate DNS cache, process trees, active sessions, and other internal state — but warm-up events are **not** written to output files. This ensures the first minutes of output look like a running system rather than a cold start. Progress output distinguishes the warm-up phase from real generation.
 
@@ -96,7 +98,7 @@ scenarios/<scenario-name>/
     ...
 ```
 
-Re-running generation overwrites the previous `data/` directory.
+If `data/`, `GROUND_TRUTH.md`, or `ENVIRONMENT.md` already exist, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use).
 
 ### 3. Post-Generation
 
@@ -151,7 +153,7 @@ After reviewing output, you can suggest:
 
 | Format | Description | Generated For |
 |--------|-------------|---------------|
-| windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 8) | Windows systems |
+| windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
 | zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
 | ecar | EDR/XDR telemetry in eCAR format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
 | syslog | Linux syslog (BSD format) | Linux systems |

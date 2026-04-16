@@ -44,6 +44,15 @@ class DnsEntry(BaseModel, extra="forbid"):
 # --- Application Catalog ---
 
 
+class LoadedModuleEntry(BaseModel, extra="forbid"):
+    """A DLL/module entry in a loaded_modules list."""
+
+    path: str
+    signed: bool = True
+    signature: str = "Microsoft Windows"
+    signature_status: str = "Valid"
+
+
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
@@ -51,6 +60,7 @@ class PlatformConfig(BaseModel, extra="forbid"):
     pe_metadata: dict[str, str] | None = None
     command_templates: list[str] | None = None
     children: list[str] | None = None
+    loaded_modules: list[LoadedModuleEntry] | None = None
 
 
 class ApplicationEntry(BaseModel, extra="forbid"):
@@ -212,6 +222,7 @@ class SystemServiceEntry(BaseModel, extra="forbid"):
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
+    loaded_modules: list[LoadedModuleEntry] | None = None
 
 
 class SystemBinaryEntry(BaseModel, extra="forbid"):

@@ -2409,6 +2409,9 @@ class BaselineMixin:
                     "smb": "svchost_netsvcs",
                     "ssl": "svchost_netsvcs",
                     "http": "svchost_netsvcs",
+                    "smtp": "svchost_netsvcs",
+                    "ntp": "svchost_local_svc",
+                    "ssh": "sshd",
                 }
                 _pids = sys_pids or {}
                 pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
@@ -3154,7 +3157,9 @@ class BaselineMixin:
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
                     self.state_manager.set_current_time(svc_ts)
                     svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
-                    svc_parent = sys_pids.get(svc_parent_key, sys_pids.get("services", 4))
+                    svc_parent = sys_pids.get(
+                        svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    )
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=svc_ts,
@@ -3162,6 +3167,189 @@ class BaselineMixin:
                         command_line=svc_cmd,
                         parent_pid=svc_parent,
                         username="SYSTEM",
+                    )
+
+            # Baseline registry activity from running services. Real Sysmon
+            # generates hundreds-thousands of Event 12/13 per hour. We emit
+            # 15-40 per host per hour to provide realistic background volume.
+            if os_cat == "windows":
+                from evidenceforge.events.base import SecurityEvent
+                from evidenceforge.events.contexts import (
+                    AuthContext,
+                    ProcessContext,
+                    RegistryContext,
+                )
+
+                _REG_KEYS_HKCU = [
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+                        "cmd.exe /k dir\\1",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "DWORD (0x00000002)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "DWORD (0x00000000)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                        "DWORD (0x00000000)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
+                        "HRZR_PGYFRFFVBA",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*",
+                        "0",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General",
+                        "ShownFirstRunOptin",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1",
+                        "Datetime",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
+                        "SubscribedContent-338389Enabled",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+                        "SearchboxTaskbarMode",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent",
+                        "AccentPalette",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
+                        "HarvestContacts",
+                    ),
+                ]
+                # (key, Details) — Details is the actual data written, shown in Event 13.
+                # Use realistic DWORD/string values matching what each key stores.
+                _REG_KEYS_HKLM = [
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                        "explorer.exe",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+                        "DWORD (0x00000000)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+                        "DWORD (0x00000000)",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config",
+                        "DWORD (0x0000000f)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational",
+                        "DWORD (0x00000001)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application",
+                        "DWORD (0x01400000)",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection",
+                        "DWORD (0x00000000)",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
+                        "DWORD (0x00000000)",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+                        "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters",
+                        "DWORD (0x00000001)",
+                    ),
+                    ("HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "DWORD (0x00000002)"),
+                ]
+                _reg_count = rng.randint(50, 120)
+                _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                _host_ctx = self.activity_generator._build_host_context(system)
+                # Only emit HKCU on workstations with a logged-in user;
+                # servers run services, not user desktops.
+                _has_desktop = getattr(system, "assigned_user", None) is not None
+                _hkcu_rate = 0.30 if _has_desktop else 0.0
+                for _ri in range(_reg_count):
+                    _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    if rng.random() >= _hkcu_rate:
+                        _key, _val = rng.choice(_REG_KEYS_HKLM)
+                        _reg_pid = _svc_pid
+                        _reg_user = "SYSTEM"
+                    else:
+                        _key, _val = rng.choice(_REG_KEYS_HKCU)
+                        _reg_pid = sys_pids.get("explorer", _svc_pid)
+                        _reg_user = system.assigned_user or "SYSTEM"
+                    # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
+                    _reg_action = "delete" if rng.random() < 0.10 else "modify"
+                    self.activity_generator.dispatcher.dispatch(
+                        SecurityEvent(
+                            timestamp=_reg_ts,
+                            event_type="registry_modify",
+                            src_host=_host_ctx,
+                            auth=AuthContext(username=_reg_user),
+                            process=ProcessContext(
+                                pid=_reg_pid,
+                                parent_pid=0,
+                                image=self.activity_generator._lookup_process_name(
+                                    system.hostname, _reg_pid, "windows"
+                                )
+                                or r"C:\Windows\System32\svchost.exe",
+                                command_line="",
+                                username=_reg_user,
+                            ),
+                            registry=RegistryContext(
+                                key=_key, value=_val, action=_reg_action, pid=_reg_pid
+                            ),
+                        )
                     )
 
             # Windows scheduled tasks — diverse per-hour selection from YAML.
@@ -3182,7 +3370,9 @@ class BaselineMixin:
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
-                    parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
+                    parent_pid = sys_pids.get(
+                        task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    )
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
                         user=_SYSTEM_USER,
@@ -3244,6 +3434,41 @@ class BaselineMixin:
                         target_image=tgt_image,
                         granted_access=access,
                     )
+
+            # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
+            # Uses data-driven DLL profiles from system_processes.yaml and
+            # application_catalog.yaml. Picks from processes actually running
+            # on this system (from StateManager) so PIDs are always valid.
+            if os_cat == "windows":
+                from evidenceforge.generation.activity.dll_load_profiles import (
+                    get_dlls_for_process,
+                )
+
+                running = self.state_manager.get_processes_on_system(system.hostname)
+                win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
+                if win_procs:
+                    num_dll = rng.randint(15, 40)
+                    for _ in range(num_dll):
+                        proc_pid, proc_image = rng.choice(win_procs)
+                        exe_name = proc_image.rsplit("\\", 1)[-1]
+                        dll_pool = get_dlls_for_process(exe_name)
+                        if not dll_pool:
+                            continue
+                        dll = rng.choice(dll_pool)
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_image_load(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            pid=proc_pid,
+                            image=proc_image,
+                            dll_path=dll["path"],
+                            signed=dll["signed"],
+                            signature=dll["signature"],
+                            signature_status=dll["signature_status"],
+                        )
 
             # ICMP monitoring pings are now handled by role_traffic profiles
 

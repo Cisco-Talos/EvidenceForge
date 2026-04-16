@@ -144,7 +144,12 @@ def validate_config() -> ValidationResult:
             "list_fields": {"mappings": None},
         },
         "activity/system_processes.yaml": {
-            "dict_fields": {"system_services", "system_binaries"},
+            "dict_fields": {
+                "system_services",
+                "system_binaries",
+                "common_loaded_modules",
+                "process_loaded_modules",
+            },
             "list_fields": {"scheduled_tasks": None},
         },
         "activity/systemd_schedules.yaml": {

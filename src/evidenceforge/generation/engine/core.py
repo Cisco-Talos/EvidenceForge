@@ -349,12 +349,15 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             ) + 1000
 
         # Pass per-host boot datetimes to Sysmon emitter for ProcessGUID realism
-        if "sysmon" in self.emitters:
+        if "windows_event_sysmon" in self.emitters:
             _boot_times = {
                 hostname: self.start_time - timedelta(seconds=uptime)
                 for hostname, uptime in self._kernel_boot_uptimes.items()
             }
-            self.emitters["sysmon"]._host_boot_times = _boot_times
+            _sysmon = self.emitters["windows_event_sysmon"]
+            _sysmon._host_boot_times = _boot_times
+            _sysmon._state_manager = self.state_manager
+            _sysmon._system_pids = self._system_pids
 
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)

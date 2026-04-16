@@ -39,6 +39,17 @@ applications:
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --enable-features=NetworkService'
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=gpu-process'
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=utility --utility-sub-type=network.mojom.NetworkService'
+        loaded_modules:
+          - path: 'C:\Program Files\Google\Chrome\Application\chrome_elf.dll'
+            signature: "Google LLC"
+          - path: 'C:\Program Files\Google\Chrome\Application\libEGL.dll'
+            signature: "Google LLC"
+          - path: 'C:\Program Files\Google\Chrome\Application\libGLESv2.dll'
+            signature: "Google LLC"
+          - path: 'C:\Windows\System32\user32.dll'
+          - path: 'C:\Windows\System32\gdi32.dll'
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\dwrite.dll'
       linux:
         image_path: "/usr/bin/google-chrome"
         command_templates:
@@ -64,6 +75,16 @@ applications:
         children:
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc -childID 3 -isForBrowser'
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc -childID 5 -isForBrowser'
+        loaded_modules:
+          - path: 'C:\Program Files\Mozilla Firefox\mozglue.dll'
+            signature: "Mozilla Corporation"
+          - path: 'C:\Program Files\Mozilla Firefox\nss3.dll'
+            signature: "Mozilla Corporation"
+          - path: 'C:\Program Files\Mozilla Firefox\lgpllibs.dll'
+            signature: "Mozilla Corporation"
+          - path: 'C:\Windows\System32\user32.dll'
+          - path: 'C:\Windows\System32\gdi32.dll'
+          - path: 'C:\Windows\System32\ws2_32.dll'
       linux:
         image_path: "/usr/bin/firefox"
         command_templates:
@@ -86,6 +107,14 @@ applications:
         command_templates:
           - '"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"'
           - 'OUTLOOK.EXE /recycle'
+        loaded_modules:
+          - path: 'C:\Program Files\Microsoft Office\root\Office16\OLMAPI32.DLL'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Program Files\Microsoft Office\root\Office16\mso.dll'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Windows\System32\user32.dll'
+          - path: 'C:\Windows\System32\ole32.dll'
+          - path: 'C:\Windows\System32\ws2_32.dll'
     categories: [user_app, office]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]
 
@@ -103,6 +132,14 @@ applications:
         command_templates:
           - 'WINWORD.EXE /n "{doc_path}"'
           - '"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE" /t "Normal.dotm"'
+        loaded_modules:
+          - path: 'C:\Program Files\Microsoft Office\root\Office16\mso.dll'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Program Files\Microsoft Office\root\Office16\wwlib.dll'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Windows\System32\user32.dll'
+          - path: 'C:\Windows\System32\ole32.dll'
+          - path: 'C:\Windows\System32\gdi32.dll'
     categories: [user_app, office]
     personas: [executive, analyst, hr, accountant, intern, help_desk, default]
 
@@ -120,6 +157,12 @@ applications:
         command_templates:
           - 'EXCEL.EXE "{spreadsheet_path}"'
           - '"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE" /e'
+        loaded_modules:
+          - path: 'C:\Program Files\Microsoft Office\root\Office16\mso.dll'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Windows\System32\user32.dll'
+          - path: 'C:\Windows\System32\ole32.dll'
+          - path: 'C:\Windows\System32\gdi32.dll'
     categories: [user_app, office]
     personas: [analyst, executive, hr, accountant, intern, help_desk, default]
 
@@ -140,6 +183,13 @@ applications:
         children:
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer'
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=gpu-process'
+        loaded_modules:
+          - path: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge_elf.dll'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Windows\System32\user32.dll'
+          - path: 'C:\Windows\System32\gdi32.dll'
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\dwrite.dll'
     categories: [user_app, browser]
     personas: [executive, sysadmin, analyst, hr, accountant, help_desk, default]
 

@@ -27,7 +27,9 @@ Provides commands for initialization, log generation, and validation.
 """
 
 import logging
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -86,6 +88,7 @@ console = Console()
 EXIT_SUCCESS = 0
 EXIT_INPUT_ERROR = 1
 EXIT_SCHEMA_VALIDATION = 2
+EXIT_ABORTED = 3
 EXIT_GENERATION_ERROR = 21
 EXIT_EVAL_ERROR = 22
 EXIT_SIGINT = 130
@@ -132,6 +135,9 @@ def generate(
         False, "--verbose", "-v", help="Enable verbose (INFO level) logging"
     ),
     debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug (DEBUG level) logging"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing output without prompting"
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -238,12 +244,37 @@ def generate(
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
 
-    # Clear previous data on re-generation
+    # Check for existing generated output (data/ and GROUND_TRUTH.md only).
+    # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
+    existing = []
     if data_dir.exists():
-        import shutil
+        existing.append(f"  data/           ({data_dir})")
+    gt_path = ground_truth_dir / "GROUND_TRUTH.md"
+    if gt_path.exists():
+        existing.append(f"  GROUND_TRUTH.md ({gt_path})")
 
-        shutil.rmtree(data_dir)
-        console.print("[dim]Cleared previous data[/dim]")
+    has_existing = bool(existing)
+    if has_existing:
+        console.print("\n[yellow]Existing output found:[/yellow]")
+        for item in existing:
+            console.print(item)
+
+        if not force:
+            try:
+                typer.confirm("\nOverwrite existing output?", abort=True)
+            except typer.Abort:
+                console.print("[dim]Aborted.[/dim]")
+                raise typer.Exit(EXIT_ABORTED)
+
+    # Stage generation into a temp directory when overwriting, so that a
+    # mid-run failure doesn't destroy the previous good output.
+    staging_dir = None
+    gen_data_dir = data_dir
+    gen_gt_dir = ground_truth_dir
+    if has_existing:
+        staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
+        gen_data_dir = staging_dir / "data"
+        gen_gt_dir = staging_dir
 
     # Generate logs
     try:
@@ -305,11 +336,30 @@ def generate(
             # Generate logs with progress reporting
             engine = GenerationEngine(
                 scenario=scenario,
-                output_dir=data_dir,
+                output_dir=gen_data_dir,
                 progress_callback=progress_callback,
-                ground_truth_dir=ground_truth_dir,
+                ground_truth_dir=gen_gt_dir,
             )
             engine.generate()
+
+        # DESIGN DECISION: Simple delete-then-move swap, not backup-restore.
+        # The staging directory already protects against generation failures
+        # (old output is untouched until generation succeeds). The final move
+        # is os.rename on the same filesystem (atomic). Old GROUND_TRUTH.md
+        # with new data would be semantically wrong, so partial preservation
+        # is intentionally not supported — it's all-or-nothing.
+        if staging_dir:
+            if data_dir.exists():
+                shutil.rmtree(data_dir)
+            if gt_path.exists():
+                gt_path.unlink()
+            if gen_data_dir.exists():
+                shutil.move(str(gen_data_dir), str(data_dir))
+            staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
+            if staged_gt.exists():
+                shutil.move(str(staged_gt), str(gt_path))
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            console.print("[dim]Replaced previous output[/dim]")
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")
         console.print("\nGenerated files:")
@@ -336,11 +386,17 @@ def generate(
         return
 
     except KeyboardInterrupt:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print("\n[bold yellow]Interrupted by user (Ctrl+C)[/bold yellow]")
         logger.info("Generation interrupted by user")
         raise typer.Exit(EXIT_SIGINT)
 
     except Exception as e:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
         if verbose or debug:
             console.print_exception()
