@@ -3013,12 +3013,25 @@ class ActivityGenerator:
         if not intensity:
             return pattern
 
-        # Normalize intensities to probabilities (cap at 0.95)
-        max_val = max(intensity.values())
+        # Normalize intensities to probabilities (cap at 0.95).
+        # Ignore non-positive values when determining the denominator so an
+        # all-zero (or all-negative) map cannot trigger divide-by-zero.
+        positive_values = [
+            value for activity, value in intensity.items() if activity != "logon" and value > 0
+        ]
+        if not positive_values:
+            for activity, _ in intensity.items():
+                if activity == "logon":
+                    continue  # Already added
+                pattern.append((activity, 0.1))
+            return pattern
+
+        max_val = max(positive_values)
         for activity, value in intensity.items():
             if activity == "logon":
                 continue  # Already added
-            prob = min(0.95, value / max_val * 0.8 + 0.1)
+            normalized = max(value, 0) / max_val
+            prob = min(0.95, normalized * 0.8 + 0.1)
             pattern.append((activity, prob))
 
         return pattern

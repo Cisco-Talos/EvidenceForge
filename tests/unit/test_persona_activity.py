@@ -287,6 +287,22 @@ class TestActivityIntensityOverrides:
         probs = {a: p for a, p in pattern}
         assert probs["process_code"] > probs["connection_web"]
 
+    def test_all_zero_intensity_does_not_crash(self):
+        """All-zero intensity maps should not raise and should return floor probability."""
+        persona = _make_persona(
+            name="developer", activity_intensity={"process_code": 0, "connection_web": 0}
+        )
+        generator = ActivityGenerator(
+            state_manager=Mock(),
+            emitters={},
+        )
+
+        pattern = generator.get_baseline_pattern("developer", persona=persona)
+        probs = {a: p for a, p in pattern}
+
+        assert probs["process_code"] == 0.1
+        assert probs["connection_web"] == 0.1
+
     def test_no_intensity_uses_hardcoded(self):
         """Without activity_intensity, should use hardcoded patterns."""
         persona = _make_persona(name="developer", activity_intensity=None)
