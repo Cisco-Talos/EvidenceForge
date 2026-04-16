@@ -27,6 +27,7 @@ Provides commands for initialization, log generation, and validation.
 """
 
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -86,6 +87,7 @@ console = Console()
 EXIT_SUCCESS = 0
 EXIT_INPUT_ERROR = 1
 EXIT_SCHEMA_VALIDATION = 2
+EXIT_ABORTED = 3
 EXIT_GENERATION_ERROR = 21
 EXIT_EVAL_ERROR = 22
 EXIT_SIGINT = 130
@@ -132,6 +134,9 @@ def generate(
         False, "--verbose", "-v", help="Enable verbose (INFO level) logging"
     ),
     debug: bool = typer.Option(False, "--debug", "-d", help="Enable debug (DEBUG level) logging"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Overwrite existing output without prompting"
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -238,12 +243,37 @@ def generate(
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
 
-    # Clear previous data on re-generation
+    # Check for existing output
+    existing = []
     if data_dir.exists():
-        import shutil
+        existing.append(f"  data/           ({data_dir})")
+    gt_path = ground_truth_dir / "GROUND_TRUTH.md"
+    if gt_path.exists():
+        existing.append(f"  GROUND_TRUTH.md ({gt_path})")
+    env_path = ground_truth_dir / "ENVIRONMENT.md"
+    if env_path.exists():
+        existing.append(f"  ENVIRONMENT.md  ({env_path})")
 
-        shutil.rmtree(data_dir)
-        console.print("[dim]Cleared previous data[/dim]")
+    if existing:
+        console.print("\n[yellow]Existing output found:[/yellow]")
+        for item in existing:
+            console.print(item)
+
+        if not force:
+            try:
+                typer.confirm("\nOverwrite existing output?", abort=True)
+            except typer.Abort:
+                console.print("[dim]Aborted.[/dim]")
+                raise typer.Exit(EXIT_ABORTED)
+
+        # Clean previous output
+        if data_dir.exists():
+            shutil.rmtree(data_dir)
+        if gt_path.exists():
+            gt_path.unlink()
+        if env_path.exists():
+            env_path.unlink()
+        console.print("[dim]Cleared previous output[/dim]")
 
     # Generate logs
     try:

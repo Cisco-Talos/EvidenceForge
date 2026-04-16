@@ -48,6 +48,7 @@ eforge generate <scenario.yaml> [options]
 Options:
   --output, -o <dir>     Override output directory (default: from scenario's output.destination)
   --config, -c <file>    Path to config.yaml
+  --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
 ```
@@ -56,6 +57,7 @@ Exit codes:
 - 0 = Success
 - 1 = Input error (file not found, bad path)
 - 2 = Schema validation failed
+- 3 = User declined overwrite (aborted)
 - 21 = Generation error
 - 130 = User interrupted (Ctrl+C)
 
@@ -96,7 +98,7 @@ scenarios/<scenario-name>/
     ...
 ```
 
-Re-running generation overwrites the previous `data/` directory.
+If `data/`, `GROUND_TRUTH.md`, or `ENVIRONMENT.md` already exist, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use).
 
 ### 3. Post-Generation
 
