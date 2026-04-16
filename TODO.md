@@ -93,6 +93,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] **No pre-commit hooks** — ruff issues only caught in CI. Add pre-commit framework with ruff check + format hooks.
 - [x] Security: sandboxed Jinja template rendering for YAML-defined format templates (SandboxedEnvironment + StrictUndefined) to block SSTI/code execution while preserving safe field interpolation.
 - [x] Security: bound baseline failed-logon synthetic service account selection loops to prevent scenario-controlled infinite loops/DoS.
+- [x] Security: guard persona `activity_intensity` normalization against all-zero values to prevent divide-by-zero DoS during generation (all-zero overrides now safely map to floor probability instead of crashing).
 - [ ] **Re-generation appends to existing output** — `GenerationEngine` creates output directories with `exist_ok=True` and emitters append to existing files. Re-running a scenario without manually clearing the output directory produces mixed old+new data. Should clean the output directory (or at least its per-sensor subdirectories) before writing.
 
 ### Tier 1: Foundational Correctness
