@@ -2786,8 +2786,29 @@ class ActivityGenerator:
         # connection is preceded by a DNS query.
         if not hasattr(self, "_dns_cache"):
             self._dns_cache: dict[tuple[str, str], float] = {}
+        if not hasattr(self, "_dns_cache_last_prune"):
+            self._dns_cache_last_prune = 0.0
+
         cache_key = (src_ip, hostname)
         ts_epoch = time.timestamp()
+
+        # Keep the cache bounded: drop entries older than the max TTL horizon,
+        # and enforce a hard cap under high-cardinality/adversarial inputs.
+        if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
+            max_ttl_window = 600
+            cutoff = ts_epoch - max_ttl_window
+            self._dns_cache = {
+                key: cached_at for key, cached_at in self._dns_cache.items() if cached_at >= cutoff
+            }
+            if len(self._dns_cache) > 50_000:
+                sorted_items = sorted(
+                    self._dns_cache.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+                self._dns_cache = dict(sorted_items[:50_000])
+            self._dns_cache_last_prune = ts_epoch
+
         last_query = self._dns_cache.get(cache_key, 0)
         cache_ttl = rng.choice([60, 120, 300, 600])  # Varied TTLs
         if ts_epoch - last_query < cache_ttl:
@@ -2859,7 +2880,14 @@ class ActivityGenerator:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
+            ipv6_answer = _IPV6_MAP.get(dst_ip)
+            if ipv6_answer is not None:
+                answers = [ipv6_answer]
+            elif ":" in dst_ip:
+                # Already IPv6 (not present in registry map) — use as-is.
+                answers = [dst_ip]
+            else:
+                answers = [_ipv4_to_fake_ipv6(dst_ip)]
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
@@ -3013,12 +3041,25 @@ class ActivityGenerator:
         if not intensity:
             return pattern
 
-        # Normalize intensities to probabilities (cap at 0.95)
-        max_val = max(intensity.values())
+        # Normalize intensities to probabilities (cap at 0.95).
+        # Ignore non-positive values when determining the denominator so an
+        # all-zero (or all-negative) map cannot trigger divide-by-zero.
+        positive_values = [
+            value for activity, value in intensity.items() if activity != "logon" and value > 0
+        ]
+        if not positive_values:
+            for activity, _ in intensity.items():
+                if activity == "logon":
+                    continue  # Already added
+                pattern.append((activity, 0.1))
+            return pattern
+
+        max_val = max(positive_values)
         for activity, value in intensity.items():
             if activity == "logon":
                 continue  # Already added
-            prob = min(0.95, value / max_val * 0.8 + 0.1)
+            normalized = max(value, 0) / max_val
+            prob = min(0.95, normalized * 0.8 + 0.1)
             pattern.append((activity, prob))
 
         return pattern

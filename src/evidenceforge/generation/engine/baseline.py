@@ -94,6 +94,36 @@ _HAWKES_RISK_PARAMS = {
 }
 
 
+def _pick_non_colliding_account_name(
+    rng: random.Random,
+    existing_accounts: set[str],
+    base_names: list[str],
+    max_numeric_suffix: int = 9,
+) -> str:
+    """Pick a synthetic account name that does not collide with scenario-defined accounts.
+
+    Selection is deterministic for a given RNG state and never loops forever:
+    1. Choose from base names and base+numeric suffix candidates when available.
+    2. Fall back to deterministic underscore suffixes with a bounded search.
+    """
+    candidate_pool = [*base_names]
+    for base_name in base_names:
+        candidate_pool.extend(f"{base_name}{suffix}" for suffix in range(1, max_numeric_suffix + 1))
+
+    available = [candidate for candidate in candidate_pool if candidate not in existing_accounts]
+    if available:
+        return rng.choice(available)
+
+    fallback_base = base_names[0]
+    for suffix in range(1, 10_001):
+        candidate = f"{fallback_base}_{suffix}"
+        if candidate not in existing_accounts:
+            return candidate
+
+    msg = "Unable to select non-colliding synthetic account name after bounded fallback search"
+    raise ValueError(msg)
+
+
 def _hawkes_params_from_persona(persona: Persona | None) -> dict:
     """Derive Hawkes kernel parameters from persona risk_profile.
 
@@ -733,13 +763,15 @@ class BaselineMixin:
         _sched_seed = _stable_seed(self.scenario.name + "_sched_fail")
         _sched_rng = random.Random(_sched_seed)
         _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
-        _sched_acct = _sched_rng.choice(_svc_names)
         # Ensure no collision with actual scenario accounts
         _existing = {u.username for u in self.scenario.environment.users} | set(
             self.scenario.environment.service_accounts
         )
-        while _sched_acct in _existing:
-            _sched_acct = _sched_rng.choice(_svc_names) + str(_sched_rng.randint(1, 9))
+        _sched_acct = _pick_non_colliding_account_name(
+            rng=_sched_rng,
+            existing_accounts=_existing,
+            base_names=_svc_names,
+        )
         _sched_user = User(
             username=_sched_acct,
             full_name=_sched_acct,
@@ -773,9 +805,11 @@ class BaselineMixin:
         is_business = 0 <= _local.weekday() <= 4 and 8 <= _local.hour <= 17
         # Fire at ~10am and ~2pm (deterministic per scenario)
         if is_business and _local.hour in (10, 14) and rng.random() < 0.5:
-            _mgmt_acct = "svc_mgmt"
-            while _mgmt_acct in _existing:
-                _mgmt_acct = f"svc_mgmt{rng.randint(1, 9)}"
+            _mgmt_acct = _pick_non_colliding_account_name(
+                rng=rng,
+                existing_accounts=_existing,
+                base_names=["svc_mgmt"],
+            )
             _mgmt_user = User(
                 username=_mgmt_acct,
                 full_name=_mgmt_acct,

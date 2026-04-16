@@ -79,7 +79,12 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Tier 0: Infrastructure
 
+- [x] Security: validate `environment.timezone.systems` overrides at schema load to prevent runtime `UnknownTimeZoneError` crashes during timezone conversion.
+- [x] Security: threaded emitter worker exceptions can deadlock `barrier_flush()` (`Queue.join()` wait forever when worker dies).
 - [x] Security: blocked symlinked `eforge` install target in `install-skills` to prevent arbitrary overwrite/deletion and stale-file cleanup outside target.
+- [x] Security: cap firewall deny baseline amplification (`deny_ratio`/hourly deny volume) to prevent scenario-driven local DoS — `NetworkSensor.deny_ratio` now enforces `<= 50.0`.
+- [x] Security: prevent IPv6 scenario DoS in DNS AAAA fallback (`_ipv4_to_fake_ipv6` no longer evaluates for IPv6 destination IPs; AAAA uses mapped IPv6 or preserves IPv6 literal).
+- [x] Security: bounded/pruned ActivityGenerator DNS cache (60s prune cadence, 600s TTL-horizon eviction, 50k hard cap) to prevent unbounded memory growth from unique `(src_ip, hostname)` keys.
 
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.
 - [x] **`eforge validate` can't find personas in dev mode** — works when installed (`eforge validate`) but not via `uv run eforge validate`. Blocks dev workflow.
@@ -88,6 +93,8 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] **CI runs tests 3 times** — 3 separate pytest invocations (unit, integration, both again for coverage). Consolidate to single run.
 - [x] **No pre-commit hooks** — ruff issues only caught in CI. Add pre-commit framework with ruff check + format hooks.
 - [x] Security: sandboxed Jinja template rendering for YAML-defined format templates (SandboxedEnvironment + StrictUndefined) to block SSTI/code execution while preserving safe field interpolation.
+- [x] Security: bound baseline failed-logon synthetic service account selection loops to prevent scenario-controlled infinite loops/DoS.
+- [x] Security: guard persona `activity_intensity` normalization against all-zero values to prevent divide-by-zero DoS during generation (all-zero overrides now safely map to floor probability instead of crashing).
 - [ ] **Re-generation appends to existing output** — `GenerationEngine` creates output directories with `exist_ok=True` and emitters append to existing files. Re-running a scenario without manually clearing the output directory produces mixed old+new data. Should clean the output directory (or at least its per-sensor subdirectories) before writing.
 
 ### Tier 1: Foundational Correctness

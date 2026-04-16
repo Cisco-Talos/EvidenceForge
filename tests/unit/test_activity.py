@@ -637,3 +637,21 @@ class TestActivityGenerator:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.protocol == "icmp"
         assert event.network.ip_proto == 1
+
+
+def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
+    """_emit_dns_lookup should prune expired entries and enforce a bounded cache size."""
+    now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    ts_now = now.timestamp()
+
+    activity_gen._dns_cache = {
+        (f"10.0.0.{i % 255}", f"host-{i}.example.com"): ts_now - 5 for i in range(50_100)
+    }
+    hot_key = ("10.0.0.5", "active.example.com")
+    activity_gen._dns_cache[hot_key] = ts_now - 1
+    activity_gen._dns_cache_last_prune = 0.0
+
+    activity_gen._emit_dns_lookup(hot_key[0], "93.184.216.34", now, hostname=hot_key[1])
+
+    assert hot_key in activity_gen._dns_cache
+    assert len(activity_gen._dns_cache) <= 50_001

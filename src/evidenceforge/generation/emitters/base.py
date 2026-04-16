@@ -87,6 +87,7 @@ class LogEmitter(ABC):
         self._flush_barrier: Event | None = None
         self._stop_event: Event | None = None
         self._thread: Thread | None = None
+        self._thread_error: Exception | None = None
 
         if self.threaded:
             self._event_queue = Queue(maxsize=50000)  # Bounded queue for backpressure
@@ -157,14 +158,22 @@ class LogEmitter(ABC):
             try:
                 # Try to get event from queue with timeout
                 event_data = self._event_queue.get(timeout=0.1)
-
-                # Render and buffer the event (None means skip)
-                rendered = self._render_event(event_data)
-                if rendered is not None:
-                    self._buffer_event(rendered)
-
-                # Mark task as done
-                self._event_queue.task_done()
+                try:
+                    # Render and buffer the event (None means skip)
+                    rendered = self._render_event(event_data)
+                    if rendered is not None:
+                        self._buffer_event(rendered)
+                except Exception as exc:  # noqa: BLE001
+                    self._thread_error = exc
+                    logger.exception(
+                        "Unhandled exception in %s emitter thread; stopping thread",
+                        self.format_def.name,
+                    )
+                    self._stop_event.set()
+                finally:
+                    # Always mark task done, even if rendering failed.
+                    # Otherwise queue join/barrier can deadlock forever.
+                    self._event_queue.task_done()
 
             except Empty:
                 # No events in queue - check for flush barrier
@@ -202,15 +211,19 @@ class LogEmitter(ABC):
         """
         if self.threaded:
             logger.debug(f"Waiting for {self.format_def.name} emitter to flush at barrier")
+            self._raise_if_thread_failed()
 
             # Signal the emitter thread to flush
             self._flush_barrier.set()
 
             # Wait for queue to drain
-            self._event_queue.join()
+            while self._event_queue.unfinished_tasks > 0:
+                self._raise_if_thread_failed()
+                time.sleep(0.01)
 
             # Wait for flush to complete (barrier cleared by emitter thread)
             while self._flush_barrier.is_set():
+                self._raise_if_thread_failed()
                 time.sleep(0.01)
 
             logger.debug(f"Barrier flush complete for {self.format_def.name}")
@@ -233,6 +246,16 @@ class LogEmitter(ABC):
                 logger.warning(
                     f"Emitter thread for {self.format_def.name} did not stop within timeout"
                 )
+            self._raise_if_thread_failed()
+
+    def _raise_if_thread_failed(self) -> None:
+        """Raise RuntimeError if emitter thread died or recorded an exception."""
+        if self._thread_error is not None:
+            raise RuntimeError(
+                f"{self.format_def.name} emitter thread failed"
+            ) from self._thread_error
+        if self._thread and not self._thread.is_alive() and not self._stop_event.is_set():
+            raise RuntimeError(f"{self.format_def.name} emitter thread stopped unexpectedly")
 
     def _write_header(self) -> None:
         """Write header to output file if format has one (thread-safe)."""

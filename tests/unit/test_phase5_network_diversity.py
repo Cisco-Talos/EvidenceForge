@@ -281,6 +281,36 @@ class TestDnsQueryTypeSemantics:
                     return  # Found at least one AAAA
         # It's probabilistic, so we might not see AAAA in 100 tries, but very unlikely
 
+    def test_aaaa_query_handles_ipv6_destination(self, activity_gen, mock_emitters, monkeypatch):
+        """AAAA lookup should not crash when destination IP is already IPv6."""
+        import random
+
+        import evidenceforge.generation.activity.generator as generator_module
+
+        rng = random.Random(42)
+        random_values = iter([0.5, 0.7])  # not SERVFAIL, then AAAA branch
+
+        def _fixed_random() -> float:
+            try:
+                return next(random_values)
+            except StopIteration:
+                return 0.7
+
+        monkeypatch.setattr(rng, "random", _fixed_random)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.10.1",
+            dst_ip="2001:db8::1",
+            time=datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+            hostname="example.test",
+        )
+
+        assert mock_emitters["zeek_dns"].emit_raw.called
+        event = mock_emitters["zeek_dns"].emit_raw.call_args_list[0][0][0]
+        assert event["qtype_name"] == "AAAA"
+        assert event["answers"] == ["2001:db8::1"]
+
     def test_ptr_uses_in_addr_arpa(self, activity_gen, state_manager, mock_emitters):
         """PTR queries must use in-addr.arpa format."""
         for _ in range(200):
