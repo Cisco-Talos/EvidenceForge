@@ -25,6 +25,7 @@
 Each parser reads generated log output and yields structured ParsedRecord objects.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from datetime import datetime
@@ -32,6 +33,8 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class ParsedRecord(BaseModel):
@@ -79,42 +82,69 @@ def get_parser(format_name: str) -> LogParser:
     return cls()
 
 
+def _is_safe_path(path: Path, root: Path) -> bool:
+    """Check that path is not a symlink and resolves inside root."""
+    if path.is_symlink():
+        logger.warning("Skipping symlinked path during log discovery: %s", path)
+        return False
+    try:
+        path.resolve().relative_to(root)
+    except ValueError:
+        logger.warning("Skipping path outside output directory: %s", path)
+        return False
+    return True
+
+
 def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
     """Discover log files in an output directory and map to format parsers.
 
     Scans both top-level files and per-sensor subdirectories (e.g., zeek-fw01/).
+    Rejects symlinks and paths that resolve outside the output directory.
 
     Returns:
         Dict mapping format_name to list of file paths.
     """
     result: dict[str, list[Path]] = {}
+    output_root = output_dir.resolve()
 
     # Collect all candidate files: top-level + one level of subdirectories
     candidates: list[Path] = []
     for child in output_dir.iterdir():
+        if not _is_safe_path(child, output_root):
+            continue
         if child.is_file():
             candidates.append(child)
         elif child.is_dir():
             if child.name == "bash_history":
                 # Special case: bash_history has its own discovery
-                files = list(child.rglob("*.history")) + list(child.rglob("*.bash_history"))
+                files = [
+                    f
+                    for f in list(child.rglob("*.history")) + list(child.rglob("*.bash_history"))
+                    if _is_safe_path(f, output_root)
+                ]
                 if files:
                     result["bash_history"] = files
             else:
                 # Per-host FQDN or per-sensor subdirectory
                 for subfile in child.iterdir():
+                    if not _is_safe_path(subfile, output_root):
+                        continue
                     if subfile.is_file():
                         candidates.append(subfile)
                     elif subfile.is_dir():
                         if subfile.name == "bash_history":
                             # Bash history nested in per-host dir
-                            files = list(subfile.rglob("*.bash_history"))
+                            files = [
+                                f
+                                for f in subfile.rglob("*.bash_history")
+                                if _is_safe_path(f, output_root)
+                            ]
                             if files:
                                 result.setdefault("bash_history", []).extend(files)
                         else:
                             # Deeper subdirectory (e.g., per-sensor logs)
                             for deepfile in subfile.iterdir():
-                                if deepfile.is_file():
+                                if _is_safe_path(deepfile, output_root) and deepfile.is_file():
                                     candidates.append(deepfile)
 
     for format_name, parser_cls in _PARSER_CLASSES.items():
