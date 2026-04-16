@@ -12,15 +12,24 @@ from __future__ import annotations
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
-from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.config.overlay import load_with_overlay
 
 _FILTERS_PATH = get_activity_directory() / "sysmon_filters.yaml"
 _CACHED: dict[str, Any] | None = None
 
 
 def _merge_sysmon_filters(default: dict, overlay: dict) -> dict:
-    """Merge overlay into defaults — top-level keys replace entirely."""
-    return deep_merge_dict(default, overlay)
+    """Merge overlay into defaults — top-level keys replace entirely.
+
+    Unlike deep_merge_dict, this replaces each top-level section wholesale
+    when present in the overlay. A user who overrides `network_connect:`
+    gets exactly their config, not a merge with the defaults. Sections
+    not present in the overlay are preserved from the defaults.
+    """
+    result = dict(default)
+    for key, value in overlay.items():
+        result[key] = value
+    return result
 
 
 def load_sysmon_filters() -> dict[str, Any]:

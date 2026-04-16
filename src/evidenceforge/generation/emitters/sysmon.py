@@ -875,11 +875,20 @@ class SysmonEventEmitter(LogEmitter):
             pid, image = self._resolve_process_from_pid(host.hostname, initiating_pid)
         process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
 
-        # User
+        # User — resolve from AuthContext, ProcessContext, or StateManager
+        user = ""
         if event.auth and event.auth.username:
             user = f"{host.netbios_domain}\\{event.auth.username}"
-        else:
-            user = "NT AUTHORITY\\SYSTEM" if pid == 4 else f"{host.netbios_domain}\\SYSTEM"
+        elif proc and proc.username:
+            user = f"{host.netbios_domain}\\{proc.username}"
+        elif pid > 0:
+            sm = getattr(self, "_state_manager", None)
+            if sm:
+                rp = sm.get_process(host.hostname, pid)
+                if rp and rp.username:
+                    user = f"{host.netbios_domain}\\{rp.username}"
+        if not user:
+            user = "NT AUTHORITY\\SYSTEM" if pid == 4 else "NT AUTHORITY\\SYSTEM"
 
         src_ip = net.src_ip or host.ip
         dst_ip = net.dst_ip or ""
@@ -1059,10 +1068,14 @@ class SysmonEventEmitter(LogEmitter):
         # Tools that bypass the DNS Client (nslookup.exe, certain malware) are
         # the exception; storyline-specific DNS could use the actual process
         # in a future enhancement.
-        # Use the seeded svchost PID so the PID exists in StateManager's
-        # process tree (correlates with Event 1).
+        # Use the seeded svchost PID for the DNS Client service group
+        # (svchost_local_svc = svchost.exe -k LocalService) so the PID
+        # exists in StateManager's process tree and correlates with Event 1.
         sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
-        dns_client_pid = sys_pids.get("svchost", self._get_dns_client_pid(host.hostname))
+        dns_client_pid = sys_pids.get(
+            "svchost_local_svc",
+            sys_pids.get("svchost_netsvcs", self._get_dns_client_pid(host.hostname)),
+        )
         process_guid = self._generate_process_guid(host.hostname, dns_client_pid, event.timestamp)
 
         # Map DNS rcode to Windows QueryStatus
