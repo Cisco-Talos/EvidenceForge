@@ -75,6 +75,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Tier 0: Infrastructure
 
+- [x] Security: validate and harden `load_format` name/path handling to prevent traversal outside bundled format definitions. Added strict name validation (`^[A-Za-z0-9_]+$`) in the loader and unit tests for traversal/absolute-path inputs.
 - [x] Security: blocked symlinked `eforge` install target in `install-skills` to prevent arbitrary overwrite/deletion and stale-file cleanup outside target.
 
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.

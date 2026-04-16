@@ -27,6 +27,7 @@ in the config/formats/ directory.
 """
 
 import logging
+import re
 
 from pydantic import ValidationError
 
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 # Global format cache (in-memory, no TTL)
 _format_cache: dict[str, FormatDefinition] = {}
+_FORMAT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def get_definitions_directory():
@@ -77,6 +79,11 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
         >>> fmt.category
         'host'
     """
+    if not _FORMAT_NAME_PATTERN.fullmatch(name):
+        raise ConfigurationError(
+            "Invalid format definition name. Use only letters, numbers, and underscores."
+        )
+
     # Check cache first
     if not force_reload and name in _format_cache:
         logger.debug(f"Loaded format '{name}' from cache")

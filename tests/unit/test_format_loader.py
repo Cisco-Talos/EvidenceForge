@@ -163,6 +163,15 @@ class TestLoadFormat:
         with pytest.raises(ConfigurationError, match="not found"):
             load_format("nonexistent_format")
 
+    @pytest.mark.parametrize(
+        "invalid_name",
+        ["../malicious", "..\\malicious", "/tmp/malicious", "nested/name", "name-with-dash"],
+    )
+    def test_rejects_invalid_format_names(self, invalid_name):
+        """Test that unsafe or invalid format names are rejected."""
+        with pytest.raises(ConfigurationError, match="Invalid format definition name"):
+            load_format(invalid_name)
+
     def test_file_path_in_error_message(self):
         """Test that error message contains file path."""
         try:
