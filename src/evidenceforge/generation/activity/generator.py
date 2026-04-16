@@ -1345,12 +1345,15 @@ class ActivityGenerator:
         self.dispatcher.dispatch(event)
 
         # Guaranteed FILE/CREATE for the process image when requested (storyline processes).
-        # Skip for pre-existing OS binaries in System32/SysWOW64 — Event 11 should
-        # only fire for genuinely new files written to disk (malware drops, downloads).
+        # Skip for pre-existing binaries in System32/SysWOW64/Program Files — Event 11
+        # should only fire for genuinely new files written to disk (malware drops, downloads).
         if ensure_file_event:
             _lower = process_name.lower().replace("/", "\\")
-            _is_system_binary = _lower.startswith("c:\\windows\\system32\\") or _lower.startswith(
-                "c:\\windows\\syswow64\\"
+            _is_system_binary = (
+                _lower.startswith("c:\\windows\\system32\\")
+                or _lower.startswith("c:\\windows\\syswow64\\")
+                or _lower.startswith("c:\\program files\\")
+                or _lower.startswith("c:\\program files (x86)\\")
             )
             if not _is_system_binary:
                 self.dispatcher.dispatch(

@@ -3169,6 +3169,98 @@ class BaselineMixin:
                         username="SYSTEM",
                     )
 
+            # Baseline registry activity from running services. Real Sysmon
+            # generates hundreds-thousands of Event 12/13 per hour. We emit
+            # 15-40 per host per hour to provide realistic background volume.
+            if os_cat == "windows":
+                from evidenceforge.events.base import SecurityEvent
+                from evidenceforge.events.contexts import (
+                    AuthContext,
+                    ProcessContext,
+                    RegistryContext,
+                )
+
+                _REG_KEYS_HKCU = [
+                    ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "HideFileExt",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                        "ProxyEnable",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        "AppsUseLightTheme",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General",
+                        "ShownFirstRunOptin",
+                    ),
+                ]
+                _REG_KEYS_HKLM = [
+                    ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters",
+                        "EnableFirewall",
+                    ),
+                    ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
+                    (
+                        "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+                        "NoAutoUpdate",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+                        "ClearPageFileAtShutdown",
+                    ),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                        "EnableLUA",
+                    ),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
+                        "DhcpIPAddress",
+                    ),
+                ]
+                _reg_count = rng.randint(15, 40)
+                _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                _host_ctx = self.activity_generator._build_host_context(system)
+                for _ri in range(_reg_count):
+                    _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    # 70% HKLM (services), 30% HKCU (user-context)
+                    if rng.random() < 0.70:
+                        _key, _val = rng.choice(_REG_KEYS_HKLM)
+                        _reg_pid = _svc_pid
+                        _reg_user = "SYSTEM"
+                    else:
+                        _key, _val = rng.choice(_REG_KEYS_HKCU)
+                        _reg_pid = sys_pids.get("explorer", _svc_pid)
+                        _reg_user = "SYSTEM"  # Will be overridden by emitter
+                    # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
+                    _reg_action = "delete" if rng.random() < 0.10 else "modify"
+                    self.activity_generator.dispatcher.dispatch(
+                        SecurityEvent(
+                            timestamp=_reg_ts,
+                            event_type="registry_modify",
+                            src_host=_host_ctx,
+                            auth=AuthContext(username=_reg_user),
+                            process=ProcessContext(
+                                pid=_reg_pid,
+                                parent_pid=0,
+                                image=self.activity_generator._lookup_process_name(
+                                    system.hostname, _reg_pid, "windows"
+                                )
+                                or r"C:\Windows\System32\svchost.exe",
+                                command_line="",
+                                username=_reg_user,
+                            ),
+                            registry=RegistryContext(
+                                key=_key, value=_val, action=_reg_action, pid=_reg_pid
+                            ),
+                        )
+                    )
+
             # Windows scheduled tasks — diverse per-hour selection from YAML.
             # Linux scheduled tasks are handled by _generate_scheduled_tasks()
             # which uses realistic daily/weekly frequencies instead of the

@@ -634,19 +634,24 @@ class EmitterSetupMixin:
         pids["userinit"] = _c(
             pids["winlogon"], r"C:\Windows\System32\userinit.exe", "userinit.exe", "SYSTEM"
         )
-        # User-context processes: use the system's assigned user if available,
-        # since explorer.exe, RuntimeBroker.exe etc. run under the logged-in user.
-        _desktop_user = getattr(system, "assigned_user", None) or "SYSTEM"
-        pids["explorer"] = _c(
-            pids["userinit"], r"C:\Windows\explorer.exe", "explorer.exe", _desktop_user
-        )
+        # User-context processes run under the logged-in user, not SYSTEM.
+        # Only seed them for workstations with an assigned user; servers/DCs
+        # start explorer only when an admin logs in interactively.
+        _desktop_user = getattr(system, "assigned_user", None)
+        if _desktop_user:
+            pids["explorer"] = _c(
+                pids["userinit"], r"C:\Windows\explorer.exe", "explorer.exe", _desktop_user
+            )
+            pids["runtime_broker"] = _c(
+                pids["svchost_local_system"],
+                r"C:\Windows\System32\RuntimeBroker.exe",
+                "RuntimeBroker.exe",
+                _desktop_user,
+            )
+        else:
+            # Servers/DCs: no persistent desktop session at boot
+            pids["explorer"] = pids["winlogon"]  # Alias for fallback lookups
         pids["dwm"] = _c(pids["csrss_s0"], r"C:\Windows\System32\dwm.exe", "dwm.exe", "SYSTEM")
-        pids["runtime_broker"] = _c(
-            pids["svchost_local_system"],
-            r"C:\Windows\System32\RuntimeBroker.exe",
-            "RuntimeBroker.exe",
-            _desktop_user,
-        )
 
     def _seed_linux_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Linux system process tree in StateManager."""
