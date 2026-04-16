@@ -634,15 +634,18 @@ class EmitterSetupMixin:
         pids["userinit"] = _c(
             pids["winlogon"], r"C:\Windows\System32\userinit.exe", "userinit.exe", "SYSTEM"
         )
+        # User-context processes: use the system's assigned user if available,
+        # since explorer.exe, RuntimeBroker.exe etc. run under the logged-in user.
+        _desktop_user = getattr(system, "assigned_user", None) or "SYSTEM"
         pids["explorer"] = _c(
-            pids["userinit"], r"C:\Windows\explorer.exe", "explorer.exe", "SYSTEM"
+            pids["userinit"], r"C:\Windows\explorer.exe", "explorer.exe", _desktop_user
         )
         pids["dwm"] = _c(pids["csrss_s0"], r"C:\Windows\System32\dwm.exe", "dwm.exe", "SYSTEM")
         pids["runtime_broker"] = _c(
             pids["svchost_local_system"],
             r"C:\Windows\System32\RuntimeBroker.exe",
             "RuntimeBroker.exe",
-            "SYSTEM",
+            _desktop_user,
         )
 
     def _seed_linux_process_tree(self, system: System, pids: dict[str, int]) -> None:

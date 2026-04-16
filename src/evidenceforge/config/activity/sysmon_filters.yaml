@@ -32,6 +32,15 @@ network_connect:  # Event 3
     - installutil.exe
     - cmstp.exe
     - mmc.exe
+  # System/infra processes whose connections are sampled for baseline Event 3
+  # volume (analysts need these for hunting; full include would be too noisy)
+  include_baseline_images:
+    - svchost.exe
+    - lsass.exe
+    - services.exe
+    - dns.exe
+    - dfsr.exe
+  baseline_sample_rate: 0.10  # Log 10% of matching connections
   include_dest_ports:
     - 22     # SSH
     - 25     # SMTP

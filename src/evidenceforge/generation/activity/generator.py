@@ -1279,10 +1279,26 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
-        # Determine integrity level: admin group users get "High"
-        _admin_groups = {"domain-admins", "domain admins", "administrators", "local-admins"}
-        _user_groups = {g.lower() for g in (user.groups or [])}
-        _integrity = "High" if _user_groups & _admin_groups else "Medium"
+        # Determine integrity level per UAC model:
+        # - SYSTEM processes: "System" (handled in generate_system_process)
+        # - Explicitly elevated (admin tools, installers): "High"
+        # - Everything else (including admin users under UAC): "Medium"
+        _HIGH_INTEGRITY_EXES = {
+            "msiexec.exe",
+            "regedit.exe",
+            "mmc.exe",
+            "dism.exe",
+            "pkgmgr.exe",
+            "setup.exe",
+            "install.exe",
+            "procdump64.exe",
+            "procdump.exe",
+            "mimikatz.exe",
+            "psexec.exe",
+            "psexesvc.exe",
+        }
+        _exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        _integrity = "High" if _exe_lower in _HIGH_INTEGRITY_EXES else "Medium"
 
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(

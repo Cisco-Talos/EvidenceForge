@@ -372,6 +372,41 @@ class SysmonEventEmitter(LogEmitter):
             "Microsoft Corporation",
             "ismserv.exe",
         ),
+        "wsqmcons.exe": (
+            "10.0.19041.1",
+            "Windows SQM Consolidator",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "wsqmcons.exe",
+        ),
+        "consent.exe": (
+            "10.0.19041.1",
+            "Consent UI for administrative applications",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "consent.exe",
+        ),
+        "slui.exe": (
+            "10.0.19041.1",
+            "Windows Activation Client",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "slui.exe",
+        ),
+        "sppsvc.exe": (
+            "10.0.19041.1",
+            "Microsoft Software Protection Platform Service",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "sppsvc.exe",
+        ),
+        "ssh.exe": (
+            "8.6.0.1",
+            "OpenSSH SSH client",
+            "OpenSSH for Windows",
+            "Microsoft Corporation",
+            "ssh.exe",
+        ),
     }
 
     @classmethod
@@ -390,6 +425,19 @@ class SysmonEventEmitter(LogEmitter):
         from evidenceforge.generation.activity.application_catalog import get_pe_metadata
 
         return get_pe_metadata(basename)
+
+    def _get_sysmon_thread_id(self, hostname: str) -> int:
+        """Return a ThreadID from a small reused pool for this host.
+
+        Real Sysmon reuses a small thread pool (3-5 threads), not random IDs.
+        """
+        cache = getattr(self, "_sysmon_thread_pools", None)
+        if cache is None:
+            cache = self._sysmon_thread_pools = {}
+        if hostname not in cache:
+            rng = random.Random(_stable_seed(f"sysmon_threads_{hostname}"))
+            cache[hostname] = [rng.randint(1000, 5000) for _ in range(rng.randint(3, 5))]
+        return random.choice(cache[hostname])
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
@@ -567,7 +615,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
-        rng = random.Random()
+        random.Random()
         proc = event.process
         auth = event.auth
         host = event.src_host
@@ -599,7 +647,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": proc.pid,
@@ -634,7 +682,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""
-        rng = random.Random()
+        random.Random()
         proc = event.process
         auth = event.auth
         host = event.src_host
@@ -654,7 +702,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": proc.pid,
@@ -707,7 +755,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "SourceProcessGuid": source_guid,
             "SourceProcessId": proc.pid,
@@ -762,7 +810,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "SourceProcessGUID": source_guid,
             "SourceProcessId": proc.pid,
@@ -819,6 +867,13 @@ class SysmonEventEmitter(LogEmitter):
         include_images = [img.lower() for img in cfg.get("include_images", [])]
         if image in include_images:
             return True
+
+        # Baseline system images: sampled at a lower rate for volume balance
+        baseline_images = [img.lower() for img in cfg.get("include_baseline_images", [])]
+        if image in baseline_images:
+            sample_rate = cfg.get("baseline_sample_rate", 0.10)
+            if random.random() < sample_rate:
+                return True
 
         dst_port = event.network.dst_port or 0
         include_ports = cfg.get("include_dest_ports", [])
@@ -928,7 +983,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_network_connect(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 3 (NetworkConnect)."""
-        rng = random.Random()
+        random.Random()
         host = event.src_host
         net = event.network
         proc = event.process
@@ -976,7 +1031,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": pid,
@@ -1020,7 +1075,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": pid,
@@ -1040,7 +1095,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_file_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 11 (FileCreate)."""
-        rng = random.Random()
+        random.Random()
         host = event.src_host
         proc = event.process
         fc = event.file
@@ -1061,7 +1116,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": pid,
@@ -1077,7 +1132,7 @@ class SysmonEventEmitter(LogEmitter):
         if not self._passes_event12_13_filter(event):
             return
 
-        rng = random.Random()
+        random.Random()
         host = event.src_host
         proc = event.process
 
@@ -1112,7 +1167,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": pid,
@@ -1129,7 +1184,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_dns_query(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 22 (DNSQuery)."""
-        rng = random.Random()
+        random.Random()
         host = event.src_host
         dns = event.dns
 
@@ -1167,7 +1222,7 @@ class SysmonEventEmitter(LogEmitter):
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
             "ExecutionProcessID": self._get_sysmon_pid(host.hostname),
-            "ExecutionThreadID": rng.randint(1000, 5000),
+            "ExecutionThreadID": self._get_sysmon_thread_id(host.hostname),
             "UtcTime": utc_time,
             "ProcessGuid": process_guid,
             "ProcessId": dns_client_pid,
