@@ -84,6 +84,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] Security: blocked symlinked `eforge` install target in `install-skills` to prevent arbitrary overwrite/deletion and stale-file cleanup outside target.
 - [x] Security: cap firewall deny baseline amplification (`deny_ratio`/hourly deny volume) to prevent scenario-driven local DoS — `NetworkSensor.deny_ratio` now enforces `<= 50.0`.
 - [x] Security: prevent IPv6 scenario DoS in DNS AAAA fallback (`_ipv4_to_fake_ipv6` no longer evaluates for IPv6 destination IPs; AAAA uses mapped IPv6 or preserves IPv6 literal).
+- [x] Security: bounded/pruned ActivityGenerator DNS cache (60s prune cadence, 600s TTL-horizon eviction, 50k hard cap) to prevent unbounded memory growth from unique `(src_ip, hostname)` keys.
 
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.
 - [x] **`eforge validate` can't find personas in dev mode** — works when installed (`eforge validate`) but not via `uv run eforge validate`. Blocks dev workflow.
