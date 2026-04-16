@@ -2786,8 +2786,29 @@ class ActivityGenerator:
         # connection is preceded by a DNS query.
         if not hasattr(self, "_dns_cache"):
             self._dns_cache: dict[tuple[str, str], float] = {}
+        if not hasattr(self, "_dns_cache_last_prune"):
+            self._dns_cache_last_prune = 0.0
+
         cache_key = (src_ip, hostname)
         ts_epoch = time.timestamp()
+
+        # Keep the cache bounded: drop entries older than the max TTL horizon,
+        # and enforce a hard cap under high-cardinality/adversarial inputs.
+        if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
+            max_ttl_window = 600
+            cutoff = ts_epoch - max_ttl_window
+            self._dns_cache = {
+                key: cached_at for key, cached_at in self._dns_cache.items() if cached_at >= cutoff
+            }
+            if len(self._dns_cache) > 50_000:
+                sorted_items = sorted(
+                    self._dns_cache.items(),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+                self._dns_cache = dict(sorted_items[:50_000])
+            self._dns_cache_last_prune = ts_epoch
+
         last_query = self._dns_cache.get(cache_key, 0)
         cache_ttl = rng.choice([60, 120, 300, 600])  # Varied TTLs
         if ts_epoch - last_query < cache_ttl:
