@@ -265,6 +265,41 @@ output:
         assert not (tmp_path / "ENVIRONMENT.md").exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_force_preserves_old_output_on_failure(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """If generation fails with --force, previous output should be preserved."""
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = Exception("Generation crashed")
+        mock_engine_class.return_value = mock_engine
+
+        # Create existing output files
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "test.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        # Previous output should be preserved (not deleted)
+        assert (tmp_path / "data" / "test.xml").exists()
+        assert (tmp_path / "data" / "test.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+        # Staging directory should be cleaned up
+        staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+        assert len(staging_dirs) == 0, "Staging directory should be cleaned up on failure"
+        assert "previous output preserved" in result.stdout.lower()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_no_prompt_when_clean(self, mock_engine_class, scenarios_dir, tmp_path):
         """Clean output directory should not trigger any prompt."""
         mock_engine = Mock()

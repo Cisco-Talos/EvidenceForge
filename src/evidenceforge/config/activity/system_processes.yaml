@@ -179,6 +179,13 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\uxtheme.dll"
     - path: "C:\\Windows\\System32\\SHCore.dll"
     - path: "C:\\Windows\\System32\\propsys.dll"
+    # Third-party shell extensions (survive Event 7 exclude filter)
+    - path: "C:\\Program Files\\7-Zip\\7-zip.dll"
+      signed: false
+      signature: "-"
+      signature_status: "Unavailable"
+    - path: "C:\\Program Files\\Microsoft OneDrive\\FileSyncShell64.dll"
+      signature: "Microsoft Corporation"
 
   lsass.exe:
     - path: "C:\\Windows\\System32\\msv1_0.dll"
@@ -189,6 +196,11 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\samsrv.dll"
     - path: "C:\\Windows\\System32\\cryptdll.dll"
     - path: "C:\\Windows\\System32\\negoext.dll"
+    # Third-party credential providers
+    - path: "C:\\Program Files\\VMware\\VMware Tools\\vmStatsProvider.dll"
+      signed: false
+      signature: "-"
+      signature_status: "Unavailable"
 
   services.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
@@ -204,6 +216,11 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\dnsapi.dll"
     - path: "C:\\Windows\\System32\\winhttp.dll"
     - path: "C:\\Windows\\System32\\wintrust.dll"
+    # Third-party service DLLs (survive Event 7 exclude filter)
+    - path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
+      signature: "Microsoft Corporation"
+    - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
+      signature: "Microsoft Corporation"
 
   powershell.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
@@ -225,6 +242,9 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\ole32.dll"
     - path: "C:\\Windows\\System32\\user32.dll"
     - path: "C:\\Windows\\System32\\taskschd.dll"
+    # Third-party task DLLs
+    - path: "C:\\Program Files\\Windows Defender\\MpOAV.dll"
+      signature: "Microsoft Corporation"
 
   MsMpEng.exe:
     - path: "C:\\Windows\\System32\\ole32.dll"

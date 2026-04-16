@@ -29,6 +29,7 @@ Provides commands for initialization, log generation, and validation.
 import logging
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -254,7 +255,8 @@ def generate(
     if env_path.exists():
         existing.append(f"  ENVIRONMENT.md  ({env_path})")
 
-    if existing:
+    has_existing = bool(existing)
+    if has_existing:
         console.print("\n[yellow]Existing output found:[/yellow]")
         for item in existing:
             console.print(item)
@@ -266,14 +268,15 @@ def generate(
                 console.print("[dim]Aborted.[/dim]")
                 raise typer.Exit(EXIT_ABORTED)
 
-        # Clean previous output
-        if data_dir.exists():
-            shutil.rmtree(data_dir)
-        if gt_path.exists():
-            gt_path.unlink()
-        if env_path.exists():
-            env_path.unlink()
-        console.print("[dim]Cleared previous output[/dim]")
+    # Stage generation into a temp directory when overwriting, so that a
+    # mid-run failure doesn't destroy the previous good output.
+    staging_dir = None
+    gen_data_dir = data_dir
+    gen_gt_dir = ground_truth_dir
+    if has_existing:
+        staging_dir = Path(tempfile.mkdtemp(prefix=".eforge_staging_", dir=ground_truth_dir))
+        gen_data_dir = staging_dir / "data"
+        gen_gt_dir = staging_dir
 
     # Generate logs
     try:
@@ -335,11 +338,28 @@ def generate(
             # Generate logs with progress reporting
             engine = GenerationEngine(
                 scenario=scenario,
-                output_dir=data_dir,
+                output_dir=gen_data_dir,
                 progress_callback=progress_callback,
-                ground_truth_dir=ground_truth_dir,
+                ground_truth_dir=gen_gt_dir,
             )
             engine.generate()
+
+        # Generation succeeded — swap staged output into place
+        if staging_dir:
+            if data_dir.exists():
+                shutil.rmtree(data_dir)
+            if gt_path.exists():
+                gt_path.unlink()
+            if env_path.exists():
+                env_path.unlink()
+            # Move staged data/ and GROUND_TRUTH.md to final location
+            if gen_data_dir.exists():
+                shutil.move(str(gen_data_dir), str(data_dir))
+            staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
+            if staged_gt.exists():
+                shutil.move(str(staged_gt), str(gt_path))
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            console.print("[dim]Replaced previous output[/dim]")
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")
         console.print("\nGenerated files:")
@@ -366,11 +386,17 @@ def generate(
         return
 
     except KeyboardInterrupt:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print("\n[bold yellow]Interrupted by user (Ctrl+C)[/bold yellow]")
         logger.info("Generation interrupted by user")
         raise typer.Exit(EXIT_SIGINT)
 
     except Exception as e:
+        if staging_dir and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            console.print("[dim]Cleaned up staging directory; previous output preserved[/dim]")
         console.print(f"\n[bold red]Error:[/bold red] Generation failed: {e}", style="red")
         if verbose or debug:
             console.print_exception()

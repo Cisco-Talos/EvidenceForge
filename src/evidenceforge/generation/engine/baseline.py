@@ -3256,11 +3256,17 @@ class BaselineMixin:
 
                 num_dll = rng.randint(15, 40)
                 _dll_procs = [
+                    # System processes
                     ("explorer", r"C:\Windows\explorer.exe"),
                     ("svchost", r"C:\Windows\System32\svchost.exe"),
                     ("runtimebroker", r"C:\Windows\System32\RuntimeBroker.exe"),
                     ("taskhostw", r"C:\Windows\System32\taskhostw.exe"),
                     ("dllhost", r"C:\Windows\System32\dllhost.exe"),
+                    # User apps with third-party DLLs that survive Event 7 filter
+                    ("chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+                    ("msedge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+                    ("firefox", r"C:\Program Files\Mozilla Firefox\firefox.exe"),
+                    ("outlook", r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE"),
                 ]
                 for _ in range(num_dll):
                     proc_key, proc_image = rng.choice(_dll_procs)

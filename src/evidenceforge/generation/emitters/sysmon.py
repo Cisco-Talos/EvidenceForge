@@ -401,6 +401,22 @@ class SysmonEventEmitter(LogEmitter):
             cache[hostname] = 1800 + (h % 1200)  # range 1800-2999
         return cache[hostname]
 
+    def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
+        """Look up process image from StateManager by PID.
+
+        Returns (pid, image_path). Falls back to (pid, "System") only when
+        pid is -1/0 (unknown) or StateManager is not available.
+        """
+        if pid <= 0:
+            return (4, "System") if pid == -1 else (pid, r"C:\Windows\System32\svchost.exe")
+        sm = getattr(self, "_state_manager", None)
+        if sm is None:
+            return (pid, r"C:\Windows\System32\svchost.exe")
+        proc = sm.get_process(hostname, pid)
+        if proc is not None:
+            return (pid, proc.image)
+        return (pid, r"C:\Windows\System32\svchost.exe")
+
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
         if event.event_type not in self._supported_types:
@@ -841,9 +857,14 @@ class SysmonEventEmitter(LogEmitter):
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # Process info — use ProcessContext if available, else fallback to System
-        pid = proc.pid if proc else 4
-        image = proc.image if proc else "System"
+        # Process info — use ProcessContext if available, else resolve from
+        # initiating_pid via StateManager lookup
+        if proc:
+            pid = proc.pid
+            image = proc.image
+        else:
+            initiating_pid = net.initiating_pid if net else -1
+            pid, image = self._resolve_process_from_pid(host.hostname, initiating_pid)
         process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
 
         # User
@@ -935,8 +956,12 @@ class SysmonEventEmitter(LogEmitter):
         fc = event.file
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        pid = proc.pid if proc else rng.randint(1000, 5000)
-        image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
+        if proc:
+            pid = proc.pid
+            image = proc.image
+        else:
+            file_pid = fc.pid if fc else 0
+            pid, image = self._resolve_process_from_pid(host.hostname, file_pid)
         process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
 
         event_data = {
@@ -967,8 +992,12 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        pid = proc.pid if proc else rng.randint(1000, 5000)
-        image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
+        if proc:
+            pid = proc.pid
+            image = proc.image
+        else:
+            reg_pid = reg.pid if reg else 0
+            pid, image = self._resolve_process_from_pid(host.hostname, reg_pid)
         process_guid = self._generate_process_guid(host.hostname, pid, event.timestamp)
 
         # Route to Event 12 or 13 based on action
