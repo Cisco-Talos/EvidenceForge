@@ -1,5 +1,8 @@
 # Tests for remaining expert review fixes (#15, #34).
 
+import random
+
+from evidenceforge.generation.engine.baseline import _pick_non_colliding_account_name
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -43,20 +46,42 @@ class TestBaselineFailedLogonPatterns:
 
     def test_scheduled_task_account_not_collides(self):
         """Scheduled task account names should not collide with scenario accounts."""
-        import random
-
         _existing = {"alice.admin", "bob.dev", "svc_backup"}
-        _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
         _sched_rng = random.Random(42)
-        _sched_acct = _sched_rng.choice(_svc_names)
-        while _sched_acct in _existing:
-            _sched_acct = _sched_rng.choice(_svc_names) + str(_sched_rng.randint(1, 9))
+        _sched_acct = _pick_non_colliding_account_name(
+            rng=_sched_rng,
+            existing_accounts=_existing,
+            base_names=["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"],
+        )
         assert _sched_acct not in _existing
+
+    def test_scheduled_task_account_bounded_when_default_pool_exhausted(self):
+        """Account selection should terminate with fallback naming if default pool is exhausted."""
+        _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
+        _existing = {name for name in _svc_names}
+        _existing.update(f"{name}{digit}" for name in _svc_names for digit in range(1, 10))
+
+        acct = _pick_non_colliding_account_name(
+            rng=random.Random(42),
+            existing_accounts=_existing,
+            base_names=_svc_names,
+        )
+
+        assert acct not in _existing
+        assert acct.startswith("svc_backup_")
+
+    def test_management_sweep_account_bounded_when_default_pool_exhausted(self):
+        """Management sweep account selection should terminate when svc_mgmt and 1-9 are reserved."""
+        _existing = {"svc_mgmt", *(f"svc_mgmt{digit}" for digit in range(1, 10))}
+        acct = _pick_non_colliding_account_name(
+            rng=random.Random(42),
+            existing_accounts=_existing,
+            base_names=["svc_mgmt"],
+        )
+        assert acct == "svc_mgmt_1"
 
     def test_management_sweep_targets_multiple_hosts(self):
         """Management sweep should target 5-15 servers."""
-        import random
-
         rng = random.Random(42)
         servers = [f"SRV-{i:02d}" for i in range(20)]
         n_targets = min(rng.randint(5, 15), len(servers))
