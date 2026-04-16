@@ -683,7 +683,9 @@ class SysmonEventEmitter(LogEmitter):
                         break
             if _session_user:
                 user = self._format_user(_session_user, host.netbios_domain)
-                logon_id = "0x10001"  # Typical interactive session logon ID
+                # Generate a realistic per-host interactive logon ID
+                _lid = _stable_seed(f"interactive_logon_{host.hostname}_{_session_user}")
+                logon_id = f"0x{(_lid & 0xFFFFFFFF) | 0x10000:x}"
                 integrity = "Medium"  # User-session processes run at Medium
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
@@ -742,6 +744,23 @@ class SysmonEventEmitter(LogEmitter):
             user = self._format_user(auth.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
+
+        # Override SYSTEM for user-session processes (same logic as Event 1)
+        _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+        _img_base = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if _img_base in self._USER_SESSION_PROCESSES and (
+            "NT AUTHORITY" in user or auth is None or (auth and auth.username in _SYSTEM_ACCOUNTS)
+        ):
+            sm = getattr(self, "_state_manager", None)
+            if sm:
+                for sess in sm.state.active_sessions.values():
+                    if (
+                        sess.system == host.hostname
+                        and sess.username not in _SYSTEM_ACCOUNTS
+                        and sess.logon_type in (2, 10, 11)
+                    ):
+                        user = self._format_user(sess.username, host.netbios_domain)
+                        break
 
         event_data = {
             "EventID": 5,

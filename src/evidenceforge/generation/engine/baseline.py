@@ -3181,30 +3181,33 @@ class BaselineMixin:
                 )
 
                 _REG_KEYS_HKCU = [
-                    ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
                     (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
-                        "HideFileExt",
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+                        "cmd.exe /k dir\\1",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
-                        "Hidden",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
-                        "ShowSuperHidden",
+                        "DWORD (0x00000002)",
+                    ),
+                    (
+                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                        "DWORD (0x00000000)",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-                        "ProxyEnable",
+                        "DWORD (0x00000000)",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-                        "MigrateProxy",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                        "AppsUseLightTheme",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
@@ -3239,78 +3242,92 @@ class BaselineMixin:
                         "HarvestContacts",
                     ),
                 ]
+                # (key, Details) — Details is the actual data written, shown in Event 13.
+                # Use realistic DWORD/string values matching what each key stores.
                 _REG_KEYS_HKLM = [
-                    ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        "DWORD (0x00000001)",
+                    ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
-                        "EnableFirewall",
+                        "DWORD (0x00000001)",
                     ),
-                    ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
+                    (
+                        "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                        "explorer.exe",
+                    ),
                     (
                         "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
-                        "NoAutoUpdate",
+                        "DWORD (0x00000000)",
                     ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
-                        "ClearPageFileAtShutdown",
+                        "DWORD (0x00000000)",
                     ),
                     (
                         "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
-                        "EnableLUA",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
-                        "DhcpIPAddress",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config",
-                        "MaxPollInterval",
+                        "DWORD (0x0000000f)",
                     ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
-                        "EnableSecuritySignature",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending",
-                        "Servicing",
+                        "DWORD (0x00000001)",
                     ),
                     (
                         "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational",
-                        "Enabled",
+                        "DWORD (0x00000001)",
                     ),
-                    ("HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application", "MaxSize"),
+                    (
+                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application",
+                        "DWORD (0x01400000)",
+                    ),
                     (
                         "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection",
-                        "DisableRealtimeMonitoring",
+                        "DWORD (0x00000000)",
                     ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
-                        "UseLogonCredential",
+                        "DWORD (0x00000000)",
                     ),
                     (
                         "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
-                        "Common Startup",
+                        "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
                     ),
                     (
                         "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters",
-                        "ListenAddresses",
+                        "DWORD (0x00000001)",
                     ),
-                    ("HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging"),
+                    ("HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "DWORD (0x00000002)"),
                 ]
                 _reg_count = rng.randint(50, 120)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
+                # Only emit HKCU on workstations with a logged-in user;
+                # servers run services, not user desktops.
+                _has_desktop = getattr(system, "assigned_user", None) is not None
+                _hkcu_rate = 0.30 if _has_desktop else 0.0
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                    # 70% HKLM (services), 30% HKCU (user-context)
-                    if rng.random() < 0.70:
+                    if rng.random() >= _hkcu_rate:
                         _key, _val = rng.choice(_REG_KEYS_HKLM)
                         _reg_pid = _svc_pid
                         _reg_user = "SYSTEM"
                     else:
                         _key, _val = rng.choice(_REG_KEYS_HKCU)
                         _reg_pid = sys_pids.get("explorer", _svc_pid)
-                        _reg_user = "SYSTEM"  # Will be overridden by emitter
+                        _reg_user = system.assigned_user or "SYSTEM"
                     # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
                     _reg_action = "delete" if rng.random() < 0.10 else "modify"
                     self.activity_generator.dispatcher.dispatch(
