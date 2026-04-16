@@ -77,14 +77,23 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
         >>> fmt.category
         'host'
     """
+    # Sanitize format name to prevent path traversal
+    from evidenceforge.utils.paths import sanitize_path_component
+
+    safe_name = sanitize_path_component(name)
+    if not safe_name:
+        raise ConfigurationError(
+            f"Invalid format definition name (contains unsafe characters): {name!r}"
+        )
+
     # Check cache first
-    if not force_reload and name in _format_cache:
-        logger.debug(f"Loaded format '{name}' from cache")
-        return _format_cache[name]
+    if not force_reload and safe_name in _format_cache:
+        logger.debug(f"Loaded format '{safe_name}' from cache")
+        return _format_cache[safe_name]
 
     # Load from disk
     definitions_dir = get_definitions_directory()
-    format_file = definitions_dir / f"{name}.yaml"
+    format_file = definitions_dir / f"{safe_name}.yaml"
 
     if not format_file.exists():
         raise ConfigurationError(f"Format definition not found: {name} (expected at {format_file})")
@@ -97,7 +106,7 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
         format_def = FormatDefinition(**data)
 
         # Cache it
-        _format_cache[name] = format_def
+        _format_cache[safe_name] = format_def
 
         logger.info(f"Loaded format definition: {name} (version {format_def.version})")
         return format_def
