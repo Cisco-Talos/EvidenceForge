@@ -2859,7 +2859,14 @@ class ActivityGenerator:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
             query = hostname
-            answers = [_IPV6_MAP.get(dst_ip, _ipv4_to_fake_ipv6(dst_ip))]
+            ipv6_answer = _IPV6_MAP.get(dst_ip)
+            if ipv6_answer is not None:
+                answers = [ipv6_answer]
+            elif ":" in dst_ip:
+                # Already IPv6 (not present in registry map) — use as-is.
+                answers = [dst_ip]
+            else:
+                answers = [_ipv4_to_fake_ipv6(dst_ip)]
         elif qtype_roll < 0.93:
             # PTR record: reversed IP → rDNS name
             qtype, qtype_name = 12, "PTR"
