@@ -665,18 +665,26 @@ class SysmonEventEmitter(LogEmitter):
         # Override SYSTEM for user-session processes (sihost, SearchHost, etc.)
         # These always run under the logged-in user, never SYSTEM.
         _img_basename = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if _img_basename in self._USER_SESSION_PROCESSES and user == "NT AUTHORITY\\SYSTEM":
-            # Look up the host's assigned user from StateManager sessions
+        _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+        if _img_basename in self._USER_SESSION_PROCESSES and (
+            "NT AUTHORITY" in user or auth is None or (auth and auth.username in _SYSTEM_ACCOUNTS)
+        ):
+            # Look up the host's interactive user from StateManager sessions
             sm = getattr(self, "_state_manager", None)
             _session_user = None
             if sm:
                 for sess in sm.state.active_sessions.values():
-                    if sess.system == host.hostname and sess.username != "SYSTEM":
+                    if (
+                        sess.system == host.hostname
+                        and sess.username not in _SYSTEM_ACCOUNTS
+                        and sess.logon_type in (2, 10, 11)  # Interactive/RDP only
+                    ):
                         _session_user = sess.username
                         break
             if _session_user:
                 user = self._format_user(_session_user, host.netbios_domain)
                 logon_id = "0x10001"  # Typical interactive session logon ID
+                integrity = "Medium"  # User-session processes run at Medium
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
 

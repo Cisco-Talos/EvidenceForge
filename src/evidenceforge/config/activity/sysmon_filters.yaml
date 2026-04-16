@@ -116,6 +116,7 @@ registry_event:  # Events 12/13
   enabled: true
   mode: include
   include_key_patterns:
+    # Persistence / tampering keys (high-value for detection)
     - CurrentVersion\Run
     - CurrentVersion\RunOnce
     - Winlogon\Shell
@@ -132,6 +133,31 @@ registry_event:  # Events 12/13
     - EnableLUA
     - LocalAccountTokenFilterPolicy
     - fDenyTSConnections
+    - UseLogonCredential
+    - SecurityProviders
+    # Baseline system activity (provides realistic background volume)
+    - Explorer\Advanced
+    - Explorer\UserAssist
+    - Explorer\ComDlg32
+    - Explorer\Accent
+    - Internet Settings
+    - Themes\Personalize
+    - ContentDeliveryManager
+    - Search\SearchboxTaskbar
+    - InputPersonalization
+    - Office\16.0
+    - \Parameters
+    - Component Based Servicing
+    - WINEVT\Channels
+    - EventLog\Application
+    - Real-Time Protection
+    - Shell Folders
+    - W32Time
+    - LanmanWorkstation
+    - Session Manager\Memory Management
+    - Policies\System
+    - WindowsUpdate
+    - WBEM\CIMOM
   log_create_key: false  # Only log SetValue (13) and Delete (12), not CreateKey
 
 dns_query:  # Event 22
