@@ -218,6 +218,6 @@ class TestEdrRegistryBackslashEscaping:
         )
 
         # Registry keys from both YAML pools all contain backslashes
-        keys = [k for k, v in get_registry_keys_hkcu()]
-        keys += [k for k, v in get_registry_keys_hklm()]
+        keys = [k for k, _vn, _d in get_registry_keys_hkcu()]
+        keys += [k for k, _vn, _d in get_registry_keys_hklm()]
         assert all("\\" in k for k in keys)

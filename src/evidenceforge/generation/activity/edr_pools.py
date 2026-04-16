@@ -52,16 +52,16 @@ def get_file_paths(os_category: str) -> list[str]:
     return pools.get(key, [])
 
 
-def get_registry_keys_hkcu() -> list[tuple[str, str]]:
-    """Return HKCU registry key pool as (key, Details) tuples."""
+def get_registry_keys_hkcu() -> list[tuple[str, str, str]]:
+    """Return HKCU registry key pool as (key, value_name, details) tuples."""
     pools = load_edr_pools()
-    return [(k, v) for k, v in pools.get("registry_keys_hkcu", [])]
+    return [(k, vn, d) for k, vn, d in pools.get("registry_keys_hkcu", [])]
 
 
-def get_registry_keys_hklm() -> list[tuple[str, str]]:
-    """Return HKLM registry key pool as (key, Details) tuples."""
+def get_registry_keys_hklm() -> list[tuple[str, str, str]]:
+    """Return HKLM registry key pool as (key, value_name, details) tuples."""
     pools = load_edr_pools()
-    return [(k, v) for k, v in pools.get("registry_keys_hklm", [])]
+    return [(k, vn, d) for k, vn, d in pools.get("registry_keys_hklm", [])]
 
 
 def get_dll_pool() -> list[str]:

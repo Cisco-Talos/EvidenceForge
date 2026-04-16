@@ -60,24 +60,27 @@ class TestFilePaths:
 class TestRegistryKeys:
     """Test registry key pool content."""
 
-    def test_hkcu_returns_tuples(self):
+    def test_hkcu_returns_3tuples(self):
         keys = get_registry_keys_hkcu()
         assert len(keys) >= 5
-        for k, _v in keys:
+        for k, vname, details in keys:
             assert k.startswith("HKCU\\"), f"HKCU key doesn't start with HKCU\\: {k}"
             assert "\\" in k, f"Key missing backslash: {k}"
+            assert vname, f"Value name is empty for key {k}"
+            assert details, f"Details is empty for key {k}"
 
-    def test_hklm_returns_tuples(self):
+    def test_hklm_returns_3tuples(self):
         keys = get_registry_keys_hklm()
         assert len(keys) >= 4
-        for k, _v in keys:
+        for k, vname, _details in keys:
             assert k.startswith("HKLM\\"), f"HKLM key doesn't start with HKLM\\: {k}"
+            assert vname, f"Value name is empty for key {k}"
 
     def test_registry_details_are_realistic(self):
         """Details should be DWORD values or strings, not value names."""
-        for _k, v in get_registry_keys_hklm():
-            assert v.startswith("DWORD (") or not v.isupper(), (
-                f"Details looks like a value name, not data: {v}"
+        for _k, _vn, details in get_registry_keys_hklm():
+            assert details.startswith("DWORD (") or not details.isupper(), (
+                f"Details looks like a value name, not data: {details}"
             )
 
 

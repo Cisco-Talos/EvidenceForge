@@ -1476,9 +1476,11 @@ class ActivityGenerator:
             _pool_hklm = get_registry_keys_hklm()
             for _ in range(_reg_count):
                 if _exe in _HKLM_WRITERS:
-                    key, value = rng.choice(_pool_hklm + _pool_hkcu)
+                    _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
                 else:
-                    key, value = rng.choice(_pool_hkcu)
+                    _key, _vname, _details = rng.choice(_pool_hkcu)
+                # TargetObject = key\value_name (full path as Sysmon shows it)
+                _target = f"{_key}\\{_vname}"
                 # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
                 reg_action = "delete" if rng.random() < 0.15 else "modify"
                 self.dispatcher.dispatch(
@@ -1487,7 +1489,9 @@ class ActivityGenerator:
                         event_type="registry_modify",
                         src_host=host_ctx,
                         auth=auth_ctx,
-                        registry=RegistryContext(key=key, value=value, action=reg_action, pid=pid),
+                        registry=RegistryContext(
+                            key=_target, value=_details, action=reg_action, pid=pid
+                        ),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                     )
                 )

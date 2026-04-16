@@ -3196,13 +3196,14 @@ class BaselineMixin:
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     if rng.random() >= _hkcu_rate:
-                        _key, _val = rng.choice(_REG_KEYS_HKLM)
+                        _key, _vname, _details = rng.choice(_REG_KEYS_HKLM)
                         _reg_pid = _svc_pid
                         _reg_user = "SYSTEM"
                     else:
-                        _key, _val = rng.choice(_REG_KEYS_HKCU)
+                        _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
                         _reg_pid = sys_pids.get("explorer", _svc_pid)
                         _reg_user = system.assigned_user or "SYSTEM"
+                    _target = f"{_key}\\{_vname}"
                     # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
                     _reg_action = "delete" if rng.random() < 0.10 else "modify"
                     self.activity_generator.dispatcher.dispatch(
@@ -3222,7 +3223,7 @@ class BaselineMixin:
                                 username=_reg_user,
                             ),
                             registry=RegistryContext(
-                                key=_key, value=_val, action=_reg_action, pid=_reg_pid
+                                key=_target, value=_details, action=_reg_action, pid=_reg_pid
                             ),
                         )
                     )
