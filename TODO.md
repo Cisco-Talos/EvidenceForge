@@ -80,7 +80,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 ### Tier 0: Infrastructure
 
 - [x] Security: validate `environment.timezone.systems` overrides at schema load to prevent runtime `UnknownTimeZoneError` crashes during timezone conversion.
-
+- [x] Security: threaded emitter worker exceptions can deadlock `barrier_flush()` (`Queue.join()` wait forever when worker dies).
 - [x] Security: blocked symlinked `eforge` install target in `install-skills` to prevent arbitrary overwrite/deletion and stale-file cleanup outside target.
 - [x] Security: cap firewall deny baseline amplification (`deny_ratio`/hourly deny volume) to prevent scenario-driven local DoS — `NetworkSensor.deny_ratio` now enforces `<= 50.0`.
 - [x] Security: prevent IPv6 scenario DoS in DNS AAAA fallback (`_ipv4_to_fake_ipv6` no longer evaluates for IPv6 destination IPs; AAAA uses mapped IPv6 or preserves IPv6 literal).
