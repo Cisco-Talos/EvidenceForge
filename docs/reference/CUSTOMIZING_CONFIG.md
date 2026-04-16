@@ -157,6 +157,9 @@ Configuration files are interconnected. When you add an entry to one file, other
 | A new application | `spawn_rules.yaml` (process tree), `process_network_map.yaml` (if it generates traffic) |
 | A DLL load profile | Add `loaded_modules` to the app in `application_catalog.yaml`, or to the process entry in `system_processes.yaml`. Overlay entries extend the DLL pool (deep merge adds new modules alongside defaults). |
 | A new persona | `application_catalog.yaml` (add persona to relevant apps' `personas:` lists) |
+| Sysmon filter rules | `sysmon_filters.yaml` — overlay replaces entire top-level sections (e.g., `network_connect:` replaces all Event 3 rules). Standalone, no cascades. |
+| EDR background events | `edr_pools.yaml` — overlay replaces entire sections (e.g., `file_paths_windows:` replaces the full file path pool). Use `{user}` and `{rand}` templates. |
+| CallTrace patterns | `calltrace_patterns.yaml` — overlay replaces the entire `patterns:` list. Each pattern needs `modules` and `offset_ranges` with `[min, max]` hex ranges. |
 
 The `/eforge:config` skill handles these dependencies automatically. If editing manually, run `/eforge:config validate my config files` to check for missing cross-references.
 

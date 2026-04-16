@@ -69,6 +69,9 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 |---|-------|----------|-------------|
 | 26 | Invalid field references | WARNING | co_occurrence or distribution rule referencing a field name not in the corresponding format definition |
 | 27 | Invalid format references | ERROR | Rules under a format key that doesn't match any format file name |
+| 28 | sysmon_filters.yaml structure | ERROR | Missing required sections (network_connect, image_loaded, etc.) or invalid types |
+| 29 | edr_pools.yaml structure | ERROR | Missing required sections (file_paths_windows, registry_keys_hkcu, etc.) or empty lists |
+| 30 | calltrace_patterns.yaml structure | ERROR | Patterns list empty, or pattern missing `modules`/`offset_ranges` fields |
 
 ## Output Format
 

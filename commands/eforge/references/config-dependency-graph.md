@@ -121,6 +121,24 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone certificate authority data |
 | **depended on by** | Engine (runtime) | Drives Zeek x509/SSL certificate generation |
 
+### sysmon_filters.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone (filter rules reference exe basenames but no hard deps) |
+| **depended on by** | Engine (runtime) | Controls which Sysmon Events 3/7/11/12/13/22 are emitted |
+
+### edr_pools.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone file path/registry/DLL pools |
+| **depended on by** | Engine (runtime) | Drives probabilistic file create, registry modify, and DLL load events |
+
+### calltrace_patterns.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone call chain template definitions |
+| **depended on by** | Engine (runtime) | Drives Sysmon Event 10 CallTrace field generation |
+
 ### formats/*.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
