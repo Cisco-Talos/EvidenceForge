@@ -155,6 +155,7 @@ Configuration files are interconnected. When you add an entry to one file, other
 |----------------|----------------|
 | A new domain | `proxy_uri_templates.yaml` (URI paths), `site_maps.yaml` (browsing depth) |
 | A new application | `spawn_rules.yaml` (process tree), `process_network_map.yaml` (if it generates traffic) |
+| A DLL load profile | Add `loaded_modules` to the app in `application_catalog.yaml`, or to the process entry in `system_processes.yaml`. Overlay entries extend the DLL pool (deep merge adds new modules alongside defaults). |
 | A new persona | `application_catalog.yaml` (add persona to relevant apps' `personas:` lists) |
 
 The `/eforge:config` skill handles these dependencies automatically. If editing manually, run `/eforge:config validate my config files` to check for missing cross-references.

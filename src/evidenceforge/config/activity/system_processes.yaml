@@ -53,6 +53,11 @@ system_services:
         - "WmiPrvSE.exe -Embedding"
         - "WmiPrvSE.exe -secured -Embedding"
       parent: svchost_dcom
+      loaded_modules:
+        - path: "C:\\Windows\\System32\\ole32.dll"
+        - path: "C:\\Windows\\System32\\framedynos.dll"
+        - path: "C:\\Windows\\System32\\wbem\\fastprox.dll"
+        - path: "C:\\Windows\\System32\\wbemsvc.dll"
     - image: "C:\\Windows\\System32\\dllhost.exe"
       command_templates:
         - "dllhost.exe /Processid:{guid}"
@@ -62,6 +67,10 @@ system_services:
           - "{73E709EA-5D93-4B2E-BBB0-99B7938DA9E4}"
           - "{AB8902B4-09CA-4BB6-B78D-A8F59079A8D5}"
       parent: svchost_dcom
+      loaded_modules:
+        - path: "C:\\Windows\\System32\\combase.dll"
+        - path: "C:\\Windows\\System32\\ole32.dll"
+        - path: "C:\\Windows\\System32\\clbcatq.dll"
     - image: "C:\\Windows\\System32\\conhost.exe"
       command_templates:
         - "conhost.exe 0x4"
@@ -71,6 +80,10 @@ system_services:
       command_templates:
         - "RuntimeBroker.exe -Embedding"
       parent: svchost_dcom
+      loaded_modules:
+        - path: "C:\\Windows\\System32\\combase.dll"
+        - path: "C:\\Windows\\System32\\ole32.dll"
+        - path: "C:\\Windows\\System32\\twinapi.appcore.dll"
     - image: "C:\\Windows\\System32\\spoolsv.exe"
       command_templates:
         - "spoolsv.exe"
@@ -137,6 +150,88 @@ system_services:
       command_templates:
         - "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun"
       parent: svchost_local_system
+
+# Common loaded modules — the OS loader chain loaded by every Windows process.
+# These DLLs are injected by the kernel/NTDLL during process initialization;
+# no user-mode process runs without them. All default to signed=true,
+# signature="Microsoft Windows", signature_status="Valid".
+common_loaded_modules:
+  windows:
+    - path: "C:\\Windows\\System32\\ntdll.dll"
+    - path: "C:\\Windows\\System32\\kernel32.dll"
+    - path: "C:\\Windows\\System32\\kernelbase.dll"
+    - path: "C:\\Windows\\System32\\msvcrt.dll"
+    - path: "C:\\Windows\\System32\\ucrtbase.dll"
+    - path: "C:\\Windows\\System32\\advapi32.dll"
+    - path: "C:\\Windows\\System32\\sechost.dll"
+    - path: "C:\\Windows\\System32\\rpcrt4.dll"
+    - path: "C:\\Windows\\System32\\bcryptprimitives.dll"
+
+# Per-process loaded modules for processes not defined in system_services
+# or scheduled_tasks above. Same schema as loaded_modules on service entries.
+process_loaded_modules:
+  explorer.exe:
+    - path: "C:\\Windows\\System32\\shell32.dll"
+    - path: "C:\\Windows\\System32\\user32.dll"
+    - path: "C:\\Windows\\System32\\gdi32.dll"
+    - path: "C:\\Windows\\System32\\ole32.dll"
+    - path: "C:\\Windows\\System32\\combase.dll"
+    - path: "C:\\Windows\\System32\\uxtheme.dll"
+    - path: "C:\\Windows\\System32\\SHCore.dll"
+    - path: "C:\\Windows\\System32\\propsys.dll"
+
+  lsass.exe:
+    - path: "C:\\Windows\\System32\\msv1_0.dll"
+    - path: "C:\\Windows\\System32\\kerberos.dll"
+    - path: "C:\\Windows\\System32\\wdigest.dll"
+    - path: "C:\\Windows\\System32\\tspkg.dll"
+    - path: "C:\\Windows\\System32\\sspisrv.dll"
+    - path: "C:\\Windows\\System32\\samsrv.dll"
+    - path: "C:\\Windows\\System32\\cryptdll.dll"
+    - path: "C:\\Windows\\System32\\negoext.dll"
+
+  services.exe:
+    - path: "C:\\Windows\\System32\\user32.dll"
+    - path: "C:\\Windows\\System32\\scesrv.dll"
+    - path: "C:\\Windows\\System32\\authz.dll"
+    - path: "C:\\Windows\\System32\\cryptsp.dll"
+
+  svchost.exe:
+    - path: "C:\\Windows\\System32\\combase.dll"
+    - path: "C:\\Windows\\System32\\ole32.dll"
+    - path: "C:\\Windows\\System32\\user32.dll"
+    - path: "C:\\Windows\\System32\\cryptsp.dll"
+    - path: "C:\\Windows\\System32\\dnsapi.dll"
+    - path: "C:\\Windows\\System32\\winhttp.dll"
+    - path: "C:\\Windows\\System32\\wintrust.dll"
+
+  powershell.exe:
+    - path: "C:\\Windows\\System32\\user32.dll"
+    - path: "C:\\Windows\\System32\\ole32.dll"
+    - path: "C:\\Windows\\System32\\gdi32.dll"
+    - path: "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\clr.dll"
+      signature: "Microsoft Corporation"
+    - path: "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\clrjit.dll"
+      signature: "Microsoft Corporation"
+
+  cmd.exe:
+    - path: "C:\\Windows\\System32\\user32.dll"
+    - path: "C:\\Windows\\System32\\gdi32.dll"
+    - path: "C:\\Windows\\System32\\shell32.dll"
+    - path: "C:\\Windows\\System32\\winbrand.dll"
+
+  taskhostw.exe:
+    - path: "C:\\Windows\\System32\\combase.dll"
+    - path: "C:\\Windows\\System32\\ole32.dll"
+    - path: "C:\\Windows\\System32\\user32.dll"
+    - path: "C:\\Windows\\System32\\taskschd.dll"
+
+  MsMpEng.exe:
+    - path: "C:\\Windows\\System32\\ole32.dll"
+    - path: "C:\\Windows\\System32\\wintrust.dll"
+    - path: "C:\\Windows\\System32\\crypt32.dll"
+    - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
+      signature: "Microsoft Corporation"
 
 # System binaries: exe name -> full image path mapping.
 # Used by the engine for path resolution and by validation for

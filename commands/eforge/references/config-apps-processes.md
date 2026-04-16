@@ -65,6 +65,7 @@ applications:
 | `pe_metadata` | object | windows only | PE header fields for Windows process events |
 | `command_templates` | list[string] | yes | Realistic command lines with `{placeholder}` support |
 | `children` | list[string] | no | Command lines for child processes this app spawns |
+| `loaded_modules` | list[object] | no | DLLs characteristically loaded by this application (Sysmon Event 7). See Loaded Module Fields below. |
 
 ### PE Metadata Fields (Windows only)
 
@@ -75,6 +76,19 @@ applications:
 | `product` | string | PE product name |
 | `company` | string | PE company name |
 | `original_filename` | string | PE original filename |
+
+### Loaded Module Fields (Windows only)
+
+DLLs characteristically loaded by this process, used for Sysmon Event 7 (ImageLoaded) generation. All fields except `path` have defaults — only specify what differs.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `path` | string | (required) | Full Windows path to the DLL (must contain `\`) |
+| `signed` | bool | `true` | Whether the DLL is digitally signed |
+| `signature` | string | `"Microsoft Windows"` | Signer name (e.g., `"Google LLC"`, `"Mozilla Corporation"`) |
+| `signature_status` | string | `"Valid"` | One of: `Valid`, `Expired`, `Revoked`, `Unavailable` |
+
+Every Windows process also receives the common OS loader DLLs (ntdll.dll, kernel32.dll, etc.) defined in `system_processes.yaml` under `common_loaded_modules.windows` — you don't need to repeat those in per-app profiles.
 
 ### Valid Categories
 
@@ -280,9 +294,20 @@ system_services:
       parent: services
 ```
 
+### DLL Load Profile Sections
+
+System processes also support DLL load profiles for Sysmon Event 7. Three locations:
+
+1. **`common_loaded_modules.windows`** — OS loader chain (ntdll, kernel32, etc.) loaded by every Windows process. Applied automatically to all processes.
+2. **`process_loaded_modules`** — Per-exe DLL profiles for processes not in system_services (e.g., explorer.exe, lsass.exe, powershell.exe). Keyed by exe basename.
+3. **Inline `loaded_modules`** on system_services entries — DLLs specific to a service process (e.g., WmiPrvSE.exe loads fastprox.dll).
+
+All use the same field schema as application catalog loaded_modules (see Loaded Module Fields above).
+
 ### Conventions
 
 - `scheduled_tasks:` are periodic system tasks (update checks, maintenance)
 - `system_services:` are role-filtered: `all` applies everywhere, named roles (e.g., `domain_controller`) restrict to that host role
 - `parent:` uses symbolic names resolved at generation time (e.g., `services` = services.exe, `svchost_netsvcs` = svchost.exe -k netsvcs)
 - `params:` provides lists of values for `{placeholder}` resolution in command_templates
+- `loaded_modules:` optional list of DLLs loaded by this process (same schema as app catalog)
