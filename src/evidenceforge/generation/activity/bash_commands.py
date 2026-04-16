@@ -105,8 +105,10 @@ def _get_role_pool(persona: str, server_role: str) -> str:
         return "sysadmin"
 
     # Exact match: persona has its own command pool in the YAML
-    # (custom/overlay personas, or stock personas like sysadmin)
-    if persona_lower in data:
+    # (custom/overlay personas, or stock personas like sysadmin).
+    # Restrict to list-valued entries to avoid selecting helper mappings
+    # such as "params" or "keyboard_adjacency".
+    if persona_lower in data and isinstance(data[persona_lower], list):
         return persona_lower
 
     return "sysadmin"  # Default for unknown personas without a custom pool

@@ -9,6 +9,7 @@ from evidenceforge.generation.activity.application_catalog import (
     pick_app_and_command,
 )
 from evidenceforge.generation.activity.bash_commands import (
+    _get_role_pool,
     _get_user_pool,
     load_bash_commands,
 )
@@ -102,6 +103,15 @@ class TestPerUserToolAffinity:
         # Just verify they're both subsets of the original
         assert all(cmd in pool for cmd in pool_a)
         assert all(cmd in pool for cmd in pool_b)
+
+
+class TestBashRolePoolSelection:
+    """Ensure persona-to-pool selection only returns command list pools."""
+
+    def test_non_list_yaml_sections_are_not_used_as_role_pool(self):
+        """Dict-valued metadata sections should not be selected as command pools."""
+        pool = _get_role_pool("params", "generic")
+        assert pool == "sysadmin"
 
 
 class TestPerUserBrowserAffinity:
