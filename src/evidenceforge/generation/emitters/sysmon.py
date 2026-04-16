@@ -40,6 +40,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.windows import _subject_domain
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 
@@ -96,6 +97,11 @@ class SysmonEventEmitter(LogEmitter):
     # Per-host boot datetimes for realistic parent ProcessGUID timestamps.
     # Set by emitter_setup after initialization.
     _host_boot_times: dict[str, datetime] = {}
+
+    # Per-host cached CallTrace patterns. Real ASLR randomizes DLL base
+    # addresses per boot, but intra-module offsets (function entry points)
+    # are fixed. All Event 10 events on the same host share the same offsets.
+    _call_trace_cache: dict[str, list[str]] = {}
 
     # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
     _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
@@ -401,21 +407,54 @@ class SysmonEventEmitter(LogEmitter):
             cache[hostname] = 1800 + (h % 1200)  # range 1800-2999
         return cache[hostname]
 
+    def _get_call_trace(self, hostname: str) -> str:
+        """Return a CallTrace string with per-host stable offsets.
+
+        Real ASLR randomizes DLL base addresses per boot, but intra-module
+        offsets (function entry points like NtOpenProcess) are fixed within
+        a boot session. We generate 3 call patterns per host on first use,
+        then reuse them for all Event 10 events on that host.
+        """
+        if hostname not in self._call_trace_cache:
+            rng = random.Random(_stable_seed(f"calltrace_{hostname}"))
+            ntdll_off = rng.randint(0x9C000, 0x9F000)
+            kb_off = rng.randint(0x2C000, 0x2F000)
+            k32_off = rng.randint(0x1C000, 0x1F000)
+            rpcrt4_off = rng.randint(0x7C000, 0x7F000)
+            patterns = [
+                # Direct NtOpenProcess (ntdll → KERNELBASE)
+                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
+                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}",
+                # Via kernel32 (ntdll → KERNELBASE → kernel32)
+                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
+                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}"
+                f"|C:\\Windows\\System32\\kernel32.dll+{k32_off:X}",
+                # Remote access path (ntdll → RPCRT4 → KERNELBASE)
+                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
+                f"|C:\\Windows\\System32\\RPCRT4.dll+{rpcrt4_off:X}"
+                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}",
+            ]
+            self._call_trace_cache[hostname] = patterns
+        return random.choice(self._call_trace_cache[hostname])
+
     def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
         """Look up process image from StateManager by PID.
 
-        Returns (pid, image_path). Falls back to (pid, "System") only when
-        pid is -1/0 (unknown) or StateManager is not available.
+        Returns (pid, image_path). Falls back to "-" (Sysmon convention for
+        unknown) when the PID is not found, rather than guessing svchost.exe
+        which would produce misleading Event 3/11/12 attributions.
         """
+        if pid == -1:
+            return (4, "System")
         if pid <= 0:
-            return (4, "System") if pid == -1 else (pid, r"C:\Windows\System32\svchost.exe")
+            return (pid, "-")
         sm = getattr(self, "_state_manager", None)
         if sm is None:
-            return (pid, r"C:\Windows\System32\svchost.exe")
+            return (pid, "-")
         proc = sm.get_process(hostname, pid)
         if proc is not None:
             return (pid, proc.image)
-        return (pid, r"C:\Windows\System32\svchost.exe")
+        return (pid, "-")
 
     def _get_stable_process_guid(
         self, hostname: str, pid: int, fallback_timestamp: datetime
@@ -469,7 +508,16 @@ class SysmonEventEmitter(LogEmitter):
                 self._render_sysmon_image_loaded(event)
 
     @staticmethod
-    def _generate_process_guid(hostname: str, pid: int, timestamp: datetime) -> str:
+    def _format_user(username: str, netbios_domain: str) -> str:
+        """Format Sysmon User field with correct domain for well-known accounts.
+
+        Windows always reports SYSTEM, LOCAL SERVICE, and NETWORK SERVICE
+        under 'NT AUTHORITY', never under the AD domain name.
+        """
+        domain = _subject_domain(username, netbios_domain)
+        return f"{domain}\\{username}"
+
+    def _generate_process_guid(self, hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
         Real Sysmon ProcessGUID format: {machine_guid}-HHHH-HHHH-SSSS-XXXXXXXXXXXX}
@@ -478,14 +526,22 @@ class SysmonEventEmitter(LogEmitter):
 
         The first DWORD is a stable machine-specific value (same for all
         processes on a given host), matching real Sysmon behavior.
+
+        The second segment XORs the process timestamp with the host boot
+        time so that the same absolute creation time produces different
+        GUIDs on hosts with different boot times — matching real Sysmon
+        behavior where the timestamp segment is boot-relative.
         """
         # Machine-specific first DWORD (stable across all processes on this host)
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
 
-        # Second segment: hex Unix timestamp of process creation
+        # Second segment: boot-relative timestamp for per-host uniqueness
         unix_ts = int(timestamp.timestamp())
+        boot_time = getattr(self, "_host_boot_times", {}).get(hostname)
+        if boot_time:
+            unix_ts ^= int(boot_time.timestamp())
         hex_ts = f"{unix_ts:08x}"
 
         # Third segment: PID-based sequence for uniqueness
@@ -529,12 +585,8 @@ class SysmonEventEmitter(LogEmitter):
         )
 
         # Determine user string
-        if auth:
-            user = (
-                f"{host.netbios_domain}\\{auth.username}"
-                if auth.username
-                else "NT AUTHORITY\\SYSTEM"
-            )
+        if auth and auth.username:
+            user = self._format_user(auth.username, host.netbios_domain)
             logon_id = auth.logon_id if hasattr(auth, "logon_id") and auth.logon_id else "0x3e7"
         else:
             user = "NT AUTHORITY\\SYSTEM"
@@ -593,7 +645,7 @@ class SysmonEventEmitter(LogEmitter):
         process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
 
         if auth and auth.username:
-            user = f"{host.netbios_domain}\\{auth.username}"
+            user = self._format_user(auth.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
 
@@ -695,7 +747,7 @@ class SysmonEventEmitter(LogEmitter):
 
         # Determine user string
         if auth and auth.username:
-            user = f"{host.netbios_domain}\\{auth.username}"
+            user = self._format_user(auth.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
 
@@ -724,10 +776,7 @@ class SysmonEventEmitter(LogEmitter):
             "TargetImage": target_image,
             "TargetUser": "NT AUTHORITY\\SYSTEM",
             "GrantedAccess": granted_access,
-            "CallTrace": (
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{rng.randint(0x9C000, 0x9F000):X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{rng.randint(0x2C000, 0x2F000):X}"
-            ),
+            "CallTrace": self._get_call_trace(host.hostname),
         }
         self.emit_event(event_data)
 
@@ -776,6 +825,12 @@ class SysmonEventEmitter(LogEmitter):
         dst_port = event.network.dst_port or 0
         include_ports = cfg.get("include_dest_ports", [])
         if dst_port in include_ports:
+            # Enforce port-process constraints if defined (e.g., port 22 only from ssh.exe)
+            constraints = cfg.get("port_process_constraints", {})
+            allowed = constraints.get(dst_port)
+            if allowed is not None:
+                if not image or image not in [p.lower() for p in allowed]:
+                    return False
             return True
 
         return False
@@ -895,17 +950,17 @@ class SysmonEventEmitter(LogEmitter):
         # User — resolve from AuthContext, ProcessContext, or StateManager
         user = ""
         if event.auth and event.auth.username:
-            user = f"{host.netbios_domain}\\{event.auth.username}"
+            user = self._format_user(event.auth.username, host.netbios_domain)
         elif proc and proc.username:
-            user = f"{host.netbios_domain}\\{proc.username}"
+            user = self._format_user(proc.username, host.netbios_domain)
         elif pid > 0:
             sm = getattr(self, "_state_manager", None)
             if sm:
                 rp = sm.get_process(host.hostname, pid)
                 if rp and rp.username:
-                    user = f"{host.netbios_domain}\\{rp.username}"
+                    user = self._format_user(rp.username, host.netbios_domain)
         if not user:
-            user = "NT AUTHORITY\\SYSTEM" if pid == 4 else "NT AUTHORITY\\SYSTEM"
+            user = "NT AUTHORITY\\SYSTEM"
 
         src_ip = net.src_ip or host.ip
         dst_ip = net.dst_ip or ""

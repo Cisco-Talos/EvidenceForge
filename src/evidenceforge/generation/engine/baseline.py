@@ -3154,7 +3154,9 @@ class BaselineMixin:
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
                     self.state_manager.set_current_time(svc_ts)
                     svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
-                    svc_parent = sys_pids.get(svc_parent_key, sys_pids.get("services", 4))
+                    svc_parent = sys_pids.get(
+                        svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    )
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=svc_ts,
@@ -3182,7 +3184,9 @@ class BaselineMixin:
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
-                    parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
+                    parent_pid = sys_pids.get(
+                        task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    )
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
                         user=_SYSTEM_USER,

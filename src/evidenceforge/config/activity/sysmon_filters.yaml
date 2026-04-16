@@ -42,6 +42,20 @@ network_connect:  # Event 3
     - 8080   # Alt HTTP
     - 8443   # Alt HTTPS
     - 9001   # Tor
+  # Port-process constraints: when a port-based match fires, restrict
+  # which source processes are valid. Prevents e.g. svchost.exe → SSH.
+  # Ports not listed here have no process restriction.
+  port_process_constraints:
+    22:   # SSH
+      - ssh.exe
+      - putty.exe
+      - plink.exe
+      - powershell.exe
+      - cmd.exe
+      - wsl.exe
+    3389: # RDP
+      - mstsc.exe
+      - powershell.exe
   exclude_dest_ips:
     - "127.0.0.1"
     - "::1"

@@ -788,3 +788,182 @@ class TestTemplateCompleteness:
         optional = {"RuleName"}
         required_empty = [f for f in empty if f not in optional]
         assert required_empty == [], f"Empty required fields in Event 22: {required_empty}"
+
+
+# ── Tests for expert review fixes ──────────────────────────────────────
+
+
+class TestUserFieldFormatting:
+    """Fix 1: NT AUTHORITY\\SYSTEM instead of DOMAIN\\SYSTEM."""
+
+    def test_system_user_gets_nt_authority(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="SYSTEM", logon_id="0x3e7"),
+            process=ProcessContext(
+                pid=4000,
+                parent_pid=600,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe -k netsvcs",
+                username="SYSTEM",
+            ),
+        )
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert "NT AUTHORITY\\SYSTEM" in content
+        assert "CORP\\SYSTEM" not in content
+
+    def test_local_service_gets_nt_authority(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="LOCAL SERVICE", logon_id="0x3e5"),
+            process=ProcessContext(
+                pid=4001,
+                parent_pid=600,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe -k LocalService",
+                username="LOCAL SERVICE",
+            ),
+        )
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert "NT AUTHORITY\\LOCAL SERVICE" in content
+        assert "CORP\\LOCAL SERVICE" not in content
+
+    def test_regular_user_gets_domain(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="jsmith", logon_id="0x12345"),
+            process=ProcessContext(
+                pid=4002,
+                parent_pid=3000,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe",
+                username="jsmith",
+            ),
+        )
+        emitter._render_sysmon_process_create(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert "CORP\\jsmith" in content
+
+
+class TestCallTraceConsistency:
+    """Fix 3: CallTrace offsets consistent per host, different across hosts."""
+
+    def test_offsets_consistent_per_host(self, emitter):
+        traces = [emitter._get_call_trace("HOST-A") for _ in range(20)]
+        # Extract ntdll offset from each trace
+        offsets = set()
+        for t in traces:
+            # First segment: "C:\Windows\SYSTEM32\ntdll.dll+XXXXX|..."
+            ntdll_part = t.split("|")[0]
+            offset = ntdll_part.split("+")[1]
+            offsets.add(offset)
+        # All traces for the same host should share the same ntdll offset
+        assert len(offsets) == 1, f"Expected 1 ntdll offset, got {offsets}"
+
+    def test_offsets_differ_across_hosts(self, emitter):
+        trace_a = emitter._get_call_trace("HOST-A")
+        trace_b = emitter._get_call_trace("HOST-B")
+        off_a = trace_a.split("|")[0].split("+")[1]
+        off_b = trace_b.split("|")[0].split("+")[1]
+        assert off_a != off_b, "Different hosts should have different CallTrace offsets"
+
+    def test_multiple_call_patterns_available(self, emitter):
+        # Should generate 3 distinct patterns per host
+        emitter._get_call_trace("HOST-C")
+        patterns = emitter._call_trace_cache["HOST-C"]
+        assert len(patterns) == 3
+
+
+class TestProcessGuidBootTime:
+    """Fix 4: ProcessGuid second segment varies with boot time."""
+
+    def test_guid_differs_with_different_boot_times(self, emitter):
+        emitter._host_boot_times = {
+            "HOST-A": datetime(2024, 2, 1, 6, 0, tzinfo=UTC),
+            "HOST-B": datetime(2024, 3, 15, 12, 0, tzinfo=UTC),
+        }
+        creation = datetime(2024, 4, 1, 10, 0, tzinfo=UTC)
+        guid_a = emitter._generate_process_guid("HOST-A", 1234, creation)
+        guid_b = emitter._generate_process_guid("HOST-B", 1234, creation)
+        # Same PID and creation time, different boot times → different GUIDs
+        # (second segment should differ)
+        seg_a = guid_a.split("-")[1]
+        seg_b = guid_b.split("-")[1]
+        assert seg_a != seg_b, f"Boot-relative segment should differ: {seg_a} vs {seg_b}"
+
+    def test_guid_deterministic_with_boot_time(self, emitter):
+        emitter._host_boot_times = {
+            "HOST-A": datetime(2024, 2, 1, 6, 0, tzinfo=UTC),
+        }
+        creation = datetime(2024, 4, 1, 10, 0, tzinfo=UTC)
+        guid1 = emitter._generate_process_guid("HOST-A", 1234, creation)
+        guid2 = emitter._generate_process_guid("HOST-A", 1234, creation)
+        assert guid1 == guid2
+
+
+class TestEvent3PortProcessConstraints:
+    """Fix 7: Port-process constraints in Event 3 filter."""
+
+    def _make_conn_event(self, dst_port, image=None, initiating_pid=-1):
+        host = _win_host()
+        net = NetworkContext(
+            src_ip="10.0.1.10",
+            dst_ip="10.0.2.20",
+            src_port=49152,
+            dst_port=dst_port,
+            protocol="tcp",
+            initiating_pid=initiating_pid,
+        )
+        proc = (
+            ProcessContext(
+                pid=5000,
+                parent_pid=3000,
+                image=image,
+                command_line=f"{image} args",
+                username="jsmith",
+            )
+            if image
+            else None
+        )
+        return SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=host,
+            network=net,
+            process=proc,
+        )
+
+    def test_svchost_ssh_filtered(self, emitter):
+        event = self._make_conn_event(22, image=r"C:\Windows\System32\svchost.exe")
+        assert emitter._passes_event3_filter(event) is False
+
+    def test_ssh_exe_ssh_passes(self, emitter):
+        event = self._make_conn_event(22, image=r"C:\Windows\System32\OpenSSH\ssh.exe")
+        assert emitter._passes_event3_filter(event) is True
+
+    def test_powershell_ssh_passes(self, emitter):
+        event = self._make_conn_event(
+            22, image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        )
+        assert emitter._passes_event3_filter(event) is True
+
+    def test_unconstrained_port_any_process(self, emitter):
+        # Port 4444 has no constraints — any process should pass
+        event = self._make_conn_event(4444, image=r"C:\Windows\System32\svchost.exe")
+        assert emitter._passes_event3_filter(event) is True
+
+    def test_unknown_pid_resolves_to_dash(self, emitter):
+        pid, image = emitter._resolve_process_from_pid("WKS-01", 99999)
+        assert image == "-"
+        assert pid == 99999

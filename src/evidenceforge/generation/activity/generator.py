@@ -1323,18 +1323,35 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Guaranteed FILE/CREATE for the process image when requested (storyline processes)
+        # Guaranteed FILE/CREATE for the process image when requested (storyline processes).
+        # Skip for pre-existing OS binaries in System32/SysWOW64 — Event 11 should
+        # only fire for genuinely new files written to disk (malware drops, downloads).
         if ensure_file_event:
-            self.dispatcher.dispatch(
-                SecurityEvent(
-                    timestamp=time,
-                    event_type="file_create",
-                    src_host=self._build_host_context(system),
-                    auth=AuthContext(username=user.username),
-                    file=FileContext(path=process_name, action="create", pid=pid),
-                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
-                )
+            _lower = process_name.lower().replace("/", "\\")
+            _is_system_binary = _lower.startswith("c:\\windows\\system32\\") or _lower.startswith(
+                "c:\\windows\\syswow64\\"
             )
+            if not _is_system_binary:
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time,
+                        event_type="file_create",
+                        src_host=self._build_host_context(system),
+                        auth=AuthContext(username=user.username),
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=self._lookup_process_name(
+                                system.hostname, parent_pid, _get_os_category(system.os)
+                            )
+                            or process_name,
+                            command_line=command_line,
+                            username=user.username,
+                        ),
+                        file=FileContext(path=process_name, action="create", pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                    )
+                )
 
         # Phase 8.2: Probabilistic EDR object diversity via canonical SecurityEvent
         rng = _get_rng()
@@ -4755,11 +4772,15 @@ class ActivityGenerator:
                 ]
                 if shells and rng.random() < 0.6:
                     return shells[-1][0]
-                return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+                return sys_pids.get(
+                    "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
 
             # Prefer session-specific explorer PID over system-wide default
             session_explorer = self._get_session_explorer_pid(system, user)
-            explorer_pid = session_explorer or sys_pids.get("explorer", 4)
+            explorer_pid = session_explorer or sys_pids.get(
+                "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+            )
 
             # Shells and terminals spawn from explorer.exe
             if exe_name in self._WINDOWS_SHELLS:
@@ -4848,8 +4869,12 @@ class ActivityGenerator:
         if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
             if is_shell:
                 # Shells get svchost as parent (realistic: service host spawns shell)
-                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
-            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+                return sys_pids.get(
+                    "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+            return sys_pids.get(
+                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+            )
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
         # Match by logon_id when available to avoid picking the wrong session
@@ -4869,8 +4894,12 @@ class ActivityGenerator:
         is_network_logon = active_session and active_session.logon_type == 3
         if is_network_logon:
             if is_shell:
-                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
-            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+                return sys_pids.get(
+                    "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+            return sys_pids.get(
+                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+            )
 
         # Look up valid parents from spawn rules
         if os_cat == "windows":
@@ -4957,14 +4986,18 @@ class ActivityGenerator:
         # Safety limit
         if depth > 3:
             if os_cat == "windows":
-                return sys_pids.get("explorer", 4)
+                return sys_pids.get(
+                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+                )
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
         # Pick a parent for child_exe from the rules
         possible_parents = reverse.get(child_exe, [])
         if not possible_parents:
             if os_cat == "windows":
-                return sys_pids.get("explorer", 4)
+                return sys_pids.get(
+                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+                )
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux

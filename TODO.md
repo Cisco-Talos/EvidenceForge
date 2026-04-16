@@ -273,6 +273,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **Cross-Source / General:**
 - [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
 - [x] Cross-sensor timestamp precision identical to 15+ decimal places — microsecond jitter added in snort.py, windows.py, and storyline.py
+- [ ] **P2** Per-host-type event rate multiplier — Domain controllers generate ~50 events/hr but real DCs running AD/DNS/DFS/GPO produce thousands/hr. `system.type` is used for routing but never for volume scaling. Need `event_rate_multiplier` on System model (or implicit per-type defaults) applied in `_calculate_events_for_hour()` and `_generate_system_traffic()`. DCs should be 3-5x workstation baseline; file servers and web servers similarly elevated.
 - [ ] Encoded PowerShell baseline noise identical across hosts (same Get-Service blob) — needs per-host variation
 - [ ] Workstation connection counts suspiciously uniform (808-1068 range) — Hawkes process variance too narrow
 - [ ] Uniform log file sets across all hosts (every workstation has identical format coverage)

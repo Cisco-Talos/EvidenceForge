@@ -197,12 +197,13 @@ class TestSysmonEventEmitter:
         assert "<EventID>5</EventID>" in content
         assert '<Data Name="ProcessId">8052</Data>' in content
 
-    def test_process_guid_deterministic(self):
+    def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""
+        emitter = SysmonEventEmitter(format_def, temp_output)
         ts = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
-        guid1 = SysmonEventEmitter._generate_process_guid("WKS-01", 1234, ts)
-        guid2 = SysmonEventEmitter._generate_process_guid("WKS-01", 1234, ts)
-        guid3 = SysmonEventEmitter._generate_process_guid("WKS-01", 5678, ts)
+        guid1 = emitter._generate_process_guid("WKS-01", 1234, ts)
+        guid2 = emitter._generate_process_guid("WKS-01", 1234, ts)
+        guid3 = emitter._generate_process_guid("WKS-01", 5678, ts)
 
         assert guid1 == guid2  # Same inputs → same GUID
         assert guid1 != guid3  # Different PID → different GUID
