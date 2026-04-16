@@ -178,6 +178,9 @@ def validate_config() -> ValidationResult:
                 "dns_query",
             },
         },
+        "activity/calltrace_patterns.yaml": {
+            "list_fields": {"patterns": None},
+        },
         "activity/edr_pools.yaml": {
             "list_fields": {
                 "file_paths_windows": None,

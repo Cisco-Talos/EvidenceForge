@@ -466,31 +466,28 @@ class SysmonEventEmitter(LogEmitter):
     def _get_call_trace(self, hostname: str) -> str:
         """Return a CallTrace string with per-host stable offsets.
 
-        Real ASLR randomizes DLL base addresses per boot, but intra-module
-        offsets (function entry points like NtOpenProcess) are fixed within
-        a boot session. We generate 3 call patterns per host on first use,
-        then reuse them for all Event 10 events on that host.
+        Loads call chain patterns from calltrace_patterns.yaml, then generates
+        concrete offsets per-host using a hostname-seeded RNG. Offsets are fixed
+        within a boot session (matching real ASLR behavior) but vary across hosts.
         """
         if hostname not in self._call_trace_cache:
+            from evidenceforge.generation.activity.calltrace_patterns import (
+                load_calltrace_patterns,
+            )
+
+            patterns = load_calltrace_patterns()
             rng = random.Random(_stable_seed(f"calltrace_{hostname}"))
-            ntdll_off = rng.randint(0x9C000, 0x9F000)
-            kb_off = rng.randint(0x2C000, 0x2F000)
-            k32_off = rng.randint(0x1C000, 0x1F000)
-            rpcrt4_off = rng.randint(0x7C000, 0x7F000)
-            patterns = [
-                # Direct NtOpenProcess (ntdll → KERNELBASE)
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}",
-                # Via kernel32 (ntdll → KERNELBASE → kernel32)
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}"
-                f"|C:\\Windows\\System32\\kernel32.dll+{k32_off:X}",
-                # Remote access path (ntdll → RPCRT4 → KERNELBASE)
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
-                f"|C:\\Windows\\System32\\RPCRT4.dll+{rpcrt4_off:X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}",
-            ]
-            self._call_trace_cache[hostname] = patterns
+            rendered = []
+            for pat in patterns:
+                modules = pat["modules"]
+                ranges = pat["offset_ranges"]
+                parts = []
+                for mod in modules:
+                    lo, hi = ranges[mod]
+                    off = rng.randint(lo, hi)
+                    parts.append(f"C:\\Windows\\SYSTEM32\\{mod}+{off:X}")
+                rendered.append("|".join(parts))
+            self._call_trace_cache[hostname] = rendered
         return random.choice(self._call_trace_cache[hostname])
 
     def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
