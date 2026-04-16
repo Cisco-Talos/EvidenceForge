@@ -18,7 +18,7 @@ If the user has a scenario file ready:
 
 ```bash
 eforge validate <scenario-file>
-eforge generate <scenario-file> --verbose
+eforge generate <scenario-file> --verbose --force
 ```
 
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
@@ -74,10 +74,10 @@ Before running generation:
 ### 2. Run Generation
 
 ```bash
-eforge generate <scenario-file> --verbose
+eforge generate <scenario-file> --verbose --force
 ```
 
-Always use `--verbose` so you can see progress and diagnose issues.
+Always use `--verbose` so you can see progress and diagnose issues. Always use `--force` to skip the interactive overwrite prompt — without it, re-running a scenario will block waiting for user input.
 
 **Warm-up phase:** Generation begins with a warm-up period (default 8 hours, minimum 1 hour, configurable via `time_window.warmup`). During warm-up, the engine runs baseline generation to pre-populate DNS cache, process trees, active sessions, and other internal state — but warm-up events are **not** written to output files. This ensures the first minutes of output look like a running system rather than a cold start. Progress output distinguishes the warm-up phase from real generation.
 
