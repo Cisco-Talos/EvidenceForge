@@ -306,10 +306,11 @@ class TestDnsQueryTypeSemantics:
             hostname="example.test",
         )
 
-        assert mock_emitters["zeek_dns"].emit_raw.called
-        event = mock_emitters["zeek_dns"].emit_raw.call_args_list[0][0][0]
-        assert event["qtype_name"] == "AAAA"
-        assert event["answers"] == ["2001:db8::1"]
+        assert mock_emitters["zeek_dns"].emit.called
+        event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        assert event.dns is not None
+        assert event.dns.query_type == "AAAA"
+        assert "2001:db8::1" in event.dns.answers
 
     def test_ptr_uses_in_addr_arpa(self, activity_gen, state_manager, mock_emitters):
         """PTR queries must use in-addr.arpa format."""

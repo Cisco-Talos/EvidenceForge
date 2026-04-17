@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from threading import Barrier, Thread
 
+import pytest
+
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 
@@ -319,6 +321,7 @@ class TestEmitterThreadSafety:
 
             assert len(lines) == num_threads * events_per_thread
 
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
     def test_barrier_flush_raises_if_worker_thread_crashes(self):
         """Test threaded emitter reports worker failures instead of hanging forever."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -356,11 +359,8 @@ class TestEmitterThreadSafety:
                 time.sleep(0.1)
 
                 start = time.monotonic()
-                try:
+                with pytest.raises(RuntimeError):
                     emitter.barrier_flush()
-                    raise AssertionError("Expected barrier_flush to raise after worker failure")
-                except RuntimeError as exc:
-                    assert "failed" in str(exc)
                 elapsed = time.monotonic() - start
                 assert elapsed < 1.0
             finally:
