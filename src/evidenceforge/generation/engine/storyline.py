@@ -1784,6 +1784,42 @@ class StorylineMixin:
             malicious_event["total_queries"] = query_count
             malicious_event["bytes_exfiltrated"] = total_bytes
 
+        elif spec.type == "explicit_credentials":
+            self.activity_generator.generate_explicit_credentials(
+                user=actor,
+                system=system,
+                time=time,
+                target_username=spec.target_username,
+                target_server=spec.target_server or system.hostname,
+                process_name=spec.process_name or r"C:\Windows\System32\runas.exe",
+                process_pid=getattr(self, "_last_storyline_pid", -1) or 0,
+                source_ip=spec.source_ip or system.ip,
+            )
+            malicious_event["target_username"] = spec.target_username
+            malicious_event["target_server"] = spec.target_server
+
+        elif spec.type == "workstation_lock":
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            session = next((s for s in sessions if s.system == system.hostname), None)
+            logon_id = session.logon_id if session else "0x0"
+            self.activity_generator.generate_workstation_lock(
+                user=actor,
+                system=system,
+                time=time,
+                logon_id=logon_id,
+            )
+
+        elif spec.type == "workstation_unlock":
+            sessions = self.state_manager.get_sessions_for_user(actor.username)
+            session = next((s for s in sessions if s.system == system.hostname), None)
+            logon_id = session.logon_id if session else "0x0"
+            self.activity_generator.generate_workstation_unlock(
+                user=actor,
+                system=system,
+                time=time,
+                logon_id=logon_id,
+            )
+
         elif spec.type == "raw":
             self.activity_generator.generate_raw(
                 time=time,

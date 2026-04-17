@@ -84,6 +84,9 @@ _WINDOWS_EVENT_TYPES = {
     "log_cleared",
     "create_remote_thread",
     "process_access",
+    "explicit_credentials",
+    "workstation_lock",
+    "workstation_unlock",
 }
 
 # Event types that imply Linux/SSH
