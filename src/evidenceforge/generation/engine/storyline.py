@@ -1011,7 +1011,6 @@ class StorylineMixin:
         elif spec.type == "scheduled_task_created":
             task_content = spec.task_content
             if not task_content:
-                # Generate realistic XML task content from the task name
                 task_content = (
                     f'<?xml version="1.0" encoding="UTF-16"?>\n'
                     f'<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -1019,6 +1018,17 @@ class StorylineMixin:
                     f"    <Exec>\n"
                     f"      <Command>C:\\Windows\\System32\\cmd.exe</Command>\n"
                     f'      <Arguments>/c "{spec.task_name}"</Arguments>\n'
+                    f"    </Exec>\n"
+                    f"  </Actions>\n"
+                    f"</Task>"
+                )
+            elif not task_content.lstrip().startswith(("<?xml", "<Task")):
+                task_content = (
+                    f'<?xml version="1.0" encoding="UTF-16"?>\n'
+                    f'<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+                    f'  <Actions Context="Author">\n'
+                    f"    <Exec>\n"
+                    f"      <Command>{task_content}</Command>\n"
                     f"    </Exec>\n"
                     f"  </Actions>\n"
                     f"</Task>"

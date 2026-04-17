@@ -3998,8 +3998,11 @@ class BaselineMixin:
                     # Generate login + disconnect sequence (realistic sshd log)
                     if rng.random() < 0.5:
                         # Login sequence: connection → auth → session open
-                        key_type = rng.choice(["RSA", "ED25519", "ECDSA"])
-                        key_hash = f"SHA256:{''.join(rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
+                        _key_rng = random.Random(
+                            _stable_seed(f"ssh_key:{ssh_user}:{system.hostname}")
+                        )
+                        key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
+                        key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
                         if rng.random() < 0.7:
                             # Key-based auth (70%)
                             auth_msg = f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: {key_type} {key_hash}"
@@ -4009,19 +4012,34 @@ class BaselineMixin:
                                 f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                             )
                         login_msgs = [
-                            f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
-                            auth_msg,
-                            f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                            (
+                                "sshd",
+                                sshd_pid,
+                                f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
+                            ),
+                            ("sshd", sshd_pid, auth_msg),
+                            (
+                                "sshd",
+                                sshd_pid,
+                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                            ),
+                            (
+                                "systemd-logind",
+                                rng.randint(300, 900),
+                                f"New session {rng.randint(50, 9999)} of user {ssh_user}.",
+                            ),
                         ]
-                        for lm in login_msgs:
+                        _msg_offset = rng.randint(10, 50)
+                        for app, pid_val, lm in login_msgs:
                             self.activity_generator.generate_syslog_event(
                                 system=system,
-                                time=ts + timedelta(milliseconds=rng.randint(10, 200)),
-                                app_name="sshd",
+                                time=ts + timedelta(milliseconds=_msg_offset),
+                                app_name=app,
                                 message=lm,
-                                pid=sshd_pid,
+                                pid=pid_val,
                                 facility=10,
                             )
+                            _msg_offset += rng.randint(1, 50)
                     else:
                         # Disconnect sequence
                         msgs = [
@@ -4088,12 +4106,13 @@ class BaselineMixin:
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
                 elif source_roll < 0.94:
-                    # Journald runtime statistics
+                    # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
-                    size = rng.randint(4, 128)
-                    max_size = rng.choice([256, 512, 1024, 2048, 4096])
+                    _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
+                    max_size = _j_rng.choice([256, 512, 1024, 2048, 4096])
+                    journal_type = _j_rng.choice(["Runtime", "System"])
+                    size = rng.randint(4, max_size - 1)
                     free = max_size - size
-                    journal_type = rng.choice(["Runtime", "System"])
                     path = (
                         f"/run/log/journal/{machine_id}"
                         if journal_type == "Runtime"
@@ -4198,202 +4217,18 @@ class BaselineMixin:
 
         # IDS false-positive alerts
         if "snort_alert" in self.emitters and self.scenario.environment.network:
-            # Signatures keyed by protocol — each sig declares expected port and
-            # direction ("in" = external→internal, "out" = internal→external).
-            # Tuple: (sid, message, classification, priority, dst_port, direction)
-            _FP_SIGS_BY_PROTO: dict[str, list[tuple[int, str, str, int, int, str]]] = {
-                "icmp": [
-                    (2100498, "GPL ICMP_INFO PING *NIX", "icmp-event", 3, 0, "in"),
-                    (2100366, "GPL ICMP_INFO PING BSDtype", "icmp-event", 3, 0, "in"),
-                    (2100480, "GPL ICMP_INFO PING Windows", "icmp-event", 3, 0, "in"),
-                ],
-                "tcp": [
-                    # Outbound policy (internal host → external)
-                    (
-                        2013028,
-                        "ET POLICY curl User-Agent Outbound",
-                        "policy-violation",
-                        3,
-                        80,
-                        "out",
-                    ),
-                    (
-                        2010935,
-                        "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected",
-                        "policy-violation",
-                        2,
-                        80,
-                        "out",
-                    ),
-                    (
-                        2025331,
-                        "ET POLICY SSLv3 Outbound Connection Detected",
-                        "policy-violation",
-                        2,
-                        443,
-                        "out",
-                    ),
-                    (
-                        2027316,
-                        "ET INFO Observed Let's Encrypt Certificate",
-                        "misc-activity",
-                        3,
-                        443,
-                        "out",
-                    ),
-                    (
-                        2013504,
-                        "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management",
-                        "policy-violation",
-                        3,
-                        80,
-                        "out",
-                    ),
-                    (
-                        2018959,
-                        "ET POLICY PE EXE or DLL Windows file download HTTP",
-                        "policy-violation",
-                        2,
-                        80,
-                        "out",
-                    ),
-                    (
-                        2016360,
-                        "ET INFO Observed Discord Domain (discordapp.com)",
-                        "misc-activity",
-                        3,
-                        443,
-                        "out",
-                    ),
-                    (
-                        2023882,
-                        "ET INFO Observed Telegram Domain (t.me)",
-                        "misc-activity",
-                        3,
-                        443,
-                        "out",
-                    ),
-                    (
-                        2025712,
-                        "ET INFO External IP Lookup Domain (ipify.org)",
-                        "misc-activity",
-                        2,
-                        443,
-                        "out",
-                    ),
-                    (
-                        2024897,
-                        "ET INFO External IP Lookup (ipinfo.io)",
-                        "misc-activity",
-                        2,
-                        443,
-                        "out",
-                    ),
-                    (
-                        2028401,
-                        "ET JA3 Hash - Possible Malware - Various RAT",
-                        "potentially-bad-traffic",
-                        1,
-                        443,
-                        "out",
-                    ),
-                    # Inbound (external → internal)
-                    (2024364, "ET INFO TLS Handshake Failure", "misc-activity", 3, 443, "in"),
-                    (
-                        2210044,
-                        "SURICATA STREAM Packet with broken ack",
-                        "protocol-command-decode",
-                        3,
-                        80,
-                        "in",
-                    ),
-                    (
-                        2210020,
-                        "SURICATA STREAM ESTABLISHED retransmission packet",
-                        "protocol-command-decode",
-                        3,
-                        443,
-                        "in",
-                    ),
-                    (
-                        2210054,
-                        "SURICATA STREAM Packet with invalid timestamp",
-                        "protocol-command-decode",
-                        2,
-                        80,
-                        "in",
-                    ),
-                    (2002911, "ET SCAN Potential SSH Scan", "attempted-recon", 2, 22, "in"),
-                    (
-                        2010937,
-                        "ET SCAN Suspicious inbound to mySQL port 3306",
-                        "attempted-recon",
-                        2,
-                        3306,
-                        "in",
-                    ),
-                    (
-                        2010936,
-                        "ET SCAN Suspicious inbound to MSSQL port 1433",
-                        "attempted-recon",
-                        2,
-                        1433,
-                        "in",
-                    ),
-                    (
-                        2002910,
-                        "ET SCAN Potential VNC Scan 5900-5920",
-                        "attempted-recon",
-                        2,
-                        5900,
-                        "in",
-                    ),
-                    (2019876, "ET INFO Packed Executable Download", "misc-activity", 2, 80, "in"),
-                    (
-                        2009582,
-                        "ET WEB_SERVER SQL Injection Attempt SELECT FROM",
-                        "web-application-attack",
-                        1,
-                        80,
-                        "in",
-                    ),
-                    (
-                        2009714,
-                        "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT",
-                        "web-application-attack",
-                        1,
-                        80,
-                        "in",
-                    ),
-                    (
-                        2024317,
-                        "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt",
-                        "web-application-attack",
-                        1,
-                        8080,
-                        "in",
-                    ),
-                ],
-                "udp": [
-                    (
-                        2016149,
-                        "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)",
-                        "policy-violation",
-                        3,
-                        3478,
-                        "out",
-                    ),
-                    (
-                        2027865,
-                        "ET DNS Query to a .top domain",
-                        "potentially-bad-traffic",
-                        2,
-                        53,
-                        "out",
-                    ),
-                    (2029706, "ET DNS Query to .cloud TLD", "misc-activity", 3, 53, "out"),
-                ],
-            }
+            from evidenceforge.config import get_activity_directory
+            from evidenceforge.utils.files import load_yaml
+
+            _all_sigs = load_yaml(get_activity_directory() / "ids_signatures.yaml").get(
+                "signatures", []
+            )
+            _FP_SIGS_BY_PROTO: dict[str, list[dict]] = {"tcp": [], "udp": [], "icmp": []}
+            for sig in _all_sigs:
+                proto = sig.get("proto", "tcp")
+                if proto in _FP_SIGS_BY_PROTO:
+                    _FP_SIGS_BY_PROTO[proto].append(sig)
+
             from evidenceforge.events.dispatcher import expand_formats
 
             segment_systems: dict[str, list] = {}
@@ -4434,10 +4269,30 @@ class BaselineMixin:
                     ts = current_hour + timedelta(seconds=offset)
                     # Pick protocol first, then choose a matching signature
                     alert_proto = rng.choice(["tcp", "udp", "icmp"])
-                    sig = rng.choice(_FP_SIGS_BY_PROTO[alert_proto])
-                    alert_dst_port = sig[4]  # port declared by signature
-                    sig_direction = sig[5]  # "in" or "out"
                     local_sys = rng.choice(monitored_systems)
+                    _os_cat = (
+                        _get_os_category(local_sys.os) if hasattr(local_sys, "os") else "unknown"
+                    )
+                    _sys_services = set(getattr(local_sys, "services", None) or [])
+
+                    # Filter signatures by target system compatibility
+                    _pool = _FP_SIGS_BY_PROTO[alert_proto]
+                    _filtered = [
+                        s
+                        for s in _pool
+                        if (not s.get("target_os") or _os_cat in s["target_os"])
+                        and (
+                            not s.get("target_services")
+                            or _sys_services & set(s["target_services"])
+                        )
+                    ]
+                    if not _filtered:
+                        _filtered = _pool
+                    if not _filtered:
+                        continue
+                    sig = rng.choice(_filtered)
+                    alert_dst_port = sig["dst_port"]
+                    sig_direction = sig["direction"]
                     _weights = getattr(self, "_external_scanner_weights", None)
                     if _weights:
                         ext_ip = rng.choices(_EXTERNAL_SCAN_IPS, weights=_weights, k=1)[0]
@@ -4445,7 +4300,6 @@ class BaselineMixin:
                         ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
                     from evidenceforge.events.contexts import IdsContext
 
-                    # Direction: "in" = external→internal, "out" = internal→external
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         dst_ip = ext_ip
@@ -4465,10 +4319,10 @@ class BaselineMixin:
                         orig_bytes=rng.randint(40, 2000),
                         resp_bytes=rng.randint(0, 1000),
                         ids=IdsContext(
-                            sid=sig[0],
-                            message=sig[1],
-                            classification=sig[2],
-                            priority=sig[3],
+                            sid=sig["sid"],
+                            message=sig["message"],
+                            classification=sig["classification"],
+                            priority=sig["priority"],
                         ),
                     )
 

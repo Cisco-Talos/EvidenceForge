@@ -2491,6 +2491,24 @@ class ActivityGenerator:
             session_id = max(_candidate, _last_id + 1)
             self._session_id_state[hostname] = (_epoch_sec, session_id)
 
+            # sshd connection message (precedes auth in real SSH lifecycle)
+            conn_msg_event = SecurityEvent(
+                timestamp=time - timedelta(microseconds=rng.randint(1000, 5000)),
+                event_type="syslog",
+                src_host=event.dst_host,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=sshd_pid,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        f"Connection from {source_ip} port {src_port}"
+                        f' on {target_system.ip} port 22 rdomain ""'
+                    ),
+                ),
+            )
+            self.dispatcher.dispatch(conn_msg_event)
+
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(
                 app_name="sshd",
