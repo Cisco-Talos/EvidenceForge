@@ -138,6 +138,14 @@ def generate(
     force: bool = typer.Option(
         False, "--force", "-f", help="Overwrite existing output without prompting"
     ),
+    formats: str | None = typer.Option(
+        None,
+        "--formats",
+        "-F",
+        help="Comma-separated format filter (e.g., 'zeek_conn,zeek_dns' or 'zeek'). "
+        "Only generates formats present in both this list and the scenario. "
+        "Supports group names (zeek, windows). See 'eforge info format_groups'.",
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -240,6 +248,29 @@ def generate(
         scenario_dir = scenario_file.parent
         data_dir = scenario_dir / "data"
         ground_truth_dir = scenario_dir
+
+    # Apply --formats filter (intersection with scenario output.logs)
+    if formats:
+        from evidenceforge.events.dispatcher import expand_formats
+
+        requested = expand_formats([f.strip() for f in formats.split(",")])
+        scenario_formats = expand_formats(
+            {log["format"] for log in scenario.output.logs if "format" in log}
+        )
+        filtered = requested & scenario_formats
+
+        if requested - scenario_formats:
+            missing = sorted(requested - scenario_formats)
+            console.print(f"[yellow]Warning: formats not in scenario: {missing}[/yellow]")
+
+        if not filtered:
+            console.print(
+                "[bold red]Error:[/bold red] No formats match both --formats and scenario output.logs"
+            )
+            raise typer.Exit(EXIT_INPUT_ERROR)
+
+        scenario.output.logs = [{"format": fmt} for fmt in sorted(filtered)]
+        console.print(f"[dim]Format filter: generating {sorted(filtered)}[/dim]")
 
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")

@@ -914,6 +914,12 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy`.
 
+#### Format Filtering
+
+The `output.logs` list can be scoped to only needed formats for faster generation with long time windows. For example, a 30-day baseline exercise that only needs Zeek conn.log can declare just `format: zeek_conn` instead of the full `zeek` group.
+
+The `--formats` CLI flag provides runtime filtering without modifying the scenario YAML. It intersects with `output.logs` — only formats present in both are generated. Group names (`zeek`, `windows`) are expanded before intersection.
+
 ## Backward Compatibility
 
 Persona fields are optional with null defaults:
