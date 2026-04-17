@@ -3179,138 +3179,13 @@ class BaselineMixin:
                     ProcessContext,
                     RegistryContext,
                 )
+                from evidenceforge.generation.activity.edr_pools import (
+                    get_registry_keys_hkcu,
+                    get_registry_keys_hklm,
+                )
 
-                _REG_KEYS_HKCU = [
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
-                        "cmd.exe /k dir\\1",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
-                        "DWORD (0x00000002)",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
-                        "DWORD (0x00000000)",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-                        "DWORD (0x00000000)",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count",
-                        "HRZR_PGYFRFFVBA",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*",
-                        "0",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General",
-                        "ShownFirstRunOptin",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1",
-                        "Datetime",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager",
-                        "SubscribedContent-338389Enabled",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
-                        "SearchboxTaskbarMode",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent",
-                        "AccentPalette",
-                    ),
-                    (
-                        "HKCU\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
-                        "HarvestContacts",
-                    ),
-                ]
-                # (key, Details) — Details is the actual data written, shown in Event 13.
-                # Use realistic DWORD/string values matching what each key stores.
-                _REG_KEYS_HKLM = [
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
-                        "explorer.exe",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
-                        "DWORD (0x00000000)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
-                        "DWORD (0x00000000)",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config",
-                        "DWORD (0x0000000f)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational",
-                        "DWORD (0x00000001)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application",
-                        "DWORD (0x01400000)",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection",
-                        "DWORD (0x00000000)",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
-                        "DWORD (0x00000000)",
-                    ),
-                    (
-                        "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
-                        "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
-                    ),
-                    (
-                        "HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters",
-                        "DWORD (0x00000001)",
-                    ),
-                    ("HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "DWORD (0x00000002)"),
-                ]
+                _REG_KEYS_HKCU = get_registry_keys_hkcu()
+                _REG_KEYS_HKLM = get_registry_keys_hklm()
                 _reg_count = rng.randint(50, 120)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
@@ -3321,13 +3196,14 @@ class BaselineMixin:
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     if rng.random() >= _hkcu_rate:
-                        _key, _val = rng.choice(_REG_KEYS_HKLM)
+                        _key, _vname, _details = rng.choice(_REG_KEYS_HKLM)
                         _reg_pid = _svc_pid
                         _reg_user = "SYSTEM"
                     else:
-                        _key, _val = rng.choice(_REG_KEYS_HKCU)
+                        _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
                         _reg_pid = sys_pids.get("explorer", _svc_pid)
                         _reg_user = system.assigned_user or "SYSTEM"
+                    _target = f"{_key}\\{_vname}"
                     # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
                     _reg_action = "delete" if rng.random() < 0.10 else "modify"
                     self.activity_generator.dispatcher.dispatch(
@@ -3347,7 +3223,7 @@ class BaselineMixin:
                                 username=_reg_user,
                             ),
                             registry=RegistryContext(
-                                key=_key, value=_val, action=_reg_action, pid=_reg_pid
+                                key=_target, value=_details, action=_reg_action, pid=_reg_pid
                             ),
                         )
                     )

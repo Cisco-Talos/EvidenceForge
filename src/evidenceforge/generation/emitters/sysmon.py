@@ -466,31 +466,28 @@ class SysmonEventEmitter(LogEmitter):
     def _get_call_trace(self, hostname: str) -> str:
         """Return a CallTrace string with per-host stable offsets.
 
-        Real ASLR randomizes DLL base addresses per boot, but intra-module
-        offsets (function entry points like NtOpenProcess) are fixed within
-        a boot session. We generate 3 call patterns per host on first use,
-        then reuse them for all Event 10 events on that host.
+        Loads call chain patterns from calltrace_patterns.yaml, then generates
+        concrete offsets per-host using a hostname-seeded RNG. Offsets are fixed
+        within a boot session (matching real ASLR behavior) but vary across hosts.
         """
         if hostname not in self._call_trace_cache:
+            from evidenceforge.generation.activity.calltrace_patterns import (
+                load_calltrace_patterns,
+            )
+
+            patterns = load_calltrace_patterns()
             rng = random.Random(_stable_seed(f"calltrace_{hostname}"))
-            ntdll_off = rng.randint(0x9C000, 0x9F000)
-            kb_off = rng.randint(0x2C000, 0x2F000)
-            k32_off = rng.randint(0x1C000, 0x1F000)
-            rpcrt4_off = rng.randint(0x7C000, 0x7F000)
-            patterns = [
-                # Direct NtOpenProcess (ntdll → KERNELBASE)
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}",
-                # Via kernel32 (ntdll → KERNELBASE → kernel32)
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}"
-                f"|C:\\Windows\\System32\\kernel32.dll+{k32_off:X}",
-                # Remote access path (ntdll → RPCRT4 → KERNELBASE)
-                f"C:\\Windows\\SYSTEM32\\ntdll.dll+{ntdll_off:X}"
-                f"|C:\\Windows\\System32\\RPCRT4.dll+{rpcrt4_off:X}"
-                f"|C:\\Windows\\System32\\KERNELBASE.dll+{kb_off:X}",
-            ]
-            self._call_trace_cache[hostname] = patterns
+            rendered = []
+            for pat in patterns:
+                modules = pat["modules"]
+                ranges = pat["offset_ranges"]
+                parts = []
+                for mod in modules:
+                    lo, hi = ranges[mod]
+                    off = rng.randint(lo, hi)
+                    parts.append(f"C:\\Windows\\SYSTEM32\\{mod}+{off:X}")
+                rendered.append("|".join(parts))
+            self._call_trace_cache[hostname] = rendered
         return random.choice(self._call_trace_cache[hostname])
 
     def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
@@ -509,6 +506,16 @@ class SysmonEventEmitter(LogEmitter):
         if proc is not None:
             return (pid, proc.image)
         return (pid, "-")
+
+    @staticmethod
+    def _resolve_destination_hostname(ip: str) -> str:
+        """Resolve destination IP to hostname via REVERSE_DNS.
+
+        Returns FQDN for known internal hosts (scenario systems), "-" for unknown.
+        """
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
+        return REVERSE_DNS.get(ip, "-")
 
     def _get_stable_process_guid(
         self, hostname: str, pid: int, fallback_timestamp: datetime
@@ -662,33 +669,36 @@ class SysmonEventEmitter(LogEmitter):
             user = "NT AUTHORITY\\SYSTEM"
             logon_id = "0x3e7"
 
+        integrity = proc.integrity_level if proc.integrity_level else "Medium"
+
         # Override SYSTEM for user-session processes (sihost, SearchHost, etc.)
-        # These always run under the logged-in user, never SYSTEM.
+        # These always run under the logged-in user at Medium integrity, never SYSTEM.
         _img_basename = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
-        if _img_basename in self._USER_SESSION_PROCESSES and (
-            "NT AUTHORITY" in user or auth is None or (auth and auth.username in _SYSTEM_ACCOUNTS)
-        ):
-            # Look up the host's interactive user from StateManager sessions
-            sm = getattr(self, "_state_manager", None)
-            _session_user = None
-            if sm:
-                for sess in sm.state.active_sessions.values():
-                    if (
-                        sess.system == host.hostname
-                        and sess.username not in _SYSTEM_ACCOUNTS
-                        and sess.logon_type in (2, 10, 11)  # Interactive/RDP only
-                    ):
-                        _session_user = sess.username
-                        break
-            if _session_user:
-                user = self._format_user(_session_user, host.netbios_domain)
-                # Generate a realistic per-host interactive logon ID
-                _lid = _stable_seed(f"interactive_logon_{host.hostname}_{_session_user}")
-                logon_id = f"0x{(_lid & 0xFFFFFFFF) | 0x10000:x}"
-                integrity = "Medium"  # User-session processes run at Medium
-
-        integrity = proc.integrity_level if proc.integrity_level else "Medium"
+        if _img_basename in self._USER_SESSION_PROCESSES:
+            # Force Medium integrity regardless of what the generator set
+            integrity = "Medium"
+            if (
+                "NT AUTHORITY" in user
+                or auth is None
+                or (auth and auth.username in _SYSTEM_ACCOUNTS)
+            ):
+                # Also override the username from StateManager sessions
+                sm = getattr(self, "_state_manager", None)
+                _session_user = None
+                if sm:
+                    for sess in sm.state.active_sessions.values():
+                        if (
+                            sess.system == host.hostname
+                            and sess.username not in _SYSTEM_ACCOUNTS
+                            and sess.logon_type in (2, 10, 11)
+                        ):
+                            _session_user = sess.username
+                            break
+                if _session_user:
+                    user = self._format_user(_session_user, host.netbios_domain)
+                    _lid = _stable_seed(f"interactive_logon_{host.hostname}_{_session_user}")
+                    logon_id = f"0x{(_lid & 0xFFFFFFFF) | 0x10000:x}"
 
         event_data = {
             "EventID": 1,
@@ -942,6 +952,13 @@ class SysmonEventEmitter(LogEmitter):
             if random.random() < sample_rate:
                 return True
 
+        # User application images: low sampling rate for non-zero presence
+        user_app_images = [img.lower() for img in cfg.get("include_user_app_images", [])]
+        if image in user_app_images:
+            rate = cfg.get("user_app_sample_rate", 0.05)
+            if random.random() < rate:
+                return True
+
         dst_port = event.network.dst_port or 0
         include_ports = cfg.get("include_dest_ports", [])
         if dst_port in include_ports:
@@ -1113,7 +1130,7 @@ class SysmonEventEmitter(LogEmitter):
             "SourcePortName": _PORT_NAMES.get(src_port, "-"),
             "DestinationIsIpv6": "true" if ":" in dst_ip else "false",
             "DestinationIp": dst_ip,
-            "DestinationHostname": "-",
+            "DestinationHostname": self._resolve_destination_hostname(dst_ip),
             "DestinationPort": dst_port,
             "DestinationPortName": _PORT_NAMES.get(dst_port, "-"),
         }

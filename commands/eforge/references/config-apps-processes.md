@@ -311,3 +311,77 @@ All use the same field schema as application catalog loaded_modules (see Loaded 
 - `parent:` uses symbolic names resolved at generation time (e.g., `services` = services.exe, `svchost_netsvcs` = svchost.exe -k netsvcs)
 - `params:` provides lists of values for `{placeholder}` resolution in command_templates
 - `loaded_modules:` optional list of DLLs loaded by this process (same schema as app catalog)
+
+---
+
+## Sysmon Event Filtering (`sysmon_filters.yaml`)
+
+Controls which Sysmon events are emitted. Simulates SwiftOnSecurity/Olaf Hartong community configs.
+
+### Event 3 (NetworkConnect) — `network_connect:`
+
+- `mode: include` — only log events matching include rules
+- `include_images:` — LOLBins whose connections are always logged (powershell, cmd, certutil, etc.)
+- `include_baseline_images:` — system services (svchost, lsass) sampled at `baseline_sample_rate` (default 10%)
+- `include_user_app_images:` — user apps (Slack, Teams, Code) sampled at `user_app_sample_rate` (default 5%)
+- `include_dest_ports:` — suspicious ports that log regardless of process (22, 4444, 5985, etc.)
+- `port_process_constraints:` — restricts specific ports to valid processes (e.g., port 22 only from ssh.exe)
+- `exclude_dest_ips:` — loopback addresses excluded
+
+### Event 7 (ImageLoaded) — `image_loaded:`
+
+- `mode: exclude` — log everything except matches
+- `exclude_image_loaded_prefixes:` — System32, SysWOW64 paths excluded
+- `exclude_signatures:` — Microsoft-signed DLLs excluded
+
+### Event 11 (FileCreate) — `file_create:`
+
+- `mode: include` — log only suspicious paths/extensions
+- `include_target_paths:` — Startup, Downloads, AppData, Temp, etc.
+- `include_extensions:` — .exe, .dll, .ps1, .bat, .lnk, .docm, etc.
+
+### Events 12/13 (Registry) — `registry_event:`
+
+- `mode: include` — log only matching key patterns
+- `include_key_patterns:` — persistence keys (Run, Winlogon, ServiceDll) plus baseline keys (Explorer, WDigest, Defender, etc.)
+- `log_create_key: false` — suppresses Event 12 CreateKey, allows DeleteKey
+
+### Event 22 (DNSQuery) — `dns_query:`
+
+- `mode: include_all` — log all DNS queries
+
+---
+
+## EDR Diversity Pools (`edr_pools.yaml`)
+
+Provides file path, registry key, and DLL pools for probabilistic background events emitted alongside process creation. These events provide realistic ambient EDR telemetry.
+
+### Sections
+
+- `file_paths_windows:` — Windows file paths with `{user}` and `{rand}` templates (documents, temp, cache, WER, prefetch)
+- `file_paths_linux:` — Linux paths (home, tmp, /var/log, /proc)
+- `registry_keys_hkcu:` — `[key, Details]` pairs for HKCU writes (Explorer, Office, Internet Settings)
+- `registry_keys_hklm:` — `[key, Details]` pairs for HKLM writes (Run, Defender, WDigest, Firewall)
+- `dll_pool:` — System32 DLL paths for module load events
+
+Overlay replaces entire sections (section-replace merge). Details values use Sysmon format: `"DWORD (0x00000001)"` for REG_DWORD, string for REG_SZ.
+
+---
+
+## CallTrace Patterns (`calltrace_patterns.yaml`)
+
+Templates for Sysmon Event 10 (ProcessAccess) CallTrace field. Each pattern defines a DLL call chain with offset ranges that are randomized per-host at generation time.
+
+### Pattern Schema
+
+```yaml
+patterns:
+  - modules: ["ntdll.dll", "KERNELBASE.dll"]     # DLLs in call chain order
+    offset_ranges:
+      ntdll.dll: [0x9C000, 0x9F000]               # [min, max] hex offset
+      KERNELBASE.dll: [0x2C000, 0x2F000]
+```
+
+Offsets are fixed per-host within a generation run (matching real ASLR behavior) but vary across hosts. 8 default patterns cover: direct NtOpenProcess, kernel32 path, RPCRT4, WMI, COM/DCOM, AV/EDR, kernel-mode, and sechost paths.
+
+Overlay replaces the entire `patterns:` list.

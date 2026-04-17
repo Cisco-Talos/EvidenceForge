@@ -58,6 +58,9 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names |
 | Modify systemd schedules | `systemd_schedules.yaml` | (standalone) |
+| Modify Sysmon event filtering | `sysmon_filters.yaml` | (standalone — affects which Events 3/7/11/12/13/22 are emitted) |
+| Modify EDR diversity pools | `edr_pools.yaml` | (standalone — file paths, registry keys, DLL pool for background events) |
+| Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
 
@@ -75,6 +78,7 @@ Also read the relevant reference doc for field schemas and conventions:
 |-------|---------------|
 | DNS, traffic, proxy, site maps, network | `references/config-dns-network.md` |
 | Applications, spawn rules, processes | `references/config-apps-processes.md` |
+| Sysmon filters, EDR pools, CallTrace | `references/config-apps-processes.md` (Sysmon Filtering section) |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog) | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |

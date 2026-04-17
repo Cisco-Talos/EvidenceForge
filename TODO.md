@@ -161,9 +161,12 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓³ ParentCommandLine always "-" — added parent_command_line to ProcessContext; populated via _lookup_parent_command_line() from StateManager
 - [x] Event 7 DLL load profiles per process — `loaded_modules` field on application_catalog.yaml (user apps) and system_processes.yaml (OS processes), using same schema. Unified loader in dll_load_profiles.py collects from both. Common OS loader chain applied to all processes; unprofilesd processes fall back to common-only.
 - [ ] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — real environments show 10-20+ distinct masks from AV, EDR, WMI, etc.
-- [ ] CallTrace offsets limited to 2 patterns — need diverse ntdll/KERNELBASE offsets per call path
-- [ ] Sysmon EventRecordIDs perfectly sequential (no gaps) — real systems drop events under load
+- [x] CallTrace offsets limited to 2 patterns — moved to calltrace_patterns.yaml with 8 distinct call chains (ntdll, KERNELBASE, kernel32, RPCRT4, wbemcomn, combase, advapi32, sechost)
+- [x] Sysmon EventRecordIDs perfectly sequential (no gaps) — gaps widened to 1-7 with 15% chance of 8-50
 - [ ] Event 8 StartModule/StartFunction always empty for benign pairs
+- [ ] **P1** Event 3 process-to-destination mismatch — user app sampling (Teams, Outlook, etc.) pairs process images with random baseline destinations (e.g., Teams→old.reddit.com). The process_network_map needs per-app destination domain constraints so each app only connects to plausible hosts (Teams→Microsoft domains, Outlook→O365, etc.).
+- [ ] **P1** Event 7 (ImageLoaded) volume too thin — only 3-7 DLL load events per host per 6 hours. Real Sysmon with SwiftOnSecurity config logs hundreds. Baseline needs a standalone DLL load generator similar to the registry event generator.
+- [ ] **P2** Registry TargetObject path diversity — baseline registry pool has ~30 unique paths that cycle. Real Sysmon sees hundreds of distinct paths from COM registration, GPO processing, software updates. Need larger pool or dynamic path generation.
 
 **Zeek:**
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation

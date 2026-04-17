@@ -169,6 +169,27 @@ def validate_config() -> ValidationResult:
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
             # No structural constraints — skip unexpected-key check
         },
+        "activity/sysmon_filters.yaml": {
+            "dict_fields": {
+                "network_connect",
+                "image_loaded",
+                "file_create",
+                "registry_event",
+                "dns_query",
+            },
+        },
+        "activity/calltrace_patterns.yaml": {
+            "list_fields": {"patterns": None},
+        },
+        "activity/edr_pools.yaml": {
+            "list_fields": {
+                "file_paths_windows": None,
+                "file_paths_linux": None,
+                "registry_keys_hkcu": None,
+                "registry_keys_hklm": None,
+                "dll_pool": None,
+            },
+        },
     }
 
     overlay_errors = False

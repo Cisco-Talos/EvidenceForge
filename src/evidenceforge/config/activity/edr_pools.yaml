@@ -1,0 +1,118 @@
+# EDR object diversity pools for probabilistic file/registry/DLL events.
+#
+# Used by the generation engine to emit realistic ambient file creation,
+# registry modification, and module load events alongside process activity.
+# These events provide background noise that makes EDR telemetry realistic.
+#
+# Override via .eforge/config/activity/edr_pools.yaml — any top-level
+# key you include fully replaces the corresponding default section.
+#
+# Template variables: {user} = process owner username, {rand} = 5-digit random
+
+file_paths_windows:
+  # User documents
+  - "C:\\Users\\{user}\\Documents\\report.docx"
+  - "C:\\Users\\{user}\\Documents\\spreadsheet.xlsx"
+  - "C:\\Users\\{user}\\Documents\\presentation.pptx"
+  - "C:\\Users\\{user}\\Documents\\Q4-review.pdf"
+  - "C:\\Users\\{user}\\Documents\\meeting-notes.txt"
+  # Downloads and desktop
+  - "C:\\Users\\{user}\\Downloads\\file.pdf"
+  - "C:\\Users\\{user}\\Downloads\\installer-{rand}.exe"
+  - "C:\\Users\\{user}\\Desktop\\notes-{rand}.txt"
+  - "C:\\Users\\{user}\\Desktop\\shortcut-{rand}.lnk"
+  # Temp files
+  - "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp"
+  - "C:\\Users\\{user}\\AppData\\Local\\Temp\\~DF{rand}.tmp"
+  - "C:\\Users\\{user}\\AppData\\Local\\Temp\\~$document-{rand}.docx"
+  # Application data
+  - "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Office\\16.0\\OfficeFileCache\\{rand}.dat"
+  - "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\data_{rand}"
+  - "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\{rand}"
+  - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\report-{rand}.docx.lnk"
+  - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
+  # System paths
+  - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
+  - "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf"
+  - "C:\\Windows\\Prefetch\\SVCHOST.EXE-{rand}.pf"
+  - "C:\\Windows\\Temp\\{rand}.tmp"
+  - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
+  - "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"
+  - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
+
+file_paths_linux:
+  # User files
+  - "/home/{user}/documents/report.odt"
+  - "/home/{user}/documents/notes.md"
+  - "/home/{user}/downloads/file.pdf"
+  - "/home/{user}/downloads/archive-{rand}.tar.gz"
+  - "/home/{user}/.bashrc"
+  - "/home/{user}/.ssh/known_hosts"
+  # Temp files
+  - "/tmp/tmp{rand}"
+  - "/tmp/systemd-private-{rand}-apache2.service"
+  - "/var/tmp/{rand}.lock"
+  # Application caches
+  - "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}"
+  - "/home/{user}/.cache/pip/http/{rand}"
+  - "/home/{user}/.local/share/recently-used.xbel"
+  # Logs and system
+  - "/var/log/syslog"
+  - "/var/log/auth.log"
+  - "/var/log/apache2/access.log"
+  - "/proc/{rand}/status"
+  - "/etc/passwd"
+  # Package manager
+  - "/var/lib/dpkg/status"
+  - "/var/cache/apt/archives/lock"
+  - "/var/lib/apt/lists/lock"
+
+# Registry keys for EDR events. Format: [key, value_name, details].
+# TargetObject in Sysmon = key\value_name. Details = data written.
+registry_keys_hkcu:
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a", "cmd.exe /k dir\\1"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "HideFileExt", "DWORD (0x00000001)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "Hidden", "DWORD (0x00000002)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "ShowSuperHidden", "DWORD (0x00000000)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "ProxyEnable", "DWORD (0x00000000)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "MigrateProxy", "DWORD (0x00000001)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "AppsUseLightTheme", "DWORD (0x00000001)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count", "HRZR_PGYFRFFVBA", "00 00 00 00 0E 00 00 00"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*", "0", "hex(2):43,00,3a,00"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin", "DWORD (0x00000001)"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1", "Datetime", "2024-11-12T13:00:00"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "SubscribedContent-338389Enabled", "DWORD (0x00000001)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search", "SearchboxTaskbarMode", "DWORD (0x00000002)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent", "AccentPalette", "hex:9B,9A,99,00"]
+  - ["HKCU\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore", "HarvestContacts", "DWORD (0x00000001)"]
+
+registry_keys_hklm:
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealthSystray", "C:\\Windows\\System32\\SecurityHealthSystray.exe"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\StandardProfile", "EnableFirewall", "DWORD (0x00000001)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell", "explorer.exe"]
+  - ["HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate", "DWORD (0x00000000)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management", "ClearPageFileAtShutdown", "DWORD (0x00000000)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA", "DWORD (0x00000001)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "DWORD (0x00000001)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config", "MaxPollInterval", "DWORD (0x0000000f)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters", "EnableSecuritySignature", "DWORD (0x00000001)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending", "TrustedInstaller", "DWORD (0x00000001)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational", "Enabled", "DWORD (0x00000001)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application", "MaxSize", "DWORD (0x01400000)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring", "DWORD (0x00000000)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest", "UseLogonCredential", "DWORD (0x00000000)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters", "ListenAddresses", "DWORD (0x00000001)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging", "DWORD (0x00000002)"]
+
+dll_pool:
+  - "C:\\Windows\\System32\\ntdll.dll"
+  - "C:\\Windows\\System32\\kernel32.dll"
+  - "C:\\Windows\\System32\\user32.dll"
+  - "C:\\Windows\\System32\\advapi32.dll"
+  - "C:\\Windows\\System32\\msvcrt.dll"
+  - "C:\\Windows\\System32\\rpcrt4.dll"
+  - "C:\\Windows\\System32\\ole32.dll"
+  - "C:\\Windows\\System32\\combase.dll"
+  - "C:\\Windows\\System32\\sechost.dll"
+  - "C:\\Windows\\System32\\gdi32.dll"
