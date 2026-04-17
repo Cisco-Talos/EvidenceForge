@@ -390,14 +390,19 @@ Gaps identified by comparing exercise data requirements against current engine c
 
 Highest impact — unblocks or improves 10 exercises across all 5 days. These are all variations of "generate N events matching a pattern over a time window." A single YAML-configurable bulk event primitive with type-specific parameter sets covers all of them. DNS independence is part of this because DNS beaconing and DGA are primary use cases driving the framework.
 
-- [ ] General repeating/bulk event primitive (interval, duration, jitter, configurable via YAML)
-- [ ] Built-in type: beacon — any protocol (HTTP/S, SSH, DNS, NTP, arbitrary), permitted or blocked
-- [ ] Built-in type: web_scan — directory enumeration, vuln probing, URI lists, status code distribution
-- [ ] Built-in type: credential_spray — bulk failed_logon against target accounts
-- [ ] Built-in type: dga_queries — domain generation parameters (length, TLD, charset, count, rcode distribution)
-- [ ] Standalone dns_query event type (query, qtype, rcode, ttl) — DNS records independent of TCP connections
-- [ ] DNS TTL control field on dns_query events
-- [ ] Subsume existing `blocked_c2` as one outcome variant of the beacon type
+- [x] General repeating/bulk event primitive (`_PeriodicEventBase` + `_iter_periodic_ticks()` shared engine)
+- [x] Built-in type: beacon — any protocol (HTTP/S, SSH, DNS, NTP, arbitrary), permitted or blocked
+- [x] Built-in type: web_scan — directory enumeration, vuln probing, URI lists, status code distribution (5 presets with overlay support)
+- [x] Built-in type: credential_spray — bulk failed_logon with spray/brute_force/stuffing patterns, optional success
+- [x] Built-in type: dga_queries — domain generation parameters (length, TLD, charset, count, rcode distribution, deterministic seed)
+- [x] Standalone dns_query event type (query, qtype, rcode, ttl) — DNS records independent of TCP connections
+- [x] DNS TTL control field on dns_query events
+- [x] Replaced `blocked_c2` with beacon `action: deny` (blocked_c2 removed)
+- [x] Built-in type: dns_tunnel — encoded subdomain exfiltration (base32/base64/hex, TXT/NULL/CNAME, payload chunking)
+- [ ] DGA algorithm presets (known malware families — Conficker, Suppobox, etc.)
+- [ ] Dictionary-based DGA (word combination domains)
+- [ ] active_hours / active_days on periodic types
+- [ ] Connection to non-listening host (conn_state=REJ/S0 without firewall deny)
 
 **Exercises:** 1.1 (web_scan), 1.1b (beacon), 1.3 (injection payload volume), 3.3 (beacon), 4.1 (dns_query, dga), 4.2 (dns_query, dga), 5.1 (credential_spray)
 
