@@ -69,6 +69,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] SubjectLogonId hardcoded to SYSTEM (0x3e7) on 4720/4728/4697/4698/1102
 - [x] 4728 MemberSid doesn't match 4720 TargetSid across storyline events
 - [x] 4648 SubjectLogonId is SYSTEM (0x3e7) for domain user
+- [x] 4648 ProcessId now uses explicit-credential process PID (auth.process_pid) instead of LSASS reporting PID
 - [x] Missing Snort IDS baseline alerts for single-system segments
 - [x] Sysmon 8 TargetProcessId hardcoded to 4 (System kernel PID)
 - [x] Network logon (type 3) processes parented by explorer.exe instead of services/svchost

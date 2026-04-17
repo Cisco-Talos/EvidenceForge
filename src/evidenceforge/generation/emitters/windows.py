@@ -664,7 +664,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetLogonGuid": "{00000000-0000-0000-0000-000000000000}",
             "TargetServerName": auth.target_server or "localhost",
             "TargetInfo": auth.target_server or "localhost",
-            "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x0",
+            "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
             "IpAddress": auth.source_ip or "-",
             "IpPort": auth.source_port or 0,

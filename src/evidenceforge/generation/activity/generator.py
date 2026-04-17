@@ -3701,6 +3701,7 @@ class ActivityGenerator:
                 subject_logon_id=subject_logon_id,
                 logon_guid="{00000000-0000-0000-0000-000000000000}",
                 reporting_pid=reporting_pid,
+                process_pid=process_pid,
                 target_server=target_server,
                 process_name=process_name,
                 source_ip=source_ip or "-",
