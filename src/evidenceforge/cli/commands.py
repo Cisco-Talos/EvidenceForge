@@ -290,6 +290,12 @@ def generate(
         for item in existing:
             console.print(item)
 
+        if formats:
+            console.print(
+                "[yellow]Warning: --formats replaces the entire data/ directory. "
+                "Previously generated formats not in the filter will be deleted.[/yellow]"
+            )
+
         if not force:
             try:
                 typer.confirm("\nOverwrite existing output?", abort=True)

@@ -565,6 +565,7 @@ class ScenarioValidator:
         """Validate output.logs format names."""
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
 
+        # Accept both group names (zeek, windows) and individual format names (zeek_conn)
         known_output_formats = set(FORMAT_GROUPS.keys()) | {
             "ecar",
             "syslog",
@@ -574,23 +575,12 @@ class ScenarioValidator:
             "web_access",
             "proxy_access",
         }
-        _group_members = {}
-        for group, members in FORMAT_GROUPS.items():
-            for member in members:
-                _group_members[member] = group
+        for members in FORMAT_GROUPS.values():
+            known_output_formats.update(members)
 
         for idx, log_spec in enumerate(self.scenario.output.logs):
             fmt = log_spec.get("format", "")
-            if fmt in _group_members:
-                self.issues.append(
-                    ValidationIssue(
-                        severity="error",
-                        field_path=f"output.logs.{idx}.format",
-                        message=f"Individual format '{fmt}' not allowed in output.logs",
-                        suggestion=f"Use the group name '{_group_members[fmt]}' instead",
-                    )
-                )
-            elif fmt and fmt not in known_output_formats:
+            if fmt and fmt not in known_output_formats:
                 self.issues.append(
                     ValidationIssue(
                         severity="warning",
