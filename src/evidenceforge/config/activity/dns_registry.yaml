@@ -79,10 +79,10 @@ domains:
     ips: ["13.107.42.14", "13.107.43.14"]
     tags: [web, social]
   - domain: static.licdn.com
-    ips: ["13.107.42.14", "13.107.43.14"]
+    ips: ["13.107.44.51", "13.107.45.51"]
     tags: [cdn]
   - domain: media.licdn.com
-    ips: ["13.107.42.14", "13.107.43.14"]
+    ips: ["13.107.44.52", "13.107.45.52"]
     tags: [cdn]
 
   # === Akamai ===
