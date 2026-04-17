@@ -413,7 +413,12 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
 | `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
-| `blocked_c2` | ASA 106023 (periodic denies) | `dst_ip` | `source_ip`, `dst_port`, `interval`, `duration`, `jitter` |
+| `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `status_code`, `orig_bytes`, `resp_bytes`, `jitter` |
+| `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
+| `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` |
+| `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` |
+| `dga_queries` | Zeek dns.log + conn.log (bulk DGA) | `interval`, one of `end_time`/`duration`/`count` | `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`, `source_ip`, `jitter` |
+| `dns_tunnel` | Zeek dns.log + conn.log (encoded exfil) | `base_domain`, `interval`, one of `end_time`/`duration`/`count` | `encoding` (base32/base64/hex), `qtype` (TXT/NULL/CNAME), `label_length`, `payload`, `payload_size`, `source_ip`, `jitter` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
@@ -544,26 +549,209 @@ Fields: `source_ip` (override scan source; default: uses storyline system IP —
 
 Denied connections are only visible to sensors on the source side of the firewall. The firewall's `drop_mode` controls whether Zeek sees `S0` (silent drop) or `REJ` (RST response).
 
-### Blocked C2 Events
+### Beacon Events
 
-Use `blocked_c2` for malware beaconing that the firewall blocks. Generates periodic denied outbound connection attempts over a specified duration.
+Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) or denied (firewall-blocked beaconing). Replaces the former `blocked_c2` type.
 
 ```yaml
+# Allowed beacon through proxy
+- time: "+3h"
+  actor: attacker
+  system: workstation01
+  activity: "C2 beacon to attacker infrastructure"
+  events:
+    - type: beacon
+      dst_ip: "198.51.100.30"
+      dst_port: 443
+      hostname: "cdn-analytics.example.com"
+      interval: "5m"
+      duration: "7d"
+      jitter: 0.2
+      action: allow
+      technique: "T1071.001 - Web Protocols"
+
+# Denied beacon (equivalent to former blocked_c2)
 - time: "+5h"
   actor: attacker
   system: DC-01
   activity: "Blocked C2 beaconing — firewall denies outbound from DC"
   events:
-    - type: blocked_c2
+    - type: beacon
       dst_ip: "198.51.100.30"
       dst_port: 443
-      interval: "30m"                 # Try every 30 minutes
-      duration: "12h"                 # Keep trying for 12 hours
-      jitter: 0.2                     # ±20% variation on interval
+      interval: "30m"
+      duration: "12h"
+      jitter: 0.2
+      action: deny
       technique: "T1071.001 - Web Protocols"
 ```
 
-Fields: `dst_ip` (C2 server), `dst_port` (default: 443), `interval` (time between attempts), `duration` (total beaconing period), `jitter` (0.0-1.0, default: 0.2).
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: 0.2). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, etc.). `action`: `allow` (default) or `deny`.
+
+### DNS Query Events
+
+Use `dns_query` for standalone DNS lookups with full control over query parameters. Unlike the automatic DNS expansion on `connection` events, this type lets you specify exact query type, response code, TTL, and answer. Useful for DNS-based reconnaissance, cache poisoning indicators, or any scenario where the DNS query itself is the story.
+
+```yaml
+- time: "+1h"
+  actor: marcus.chen
+  system: WS-DEV-01
+  activity: "DNS reconnaissance — query for mail server"
+  events:
+    - type: dns_query
+      query: "mail.example.com"
+      qtype: MX
+      rcode: NOERROR
+      answer: "10 smtp.example.com"
+      technique: "T1018 - Remote System Discovery"
+```
+
+Fields:
+- `query` (required): Domain name to query
+- `qtype` (default: `A`): Query type — `A`, `AAAA`, `TXT`, `CNAME`, `MX`, `NULL`, `SRV`, `PTR`
+- `rcode` (default: `NOERROR`): Response code — `NOERROR`, `NXDOMAIN`, `SERVFAIL`, `REFUSED`
+- `ttl` (optional): Response TTL (auto-generated if omitted)
+- `answer` (required when `rcode=NOERROR`): Response value(s) — string or list of strings
+- `source_ip` (optional): Querying host IP (default: storyline system IP)
+
+### Web Scan Events
+
+Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, SQLMap, Nmap HTTP). Generates high-volume HTTP requests with scanner-realistic patterns, user agents, and status code distributions. Each request produces correlated web_access + Zeek HTTP + Zeek conn records.
+
+```yaml
+- time: "+3h"
+  actor: SYSTEM
+  system: WEB-01
+  activity: "Nikto scan against web server from external attacker"
+  events:
+    - type: web_scan
+      dst_ip: "10.10.20.10"
+      dst_port: 80
+      hostname: "portal.example.com"
+      source_ip: "203.0.113.45"
+      preset: nikto
+      rate: 10                        # 10 requests/second
+      duration: "15m"
+      technique: "T1595.002 - Active Scanning: Vulnerability Scanning"
+```
+
+Fields:
+- `dst_ip` (required): Target web server IP
+- `dst_port` (default: 80): Target port
+- `hostname` (optional): Target domain name
+- `source_ip` (optional): Override scanner source IP
+- `preset` (optional): Scanner preset — `nikto`, `dirb`, `gobuster`, `sqlmap`, `nmap_http`
+- `paths` (optional): Custom URI path list — `[{uri: "/admin", method: "GET", status: 403}]`
+- `user_agent` (optional): Override the preset's default user agent
+- `status_codes` (optional): Override status code distribution (e.g., `{"404": 0.7, "200": 0.2, "403": 0.1}`)
+- `rate` (required): Requests per second
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: 0.2): Timing variation
+
+Either `preset` or `paths` (or both) must be specified.
+
+### Credential Spray Events
+
+Use `credential_spray` for bulk authentication attacks — password spraying, brute force, or credential stuffing. Generates realistic sequences of failed logon events (Windows 4625/4776 or Linux syslog auth failures) with an optional final successful logon.
+
+```yaml
+- time: "+2h"
+  actor: SYSTEM
+  system: DC-01
+  activity: "Password spray against domain accounts"
+  events:
+    - type: credential_spray
+      source_ip: "185.220.101.34"
+      pattern: spray
+      target_accounts: ["marcus.chen", "priya.patel", "sarah.oconnell", "diego.ramirez"]
+      logon_type: 3
+      interval: "2s"
+      duration: "10m"
+      success:
+        account: "priya.patel"
+        after: 8                      # Succeed after 8 failures
+      technique: "T1110.003 - Brute Force: Password Spraying"
+```
+
+Fields:
+- `target_accounts` (required): List of target usernames
+- `source_ip` (optional): Attacker source IP
+- `pattern` (default: `spray`): Attack pattern — `spray` (one password per account), `brute_force` (many passwords per account), `stuffing` (one-to-one credential pairs)
+- `logon_type` (default: 3): Windows logon type for the attempts
+- `success` (optional): Final successful logon — `{account: "username", after: N}` where `N` is number of failures before success
+- `interval` (required): Time between attempts
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: 0.2): Timing variation
+
+### DGA Query Events
+
+Use `dga_queries` for domain generation algorithm (DGA) traffic — algorithmically generated DNS lookups that mostly return NXDOMAIN. Used for botnet/DGA detection training.
+
+```yaml
+- time: "+4h"
+  actor: SYSTEM
+  system: WS-DEV-01
+  activity: "DGA beaconing from infected workstation"
+  events:
+    - type: dga_queries
+      interval: "500ms"
+      duration: "2h"
+      jitter: 0.3
+      tld: ".com"
+      length_range: [10, 15]
+      seed: 42
+      rcode_distribution:
+        NXDOMAIN: 0.95
+        NOERROR: 0.05
+      answer_ip: "198.51.100.99"
+      technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
+```
+
+Fields:
+- `length_range` (default: `[8, 15]`): Min/max domain label length (1-63)
+- `charset` (default: lowercase alphanumeric): Character set for domain generation
+- `tld` (default: `.com`): Top-level domain suffix
+- `seed` (optional): Deterministic seed for reproducible domain sequences
+- `rcode_distribution` (optional): Response code probabilities (must sum to ~1.0) — e.g., `{"NXDOMAIN": 0.95, "NOERROR": 0.05}`
+- `answer_ip` (required when NOERROR > 0): IP address for successful resolutions
+- `source_ip` (optional): Override querying host IP
+- `interval` (required): Time between queries
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: 0.2): Timing variation
+
+### DNS Tunnel Events
+
+Use `dns_tunnel` for data exfiltration via encoded DNS subdomain labels. Generates DNS queries with encoded payload chunks as subdomains (e.g., `aGVsbG8gd29ybGQ.tunnel.evil.com`). Useful for DNS exfiltration detection training.
+
+```yaml
+- time: "+6h"
+  actor: marcus.chen
+  system: WS-DEV-01
+  activity: "DNS tunneling exfiltration of stolen credentials"
+  events:
+    - type: dns_tunnel
+      base_domain: "ns1.cdn-analytics.net"
+      encoding: base64
+      qtype: TXT
+      label_length: 30
+      payload_size: 512
+      interval: "2s"
+      duration: "30m"
+      jitter: 0.1
+      technique: "T1048.003 - Exfiltration Over Unencrypted Non-C2 Protocol"
+```
+
+Fields:
+- `base_domain` (required): Tunnel endpoint domain — encoded chunks become subdomains of this
+- `encoding` (default: `hex`): Encoding scheme — `base32`, `base64`, `hex`
+- `qtype` (default: `TXT`): DNS query type — `TXT`, `NULL`, `CNAME`
+- `label_length` (default: 30): Max length of each encoded subdomain label (1-63)
+- `payload` (optional): Fixed payload string to encode and exfiltrate
+- `payload_size` (default: 256): Random payload size in bytes if no `payload` specified
+- `source_ip` (optional): Override querying host IP
+- `interval` (required): Time between queries
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: 0.2): Timing variation
 
 ### HTTP Connection Events
 

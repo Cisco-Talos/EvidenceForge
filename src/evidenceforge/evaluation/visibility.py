@@ -195,10 +195,11 @@ class VisibilityModel:
             "beacon",
             "dns_query",
             "web_scan",
-            "credential_spray",
             "dga_queries",
             "dns_tunnel",
         }
+        # Note: credential_spray produces auth events (4625/syslog), not network traces —
+        # intentionally excluded from network_types so eval doesn't require Zeek/ASA traces.
 
         groups: list[tuple[str, set[str]]] = []
         if host_local:

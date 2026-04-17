@@ -113,6 +113,8 @@ def _iter_periodic_ticks(
     """
     t = 0.0
     emitted = 0
+    end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    last_tick = None
     while True:
         if duration_sec is not None and t > duration_sec:
             break
@@ -120,6 +122,13 @@ def _iter_periodic_ticks(
             break
         jitter_offset = rng.uniform(-jitter * interval_sec, jitter * interval_sec)
         tick_time = start_time + timedelta(seconds=max(0.0, t + jitter_offset))
+        # Clamp to window end (jitter can push past duration)
+        if end_time is not None and tick_time > end_time:
+            tick_time = end_time
+        # Ensure monotonic ordering (jitter can cause inversions)
+        if last_tick is not None and tick_time < last_tick:
+            tick_time = last_tick + timedelta(milliseconds=1)
+        last_tick = tick_time
         yield tick_time
         emitted += 1
         t += interval_sec
@@ -1158,6 +1167,7 @@ class StorylineMixin:
 
         elif spec.type == "beacon":
             # Resolve timing parameters
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
             interval_sec = parse_duration(spec.interval).total_seconds()
             duration_sec = None
             count = spec.count
@@ -1165,8 +1175,7 @@ class StorylineMixin:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
-                duration_sec = (end_dt - time).total_seconds()
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+                duration_sec = (end_dt - start).total_seconds()
 
             beacon_src_ip = spec.source_ip or system.ip
 
@@ -1277,6 +1286,7 @@ class StorylineMixin:
                         dst_ip=spec.dst_ip,
                         time=tick_time,
                         dst_port=spec.dst_port,
+                        proto=spec.protocol,
                         service=service,
                         duration=rng.uniform(0.5, 10.0),
                         orig_bytes=s_ob,
@@ -1355,6 +1365,10 @@ class StorylineMixin:
                 service="dns",
                 dns=dns_ctx,
                 emit_dns=False,
+                orig_bytes=rng.randint(40, 100),
+                resp_bytes=rng.randint(80, 400) if spec.rcode == "NOERROR" else rng.randint(40, 80),
+                conn_state="SF",
+                duration=rng.uniform(0.001, 0.05),
             )
 
             malicious_event["query"] = spec.query
@@ -1382,6 +1396,7 @@ class StorylineMixin:
                 return malicious_event
 
             # Timing: rate-based → convert to interval
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
             interval_sec = 1.0 / spec.rate
             duration_sec = None
             count = spec.count
@@ -1389,8 +1404,7 @@ class StorylineMixin:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
-                duration_sec = (end_dt - time).total_seconds()
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+                duration_sec = (end_dt - start).total_seconds()
 
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip
@@ -1464,6 +1478,7 @@ class StorylineMixin:
 
         elif spec.type == "credential_spray":
             # Timing
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
             interval_sec = parse_duration(spec.interval).total_seconds()
             duration_sec = None
             count = spec.count
@@ -1471,8 +1486,7 @@ class StorylineMixin:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
-                duration_sec = (end_dt - time).total_seconds()
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+                duration_sec = (end_dt - start).total_seconds()
 
             spray_src_ip = spec.source_ip or system.ip
             accounts = spec.target_accounts
@@ -1496,22 +1510,6 @@ class StorylineMixin:
             ):
                 self.state_manager.set_current_time(tick_time)
 
-                # Check if this attempt should succeed
-                if success_account and attempt_count >= success_after:
-                    # Successful logon
-                    target_user = scenario_users.get(success_account, actor)
-                    self.activity_generator.generate_logon(
-                        user=target_user,
-                        system=system,
-                        time=tick_time,
-                        logon_type=spec.logon_type,
-                        source_ip=spray_src_ip,
-                    )
-                    attempt_count += 1
-                    malicious_event["success_account"] = success_account
-                    malicious_event["success_at_attempt"] = attempt_count
-                    break
-
                 # Select target account based on pattern
                 if spec.pattern == "spray":
                     target_account = accounts[attempt_count % len(accounts)]
@@ -1524,6 +1522,25 @@ class StorylineMixin:
                     ]
                 else:  # stuffing
                     target_account = accounts[attempt_count % len(accounts)]
+
+                # Check if this attempt should succeed (after target selection)
+                if (
+                    success_account
+                    and target_account == success_account
+                    and attempt_count >= success_after
+                ):
+                    target_user = scenario_users.get(success_account, actor)
+                    self.activity_generator.generate_logon(
+                        user=target_user,
+                        system=system,
+                        time=tick_time,
+                        logon_type=spec.logon_type,
+                        source_ip=spray_src_ip,
+                    )
+                    attempt_count += 1
+                    malicious_event["success_account"] = success_account
+                    malicious_event["success_at_attempt"] = attempt_count
+                    break
 
                 target_user = scenario_users.get(target_account, actor)
 
@@ -1548,6 +1565,7 @@ class StorylineMixin:
             from evidenceforge.events.contexts import DnsContext
 
             # Timing
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
             interval_sec = parse_duration(spec.interval).total_seconds()
             duration_sec = None
             count = spec.count
@@ -1555,8 +1573,7 @@ class StorylineMixin:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
-                duration_sec = (end_dt - time).total_seconds()
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+                duration_sec = (end_dt - start).total_seconds()
 
             # DGA RNG — separate from main rng for reproducibility
             dga_seed = spec.seed if spec.seed is not None else rng.randint(0, 2**31)
@@ -1624,6 +1641,12 @@ class StorylineMixin:
                     service="dns",
                     dns=dns_ctx,
                     emit_dns=False,
+                    orig_bytes=rng.randint(40, 100),
+                    resp_bytes=rng.randint(80, 400)
+                    if rcode_name == "NOERROR"
+                    else rng.randint(40, 80),
+                    conn_state="SF",
+                    duration=rng.uniform(0.001, 0.05),
                 )
                 query_count += 1
                 if len(domain_sample) < 5:
@@ -1643,6 +1666,7 @@ class StorylineMixin:
             _RCODE_MAP = {"NOERROR": 0}
 
             # Timing
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
             interval_sec = parse_duration(spec.interval).total_seconds()
             duration_sec = None
             count = spec.count
@@ -1650,8 +1674,7 @@ class StorylineMixin:
                 duration_sec = parse_duration(spec.duration).total_seconds()
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
-                duration_sec = (end_dt - time).total_seconds()
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+                duration_sec = (end_dt - start).total_seconds()
 
             query_src_ip = spec.source_ip or system.ip
             dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])

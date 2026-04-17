@@ -254,7 +254,7 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 
 **Baseline deny generation:** When `deny_ratio > 0` on the firewall sensor, the baseline generates denied connection attempts proportional to allowed traffic. Patterns include external scanning (60%), cross-segment blocked (20%), outbound blocked (10%), and ICMP noise (10%).
 
-**Storyline event types:** `port_scan` generates bulk 106023 denies for reconnaissance/scanning. `blocked_c2` generates periodic 106023 denies for blocked malware beaconing. Both produce correlated Zeek conn.log entries on sensors that can see the source-side traffic. Port scans with sufficient rate automatically trigger 733100 threat detection alerts.
+**Storyline event types:** `port_scan` generates bulk 106023 denies for reconnaissance/scanning. `beacon` with `action: deny` generates periodic 106023 denies for blocked malware beaconing. Both produce correlated Zeek conn.log entries on sensors that can see the source-side traffic. Port scans with sufficient rate automatically trigger 733100 threat detection alerts.
 
 **Source-only visibility:** Denied connections are only visible to sensors on the source side of the firewall. Sensors on the destination side do not see blocked traffic.
 
