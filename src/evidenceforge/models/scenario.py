@@ -508,39 +508,162 @@ class PortScanEventSpec(_EventSpecBase):
     scan_rate: float = Field(default=100.0, gt=0.0)
 
 
-class BlockedC2EventSpec(_EventSpecBase):
-    """Blocked C2 beaconing -- periodic denied outbound connection attempts.
+_DURATION_RE = re.compile(r"^(\d+(ms|[hdms]))+$")
 
-    Simulates malware on a compromised host periodically trying to reach a C2
-    server that the firewall blocks. Produces regular denied connection attempts
-    over the specified duration.
+
+def _validate_duration_string(v: str, field_name: str) -> str:
+    """Validate a duration string format and enforce > 0 seconds."""
+    if not _DURATION_RE.match(v):
+        raise ValueError(
+            f"{field_name} must match pattern like '30m', '6h', or '5m30s' "
+            "(digits followed by d/h/m/s/ms units)"
+        )
+    from evidenceforge.utils.time import parse_duration
+
+    seconds = parse_duration(v).total_seconds()
+    if seconds <= 0:
+        raise ValueError(f"{field_name} must be greater than 0 seconds (got '{v}')")
+    return v
+
+
+_VALID_QTYPES = {"A", "AAAA", "TXT", "CNAME", "MX", "NULL", "SRV", "PTR"}
+_VALID_RCODES = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+
+
+class _PeriodicEventBase(_EventSpecBase):
+    """Shared timing fields for all periodic/bulk event types.
+
+    Provides interval-based or rate-based timing, with exactly one
+    termination condition (end_time, duration, or count).
     """
 
-    type: Literal["blocked_c2"] = "blocked_c2"
-    source_ip: str = ""  # Override beacon source IP (default: uses storyline system IP)
-    dst_ip: str
-    dst_port: int = 443
-    protocol: str = Field(default="tcp", pattern="^(tcp|udp)$")
-    interval: str = "30m"
-    duration: str = "6h"
+    start_time: str | None = None  # ISO 8601 or relative offset; defaults to parent event time
+    interval: str | None = None  # Duration between events (e.g., "5m", "30s")
+    rate: float | None = None  # Events per second; mutually exclusive with interval
+    end_time: str | None = None  # ISO 8601 or relative offset
+    duration: str | None = None  # Total campaign length (e.g., "7d", "2h")
+    count: int | None = Field(default=None, ge=1)  # Exact number of events to emit
     jitter: float = Field(default=0.2, ge=0.0, le=1.0)
 
     @field_validator("interval", "duration")
     @classmethod
-    def validate_positive_duration(cls, v: str, info: ValidationInfo) -> str:
-        """Validate blocked_c2 interval/duration format and enforce > 0 seconds."""
-        if not re.match(r"^(\d+(ms|[hdms]))+$", v):
-            raise ValueError(
-                f"{info.field_name} must match pattern like '30m', '6h', or '5m30s' "
-                "(digits followed by d/h/m/s/ms units)"
-            )
-
-        from evidenceforge.utils.time import parse_duration
-
-        seconds = parse_duration(v).total_seconds()
-        if seconds <= 0:
-            raise ValueError(f"{info.field_name} must be greater than 0 seconds (got '{v}')")
+    def validate_duration_fields(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Validate interval/duration format and enforce > 0."""
+        if v is not None:
+            _validate_duration_string(v, info.field_name)
         return v
+
+    @field_validator("rate")
+    @classmethod
+    def validate_positive_rate(cls, v: float | None) -> float | None:
+        """Rate must be positive."""
+        if v is not None and v <= 0:
+            raise ValueError("rate must be greater than 0")
+        return v
+
+    @model_validator(mode="after")
+    def check_termination(self) -> "_PeriodicEventBase":
+        """Exactly one of end_time, duration, or count must be specified."""
+        terms = sum(x is not None for x in (self.end_time, self.duration, self.count))
+        if terms != 1:
+            raise ValueError("Exactly one of end_time, duration, or count must be specified")
+        return self
+
+    @model_validator(mode="after")
+    def check_timing_source(self) -> "_PeriodicEventBase":
+        """At least one of interval or rate must be set (subclasses enforce which)."""
+        if self.interval is None and self.rate is None:
+            raise ValueError("Either interval or rate must be specified")
+        if self.interval is not None and self.rate is not None:
+            raise ValueError("interval and rate are mutually exclusive")
+        return self
+
+
+class BeaconEventSpec(_PeriodicEventBase):
+    """Periodic beacon — repeated connections at regular intervals.
+
+    Produces allowed or denied connections at configurable intervals.
+    Supports any protocol (HTTP/S, SSH, DNS, NTP, arbitrary).
+    Replaces the former blocked_c2 event type.
+    """
+
+    type: Literal["beacon"] = "beacon"
+    dst_ip: str
+    dst_port: int = 443
+    hostname: str | None = None  # Domain name for DNS/SSL SNI
+    service: str | None = None  # ssl, http, etc.
+    source_ip: str | None = None
+    protocol: str = Field(default="tcp", pattern="^(tcp|udp)$")
+    action: Literal["allow", "deny"] = "allow"
+    # HTTP fields (when service=http)
+    method: str | None = None
+    uri: str | None = None
+    status_code: int | None = None
+    user_agent: str | None = None
+    response_body_len: int | None = None
+    # Override auto-sized byte counts and connection outcome
+    orig_bytes: int | None = None
+    resp_bytes: int | None = None
+    conn_state: str | None = None
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str | None) -> str | None:
+        """Validate hostname is a bare FQDN (no scheme/port/path)."""
+        if v is not None:
+            _validate_hostname(v, "beacon.hostname")
+        return v
+
+    @model_validator(mode="after")
+    def beacon_requires_interval(self) -> "BeaconEventSpec":
+        """Beacon uses interval-based timing, not rate."""
+        if self.interval is None:
+            raise ValueError("beacon requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("beacon uses interval, not rate")
+        return self
+
+
+class DnsQueryEventSpec(_EventSpecBase):
+    """Standalone DNS query event (generates Zeek dns.log, conn.log, Sysmon Event 22).
+
+    Produces a single DNS query as a UDP/53 connection with DnsContext.
+    Unlike connection events with causal DNS expansion, this type allows
+    direct control over query parameters (qtype, rcode, ttl, answer).
+    """
+
+    type: Literal["dns_query"] = "dns_query"
+    query: str  # Domain name to query
+    qtype: str = "A"  # Query type: A, AAAA, TXT, CNAME, MX, NULL, SRV, PTR
+    rcode: str = "NOERROR"  # Response code: NOERROR, NXDOMAIN, SERVFAIL, REFUSED
+    ttl: int | None = None  # Response TTL (auto-generated if omitted)
+    answer: str | list[str] | None = None  # Required when rcode=NOERROR
+    source_ip: str | None = None  # Querying host IP (default: storyline system)
+
+    @field_validator("qtype")
+    @classmethod
+    def validate_qtype(cls, v: str) -> str:
+        """Validate query type."""
+        v_upper = v.upper()
+        if v_upper not in _VALID_QTYPES:
+            raise ValueError(f"qtype must be one of {sorted(_VALID_QTYPES)}, got '{v}'")
+        return v_upper
+
+    @field_validator("rcode")
+    @classmethod
+    def validate_rcode(cls, v: str) -> str:
+        """Validate response code."""
+        v_upper = v.upper()
+        if v_upper not in _VALID_RCODES:
+            raise ValueError(f"rcode must be one of {sorted(_VALID_RCODES)}, got '{v}'")
+        return v_upper
+
+    @model_validator(mode="after")
+    def answer_required_for_noerror(self) -> "DnsQueryEventSpec":
+        """Answer is required when rcode is NOERROR."""
+        if self.rcode == "NOERROR" and self.answer is None:
+            raise ValueError("answer is required when rcode is NOERROR")
+        return self
 
 
 class RawEventSpec(_EventSpecBase):
@@ -574,7 +697,8 @@ EventSpec = Annotated[
     | CreateRemoteThreadEventSpec
     | DhcpLeaseEventSpec
     | PortScanEventSpec
-    | BlockedC2EventSpec
+    | BeaconEventSpec
+    | DnsQueryEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

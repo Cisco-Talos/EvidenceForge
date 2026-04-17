@@ -233,12 +233,20 @@ class GroundTruthGenerator:
                 f"{total} denied connections + ASA threat detection alert (733100)"
             )
 
-        elif event_type == "blocked_c2":
+        elif event_type == "beacon":
             dst = event.get("dst_ip", "N/A")
             port = event.get("dst_port", "N/A")
             attempts = event.get("attempt_count", "N/A")
-            duration = event.get("duration", "N/A")
-            return f"Blocked C2 to {dst}:{port} ({attempts} attempts over {duration})"
+            action = event.get("action", "allow")
+            term = event.get("termination", "N/A")
+            label = "Denied beacon" if action == "deny" else "Beacon"
+            return f"{label} to {dst}:{port} ({attempts} attempts, {term})"
+
+        elif event_type == "dns_query":
+            query = event.get("query", "N/A")
+            qtype = event.get("qtype", "A")
+            rcode = event.get("rcode", "NOERROR")
+            return f"DNS query: {query} ({qtype}, {rcode})"
 
         else:
             return event.get("activity", "N/A")
@@ -340,11 +348,18 @@ class GroundTruthGenerator:
                 for port in event.get("ports", []):
                     iocs["network"].add(f"Port {port} (scan target)")
 
-            elif event["type"] == "blocked_c2":
+            elif event["type"] == "beacon":
                 dst_ip = event.get("dst_ip", "")
                 dst_port = event.get("dst_port", "")
+                action = event.get("action", "allow")
+                label = "Denied Beacon" if action == "deny" else "Beacon"
                 if dst_ip:
-                    iocs["network"].add(f"{dst_ip}:{dst_port} (Blocked C2 Server)")
+                    iocs["network"].add(f"{dst_ip}:{dst_port} ({label} Target)")
+
+            elif event["type"] == "dns_query":
+                query = event.get("query", "")
+                if query:
+                    iocs["network"].add(f"{query} (Malicious DNS Query)")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

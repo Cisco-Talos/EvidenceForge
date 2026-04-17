@@ -555,21 +555,37 @@ class SignalIntegrityScorer(DimensionScorer):
                     "REJ",
                 )
 
-        elif event_type == "blocked_c2":
+        elif event_type == "beacon":
             expected_dst = event.details.get("dst_ip", "")
             expected_port = event.details.get("dst_port")
-            if format_name == "cisco_asa":
-                return (
-                    f.get("msg_id") == 106023
-                    and f.get("dst_ip") == expected_dst
-                    and f.get("dst_port") == expected_port
-                )
+            action = event.details.get("action", "allow")
+            if action == "deny":
+                if format_name == "cisco_asa":
+                    return (
+                        f.get("msg_id") == 106023
+                        and f.get("dst_ip") == expected_dst
+                        and f.get("dst_port") == expected_port
+                    )
+                if format_name == "zeek_conn":
+                    return (
+                        f.get("id.resp_h") == expected_dst
+                        and f.get("id.resp_p") == expected_port
+                        and f.get("conn_state") in ("S0", "REJ")
+                    )
+            else:  # allow
+                if format_name == "zeek_conn":
+                    return (
+                        f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
+                    )
+                if format_name in ("proxy_access", "web_access", "zeek_http"):
+                    return f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+
+        elif event_type == "dns_query":
+            expected_query = event.details.get("query", "")
+            if format_name == "zeek_dns":
+                return f.get("query") == expected_query
             if format_name == "zeek_conn":
-                return (
-                    f.get("id.resp_h") == expected_dst
-                    and f.get("id.resp_p") == expected_port
-                    and f.get("conn_state") in ("S0", "REJ")
-                )
+                return f.get("id.resp_p") == 53
 
         return False
 
