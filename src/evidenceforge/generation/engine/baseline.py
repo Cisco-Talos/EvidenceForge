@@ -2091,6 +2091,65 @@ class BaselineMixin:
                 user=user, system=system, time=t, activity_type=activity_type
             )
 
+        # Persona-driven 4648: sysadmin RunAs and helpdesk remote sessions
+        os_cat = _get_os_category(system.os) if hasattr(system, "os") else "unknown"
+        if os_cat == "windows" and persona_name:
+            _pn = persona_name.lower()
+            servers = [
+                s
+                for s in self.scenario.environment.systems
+                if s.type in ("server", "domain_controller")
+            ]
+            if _pn in ("sysadmin", "security_analyst") and rng.random() < 0.15 and servers:
+                target_server = rng.choice(servers)
+                admin_alias = f"{user.username}-admin"
+                session = next((s for s in sessions if s.system == system.hostname), None)
+                runas_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                self.state_manager.set_current_time(runas_t)
+                self.activity_generator.generate_explicit_credentials(
+                    user=user,
+                    system=system,
+                    time=runas_t,
+                    target_username=admin_alias,
+                    target_server=target_server.hostname,
+                    process_name=rng.choice(
+                        [
+                            r"C:\Windows\System32\runas.exe",
+                            r"C:\Windows\System32\mmc.exe",
+                            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                        ]
+                    ),
+                    process_pid=session.explorer_pid if session else 0,
+                )
+            elif _pn == "help_desk" and rng.random() < 0.08:
+                non_admins = [
+                    u
+                    for u in self.scenario.environment.users
+                    if u.enabled
+                    and (u.persona or "").lower()
+                    not in ("sysadmin", "security_analyst", "help_desk")
+                    and u.username != user.username
+                ]
+                if non_admins:
+                    target_user = rng.choice(non_admins)
+                    session = next((s for s in sessions if s.system == system.hostname), None)
+                    hd_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                    self.state_manager.set_current_time(hd_t)
+                    self.activity_generator.generate_explicit_credentials(
+                        user=user,
+                        system=system,
+                        time=hd_t,
+                        target_username=target_user.username,
+                        target_server=target_user.primary_system or "",
+                        process_name=rng.choice(
+                            [
+                                r"C:\Windows\System32\mstsc.exe",
+                                r"C:\Windows\System32\msra.exe",
+                            ]
+                        ),
+                        process_pid=session.explorer_pid if session else 0,
+                    )
+
     def _get_server_ssh_users(self, system) -> list:
         """Return the subset of admin users who would SSH into this server.
 
@@ -3267,6 +3326,49 @@ class BaselineMixin:
                         parent_pid=parent_pid,
                         username="SYSTEM",
                     )
+
+            # Service account delegation: svc accounts auth to remote servers
+            if os_cat == "windows" and self.scenario.environment.service_accounts:
+                all_systems = self.scenario.environment.systems
+                servers = [s for s in all_systems if s.type in ("server", "domain_controller")]
+                for svc_name in self.scenario.environment.service_accounts:
+                    if rng.random() < 0.3:
+                        target_sys = rng.choice(servers) if servers else None
+                        if target_sys and target_sys.hostname != system.hostname:
+                            svc_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                            self.state_manager.set_current_time(svc_ts)
+                            self.activity_generator.generate_explicit_credentials(
+                                user=_SYSTEM_USER,
+                                system=system,
+                                time=svc_ts,
+                                target_username=svc_name,
+                                target_server=target_sys.hostname,
+                                process_name=r"C:\Windows\System32\services.exe",
+                                process_pid=sys_pids.get("services", 0),
+                            )
+
+            # GPO application: periodic SYSTEM credential usage to DC
+            if os_cat == "windows" and system.type == "workstation":
+                gpo_phase = _stable_seed(f"gpo_phase_{system.hostname}") % 4
+                if (current_hour.hour + gpo_phase) % 3 == 0:
+                    dcs = [
+                        s
+                        for s in self.scenario.environment.systems
+                        if s.type == "domain_controller"
+                    ]
+                    if dcs:
+                        dc = dcs[_stable_seed(f"gpo_dc_{system.hostname}") % len(dcs)]
+                        gpo_ts = current_hour + timedelta(seconds=rng.uniform(60, 300))
+                        self.state_manager.set_current_time(gpo_ts)
+                        self.activity_generator.generate_explicit_credentials(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=gpo_ts,
+                            target_username="SYSTEM",
+                            target_server=dc.hostname,
+                            process_name=r"C:\Windows\System32\svchost.exe",
+                            process_pid=sys_pids.get("svchost_netsvcs", 0),
+                        )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
             if os_cat == "windows":
