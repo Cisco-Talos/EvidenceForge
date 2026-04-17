@@ -411,6 +411,22 @@ class TestStorylineEvent:
         assert len(event.events) == 1
         assert event.events[0].type == "process"
 
+    def test_storyline_event_with_process_access_event(self):
+        """Test storyline event with process_access typed event."""
+        event = StorylineEvent(
+            id="evt-test-3",
+            time="+45m",
+            actor="jdoe",
+            system="WS-01",
+            activity="Access lsass process",
+            events=[
+                {"type": "process_access", "target_process": "lsass.exe", "access_mask": "0x1010"}
+            ],
+        )
+        assert len(event.events) == 1
+        assert event.events[0].type == "process_access"
+        assert event.events[0].target_process == "lsass.exe"
+
 
 class TestOutputSpec:
     """Tests for OutputSpec model."""
