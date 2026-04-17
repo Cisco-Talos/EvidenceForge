@@ -33,9 +33,24 @@ def _apply_defaults(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_entry(entry: dict[str, Any], source: str) -> bool:
+def _validate_entry(entry: Any, source: str) -> bool:
     """Validate a single loaded_modules entry. Returns True if valid."""
+    if not isinstance(entry, dict):
+        logger.warning(
+            "DLL profile entry in %s must be a mapping, got %s — skipping",
+            source,
+            type(entry).__name__,
+        )
+        return False
+
     path = entry.get("path", "")
+    if not isinstance(path, str):
+        logger.warning(
+            "DLL profile entry in %s has non-string path %r — skipping",
+            source,
+            path,
+        )
+        return False
     if not path:
         logger.warning("DLL profile entry in %s has empty path — skipping", source)
         return False

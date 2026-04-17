@@ -111,6 +111,18 @@ class TestValidation:
     def test_empty_path_fails(self):
         assert _validate_entry({"path": ""}, "test") is False
 
+    def test_non_mapping_entry_fails(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            result = _validate_entry("not-a-dict", "test")
+        assert result is False
+        assert "must be a mapping" in caplog.text
+
+    def test_non_string_path_fails(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            result = _validate_entry({"path": None}, "test")
+        assert result is False
+        assert "non-string path" in caplog.text
+
     def test_non_windows_path_fails(self, caplog):
         with caplog.at_level(logging.WARNING):
             result = _validate_entry({"path": "/usr/lib/libfoo.so"}, "test")
