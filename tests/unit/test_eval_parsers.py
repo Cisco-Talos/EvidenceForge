@@ -76,6 +76,42 @@ class TestWindowsEventParser:
         records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
         assert all(len(r.parse_errors) == 0 for r in records)
 
+    def test_rejects_doctype_and_entity_declarations(self, tmp_path):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+        payload = """<Events>
+<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+<!DOCTYPE foo [<!ENTITY xxe "boom">]>
+<System><EventID>4624</EventID></System>
+<EventData><Data Name="TargetUserName">&xxe;</Data></EventData>
+</Event>
+</Events>
+"""
+        path = tmp_path / "windows_event_security.xml"
+        path.write_text(payload, encoding="utf-8")
+
+        records = list(parser.parse_file(path))
+
+        assert len(records) == 1
+        assert records[0].fields == {}
+        assert records[0].parse_errors
+        assert "DOCTYPE and ENTITY declarations are not allowed" in records[0].parse_errors[0]
+
+    def test_parse_file_streams_without_reading_full_content(self, monkeypatch):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        parser = WindowsEventParser()
+
+        def _fail_read_text(*_args, **_kwargs):
+            raise AssertionError("parse_file should not call Path.read_text()")
+
+        monkeypatch.setattr(Path, "read_text", _fail_read_text)
+
+        records = list(parser.parse_file(GOOD_FIXTURES / "windows_event_security.xml"))
+
+        assert len(records) == 3
+
     def test_can_parse_correct_file(self):
         from evidenceforge.evaluation.parsers.windows import WindowsEventParser
 

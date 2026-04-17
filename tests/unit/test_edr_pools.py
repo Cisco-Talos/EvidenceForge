@@ -4,6 +4,7 @@
 """Unit tests for EDR pools YAML loader."""
 
 from evidenceforge.generation.activity.edr_pools import (
+    _sanitize_edr_pools,
     get_dll_pool,
     get_file_paths,
     get_registry_keys_hkcu,
@@ -97,3 +98,36 @@ class TestDllPool:
         dll_names = [d.rsplit("\\", 1)[-1].lower() for d in dlls]
         assert "ntdll.dll" in dll_names
         assert "kernel32.dll" in dll_names
+
+
+class TestOverlayValidation:
+    """Test fallback behavior for malformed overlay-provided pools."""
+
+    def test_sanitize_empty_string_pools_falls_back_to_defaults(self):
+        defaults = {
+            "file_paths_windows": [r"C:\\Windows\\Temp\\x.tmp"],
+            "file_paths_linux": ["/tmp/x.tmp"],
+            "dll_pool": [r"C:\\Windows\\System32\\kernel32.dll"],
+            "registry_keys_hkcu": [["HKCU\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
+            "registry_keys_hklm": [["HKLM\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
+        }
+        merged = {**defaults, "file_paths_windows": [], "dll_pool": []}
+
+        sanitized = _sanitize_edr_pools(defaults, merged)
+
+        assert sanitized["file_paths_windows"] == defaults["file_paths_windows"]
+        assert sanitized["dll_pool"] == defaults["dll_pool"]
+
+    def test_sanitize_malformed_registry_pool_falls_back_to_defaults(self):
+        defaults = {
+            "file_paths_windows": [r"C:\\Windows\\Temp\\x.tmp"],
+            "file_paths_linux": ["/tmp/x.tmp"],
+            "dll_pool": [r"C:\\Windows\\System32\\kernel32.dll"],
+            "registry_keys_hkcu": [["HKCU\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
+            "registry_keys_hklm": [["HKLM\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
+        }
+        merged = {**defaults, "registry_keys_hkcu": {"bad": "shape"}}
+
+        sanitized = _sanitize_edr_pools(defaults, merged)
+
+        assert sanitized["registry_keys_hkcu"] == defaults["registry_keys_hkcu"]
