@@ -435,11 +435,7 @@ Same area of codebase — baseline engine Windows auth generation, persona work 
 
 ### Cluster 5: Labeled Data Export
 
-Standalone post-processing. Defer until Day 4 exercises are functional (Cluster 1).
-
-- [ ] `--export-labels` flag mapping storyline events to output records with technique/storyline ID
-
-**Exercises:** 4.2 (MLTK labeled training data)
+Out of scope — Ex 4.2 MLTK classifier needs real-world labeled domains (threat intel + benign lists), not synthetic EvidenceForge labels. Dataset curation task, not an engine feature.
 
 ---
 
