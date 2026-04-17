@@ -1494,15 +1494,22 @@ class StorylineMixin:
             success_account = success_spec.get("account") if success_spec else None
             success_after = success_spec.get("after", 0) if success_spec else 0
 
-            # Resolve DC for domain accounts
-            dc_system = None
-            for sys_obj in self.scenario.environment.systems:
-                if sys_obj.type == "domain_controller":
-                    dc_system = sys_obj
-                    break
-
             # Resolve actor User object for generate_failed_logon
             scenario_users = {u.username: u for u in self.scenario.environment.users}
+
+            # Only attach DC for Windows domain-account sprays — Linux SSH brute
+            # force or local-account attacks should not produce DC-side 4625/4776
+            dc_system = None
+            is_windows_target = "windows" in system.os.lower()
+            has_domain_account = any(acct in scenario_users for acct in accounts)
+            if is_windows_target and has_domain_account:
+                dcs = [
+                    s for s in self.scenario.environment.systems if s.type == "domain_controller"
+                ]
+                if dcs:
+                    # Deterministic DC per source IP (mimics AD DC Locator caching)
+                    dc_idx = _stable_seed(f"preferred_dc_{spray_src_ip}") % len(dcs)
+                    dc_system = dcs[dc_idx]
 
             attempt_count = 0
             for tick_time in _iter_periodic_ticks(
@@ -1718,7 +1725,7 @@ class StorylineMixin:
                 elif spec.encoding == "base32":
                     encoded = _b64.b32encode(chunk).decode("ascii").rstrip("=").lower()
                 else:  # base64
-                    encoded = _b64.b64encode(chunk).decode("ascii").rstrip("=")
+                    encoded = _b64.urlsafe_b64encode(chunk).decode("ascii").rstrip("=").lower()
 
                 # Truncate to label_length
                 encoded = encoded[: spec.label_length]

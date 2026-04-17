@@ -585,7 +585,7 @@ class SignalIntegrityScorer(DimensionScorer):
             if format_name == "zeek_dns":
                 return f.get("query") == expected_query
             if format_name == "zeek_conn":
-                return f.get("id.resp_p") == 53
+                return f.get("id.resp_p") == 53 and f.get("id.orig_h") == event.system_ip
 
         elif event_type == "web_scan":
             expected_dst = event.details.get("dst_ip", "")
@@ -596,18 +596,34 @@ class SignalIntegrityScorer(DimensionScorer):
                 return f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
 
         elif event_type == "credential_spray":
+            target_accounts = event.details.get("target_accounts", [])
             if format_name == "windows_event_security":
                 event_id = f.get("EventID")
-                return event_id in (4625, 4776, 4624)
+                target_user = f.get("TargetUserName", "")
+                return event_id in (4625, 4776, 4624) and (
+                    not target_accounts or target_user in target_accounts
+                )
             if format_name == "syslog":
                 msg = f.get("message", "")
-                return "Failed password" in msg or "Accepted password" in msg
+                if not ("Failed password" in msg or "Accepted password" in msg):
+                    return False
+                return not target_accounts or any(acct in msg for acct in target_accounts)
 
-        elif event_type in ("dga_queries", "dns_tunnel"):
+        elif event_type == "dga_queries":
+            tld = event.details.get("tld", ".com")
             if format_name == "zeek_dns":
-                return True  # Any DNS record in time window is a potential match
+                query = f.get("query", "")
+                return query.endswith(tld) and len(query) > 10
             if format_name == "zeek_conn":
-                return f.get("id.resp_p") == 53
+                return f.get("id.resp_p") == 53 and f.get("id.orig_h") == event.system_ip
+
+        elif event_type == "dns_tunnel":
+            base_domain = event.details.get("base_domain", "")
+            if format_name == "zeek_dns":
+                query = f.get("query", "")
+                return base_domain and query.endswith(base_domain)
+            if format_name == "zeek_conn":
+                return f.get("id.resp_p") == 53 and f.get("id.orig_h") == event.system_ip
 
         return False
 

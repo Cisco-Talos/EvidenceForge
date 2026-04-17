@@ -946,17 +946,23 @@ class SysmonEventEmitter(LogEmitter):
             return True
 
         # Baseline system images: sampled at a lower rate for volume balance
+        # Use stable seed for deterministic sampling (same connection → same decision)
+        hostname = event.src_host.hostname if event.src_host else ""
+        _net = event.network
+        _seed_key = f"sysmon3_{hostname}_{image}_{_net.dst_ip}_{_net.dst_port}"
+        _sample_float = (_stable_seed(_seed_key) & 0xFFFFFFFF) / 0xFFFFFFFF
+
         baseline_images = [img.lower() for img in cfg.get("include_baseline_images", [])]
         if image in baseline_images:
             sample_rate = cfg.get("baseline_sample_rate", 0.10)
-            if random.random() < sample_rate:
+            if _sample_float < sample_rate:
                 return True
 
         # User application images: low sampling rate for non-zero presence
         user_app_images = [img.lower() for img in cfg.get("include_user_app_images", [])]
         if image in user_app_images:
             rate = cfg.get("user_app_sample_rate", 0.05)
-            if random.random() < rate:
+            if _sample_float < rate:
                 return True
 
         dst_port = event.network.dst_port or 0

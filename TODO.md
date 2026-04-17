@@ -165,6 +165,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Sysmon EventRecordIDs perfectly sequential (no gaps) — gaps widened to 1-7 with 15% chance of 8-50
 - [ ] Event 8 StartModule/StartFunction always empty for benign pairs
 - [ ] **P1** Event 3 process-to-destination mismatch — user app sampling (Teams, Outlook, etc.) pairs process images with random baseline destinations (e.g., Teams→old.reddit.com). The process_network_map needs per-app destination domain constraints so each app only connects to plausible hosts (Teams→Microsoft domains, Outlook→O365, etc.).
+- [x] **P1** Event 3 sampling uses non-deterministic `random.random()` — baseline and user-app connection sampling in `_render_sysmon_network_connect()` uses the process-wide global RNG instead of a seeded/stable decision. Same scenario produces different Sysmon Event 3 record sets across runs, violating the deterministic-generation contract. Replace with `_stable_seed(host, uid, pid, time)` or pass a seeded RNG into the emitter path.
 - [ ] **P1** Event 7 (ImageLoaded) volume too thin — only 3-7 DLL load events per host per 6 hours. Real Sysmon with SwiftOnSecurity config logs hundreds. Baseline needs a standalone DLL load generator similar to the registry event generator.
 - [ ] **P2** Registry TargetObject path diversity — baseline registry pool has ~30 unique paths that cycle. Real Sysmon sees hundreds of distinct paths from COM registration, GPO processing, software updates. Need larger pool or dynamic path generation.
 
