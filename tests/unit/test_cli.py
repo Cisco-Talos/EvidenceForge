@@ -191,7 +191,17 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_prompts_on_existing_output(self, mock_engine_class, scenarios_dir, tmp_path):
         """Existing output should prompt for confirmation; 'y' proceeds."""
+
+        def _fake_generate():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+
         mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
         mock_engine_class.return_value = mock_engine
 
         # Create existing output files
@@ -208,8 +218,7 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert "Existing output found" in result.stdout
         assert mock_engine.generate.called
-        # Generated files should have been cleaned
-        assert not (tmp_path / "GROUND_TRUTH.md").exists()
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
         # ENVIRONMENT.md is authored by /eforge scenario, not the engine — must be preserved
         assert (tmp_path / "ENVIRONMENT.md").exists()
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
@@ -241,7 +250,18 @@ output:
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_skips_prompt(self, mock_engine_class, scenarios_dir, tmp_path):
         """--force should skip the prompt and overwrite."""
+
+        def _fake_generate():
+            # Simulate engine creating staged output in the staging dir
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+
         mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
         mock_engine_class.return_value = mock_engine
 
         # Create existing output files
@@ -263,7 +283,8 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert "Overwrite existing output?" not in result.stdout
         assert mock_engine.generate.called
-        assert not (tmp_path / "GROUND_TRUTH.md").exists()
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
+        assert (tmp_path / "data" / "new.xml").read_text() == "new data"
         # ENVIRONMENT.md must be preserved (not engine output)
         assert (tmp_path / "ENVIRONMENT.md").exists()
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
@@ -302,6 +323,181 @@ output:
         staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
         assert len(staging_dirs) == 0, "Staging directory should be cleaned up on failure"
         assert "previous output preserved" in result.stdout.lower()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_restores_on_data_install_failure(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """If installing new data/ fails, old data + old GT must be restored as a pair."""
+        from pathlib import Path
+
+        original_rename = Path.rename
+
+        def _fail_on_data_install(self_path, target):
+            if (
+                self_path.name == "data"
+                and target.name == "data"
+                and "rollback" not in str(self_path)
+            ):
+                # Fail when installing staged data/ → live data/
+                if ".eforge_staging_" in str(self_path):
+                    raise OSError("Simulated disk error during data install")
+            return original_rename(self_path, target)
+
+        def _fake_generate():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        with patch.object(Path, "rename", _fail_on_data_install):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    str(scenarios_dir / "minimal.yaml"),
+                    "--output",
+                    str(tmp_path),
+                    "--force",
+                ],
+            )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert (tmp_path / "data" / "old.xml").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_restores_on_gt_install_failure(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """If installing new GROUND_TRUTH.md fails (after data succeeds), both old files restored."""
+        from pathlib import Path
+
+        original_rename = Path.rename
+        data_installed = []
+
+        def _fail_on_gt_install(self_path, target):
+            if self_path.name == "GROUND_TRUTH.md" and "staging" in str(self_path):
+                raise OSError("Simulated disk error during GT install")
+            result = original_rename(self_path, target)
+            if self_path.name == "data" and ".eforge_staging_" in str(self_path):
+                data_installed.append(True)
+            return result
+
+        def _fake_generate():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        with patch.object(Path, "rename", _fail_on_gt_install):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    str(scenarios_dir / "minimal.yaml"),
+                    "--output",
+                    str(tmp_path),
+                    "--force",
+                ],
+            )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert (tmp_path / "data" / "old.xml").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_verifies_staged_data_exists(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """If engine succeeds but staged data/ is missing, old output must be preserved."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+        # Engine "succeeds" but doesn't create staged data/
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path), "--force"],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert (tmp_path / "data" / "old.xml").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_restores_on_keyboard_interrupt(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """KeyboardInterrupt during swap must restore old output."""
+        from pathlib import Path
+
+        original_rename = Path.rename
+
+        def _interrupt_on_data_install(self_path, target):
+            if self_path.name == "data" and ".eforge_staging_" in str(self_path):
+                raise KeyboardInterrupt()
+            return original_rename(self_path, target)
+
+        def _fake_generate():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        with patch.object(Path, "rename", _interrupt_on_data_install):
+            result = runner.invoke(
+                app,
+                [
+                    "generate",
+                    str(scenarios_dir / "minimal.yaml"),
+                    "--output",
+                    str(tmp_path),
+                    "--force",
+                ],
+            )
+
+        # KeyboardInterrupt → exit code for SIGINT
+        assert result.exit_code != EXIT_SUCCESS
+        assert (tmp_path / "data" / "old.xml").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_no_prompt_when_clean(self, mock_engine_class, scenarios_dir, tmp_path):
