@@ -48,7 +48,7 @@ class TestWindowsEventFormat:
     def test_has_event_variants(self):
         """Test that format has expected EventID variants."""
         assert self.format.variants is not None
-        assert len(self.format.variants) == 21
+        assert len(self.format.variants) == 23
         variant_names = [v.name for v in self.format.variants]
         assert "logon" in variant_names
         assert "logoff" in variant_names
@@ -437,7 +437,7 @@ class TestLoadAllFormats:
         windows_fmt = formats["windows_event_security"]
         assert windows_fmt.name == "windows_event_security"
         assert windows_fmt.category == "host"
-        assert len(windows_fmt.variants) == 21
+        assert len(windows_fmt.variants) == 23
 
         # Verify Zeek JSON format
         zeek_fmt = formats["zeek_conn"]

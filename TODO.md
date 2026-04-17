@@ -427,8 +427,9 @@ Achievable by composing bulk event primitives (beacon, connection, dns_query) ov
 
 Same area of codebase — baseline engine Windows auth generation, persona work schedules.
 
-- [ ] Broader baseline 4648 generation (RunAs, service account delegation, SCCM/GPO, helpdesk remote)
-- [ ] Event IDs 4800/4801 (workstation lock/unlock)
+- [x] Broader baseline 4648 generation (service account delegation, sysadmin RunAs, SCCM/GPO, helpdesk remote)
+- [x] Event IDs 4800/4801 (workstation lock/unlock with persona variance, paired 4624 type 7, failed unlock)
+- [x] Storyline EventSpecs: explicit_credentials, workstation_lock, workstation_unlock
 
 **Exercises:** 5.1 (4800/4801), 5.2 (4648 breadth)
 
