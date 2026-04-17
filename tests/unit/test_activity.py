@@ -662,6 +662,21 @@ class TestActivityGenerator:
         assert event.network.ip_proto == 1
 
 
+@pytest.fixture()
+def activity_gen():
+    """Create an ActivityGenerator with mock emitters for standalone tests."""
+    sm = StateManager()
+    sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+    mock_emitters = {
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "zeek_dns": Mock(),
+        "ecar": Mock(),
+        "syslog": Mock(),
+    }
+    return ActivityGenerator(sm, mock_emitters)
+
+
 def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
     """_emit_dns_lookup should prune expired entries and enforce a bounded cache size."""
     now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
