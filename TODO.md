@@ -47,6 +47,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Recently Resolved
 
+- [x] Fix syslog host routing for Linux↔Linux network logons (ensure destination host receives sshd syslog entry)
 - [x] Fix `_find_user_session` mixed tz-aware/naive `start_time` comparison crash (Aardvark finding)
 - [x] Baseline inbound profile traffic no longer depends on outbound role traffic for business-hour gating (fixed UnboundLocalError when outbound profile is empty).
 - [x] Security: validate blocked_c2 interval/duration are > 0 to prevent zero-interval infinite loop DoS

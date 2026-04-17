@@ -419,6 +419,37 @@ class TestCanHandleDefault:
                 emitter.emit_raw(data)
                 mock_emit.assert_called_once_with(data)
 
+    def test_syslog_linux_host_prefers_destination_for_logon(self):
+        """Syslog logon events route to destination Linux host when both hosts are Linux."""
+        from evidenceforge.events.contexts import HostContext, SyslogContext
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        src_host = HostContext(
+            hostname="SRC-LNX",
+            ip="10.0.0.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        dst_host = HostContext(
+            hostname="DST-LNX",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="logon",
+            src_host=src_host,
+            dst_host=dst_host,
+            syslog=SyslogContext(app_name="sshd", pid=1234, message="Accepted password for bob"),
+        )
+
+        host = SyslogEmitter._linux_host(event)
+        assert host is not None
+        assert host.hostname == "DST-LNX"
+
 
 class TestBuildHostContext:
     """Tests for ActivityGenerator._build_host_context()."""

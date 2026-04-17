@@ -54,7 +54,19 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     @staticmethod
     def _linux_host(event: SecurityEvent) -> "HostContext | None":
-        """Return whichever host has os_category == 'linux'."""
+        """Return the Linux host that owns the syslog event.
+
+        For logon events, SyslogContext is attached to the destination host
+        (target of the authentication), so prefer ``dst_host`` to ensure
+        per-host routing writes to the correct host directory.
+        """
+        if event.event_type == "logon":
+            if event.dst_host and event.dst_host.os_category == "linux":
+                return event.dst_host
+            if event.src_host and event.src_host.os_category == "linux":
+                return event.src_host
+            return None
+
         if event.src_host and event.src_host.os_category == "linux":
             return event.src_host
         if event.dst_host and event.dst_host.os_category == "linux":
