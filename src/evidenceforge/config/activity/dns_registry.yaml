@@ -42,6 +42,9 @@ domains:
   - domain: calendar.google.com
     ips: ["142.250.191.46", "142.250.80.46"]
     tags: [saas]
+  - domain: docs.google.com
+    ips: ["142.250.185.206", "142.250.80.110"]
+    tags: [saas]
 
   # === Cloudflare ===
   - domain: www.cloudflare.com
@@ -71,6 +74,17 @@ domains:
     ips: ["151.101.193.140", "151.101.1.140"]
     tags: [cdn]
 
+  # === LinkedIn / Microsoft ===
+  - domain: www.linkedin.com
+    ips: ["13.107.42.14", "13.107.43.14"]
+    tags: [web, social]
+  - domain: static.licdn.com
+    ips: ["13.107.42.14", "13.107.43.14"]
+    tags: [cdn]
+  - domain: media.licdn.com
+    ips: ["13.107.42.14", "13.107.43.14"]
+    tags: [cdn]
+
   # === Akamai ===
   - domain: download.windowsupdate.com
     ips: ["23.196.25.38", "23.196.101.50", "23.45.101.50"]
@@ -89,6 +103,12 @@ domains:
   - domain: aws.amazon.com
     ips: ["52.85.83.55", "52.85.84.55"]
     tags: [web]
+  - domain: console.aws.amazon.com
+    ips: ["52.85.83.55", "54.230.129.56"]
+    tags: [saas]
+  - domain: a.b.cdn.console.awsstatic.com
+    ips: ["54.230.129.180", "54.230.130.56"]
+    tags: [cdn]
 
   # === Microsoft / Azure ===
   - domain: www.office.com
@@ -102,6 +122,9 @@ domains:
     tags: [web, background, windows]
   - domain: teams.microsoft.com
     ips: ["13.107.246.40", "13.107.246.41"]
+    tags: [saas]
+  - domain: portal.azure.com
+    ips: ["40.90.218.198", "20.190.151.70"]
     tags: [saas]
   - domain: settings-win.data.microsoft.com
     ips: ["13.107.4.50", "13.107.4.52"]
@@ -138,6 +161,18 @@ domains:
   - domain: pages.github.io
     ips: ["185.199.108.153", "185.199.109.153"]
     tags: [web]
+  - domain: en.wikipedia.org
+    ips: ["208.80.154.224"]
+    tags: [web]
+  - domain: upload.wikimedia.org
+    ips: ["208.80.154.224"]
+    tags: [cdn]
+  - domain: news.ycombinator.com
+    ips: ["209.216.230.240"]
+    tags: [web, dev]
+  - domain: cdn.sstatic.net
+    ips: ["151.101.1.69", "151.101.65.69"]
+    tags: [cdn]
 
   # === Email ===
   - domain: smtp.office365.com

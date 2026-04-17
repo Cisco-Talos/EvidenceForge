@@ -131,6 +131,15 @@ domains:
     content_type: "application/json"
     methods: ["POST", "POST", "GET"]
 
+  portal.azure.com:
+    paths:
+      - "/"
+      - "/#blade/HubsExtension/BrowseAll"
+      - "/#blade/Microsoft_Azure_Monitoring/AzureMonitoringBrowseBlade"
+      - "/portal/{hex8}/Content/Dynamic/bundleMsPortalFxPortal.{hex16}.js"
+    content_type: "text/html"
+    methods: ["GET"]
+
   sharepoint.com:
     paths:
       - "/_api/web/lists"
@@ -200,6 +209,15 @@ domains:
       - "/drive/my-drive"
       - "/file/d/{hex16}/view"
       - "/uc?export=download&id={hex16}"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  docs.google.com:
+    paths:
+      - "/document/d/{hex16}/edit"
+      - "/spreadsheets/d/{hex16}/edit"
+      - "/presentation/d/{hex16}/edit"
+      - "/forms/d/{hex16}/viewform"
     content_type: "text/html"
     methods: ["GET"]
 
@@ -334,6 +352,17 @@ domains:
     content_type: "text/html"
     methods: ["GET"]
 
+  console.aws.amazon.com:
+    paths:
+      - "/console/home"
+      - "/ec2/home#Instances"
+      - "/s3/home"
+      - "/iam/home"
+      - "/cloudwatch/home#dashboards:"
+      - "/vpc/home#vpcs:"
+    content_type: "text/html"
+    methods: ["GET"]
+
   # --- CDN / static ---
   cdn.jsdelivr.net:
     paths:
@@ -375,6 +404,35 @@ domains:
       - "/r/popular/"
       - "/r/technology/"
       - "/r/netsec/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  www.linkedin.com:
+    paths:
+      - "/feed/"
+      - "/messaging/"
+      - "/mynetwork/"
+      - "/jobs/"
+      - "/notifications/"
+      - "/in/{hex8}/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  en.wikipedia.org:
+    paths:
+      - "/wiki/Main_Page"
+      - "/wiki/Special:Search?search={search_term}"
+      - "/w/index.php?title=Special:Search&search={search_term}"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  news.ycombinator.com:
+    paths:
+      - "/"
+      - "/newest"
+      - "/ask"
+      - "/show"
+      - "/jobs"
     content_type: "text/html"
     methods: ["GET"]
 
