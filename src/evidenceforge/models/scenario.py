@@ -481,6 +481,14 @@ class CreateRemoteThreadEventSpec(_EventSpecBase):
     target_process: str
 
 
+class ProcessAccessEventSpec(_EventSpecBase):
+    """Process access event (generates Sysmon Event 10)."""
+
+    type: Literal["process_access"] = "process_access"
+    target_process: str = "lsass.exe"
+    access_mask: str = "0x1010"
+
+
 class DhcpLeaseEventSpec(_EventSpecBase):
     """DHCP lease event for rogue/new devices appearing on the network."""
 
@@ -873,6 +881,7 @@ EventSpec = Annotated[
     | ScheduledTaskCreatedEventSpec
     | LogClearedEventSpec
     | CreateRemoteThreadEventSpec
+    | ProcessAccessEventSpec
     | DhcpLeaseEventSpec
     | PortScanEventSpec
     | BeaconEventSpec
