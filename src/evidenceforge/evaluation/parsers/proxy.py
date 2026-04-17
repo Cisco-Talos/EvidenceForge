@@ -30,13 +30,14 @@ from pathlib import Path
 from . import LogParser, ParsedRecord, register_parser
 
 # W3C Extended format:
-# date time c-ip cs-username cs-method cs-uri sc-status sc-bytes cs-bytes time-taken "cs(User-Agent)" cs-host rs(Content-Type) s-cache-result
+# date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken "cs(User-Agent)" cs-host rs(Content-Type) s-cache-result
 _PROXY_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+"  # timestamp
     r"(\S+)\s+"  # client_ip
     r"(\S+)\s+"  # username
     r"(\S+)\s+"  # method
     r"(\S+)\s+"  # url
+    r"(\S+)\s+"  # protocol
     r"(\d+)\s+"  # status_code
     r"(\d+)\s+"  # sc_bytes
     r"(\d+)\s+"  # cs_bytes
@@ -92,16 +93,17 @@ class ProxyAccessParser(LogParser):
         fields["username"] = username if username != "-" else None
         fields["method"] = match.group(4)
         fields["url"] = match.group(5)
-        fields["status_code"] = int(match.group(6))
-        fields["sc_bytes"] = int(match.group(7))
-        fields["cs_bytes"] = int(match.group(8))
-        fields["time_taken"] = int(match.group(9))
-        ua = match.group(10)
+        fields["protocol"] = match.group(6)
+        fields["status_code"] = int(match.group(7))
+        fields["sc_bytes"] = int(match.group(8))
+        fields["cs_bytes"] = int(match.group(9))
+        fields["time_taken"] = int(match.group(10))
+        ua = match.group(11)
         fields["user_agent"] = ua if ua != "-" else None
-        fields["host"] = match.group(11)
-        ct = match.group(12)
+        fields["host"] = match.group(12)
+        ct = match.group(13)
         fields["content_type"] = ct if ct != "-" else None
-        cr = match.group(13)
+        cr = match.group(14)
         fields["cache_result"] = cr if cr != "-" else None
 
         return ParsedRecord(

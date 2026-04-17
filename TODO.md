@@ -246,6 +246,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] User-Agent OS mismatch with source hosts — os field on proxy_uri_templates.yaml; OS-aware filtering in pick_proxy_uri(); OS-aware baseline web UA pool
 - [x] 100% HTTP 200 status codes — _get_http_status() in network.py returns 200 (70%), 304 (8%), 301 (10%), 302 (5%), 404 (4%), 403 (2%), 500 (1%)
 - [x] HTTP MIME type mismatches with URI — _URI_MIME_MAP in baseline.py and generator.py pairs URIs to correct MIME types
+- [x] Fix proxy_access required `protocol` schema mismatch between format definition, emitter, and parser (Aardvark finding)
 - [ ] Proxy format doesn't match standard Squid or Bluecoat output
 - [ ] Proxy lacks authenticated usernames (all "-") — healthcare proxies typically show NTLM/Kerberos auth
 - [x] Proxy URL paths randomly paired with hostnames (e.g., download.windowsupdate.com/search?q=...) — site map data layer with 12 curated domains + 8 tag-based synthesis templates; browsing session generator selects paths from site-specific page definitions

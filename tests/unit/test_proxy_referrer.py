@@ -65,6 +65,7 @@ class TestProxyEmitterReferrer:
 
         assert len(rendered_lines) == 1
         assert "https://google.com/search?q=example" in rendered_lines[0]
+        assert " HTTP/1.1 " in rendered_lines[0]
 
     def test_empty_referrer_renders_as_dash(self):
         from pathlib import Path
@@ -100,6 +101,7 @@ class TestProxyEmitterReferrer:
 
         assert len(rendered_lines) == 1
         assert '"-"' in rendered_lines[0]
+        assert " HTTP/1.1 " in rendered_lines[0]
 
 
 class TestConnectTunnelBehavior:

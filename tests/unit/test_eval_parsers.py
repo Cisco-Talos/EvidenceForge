@@ -230,6 +230,22 @@ class TestWebAccessParser:
         assert all(r.timestamp is not None for r in records)
 
 
+class TestProxyAccessParser:
+    def test_extracts_protocol_field(self, tmp_path):
+        from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser
+
+        parser = ProxyAccessParser()
+        log_file = tmp_path / "proxy_access.log"
+        log_file.write_text(
+            "2024-03-15 10:00:00 10.0.10.50 jsmith GET http://example.com/ HTTP/1.1 "
+            '200 1024 128 45 "Mozilla/5.0" example.com text/html MISS\n'
+        )
+
+        records = list(parser.parse_file(log_file))
+        assert len(records) == 1
+        assert records[0].fields["protocol"] == "HTTP/1.1"
+
+
 class TestBashHistoryParser:
     def test_parses_all_commands(self):
         from evidenceforge.evaluation.parsers.bash_history import BashHistoryParser
