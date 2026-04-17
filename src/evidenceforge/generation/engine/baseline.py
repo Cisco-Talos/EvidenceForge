@@ -525,6 +525,9 @@ class BaselineMixin:
                 for event_time in event_times:
                     self._generate_user_activity(user, event_time)
 
+                # Lock/unlock events for Windows workstation users
+                self._generate_lock_unlock_events(user, current_hour, local_hour, persona_name)
+
         # Pre-decide logoffs so profile traffic can bound persona timestamps
         planned_logoffs = self._plan_logoffs_for_hour(enabled_users, current_hour)
 
@@ -2091,6 +2094,175 @@ class BaselineMixin:
                 user=user, system=system, time=t, activity_type=activity_type
             )
 
+        # Persona-driven 4648: sysadmin RunAs and helpdesk remote sessions
+        os_cat = _get_os_category(system.os) if hasattr(system, "os") else "unknown"
+        if os_cat == "windows" and persona_name:
+            _pn = persona_name.lower()
+            servers = [
+                s
+                for s in self.scenario.environment.systems
+                if s.type in ("server", "domain_controller")
+            ]
+            if _pn in ("sysadmin", "security_analyst") and rng.random() < 0.15 and servers:
+                target_server = rng.choice(servers)
+                admin_alias = f"{user.username}-admin"
+                session = next((s for s in sessions if s.system == system.hostname), None)
+                runas_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                self.state_manager.set_current_time(runas_t)
+                self.activity_generator.generate_explicit_credentials(
+                    user=user,
+                    system=system,
+                    time=runas_t,
+                    target_username=admin_alias,
+                    target_server=target_server.hostname,
+                    process_name=rng.choice(
+                        [
+                            r"C:\Windows\System32\runas.exe",
+                            r"C:\Windows\System32\mmc.exe",
+                            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                        ]
+                    ),
+                    process_pid=session.explorer_pid if session else 0,
+                )
+            elif _pn == "help_desk" and rng.random() < 0.08:
+                non_admins = [
+                    u
+                    for u in self.scenario.environment.users
+                    if u.enabled
+                    and (u.persona or "").lower()
+                    not in ("sysadmin", "security_analyst", "help_desk")
+                    and u.username != user.username
+                ]
+                if non_admins:
+                    target_user = rng.choice(non_admins)
+                    session = next((s for s in sessions if s.system == system.hostname), None)
+                    hd_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                    self.state_manager.set_current_time(hd_t)
+                    self.activity_generator.generate_explicit_credentials(
+                        user=user,
+                        system=system,
+                        time=hd_t,
+                        target_username=target_user.username,
+                        target_server=target_user.primary_system or "",
+                        process_name=rng.choice(
+                            [
+                                r"C:\Windows\System32\mstsc.exe",
+                                r"C:\Windows\System32\msra.exe",
+                            ]
+                        ),
+                        process_pid=session.explorer_pid if session else 0,
+                    )
+
+    def _generate_lock_unlock_events(
+        self,
+        user: User,
+        current_hour: datetime,
+        local_hour: int,
+        persona_name: str | None,
+    ) -> None:
+        """Generate workstation lock/unlock events for Windows interactive sessions."""
+        rng = _get_rng()
+        # Only Windows workstation users with active interactive sessions
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        session = next(
+            (
+                s
+                for s in sessions
+                if s.logon_type == 2
+                and any(
+                    sys.type == "workstation"
+                    for sys in self.scenario.environment.systems
+                    if sys.hostname == s.system
+                )
+            ),
+            None,
+        )
+        if not session:
+            return
+        system = next(
+            (s for s in self.scenario.environment.systems if s.hostname == session.system),
+            None,
+        )
+        if not system or _get_os_category(system.os) != "windows":
+            return
+
+        # Per-persona lock frequency
+        _pn = (persona_name or "").lower()
+        if _pn in ("security_analyst", "sysadmin"):
+            lock_prob = 0.40  # 3-5 locks/day → ~40% per work hour
+        elif _pn in ("developer",):
+            lock_prob = 0.08  # 0-1 locks/day
+        else:
+            lock_prob = 0.20  # 1-3 locks/day
+
+        # Only during work hours (7-19)
+        if not (7 <= local_hour <= 19):
+            return
+
+        # Lunch lock at hour 12
+        if local_hour == 12 and rng.random() < 0.85:
+            lock_t = current_hour + timedelta(minutes=rng.randint(0, 15))
+            self.state_manager.set_current_time(lock_t)
+            self.activity_generator.generate_workstation_lock(
+                user=user,
+                system=system,
+                time=lock_t,
+                logon_id=session.logon_id,
+            )
+            # Unlock after lunch (30-60 min)
+            unlock_t = lock_t + timedelta(minutes=rng.randint(30, 60))
+            if unlock_t < current_hour + timedelta(hours=1):
+                self.state_manager.set_current_time(unlock_t)
+                # ~15% chance of failed password before unlock
+                if rng.random() < 0.15:
+                    fail_t = unlock_t - timedelta(seconds=rng.randint(3, 15))
+                    self.state_manager.set_current_time(fail_t)
+                    self.activity_generator.generate_failed_logon(
+                        user=user,
+                        system=system,
+                        time=fail_t,
+                        logon_type=7,
+                        source_ip=system.ip,
+                    )
+                self.activity_generator.generate_workstation_unlock(
+                    user=user,
+                    system=system,
+                    time=unlock_t,
+                    logon_id=session.logon_id,
+                )
+            return
+
+        # Random meeting-break lock/unlock
+        if rng.random() < lock_prob:
+            lock_t = current_hour + timedelta(seconds=rng.randint(60, 3500))
+            self.state_manager.set_current_time(lock_t)
+            self.activity_generator.generate_workstation_lock(
+                user=user,
+                system=system,
+                time=lock_t,
+                logon_id=session.logon_id,
+            )
+            gap_minutes = rng.randint(2, 15)
+            unlock_t = lock_t + timedelta(minutes=gap_minutes)
+            if unlock_t < current_hour + timedelta(hours=1):
+                self.state_manager.set_current_time(unlock_t)
+                if rng.random() < 0.15:
+                    fail_t = unlock_t - timedelta(seconds=rng.randint(3, 15))
+                    self.state_manager.set_current_time(fail_t)
+                    self.activity_generator.generate_failed_logon(
+                        user=user,
+                        system=system,
+                        time=fail_t,
+                        logon_type=7,
+                        source_ip=system.ip,
+                    )
+                self.activity_generator.generate_workstation_unlock(
+                    user=user,
+                    system=system,
+                    time=unlock_t,
+                    logon_id=session.logon_id,
+                )
+
     def _get_server_ssh_users(self, system) -> list:
         """Return the subset of admin users who would SSH into this server.
 
@@ -3267,6 +3439,49 @@ class BaselineMixin:
                         parent_pid=parent_pid,
                         username="SYSTEM",
                     )
+
+            # Service account delegation: svc accounts auth to remote servers
+            if os_cat == "windows" and self.scenario.environment.service_accounts:
+                all_systems = self.scenario.environment.systems
+                servers = [s for s in all_systems if s.type in ("server", "domain_controller")]
+                for svc_name in self.scenario.environment.service_accounts:
+                    if rng.random() < 0.3:
+                        target_sys = rng.choice(servers) if servers else None
+                        if target_sys and target_sys.hostname != system.hostname:
+                            svc_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                            self.state_manager.set_current_time(svc_ts)
+                            self.activity_generator.generate_explicit_credentials(
+                                user=_SYSTEM_USER,
+                                system=system,
+                                time=svc_ts,
+                                target_username=svc_name,
+                                target_server=target_sys.hostname,
+                                process_name=r"C:\Windows\System32\services.exe",
+                                process_pid=sys_pids.get("services", 0),
+                            )
+
+            # GPO application: periodic SYSTEM credential usage to DC
+            if os_cat == "windows" and system.type == "workstation":
+                gpo_phase = _stable_seed(f"gpo_phase_{system.hostname}") % 4
+                if (current_hour.hour + gpo_phase) % 3 == 0:
+                    dcs = [
+                        s
+                        for s in self.scenario.environment.systems
+                        if s.type == "domain_controller"
+                    ]
+                    if dcs:
+                        dc = dcs[_stable_seed(f"gpo_dc_{system.hostname}") % len(dcs)]
+                        gpo_ts = current_hour + timedelta(seconds=rng.uniform(60, 300))
+                        self.state_manager.set_current_time(gpo_ts)
+                        self.activity_generator.generate_explicit_credentials(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=gpo_ts,
+                            target_username="SYSTEM",
+                            target_server=dc.hostname,
+                            process_name=r"C:\Windows\System32\svchost.exe",
+                            process_pid=sys_pids.get("svchost_netsvcs", 0),
+                        )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
             if os_cat == "windows":

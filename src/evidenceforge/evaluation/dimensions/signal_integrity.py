@@ -625,6 +625,18 @@ class SignalIntegrityScorer(DimensionScorer):
             if format_name == "zeek_conn":
                 return f.get("id.resp_p") == 53 and f.get("id.orig_h") == event.system_ip
 
+        elif event_type == "explicit_credentials":
+            target_user = event.details.get("target_username", "")
+            if format_name == "windows_event_security":
+                return f.get("EventID") == 4648 and (
+                    not target_user or f.get("TargetUserName", "") == target_user
+                )
+
+        elif event_type in ("workstation_lock", "workstation_unlock"):
+            expected_id = 4800 if event_type == "workstation_lock" else 4801
+            if format_name == "windows_event_security":
+                return f.get("EventID") == expected_id
+
         return False
 
     def _connection_matches_zeek(self, fields: dict, event: ResolvedEvent) -> bool:
