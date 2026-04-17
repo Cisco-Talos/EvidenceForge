@@ -1530,25 +1530,9 @@ class StorylineMixin:
             ):
                 self.state_manager.set_current_time(tick_time)
 
-                # Select target account based on pattern
-                if spec.pattern == "spray":
-                    target_account = accounts[attempt_count % len(accounts)]
-                elif spec.pattern == "brute_force":
-                    target_account = accounts[
-                        min(
-                            attempt_count // max(1, (spec.count or 100) // len(accounts)),
-                            len(accounts) - 1,
-                        )
-                    ]
-                else:  # stuffing
-                    target_account = accounts[attempt_count % len(accounts)]
-
-                # Check if this attempt should succeed (after target selection)
-                if (
-                    success_account
-                    and target_account == success_account
-                    and attempt_count >= success_after
-                ):
+                # Success fires at exactly the requested attempt count,
+                # regardless of which account the pattern would have selected
+                if success_account and attempt_count == success_after:
                     target_user = scenario_users.get(success_account, actor)
                     self.activity_generator.generate_logon(
                         user=target_user,
@@ -1561,6 +1545,19 @@ class StorylineMixin:
                     malicious_event["success_account"] = success_account
                     malicious_event["success_at_attempt"] = attempt_count
                     break
+
+                # Select target account based on pattern
+                if spec.pattern == "spray":
+                    target_account = accounts[attempt_count % len(accounts)]
+                elif spec.pattern == "brute_force":
+                    target_account = accounts[
+                        min(
+                            attempt_count // max(1, (spec.count or 100) // len(accounts)),
+                            len(accounts) - 1,
+                        )
+                    ]
+                else:  # stuffing
+                    target_account = accounts[attempt_count % len(accounts)]
 
                 target_user = scenario_users.get(target_account, actor)
 
