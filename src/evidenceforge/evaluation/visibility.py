@@ -188,7 +188,15 @@ class VisibilityModel:
 
         host_local = host_formats & _HOST_LOCAL
         # Network types apply if connection events are present
-        network_types = {"connection", "dhcp_lease", "port_scan", "beacon", "dns_query"}
+        network_types = {
+            "connection",
+            "dhcp_lease",
+            "port_scan",
+            "beacon",
+            "dns_query",
+            "web_scan",
+            "credential_spray",
+        }
 
         groups: list[tuple[str, set[str]]] = []
         if host_local:

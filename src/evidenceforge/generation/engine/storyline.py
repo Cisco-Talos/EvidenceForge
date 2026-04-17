@@ -1361,6 +1361,187 @@ class StorylineMixin:
             malicious_event["qtype"] = spec.qtype
             malicious_event["rcode"] = spec.rcode
 
+        elif spec.type == "web_scan":
+            from evidenceforge.config.web_scan_presets import get_preset
+            from evidenceforge.events.contexts import HttpContext
+
+            # Load preset and merge with overrides
+            scan_paths = []
+            scan_ua = spec.user_agent or "Mozilla/5.0"
+            if spec.preset:
+                preset_data = get_preset(spec.preset)
+                if preset_data is None:
+                    logger.warning("Unknown web_scan preset: %s", spec.preset)
+                else:
+                    scan_paths = list(preset_data.get("paths", []))
+                    scan_ua = spec.user_agent or preset_data.get("user_agent", scan_ua)
+            if spec.paths:
+                scan_paths.extend(spec.paths)
+            if not scan_paths:
+                logger.warning("web_scan has no paths — skipping")
+                return malicious_event
+
+            # Timing: rate-based → convert to interval
+            interval_sec = 1.0 / spec.rate
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - time).total_seconds()
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+
+            scan_src_ip = spec.source_ip or system.ip
+            scan_host = spec.hostname or spec.dst_ip
+            service = "http" if spec.dst_port == 80 else "ssl"
+
+            # Resolve source system
+            src_sys = None
+            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+            if scan_src_ip in ip_map:
+                src_sys = ip_map[scan_src_ip]
+            elif scan_src_ip == system.ip:
+                src_sys = system
+
+            request_count = 0
+            path_idx = 0
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+                path_entry = scan_paths[path_idx % len(scan_paths)]
+                path_idx += 1
+
+                _method = path_entry.get("method", "GET")
+                _uri = path_entry.get("uri", "/")
+                _status = path_entry.get("status", 404)
+
+                http_ctx = HttpContext(
+                    method=_method,
+                    host=scan_host,
+                    uri=_uri,
+                    version="1.1",
+                    user_agent=scan_ua,
+                    request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
+                    response_body_len=rng.randint(200, 5000),
+                    status_code=_status,
+                    status_msg={
+                        200: "OK",
+                        301: "Moved Permanently",
+                        302: "Found",
+                        403: "Forbidden",
+                        404: "Not Found",
+                        405: "Method Not Allowed",
+                        500: "Internal Server Error",
+                    }.get(_status, "OK"),
+                    resp_mime_types=["text/html"] if _status == 200 else [],
+                    tags=[],
+                )
+
+                self.activity_generator.generate_connection(
+                    src_ip=scan_src_ip,
+                    dst_ip=spec.dst_ip,
+                    time=tick_time,
+                    dst_port=spec.dst_port,
+                    service=service,
+                    duration=rng.uniform(0.01, 0.5),
+                    orig_bytes=rng.randint(200, 2000),
+                    resp_bytes=rng.randint(200, 5000),
+                    conn_state="SF",
+                    emit_dns=request_count == 0,
+                    source_system=src_sys,
+                    http=http_ctx,
+                    hostname=scan_host if spec.hostname else None,
+                    pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                )
+                request_count += 1
+
+            malicious_event["dst_ip"] = spec.dst_ip
+            malicious_event["dst_port"] = spec.dst_port
+            malicious_event["preset"] = spec.preset
+            malicious_event["request_count"] = request_count
+
+        elif spec.type == "credential_spray":
+            # Timing
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - time).total_seconds()
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+
+            spray_src_ip = spec.source_ip or system.ip
+            accounts = spec.target_accounts
+            success_spec = spec.success
+            success_account = success_spec.get("account") if success_spec else None
+            success_after = success_spec.get("after", 0) if success_spec else 0
+
+            # Resolve DC for domain accounts
+            dc_system = None
+            for sys_obj in self.scenario.environment.systems:
+                if sys_obj.type == "domain_controller":
+                    dc_system = sys_obj
+                    break
+
+            # Resolve actor User object for generate_failed_logon
+            scenario_users = {u.username: u for u in self.scenario.environment.users}
+
+            attempt_count = 0
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+
+                # Check if this attempt should succeed
+                if success_account and attempt_count >= success_after:
+                    # Successful logon
+                    target_user = scenario_users.get(success_account, actor)
+                    self.activity_generator.generate_logon(
+                        user=target_user,
+                        system=system,
+                        time=tick_time,
+                        logon_type=spec.logon_type,
+                        source_ip=spray_src_ip,
+                    )
+                    attempt_count += 1
+                    malicious_event["success_account"] = success_account
+                    malicious_event["success_at_attempt"] = attempt_count
+                    break
+
+                # Select target account based on pattern
+                if spec.pattern == "spray":
+                    target_account = accounts[attempt_count % len(accounts)]
+                elif spec.pattern == "brute_force":
+                    target_account = accounts[
+                        min(
+                            attempt_count // max(1, (spec.count or 100) // len(accounts)),
+                            len(accounts) - 1,
+                        )
+                    ]
+                else:  # stuffing
+                    target_account = accounts[attempt_count % len(accounts)]
+
+                target_user = scenario_users.get(target_account, actor)
+
+                self.activity_generator.generate_failed_logon(
+                    user=target_user,
+                    system=system,
+                    time=tick_time,
+                    logon_type=spec.logon_type,
+                    source_ip=spray_src_ip,
+                    target_username=target_account,
+                    dc_system=dc_system,
+                )
+                attempt_count += 1
+
+            malicious_event["pattern"] = spec.pattern
+            malicious_event["target_accounts"] = accounts
+            malicious_event["attempt_count"] = attempt_count
+
         elif spec.type == "raw":
             self.activity_generator.generate_raw(
                 time=time,

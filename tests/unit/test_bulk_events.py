@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Tests for bulk/periodic event types: beacon, dns_query, and shared timing engine."""
+"""Tests for bulk/periodic event types and shared timing engine."""
 
 import random
 from datetime import UTC, datetime, timedelta
@@ -12,7 +12,9 @@ from pydantic import ValidationError
 from evidenceforge.generation.engine.storyline import _iter_periodic_ticks
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
+    CredentialSprayEventSpec,
     DnsQueryEventSpec,
+    WebScanEventSpec,
     _PeriodicEventBase,
 )
 
@@ -272,3 +274,166 @@ class TestIterPeriodicTicks:
         # duration=30s, interval=60s → only tick at t=0 (0 <= 30)
         ticks = list(_iter_periodic_ticks(start, 60.0, 30.0, None, 0.0, rng))
         assert len(ticks) == 1
+
+
+# ── WebScanEventSpec ──────────────────────────────────────────────────────
+
+
+class TestWebScanEventSpec:
+    def test_defaults(self):
+        spec = WebScanEventSpec(dst_ip="10.0.0.5", rate=10.0, duration="1h", preset="nikto")
+        assert spec.type == "web_scan"
+        assert spec.dst_port == 80
+        assert spec.rate == 10.0
+        assert spec.preset == "nikto"
+
+    def test_custom_paths(self):
+        spec = WebScanEventSpec(
+            dst_ip="10.0.0.5",
+            rate=5.0,
+            count=20,
+            paths=[{"uri": "/test", "method": "GET", "status": 404}],
+        )
+        assert spec.paths is not None
+        assert len(spec.paths) == 1
+
+    def test_preset_and_paths(self):
+        spec = WebScanEventSpec(
+            dst_ip="10.0.0.5",
+            rate=10.0,
+            duration="30m",
+            preset="dirb",
+            paths=[{"uri": "/custom", "method": "GET", "status": 200}],
+        )
+        assert spec.preset == "dirb"
+        assert spec.paths is not None
+
+    def test_rejects_interval(self):
+        with pytest.raises(ValidationError, match="rate"):
+            WebScanEventSpec(dst_ip="10.0.0.5", interval="5s", duration="1h", preset="nikto")
+
+    def test_requires_rate(self):
+        with pytest.raises(ValidationError, match="rate"):
+            WebScanEventSpec(dst_ip="10.0.0.5", duration="1h", preset="nikto")
+
+    def test_requires_paths_or_preset(self):
+        with pytest.raises(ValidationError, match="preset or paths"):
+            WebScanEventSpec(dst_ip="10.0.0.5", rate=10.0, duration="1h")
+
+    def test_hostname_validation(self):
+        with pytest.raises(ValidationError):
+            WebScanEventSpec(
+                dst_ip="10.0.0.5",
+                hostname="http://evil.com",
+                rate=10.0,
+                duration="1h",
+                preset="nikto",
+            )
+
+
+# ── CredentialSprayEventSpec ──────────────────────────────────────────────
+
+
+class TestCredentialSprayEventSpec:
+    def test_defaults(self):
+        spec = CredentialSprayEventSpec(
+            target_accounts=["admin", "jsmith"], interval="2s", count=100
+        )
+        assert spec.type == "credential_spray"
+        assert spec.pattern == "spray"
+        assert spec.logon_type == 3
+        assert spec.success is None
+
+    def test_brute_force_pattern(self):
+        spec = CredentialSprayEventSpec(
+            target_accounts=["admin"],
+            pattern="brute_force",
+            interval="1s",
+            count=50,
+        )
+        assert spec.pattern == "brute_force"
+
+    def test_stuffing_pattern(self):
+        spec = CredentialSprayEventSpec(
+            target_accounts=["user1", "user2", "user3"],
+            pattern="stuffing",
+            interval="500ms",
+            duration="5m",
+        )
+        assert spec.pattern == "stuffing"
+
+    def test_success_field(self):
+        spec = CredentialSprayEventSpec(
+            target_accounts=["admin", "jsmith"],
+            interval="2s",
+            count=100,
+            success={"account": "jsmith", "after": 50},
+        )
+        assert spec.success["account"] == "jsmith"
+        assert spec.success["after"] == 50
+
+    def test_success_account_must_be_in_targets(self):
+        with pytest.raises(ValidationError, match="must be in target_accounts"):
+            CredentialSprayEventSpec(
+                target_accounts=["admin"],
+                interval="2s",
+                count=50,
+                success={"account": "nobody", "after": 10},
+            )
+
+    def test_success_after_must_be_positive(self):
+        with pytest.raises(ValidationError, match="after must be"):
+            CredentialSprayEventSpec(
+                target_accounts=["admin"],
+                interval="2s",
+                count=50,
+                success={"account": "admin", "after": 0},
+            )
+
+    def test_rejects_rate(self):
+        with pytest.raises(ValidationError, match="interval"):
+            CredentialSprayEventSpec(target_accounts=["admin"], rate=10.0, duration="1h")
+
+    def test_requires_interval(self):
+        with pytest.raises(ValidationError, match="interval"):
+            CredentialSprayEventSpec(target_accounts=["admin"], duration="1h")
+
+    def test_requires_target_accounts(self):
+        with pytest.raises(ValidationError):
+            CredentialSprayEventSpec(target_accounts=[], interval="2s", count=50)
+
+    def test_empty_target_accounts_rejected(self):
+        with pytest.raises(ValidationError):
+            CredentialSprayEventSpec(target_accounts=[], interval="2s", count=50)
+
+
+# ── Web Scan Presets Config ───────────────────────────────────────────────
+
+
+class TestWebScanPresets:
+    def test_load_presets(self):
+        from evidenceforge.config.web_scan_presets import list_preset_names, load_web_scan_presets
+
+        data = load_web_scan_presets()
+        assert "presets" in data
+        names = list_preset_names()
+        assert "nikto" in names
+        assert "dirb" in names
+        assert "gobuster" in names
+        assert "sqlmap" in names
+        assert "nmap_http" in names
+
+    def test_get_preset(self):
+        from evidenceforge.config.web_scan_presets import get_preset
+
+        nikto = get_preset("nikto")
+        assert nikto is not None
+        assert "paths" in nikto
+        assert len(nikto["paths"]) > 10
+        assert "user_agent" in nikto
+        assert "default_rate" in nikto
+
+    def test_get_unknown_preset(self):
+        from evidenceforge.config.web_scan_presets import get_preset
+
+        assert get_preset("nonexistent") is None

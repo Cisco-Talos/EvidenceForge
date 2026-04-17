@@ -666,6 +666,92 @@ class DnsQueryEventSpec(_EventSpecBase):
         return self
 
 
+class WebScanEventSpec(_PeriodicEventBase):
+    """Web scanning attack — repeated HTTP requests from scanner presets.
+
+    Generates high-volume HTTP requests to a target web server using
+    configurable presets (nikto, dirb, gobuster, sqlmap, nmap_http) or
+    custom URI path lists. Each request produces web_access + Zeek HTTP logs.
+    """
+
+    type: Literal["web_scan"] = "web_scan"
+    dst_ip: str
+    dst_port: int = 80
+    hostname: str | None = None
+    source_ip: str | None = None
+    preset: str | None = None  # nikto, dirb, gobuster, sqlmap, nmap_http
+    paths: list[dict[str, Any]] | None = None  # [{uri, method, status}]
+    user_agent: str | None = None  # Override preset UA
+    status_codes: dict[str, float] | None = None  # Override status distribution
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str | None) -> str | None:
+        """Validate hostname is a bare FQDN."""
+        if v is not None:
+            _validate_hostname(v, "web_scan.hostname")
+        return v
+
+    @model_validator(mode="after")
+    def web_scan_requires_rate(self) -> "WebScanEventSpec":
+        """Web scan uses rate-based timing, not interval."""
+        if self.rate is None:
+            raise ValueError("web_scan requires rate (not interval)")
+        if self.interval is not None:
+            raise ValueError("web_scan uses rate, not interval")
+        return self
+
+    @model_validator(mode="after")
+    def web_scan_requires_paths_or_preset(self) -> "WebScanEventSpec":
+        """Either preset or paths (or both) must be specified."""
+        if self.preset is None and self.paths is None:
+            raise ValueError("Either preset or paths must be specified")
+        return self
+
+
+class CredentialSprayEventSpec(_PeriodicEventBase):
+    """Credential attack — bulk authentication attempts.
+
+    Supports three attack patterns:
+    - spray: one password per account, rotating through accounts
+    - brute_force: many passwords against one account at a time
+    - stuffing: one-to-one credential pairs
+
+    Produces Windows 4625/4776 or Linux syslog auth failures depending
+    on target OS, with optional final successful logon.
+    """
+
+    type: Literal["credential_spray"] = "credential_spray"
+    source_ip: str | None = None
+    pattern: Literal["spray", "brute_force", "stuffing"] = "spray"
+    target_accounts: list[str] = Field(..., min_length=1)
+    logon_type: int = 3
+    success: dict[str, Any] | None = None  # {"account": str, "after": int}
+
+    @model_validator(mode="after")
+    def credential_spray_requires_interval(self) -> "CredentialSprayEventSpec":
+        """Credential spray uses interval-based timing."""
+        if self.interval is None:
+            raise ValueError("credential_spray requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("credential_spray uses interval, not rate")
+        return self
+
+    @model_validator(mode="after")
+    def validate_success(self) -> "CredentialSprayEventSpec":
+        """Validate success field if specified."""
+        if self.success is not None:
+            account = self.success.get("account")
+            after = self.success.get("after")
+            if not account:
+                raise ValueError("success.account is required")
+            if account not in self.target_accounts:
+                raise ValueError(f"success.account '{account}' must be in target_accounts")
+            if not isinstance(after, int) or after < 1:
+                raise ValueError("success.after must be an integer >= 1")
+        return self
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -699,6 +785,8 @@ EventSpec = Annotated[
     | PortScanEventSpec
     | BeaconEventSpec
     | DnsQueryEventSpec
+    | WebScanEventSpec
+    | CredentialSprayEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

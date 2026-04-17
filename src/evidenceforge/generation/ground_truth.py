@@ -248,6 +248,24 @@ class GroundTruthGenerator:
             rcode = event.get("rcode", "NOERROR")
             return f"DNS query: {query} ({qtype}, {rcode})"
 
+        elif event_type == "web_scan":
+            dst = event.get("dst_ip", "N/A")
+            port = event.get("dst_port", "N/A")
+            preset = event.get("preset", "custom")
+            requests = event.get("request_count", "N/A")
+            return f"Web scan ({preset}) against {dst}:{port} ({requests} requests)"
+
+        elif event_type == "credential_spray":
+            pattern = event.get("pattern", "spray")
+            accounts = event.get("target_accounts", [])
+            attempts = event.get("attempt_count", "N/A")
+            success = event.get("success_account")
+            result = f"Credential {pattern}: {attempts} attempts against {len(accounts)} accounts"
+            if success:
+                at = event.get("success_at_attempt", "?")
+                result += f" (success: {success} at attempt {at})"
+            return result
+
         else:
             return event.get("activity", "N/A")
 
@@ -360,6 +378,16 @@ class GroundTruthGenerator:
                 query = event.get("query", "")
                 if query:
                     iocs["network"].add(f"{query} (Malicious DNS Query)")
+
+            elif event["type"] == "web_scan":
+                dst_ip = event.get("dst_ip", "")
+                dst_port = event.get("dst_port", "")
+                if dst_ip:
+                    iocs["network"].add(f"{dst_ip}:{dst_port} (Web Scan Target)")
+
+            elif event["type"] == "credential_spray":
+                for account in event.get("target_accounts", []):
+                    iocs["users"].add(f"{account} (Spray Target)")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

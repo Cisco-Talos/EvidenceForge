@@ -1,0 +1,190 @@
+# Web scan presets for the web_scan bulk event type.
+#
+# Each preset defines a realistic scanning pattern with URI paths,
+# expected status codes, user-agent strings, and default scan rate.
+#
+# Override or extend via .eforge/config/activity/web_scan_presets.yaml
+
+presets:
+  nikto:
+    description: "Nikto web vulnerability scanner"
+    user_agent: "Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:map_codes)"
+    default_rate: 10.0
+    paths:
+      - {uri: "/", method: "GET", status: 200}
+      - {uri: "/robots.txt", method: "GET", status: 200}
+      - {uri: "/sitemap.xml", method: "GET", status: 404}
+      - {uri: "/admin/", method: "GET", status: 403}
+      - {uri: "/admin/login", method: "GET", status: 404}
+      - {uri: "/.env", method: "GET", status: 403}
+      - {uri: "/.git/HEAD", method: "GET", status: 404}
+      - {uri: "/.git/config", method: "GET", status: 404}
+      - {uri: "/wp-admin/", method: "GET", status: 404}
+      - {uri: "/wp-login.php", method: "GET", status: 404}
+      - {uri: "/wp-content/", method: "GET", status: 404}
+      - {uri: "/wp-includes/", method: "GET", status: 404}
+      - {uri: "/xmlrpc.php", method: "GET", status: 404}
+      - {uri: "/phpmyadmin/", method: "GET", status: 404}
+      - {uri: "/phpMyAdmin/", method: "GET", status: 404}
+      - {uri: "/server-status", method: "GET", status: 403}
+      - {uri: "/server-info", method: "GET", status: 403}
+      - {uri: "/.htaccess", method: "GET", status: 403}
+      - {uri: "/.htpasswd", method: "GET", status: 403}
+      - {uri: "/cgi-bin/", method: "GET", status: 403}
+      - {uri: "/cgi-bin/test-cgi", method: "GET", status: 404}
+      - {uri: "/icons/", method: "GET", status: 403}
+      - {uri: "/CHANGELOG.txt", method: "GET", status: 404}
+      - {uri: "/LICENSE.txt", method: "GET", status: 404}
+      - {uri: "/README.md", method: "GET", status: 404}
+      - {uri: "/backup/", method: "GET", status: 404}
+      - {uri: "/backup.sql", method: "GET", status: 404}
+      - {uri: "/backup.zip", method: "GET", status: 404}
+      - {uri: "/database.sql", method: "GET", status: 404}
+      - {uri: "/dump.sql", method: "GET", status: 404}
+      - {uri: "/config.php", method: "GET", status: 404}
+      - {uri: "/config.yml", method: "GET", status: 404}
+      - {uri: "/config.json", method: "GET", status: 404}
+      - {uri: "/web.config", method: "GET", status: 404}
+      - {uri: "/crossdomain.xml", method: "GET", status: 404}
+      - {uri: "/elmah.axd", method: "GET", status: 404}
+      - {uri: "/trace.axd", method: "GET", status: 404}
+      - {uri: "/test.php", method: "GET", status: 404}
+      - {uri: "/info.php", method: "GET", status: 200}
+      - {uri: "/phpinfo.php", method: "GET", status: 404}
+
+  dirb:
+    description: "DIRB directory brute-force scanner"
+    user_agent: "DirBuster-1.0-RC1 (http://www.owasp.org/index.php/Category:OWASP_DirBuster_Project)"
+    default_rate: 50.0
+    paths:
+      - {uri: "/admin", method: "GET", status: 403}
+      - {uri: "/administrator", method: "GET", status: 404}
+      - {uri: "/api", method: "GET", status: 200}
+      - {uri: "/api/v1", method: "GET", status: 200}
+      - {uri: "/api/v2", method: "GET", status: 404}
+      - {uri: "/app", method: "GET", status: 404}
+      - {uri: "/assets", method: "GET", status: 200}
+      - {uri: "/auth", method: "GET", status: 404}
+      - {uri: "/bin", method: "GET", status: 403}
+      - {uri: "/blog", method: "GET", status: 404}
+      - {uri: "/cache", method: "GET", status: 404}
+      - {uri: "/cgi", method: "GET", status: 404}
+      - {uri: "/conf", method: "GET", status: 404}
+      - {uri: "/config", method: "GET", status: 403}
+      - {uri: "/console", method: "GET", status: 404}
+      - {uri: "/dashboard", method: "GET", status: 404}
+      - {uri: "/data", method: "GET", status: 404}
+      - {uri: "/db", method: "GET", status: 404}
+      - {uri: "/debug", method: "GET", status: 404}
+      - {uri: "/deploy", method: "GET", status: 404}
+      - {uri: "/dev", method: "GET", status: 404}
+      - {uri: "/docs", method: "GET", status: 200}
+      - {uri: "/download", method: "GET", status: 404}
+      - {uri: "/error", method: "GET", status: 404}
+      - {uri: "/files", method: "GET", status: 404}
+      - {uri: "/help", method: "GET", status: 404}
+      - {uri: "/images", method: "GET", status: 200}
+      - {uri: "/img", method: "GET", status: 404}
+      - {uri: "/include", method: "GET", status: 404}
+      - {uri: "/js", method: "GET", status: 200}
+      - {uri: "/lib", method: "GET", status: 404}
+      - {uri: "/log", method: "GET", status: 404}
+      - {uri: "/login", method: "GET", status: 200}
+      - {uri: "/logs", method: "GET", status: 404}
+      - {uri: "/manage", method: "GET", status: 404}
+      - {uri: "/media", method: "GET", status: 404}
+      - {uri: "/panel", method: "GET", status: 404}
+      - {uri: "/portal", method: "GET", status: 404}
+      - {uri: "/private", method: "GET", status: 403}
+      - {uri: "/public", method: "GET", status: 200}
+      - {uri: "/scripts", method: "GET", status: 404}
+      - {uri: "/search", method: "GET", status: 404}
+      - {uri: "/secret", method: "GET", status: 404}
+      - {uri: "/secure", method: "GET", status: 404}
+      - {uri: "/setup", method: "GET", status: 404}
+      - {uri: "/shell", method: "GET", status: 404}
+      - {uri: "/src", method: "GET", status: 404}
+      - {uri: "/staff", method: "GET", status: 404}
+      - {uri: "/static", method: "GET", status: 200}
+      - {uri: "/status", method: "GET", status: 200}
+      - {uri: "/storage", method: "GET", status: 404}
+      - {uri: "/temp", method: "GET", status: 404}
+      - {uri: "/test", method: "GET", status: 404}
+      - {uri: "/tmp", method: "GET", status: 404}
+      - {uri: "/upload", method: "GET", status: 404}
+      - {uri: "/uploads", method: "GET", status: 404}
+      - {uri: "/user", method: "GET", status: 404}
+      - {uri: "/users", method: "GET", status: 404}
+      - {uri: "/vendor", method: "GET", status: 404}
+      - {uri: "/webmail", method: "GET", status: 404}
+
+  gobuster:
+    description: "Gobuster directory enumeration tool"
+    user_agent: "gobuster/3.6"
+    default_rate: 100.0
+    paths:
+      - {uri: "/index.html", method: "GET", status: 200}
+      - {uri: "/index.php", method: "GET", status: 404}
+      - {uri: "/about", method: "GET", status: 200}
+      - {uri: "/contact", method: "GET", status: 200}
+      - {uri: "/login", method: "GET", status: 200}
+      - {uri: "/register", method: "GET", status: 404}
+      - {uri: "/admin", method: "GET", status: 403}
+      - {uri: "/dashboard", method: "GET", status: 404}
+      - {uri: "/api", method: "GET", status: 200}
+      - {uri: "/api/users", method: "GET", status: 403}
+      - {uri: "/api/admin", method: "GET", status: 403}
+      - {uri: "/api/config", method: "GET", status: 403}
+      - {uri: "/health", method: "GET", status: 200}
+      - {uri: "/metrics", method: "GET", status: 403}
+      - {uri: "/swagger", method: "GET", status: 404}
+      - {uri: "/swagger-ui", method: "GET", status: 404}
+      - {uri: "/graphql", method: "GET", status: 404}
+      - {uri: "/.well-known/security.txt", method: "GET", status: 404}
+      - {uri: "/wp-json", method: "GET", status: 404}
+      - {uri: "/rest", method: "GET", status: 404}
+      - {uri: "/v1", method: "GET", status: 404}
+      - {uri: "/v2", method: "GET", status: 404}
+      - {uri: "/actuator", method: "GET", status: 404}
+      - {uri: "/actuator/health", method: "GET", status: 404}
+      - {uri: "/actuator/env", method: "GET", status: 404}
+
+  sqlmap:
+    description: "SQLMap SQL injection scanner"
+    user_agent: "sqlmap/1.7.12#stable (https://sqlmap.org)"
+    default_rate: 5.0
+    paths:
+      - {uri: "/search?q=1", method: "GET", status: 200}
+      - {uri: "/search?q=1%27", method: "GET", status: 500}
+      - {uri: "/search?q=1%27%20OR%20%271%27%3D%271", method: "GET", status: 200}
+      - {uri: "/search?q=1%27%20AND%20%271%27%3D%272", method: "GET", status: 200}
+      - {uri: "/search?q=1%20UNION%20SELECT%20NULL--", method: "GET", status: 500}
+      - {uri: "/search?q=1%20UNION%20SELECT%20NULL%2CNULL--", method: "GET", status: 500}
+      - {uri: "/search?q=1%20UNION%20SELECT%20NULL%2CNULL%2CNULL--", method: "GET", status: 200}
+      - {uri: "/search?q=1%20UNION%20SELECT%20table_name%2CNULL%2CNULL%20FROM%20information_schema.tables--", method: "GET", status: 200}
+      - {uri: "/search?q=1%20UNION%20SELECT%20column_name%2CNULL%2CNULL%20FROM%20information_schema.columns--", method: "GET", status: 200}
+      - {uri: "/search?q=1%27%3B%20WAITFOR%20DELAY%20%270%3A0%3A5%27--", method: "GET", status: 200}
+      - {uri: "/search?q=1%20AND%20SLEEP(5)--", method: "GET", status: 200}
+      - {uri: "/login", method: "POST", status: 200}
+      - {uri: "/login", method: "POST", status: 500}
+      - {uri: "/api/v1/data?id=1", method: "GET", status: 200}
+      - {uri: "/api/v1/data?id=1%27", method: "GET", status: 500}
+      - {uri: "/api/v1/data?id=1%20OR%201%3D1", method: "GET", status: 200}
+
+  nmap_http:
+    description: "Nmap HTTP NSE scripts"
+    user_agent: "Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)"
+    default_rate: 3.0
+    paths:
+      - {uri: "/", method: "GET", status: 200}
+      - {uri: "/robots.txt", method: "GET", status: 200}
+      - {uri: "/favicon.ico", method: "GET", status: 200}
+      - {uri: "/nmaplowercheck1234", method: "GET", status: 404}
+      - {uri: "/NmapUpperCheck1234", method: "GET", status: 404}
+      - {uri: "/Nmap/folder/check1234", method: "GET", status: 404}
+      - {uri: "/.git/HEAD", method: "GET", status: 404}
+      - {uri: "/.svn/entries", method: "GET", status: 404}
+      - {uri: "/TRACE", method: "TRACE", status: 405}
+      - {uri: "/", method: "OPTIONS", status: 200}
+      - {uri: "/evox/about", method: "GET", status: 404}
+      - {uri: "/HNAP1/", method: "GET", status: 404}

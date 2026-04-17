@@ -587,6 +587,22 @@ class SignalIntegrityScorer(DimensionScorer):
             if format_name == "zeek_conn":
                 return f.get("id.resp_p") == 53
 
+        elif event_type == "web_scan":
+            expected_dst = event.details.get("dst_ip", "")
+            expected_port = event.details.get("dst_port")
+            if format_name in ("web_access", "zeek_http"):
+                return f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+            if format_name == "zeek_conn":
+                return f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
+
+        elif event_type == "credential_spray":
+            if format_name == "windows_event_security":
+                event_id = f.get("EventID")
+                return event_id in (4625, 4776, 4624)
+            if format_name == "syslog":
+                msg = f.get("message", "")
+                return "Failed password" in msg or "Accepted password" in msg
+
         return False
 
     def _connection_matches_zeek(self, fields: dict, event: ResolvedEvent) -> bool:
