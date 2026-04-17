@@ -29,7 +29,7 @@ from pydantic import ValidationError
 
 from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.models.scenario import (
-    BlockedC2EventSpec,
+    BeaconEventSpec,
     NetworkSensor,
     PortScanEventSpec,
 )
@@ -69,42 +69,49 @@ class TestPortScanEventSpec:
             PortScanEventSpec(target_segment="dmz", target_count=6000)
 
 
-class TestBlockedC2EventSpec:
+class TestBeaconEventSpec:
     def test_defaults(self):
-        spec = BlockedC2EventSpec(dst_ip="198.51.100.30")
-        assert spec.type == "blocked_c2"
+        spec = BeaconEventSpec(dst_ip="198.51.100.30", action="deny", interval="30m", duration="6h")
+        assert spec.type == "beacon"
         assert spec.dst_port == 443
         assert spec.protocol == "tcp"
         assert spec.interval == "30m"
         assert spec.duration == "6h"
         assert spec.jitter == 0.2
+        assert spec.action == "deny"
 
     def test_custom_values(self):
-        spec = BlockedC2EventSpec(
+        spec = BeaconEventSpec(
             dst_ip="198.51.100.30",
             dst_port=8443,
             interval="15m",
             duration="12h",
             jitter=0.1,
+            action="deny",
         )
         assert spec.dst_port == 8443
         assert spec.interval == "15m"
         assert spec.duration == "12h"
         assert spec.jitter == 0.1
+        assert spec.action == "deny"
 
     def test_jitter_bounds(self):
         with pytest.raises((ValueError, ValidationError)):
-            BlockedC2EventSpec(dst_ip="198.51.100.30", jitter=-0.1)
+            BeaconEventSpec(
+                dst_ip="198.51.100.30", action="deny", interval="30m", duration="6h", jitter=-0.1
+            )
         with pytest.raises((ValueError, ValidationError)):
-            BlockedC2EventSpec(dst_ip="198.51.100.30", jitter=1.5)
+            BeaconEventSpec(
+                dst_ip="198.51.100.30", action="deny", interval="30m", duration="6h", jitter=1.5
+            )
 
     def test_interval_must_be_greater_than_zero(self):
         with pytest.raises((ValueError, ValidationError)):
-            BlockedC2EventSpec(dst_ip="198.51.100.30", interval="0s")
+            BeaconEventSpec(dst_ip="198.51.100.30", action="deny", interval="0s", duration="6h")
 
     def test_duration_must_be_greater_than_zero(self):
         with pytest.raises((ValueError, ValidationError)):
-            BlockedC2EventSpec(dst_ip="198.51.100.30", duration="0s")
+            BeaconEventSpec(dst_ip="198.51.100.30", action="deny", interval="30m", duration="0s")
 
 
 class TestDropMode:
@@ -187,23 +194,25 @@ class TestGroundTruthPortScan:
         assert "20 targets" in details
         assert "60 denied" in details
 
-    def test_format_event_details_blocked_c2(self, minimal_scenario):
+    def test_format_event_details_denied_beacon(self, minimal_scenario):
         events = [
             {
                 "time": datetime(2024, 1, 15, 10, 30, tzinfo=UTC),
                 "actor": "attacker",
                 "system": "WS-01",
-                "type": "blocked_c2",
+                "type": "beacon",
+                "action": "deny",
                 "dst_ip": "198.51.100.30",
                 "dst_port": 443,
                 "interval": "30m",
                 "duration": "6h",
                 "attempt_count": 12,
+                "termination": "6h",
             }
         ]
         gen = GroundTruthGenerator(minimal_scenario, events)
         details = gen._format_event_details(events[0])
-        assert "Blocked C2" in details
+        assert "Denied beacon" in details
         assert "198.51.100.30:443" in details
         assert "12 attempts" in details
 
@@ -221,11 +230,12 @@ class TestGroundTruthPortScan:
         assert "Port 22 (scan target)" in iocs["network"]
         assert "Port 443 (scan target)" in iocs["network"]
 
-    def test_extract_iocs_blocked_c2(self, minimal_scenario):
+    def test_extract_iocs_denied_beacon(self, minimal_scenario):
         events = [
             {
                 "actor": "attacker",
-                "type": "blocked_c2",
+                "type": "beacon",
+                "action": "deny",
                 "dst_ip": "198.51.100.30",
                 "dst_port": 443,
             }
@@ -233,7 +243,7 @@ class TestGroundTruthPortScan:
         gen = GroundTruthGenerator(minimal_scenario, events)
         iocs = gen._extract_iocs()
         assert "network" in iocs
-        assert "198.51.100.30:443 (Blocked C2 Server)" in iocs["network"]
+        assert "198.51.100.30:443 (Denied Beacon Target)" in iocs["network"]
 
 
 class TestSourceOnlyVisibility:
@@ -344,12 +354,18 @@ class TestSourceIpOverride:
         spec = PortScanEventSpec(target_ips=["10.0.10.1"])
         assert spec.source_ip == ""
 
-    def test_blocked_c2_source_ip_field(self):
-        """BlockedC2EventSpec should accept source_ip field."""
-        spec = BlockedC2EventSpec(dst_ip="198.51.100.30", source_ip="10.0.10.50")
+    def test_beacon_source_ip_field(self):
+        """BeaconEventSpec should accept source_ip field."""
+        spec = BeaconEventSpec(
+            dst_ip="198.51.100.30",
+            source_ip="10.0.10.50",
+            action="deny",
+            interval="30m",
+            duration="6h",
+        )
         assert spec.source_ip == "10.0.10.50"
 
-    def test_blocked_c2_default_source_ip_empty(self):
-        """BlockedC2EventSpec without source_ip should default to empty string."""
-        spec = BlockedC2EventSpec(dst_ip="198.51.100.30")
-        assert spec.source_ip == ""
+    def test_beacon_default_source_ip_none(self):
+        """BeaconEventSpec without source_ip should default to None."""
+        spec = BeaconEventSpec(dst_ip="198.51.100.30", action="deny", interval="30m", duration="6h")
+        assert spec.source_ip is None

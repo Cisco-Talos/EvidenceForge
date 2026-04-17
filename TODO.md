@@ -165,6 +165,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Sysmon EventRecordIDs perfectly sequential (no gaps) — gaps widened to 1-7 with 15% chance of 8-50
 - [ ] Event 8 StartModule/StartFunction always empty for benign pairs
 - [ ] **P1** Event 3 process-to-destination mismatch — user app sampling (Teams, Outlook, etc.) pairs process images with random baseline destinations (e.g., Teams→old.reddit.com). The process_network_map needs per-app destination domain constraints so each app only connects to plausible hosts (Teams→Microsoft domains, Outlook→O365, etc.).
+- [x] **P1** Event 3 sampling uses non-deterministic `random.random()` — baseline and user-app connection sampling in `_render_sysmon_network_connect()` uses the process-wide global RNG instead of a seeded/stable decision. Same scenario produces different Sysmon Event 3 record sets across runs, violating the deterministic-generation contract. Replace with `_stable_seed(host, uid, pid, time)` or pass a seeded RNG into the emitter path.
 - [ ] **P1** Event 7 (ImageLoaded) volume too thin — only 3-7 DLL load events per host per 6 hours. Real Sysmon with SwiftOnSecurity config logs hundreds. Baseline needs a standalone DLL load generator similar to the registry event generator.
 - [ ] **P2** Registry TargetObject path diversity — baseline registry pool has ~30 unique paths that cycle. Real Sysmon sees hundreds of distinct paths from COM registration, GPO processing, software updates. Need larger pool or dynamic path generation.
 
@@ -269,6 +270,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **eCAR:**
 - [x] Limited object diversity on Linux — expanded _EDR_FILE_PATHS_LINUX from 5 to 20 entries (logs, caches, config files, /proc, package manager)
 - [x] No FILE events on attack hosts — storyline processes now pass ensure_file_event=True, guaranteeing a FILE/CREATE for the process image
+- [x] ensure_file_event PID/image mismatch — Event 11 file_create used child PID with parent image, breaking PID-based joins; fixed to use child's process_name for consistent attribution
 - [x] No USER_SESSION events for server-side RDP lateral movement — generate_rdp_session() calls generate_logon() on target, which dispatches USER_SESSION/LOGIN to eCAR with EdrContext
 - [x] Vary filenames in file operations — expanded _EDR_FILE_PATHS_WIN from 7 to 21 entries, _EDR_FILE_PATHS_LINUX from 5 to 20 entries
 - [ ] Template variable leak — literal `{psql_db}` appearing in eCAR output; unsubstituted template variable in process command line or file path
@@ -379,6 +381,67 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 - [ ] Scenario marketplace
 - [ ] Integration with attack frameworks (CALDERA, Atomic Red Team)
 - [ ] **High-Performance Generation Mode** — Parallelize generation for enterprise-scale scenarios (200+ users, 7+ days, CI pipelines). Two approaches: (1) parallelize across emitters — EventDispatcher fans out to 20+ emitters concurrently (lower risk, emitters don't share state); (2) parallelize across time windows — process hours in parallel batches with StateManager coordination (higher complexity, bigger payoff). Even approach #1 removes the proportional scaling ceiling for large scenarios.
+
+---
+
+## Field Test Gaps (FOR668/FOR669 Exercise Data)
+
+Gaps identified by comparing exercise data requirements against current engine capabilities. Full per-exercise analysis and recommendations in [scenarios/EXERCISE_DATA_REQUIREMENTS.md](scenarios/EXERCISE_DATA_REQUIREMENTS.md).
+
+### Cluster 1: Configurable Bulk Event Framework + DNS Independence
+
+Highest impact — unblocks or improves 10 exercises across all 5 days. These are all variations of "generate N events matching a pattern over a time window." A single YAML-configurable bulk event primitive with type-specific parameter sets covers all of them. DNS independence is part of this because DNS beaconing and DGA are primary use cases driving the framework.
+
+- [x] General repeating/bulk event primitive (`_PeriodicEventBase` + `_iter_periodic_ticks()` shared engine)
+- [x] Built-in type: beacon — any protocol (HTTP/S, SSH, DNS, NTP, arbitrary), permitted or blocked
+- [x] Built-in type: web_scan — directory enumeration, vuln probing, URI lists, status code distribution (5 presets with overlay support)
+- [x] Built-in type: credential_spray — bulk failed_logon with spray/brute_force/stuffing patterns, optional success
+- [x] Built-in type: dga_queries — domain generation parameters (length, TLD, charset, count, rcode distribution, deterministic seed)
+- [x] Standalone dns_query event type (query, qtype, rcode, ttl) — DNS records independent of TCP connections
+- [x] DNS TTL control field on dns_query events
+- [x] Replaced `blocked_c2` with beacon `action: deny` (blocked_c2 removed)
+- [x] Built-in type: dns_tunnel — encoded subdomain exfiltration (base32/base64/hex, TXT/NULL/CNAME, payload chunking)
+- [ ] DGA algorithm presets (known malware families — Conficker, Suppobox, etc.)
+- [ ] Dictionary-based DGA (word combination domains)
+- [ ] active_hours / active_days on periodic types
+- [ ] Connection to non-listening host (conn_state=REJ/S0 without firewall deny)
+
+**Exercises:** 1.1 (web_scan), 1.1b (beacon), 1.3 (injection payload volume), 3.3 (beacon), 4.1 (dns_query, dga), 4.2 (dns_query, dga), 5.1 (credential_spray)
+
+### Cluster 2: Format Filtering
+
+High breadth, low cost — makes multi-week generation practical for 5 exercises without deep optimization.
+
+- [ ] `--formats` CLI filter (e.g., `--formats zeek_conn,zeek_dns` or `--formats proxy_access`)
+- [ ] Skip emitters that don't match the filter
+
+**Exercises:** 3.1, 3.2, 3.3, 5.1, 5.2 (all need 2-4 week windows)
+
+### Cluster 3: Temporal Baseline Phases
+
+Single-exercise blocker, but broadly useful for any multi-week scenario.
+
+- [ ] `phases` section in scenario YAML with per-phase baseline intensity/parameters
+- [ ] Support different baseline behavior across time ranges (e.g., "3x outbound from host X starting day 15")
+
+**Exercises:** 3.2 (gradual behavioral shifts)
+
+### Cluster 4: Windows Auth Enrichment
+
+Same area of codebase — baseline engine Windows auth generation, persona work schedules.
+
+- [ ] Broader baseline 4648 generation (RunAs, service account delegation, SCCM/GPO, helpdesk remote)
+- [ ] Event IDs 4800/4801 (workstation lock/unlock)
+
+**Exercises:** 5.1 (4800/4801), 5.2 (4648 breadth)
+
+### Cluster 5: Labeled Data Export
+
+Standalone post-processing. Defer until Day 4 exercises are functional (Cluster 1).
+
+- [ ] `--export-labels` flag mapping storyline events to output records with technique/storyline ID
+
+**Exercises:** 4.2 (MLTK labeled training data)
 
 ---
 

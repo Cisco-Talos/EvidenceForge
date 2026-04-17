@@ -508,39 +508,340 @@ class PortScanEventSpec(_EventSpecBase):
     scan_rate: float = Field(default=100.0, gt=0.0)
 
 
-class BlockedC2EventSpec(_EventSpecBase):
-    """Blocked C2 beaconing -- periodic denied outbound connection attempts.
+_DURATION_RE = re.compile(r"^(\d+(ms|[hdms]))+$")
 
-    Simulates malware on a compromised host periodically trying to reach a C2
-    server that the firewall blocks. Produces regular denied connection attempts
-    over the specified duration.
+
+def _validate_duration_string(v: str, field_name: str) -> str:
+    """Validate a duration string format and enforce > 0 seconds."""
+    if not _DURATION_RE.match(v):
+        raise ValueError(
+            f"{field_name} must match pattern like '30m', '6h', or '5m30s' "
+            "(digits followed by d/h/m/s/ms units)"
+        )
+    from evidenceforge.utils.time import parse_duration
+
+    seconds = parse_duration(v).total_seconds()
+    if seconds <= 0:
+        raise ValueError(f"{field_name} must be greater than 0 seconds (got '{v}')")
+    return v
+
+
+_VALID_QTYPES = {"A", "AAAA", "TXT", "CNAME", "MX", "NULL", "SRV", "PTR"}
+_VALID_RCODES = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+
+
+class _PeriodicEventBase(_EventSpecBase):
+    """Shared timing fields for all periodic/bulk event types.
+
+    Provides interval-based or rate-based timing, with exactly one
+    termination condition (end_time, duration, or count).
     """
 
-    type: Literal["blocked_c2"] = "blocked_c2"
-    source_ip: str = ""  # Override beacon source IP (default: uses storyline system IP)
-    dst_ip: str
-    dst_port: int = 443
-    protocol: str = Field(default="tcp", pattern="^(tcp|udp)$")
-    interval: str = "30m"
-    duration: str = "6h"
+    start_time: str | None = None  # ISO 8601 or relative offset; defaults to parent event time
+    interval: str | None = None  # Duration between events (e.g., "5m", "30s")
+    rate: float | None = None  # Events per second; mutually exclusive with interval
+    end_time: str | None = None  # ISO 8601 or relative offset
+    duration: str | None = None  # Total campaign length (e.g., "7d", "2h")
+    count: int | None = Field(default=None, ge=1)  # Exact number of events to emit
     jitter: float = Field(default=0.2, ge=0.0, le=1.0)
 
     @field_validator("interval", "duration")
     @classmethod
-    def validate_positive_duration(cls, v: str, info: ValidationInfo) -> str:
-        """Validate blocked_c2 interval/duration format and enforce > 0 seconds."""
-        if not re.match(r"^(\d+(ms|[hdms]))+$", v):
-            raise ValueError(
-                f"{info.field_name} must match pattern like '30m', '6h', or '5m30s' "
-                "(digits followed by d/h/m/s/ms units)"
-            )
-
-        from evidenceforge.utils.time import parse_duration
-
-        seconds = parse_duration(v).total_seconds()
-        if seconds <= 0:
-            raise ValueError(f"{info.field_name} must be greater than 0 seconds (got '{v}')")
+    def validate_duration_fields(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Validate interval/duration format and enforce > 0."""
+        if v is not None:
+            _validate_duration_string(v, info.field_name)
         return v
+
+    @field_validator("rate")
+    @classmethod
+    def validate_positive_rate(cls, v: float | None) -> float | None:
+        """Rate must be positive."""
+        if v is not None and v <= 0:
+            raise ValueError("rate must be greater than 0")
+        return v
+
+    @model_validator(mode="after")
+    def check_termination(self) -> "_PeriodicEventBase":
+        """Exactly one of end_time, duration, or count must be specified."""
+        terms = sum(x is not None for x in (self.end_time, self.duration, self.count))
+        if terms != 1:
+            raise ValueError("Exactly one of end_time, duration, or count must be specified")
+        return self
+
+    @model_validator(mode="after")
+    def check_timing_source(self) -> "_PeriodicEventBase":
+        """At least one of interval or rate must be set (subclasses enforce which)."""
+        if self.interval is None and self.rate is None:
+            raise ValueError("Either interval or rate must be specified")
+        if self.interval is not None and self.rate is not None:
+            raise ValueError("interval and rate are mutually exclusive")
+        return self
+
+
+class BeaconEventSpec(_PeriodicEventBase):
+    """Periodic beacon — repeated connections at regular intervals.
+
+    Produces allowed or denied connections at configurable intervals.
+    Supports any protocol (HTTP/S, SSH, DNS, NTP, arbitrary).
+    Replaces the former blocked_c2 event type.
+    """
+
+    type: Literal["beacon"] = "beacon"
+    dst_ip: str
+    dst_port: int = 443
+    hostname: str | None = None  # Domain name for DNS/SSL SNI
+    service: str | None = None  # ssl, http, etc.
+    source_ip: str | None = None
+    protocol: str = Field(default="tcp", pattern="^(tcp|udp)$")
+    action: Literal["allow", "deny"] = "allow"
+    # HTTP fields (when service=http)
+    method: str | None = None
+    uri: str | None = None
+    status_code: int | None = None
+    user_agent: str | None = None
+    response_body_len: int | None = None
+    # Override auto-sized byte counts and connection outcome
+    orig_bytes: int | None = None
+    resp_bytes: int | None = None
+    conn_state: str | None = None
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str | None) -> str | None:
+        """Validate hostname is a bare FQDN (no scheme/port/path)."""
+        if v is not None:
+            _validate_hostname(v, "beacon.hostname")
+        return v
+
+    @model_validator(mode="after")
+    def beacon_requires_interval(self) -> "BeaconEventSpec":
+        """Beacon uses interval-based timing, not rate."""
+        if self.interval is None:
+            raise ValueError("beacon requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("beacon uses interval, not rate")
+        return self
+
+
+class DnsQueryEventSpec(_EventSpecBase):
+    """Standalone DNS query event (generates Zeek dns.log, conn.log, Sysmon Event 22).
+
+    Produces a single DNS query as a UDP/53 connection with DnsContext.
+    Unlike connection events with causal DNS expansion, this type allows
+    direct control over query parameters (qtype, rcode, ttl, answer).
+    """
+
+    type: Literal["dns_query"] = "dns_query"
+    query: str  # Domain name to query
+    qtype: str = "A"  # Query type: A, AAAA, TXT, CNAME, MX, NULL, SRV, PTR
+    rcode: str = "NOERROR"  # Response code: NOERROR, NXDOMAIN, SERVFAIL, REFUSED
+    ttl: int | None = None  # Response TTL (auto-generated if omitted)
+    answer: str | list[str] | None = None  # Required when rcode=NOERROR
+    source_ip: str | None = None  # Querying host IP (default: storyline system)
+
+    @field_validator("qtype")
+    @classmethod
+    def validate_qtype(cls, v: str) -> str:
+        """Validate query type."""
+        v_upper = v.upper()
+        if v_upper not in _VALID_QTYPES:
+            raise ValueError(f"qtype must be one of {sorted(_VALID_QTYPES)}, got '{v}'")
+        return v_upper
+
+    @field_validator("rcode")
+    @classmethod
+    def validate_rcode(cls, v: str) -> str:
+        """Validate response code."""
+        v_upper = v.upper()
+        if v_upper not in _VALID_RCODES:
+            raise ValueError(f"rcode must be one of {sorted(_VALID_RCODES)}, got '{v}'")
+        return v_upper
+
+    @model_validator(mode="after")
+    def answer_required_for_noerror(self) -> "DnsQueryEventSpec":
+        """Answer is required when rcode is NOERROR."""
+        if self.rcode == "NOERROR" and self.answer is None:
+            raise ValueError("answer is required when rcode is NOERROR")
+        return self
+
+
+class WebScanEventSpec(_PeriodicEventBase):
+    """Web scanning attack — repeated HTTP requests from scanner presets.
+
+    Generates high-volume HTTP requests to a target web server using
+    configurable presets (nikto, dirb, gobuster, sqlmap, nmap_http) or
+    custom URI path lists. Each request produces web_access + Zeek HTTP logs.
+    """
+
+    type: Literal["web_scan"] = "web_scan"
+    dst_ip: str
+    dst_port: int = 80
+    hostname: str | None = None
+    source_ip: str | None = None
+    preset: str | None = None  # nikto, dirb, gobuster, sqlmap, nmap_http
+    paths: list[dict[str, Any]] | None = None  # [{uri, method, status}]
+    user_agent: str | None = None  # Override preset UA
+    status_codes: dict[str, float] | None = None  # Override status distribution
+
+    @field_validator("hostname")
+    @classmethod
+    def validate_hostname(cls, v: str | None) -> str | None:
+        """Validate hostname is a bare FQDN."""
+        if v is not None:
+            _validate_hostname(v, "web_scan.hostname")
+        return v
+
+    @model_validator(mode="after")
+    def web_scan_requires_rate(self) -> "WebScanEventSpec":
+        """Web scan uses rate-based timing, not interval."""
+        if self.rate is None:
+            raise ValueError("web_scan requires rate (not interval)")
+        if self.interval is not None:
+            raise ValueError("web_scan uses rate, not interval")
+        return self
+
+    @model_validator(mode="after")
+    def web_scan_requires_paths_or_preset(self) -> "WebScanEventSpec":
+        """Either preset or paths (or both) must be specified."""
+        if self.preset is None and self.paths is None:
+            raise ValueError("Either preset or paths must be specified")
+        return self
+
+
+class CredentialSprayEventSpec(_PeriodicEventBase):
+    """Credential attack — bulk authentication attempts.
+
+    Supports three attack patterns:
+    - spray: one password per account, rotating through accounts
+    - brute_force: many passwords against one account at a time
+    - stuffing: one-to-one credential pairs
+
+    Produces Windows 4625/4776 or Linux syslog auth failures depending
+    on target OS, with optional final successful logon.
+    """
+
+    type: Literal["credential_spray"] = "credential_spray"
+    source_ip: str | None = None
+    pattern: Literal["spray", "brute_force", "stuffing"] = "spray"
+    target_accounts: list[str] = Field(..., min_length=1)
+    logon_type: int = 3
+    success: dict[str, Any] | None = None  # {"account": str, "after": int}
+
+    @model_validator(mode="after")
+    def credential_spray_requires_interval(self) -> "CredentialSprayEventSpec":
+        """Credential spray uses interval-based timing."""
+        if self.interval is None:
+            raise ValueError("credential_spray requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("credential_spray uses interval, not rate")
+        return self
+
+    @model_validator(mode="after")
+    def validate_success(self) -> "CredentialSprayEventSpec":
+        """Validate success field if specified."""
+        if self.success is not None:
+            account = self.success.get("account")
+            after = self.success.get("after")
+            if not account:
+                raise ValueError("success.account is required")
+            if account not in self.target_accounts:
+                raise ValueError(f"success.account '{account}' must be in target_accounts")
+            if not isinstance(after, int) or after < 1:
+                raise ValueError("success.after must be an integer >= 1")
+        return self
+
+
+class DgaQueriesEventSpec(_PeriodicEventBase):
+    """DGA bulk DNS queries — algorithmically generated domain lookups.
+
+    Generates many DNS queries with random domain names, mostly returning
+    NXDOMAIN. Used for botnet/DGA detection training.
+    """
+
+    type: Literal["dga_queries"] = "dga_queries"
+    source_ip: str | None = None
+    length_range: tuple[int, int] = (8, 15)
+    charset: str = "abcdefghijklmnopqrstuvwxyz0123456789"
+    tld: str = ".com"
+    seed: int | None = None  # Deterministic domain generation
+    rcode_distribution: dict[str, float] | None = None  # {"NXDOMAIN": 0.95, "NOERROR": 0.05}
+    answer_ip: str | None = None  # IP for NOERROR responses
+
+    @field_validator("length_range")
+    @classmethod
+    def validate_length_range(cls, v: tuple[int, int]) -> tuple[int, int]:
+        """Validate domain label length bounds."""
+        lo, hi = v
+        if lo < 1:
+            raise ValueError("length_range minimum must be >= 1")
+        if lo > hi:
+            raise ValueError("length_range minimum must be <= maximum")
+        if hi > 63:
+            raise ValueError("length_range maximum must be <= 63 (DNS label limit)")
+        return v
+
+    @model_validator(mode="after")
+    def dga_requires_interval(self) -> "DgaQueriesEventSpec":
+        """DGA uses interval-based timing."""
+        if self.interval is None:
+            raise ValueError("dga_queries requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("dga_queries uses interval, not rate")
+        return self
+
+    @model_validator(mode="after")
+    def validate_rcode_distribution(self) -> "DgaQueriesEventSpec":
+        """Validate rcode_distribution sums to ~1.0 and has valid keys."""
+        if self.rcode_distribution is not None:
+            for key in self.rcode_distribution:
+                if key not in _VALID_RCODES:
+                    raise ValueError(f"Invalid rcode in distribution: '{key}'")
+            total = sum(self.rcode_distribution.values())
+            if abs(total - 1.0) > 0.01:
+                raise ValueError(f"rcode_distribution must sum to ~1.0, got {total:.3f}")
+            # If any NOERROR probability, answer_ip is needed
+            noerror_prob = self.rcode_distribution.get("NOERROR", 0)
+            if noerror_prob > 0 and self.answer_ip is None:
+                raise ValueError("answer_ip is required when rcode_distribution includes NOERROR")
+        return self
+
+
+class DnsTunnelEventSpec(_PeriodicEventBase):
+    """DNS tunneling — data exfiltration via encoded DNS subdomain labels.
+
+    Generates DNS queries with encoded payload chunks as subdomain labels
+    (e.g., aGVsbG8gd29ybGQ.tunnel.evil.com). Supports TXT, NULL, and CNAME
+    query types with base32/base64/hex encoding.
+    """
+
+    type: Literal["dns_tunnel"] = "dns_tunnel"
+    source_ip: str | None = None
+    base_domain: str  # Tunnel endpoint domain
+    encoding: Literal["base32", "base64", "hex"] = "hex"
+    qtype: str = "TXT"  # TXT, NULL, CNAME
+    label_length: int = Field(default=30, ge=1, le=63)
+    payload: str | None = None  # Fixed payload to encode
+    payload_size: int = Field(default=256, ge=1)  # Random payload size if no payload
+
+    @field_validator("qtype")
+    @classmethod
+    def validate_tunnel_qtype(cls, v: str) -> str:
+        """DNS tunnel uses TXT, NULL, or CNAME query types."""
+        v_upper = v.upper()
+        valid = {"TXT", "NULL", "CNAME"}
+        if v_upper not in valid:
+            raise ValueError(f"dns_tunnel qtype must be one of {sorted(valid)}, got '{v}'")
+        return v_upper
+
+    @model_validator(mode="after")
+    def dns_tunnel_requires_interval(self) -> "DnsTunnelEventSpec":
+        """DNS tunnel uses interval-based timing."""
+        if self.interval is None:
+            raise ValueError("dns_tunnel requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("dns_tunnel uses interval, not rate")
+        return self
 
 
 class RawEventSpec(_EventSpecBase):
@@ -574,7 +875,12 @@ EventSpec = Annotated[
     | CreateRemoteThreadEventSpec
     | DhcpLeaseEventSpec
     | PortScanEventSpec
-    | BlockedC2EventSpec
+    | BeaconEventSpec
+    | DnsQueryEventSpec
+    | WebScanEventSpec
+    | CredentialSprayEventSpec
+    | DgaQueriesEventSpec
+    | DnsTunnelEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

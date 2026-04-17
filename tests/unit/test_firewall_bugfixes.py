@@ -62,7 +62,7 @@ class TestCiscoAsaFormatFields:
 
 
 class TestEvalScorerFirewallEvents:
-    """Fix 2: _record_matches() should recognize port_scan and blocked_c2."""
+    """Fix 2: _record_matches() should recognize port_scan and beacon."""
 
     def _make_resolved_event(self, event_type, system_ip, details=None):
         """Create a minimal ResolvedEvent-like object for testing."""
@@ -147,37 +147,37 @@ class TestEvalScorerFirewallEvents:
         )
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is False
 
-    def test_blocked_c2_matches_cisco_asa(self):
+    def test_beacon_deny_matches_cisco_asa(self):
         from evidenceforge.evaluation.dimensions.signal_integrity import (
             SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
         event = self._make_resolved_event(
-            "blocked_c2", "10.0.10.50", {"dst_ip": "198.51.100.30", "dst_port": 443}
+            "beacon", "10.0.10.50", {"dst_ip": "198.51.100.30", "dst_port": 443, "action": "deny"}
         )
         record = ParsedRecord(
             source_format="cisco_asa",
             raw="test",
             fields={"msg_id": 106023, "dst_ip": "198.51.100.30", "dst_port": 443},
         )
-        assert scorer._record_matches(record, record.source_format, event, "blocked_c2") is True
+        assert scorer._record_matches(record, record.source_format, event, "beacon") is True
 
-    def test_blocked_c2_no_match_wrong_port(self):
+    def test_beacon_deny_no_match_wrong_port(self):
         from evidenceforge.evaluation.dimensions.signal_integrity import (
             SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
         event = self._make_resolved_event(
-            "blocked_c2", "10.0.10.50", {"dst_ip": "198.51.100.30", "dst_port": 443}
+            "beacon", "10.0.10.50", {"dst_ip": "198.51.100.30", "dst_port": 443, "action": "deny"}
         )
         record = ParsedRecord(
             source_format="cisco_asa",
             raw="test",
             fields={"msg_id": 106023, "dst_ip": "198.51.100.30", "dst_port": 8443},
         )
-        assert scorer._record_matches(record, record.source_format, event, "blocked_c2") is False
+        assert scorer._record_matches(record, record.source_format, event, "beacon") is False
 
 
 class TestSourceSideVisibilityDirection:

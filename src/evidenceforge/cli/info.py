@@ -116,6 +116,13 @@ def _collect_system_roles() -> list[str]:
     return sorted(data.get("role_traffic", {}).keys())
 
 
+def _collect_web_scan_presets() -> list[str]:
+    """Collect available web scan preset names."""
+    from evidenceforge.config.web_scan_presets import list_preset_names
+
+    return list_preset_names()
+
+
 def _gather_lightweight() -> dict[str, Any]:
     """Gather lightweight fields that don't require overlay-backed loaders.
 
@@ -181,6 +188,7 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "dns_tags": _collect_dns_tags,
         "application_ids": _collect_application_ids,
         "system_roles": _collect_system_roles,
+        "web_scan_presets": _collect_web_scan_presets,
     }
     for key, collector in inventories.items():
         try:
@@ -275,6 +283,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "personas": "Built-in persona names (package + overlay)",
     "system_roles": "System role names from traffic profiles",
     "version": "EvidenceForge version",
+    "web_scan_presets": "Available web scan preset names (nikto, dirb, etc.)",
 }
 
 

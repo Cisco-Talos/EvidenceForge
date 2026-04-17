@@ -394,11 +394,16 @@ These are just examples — invent additional realistic variations appropriate t
 
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
-**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `blocked_c2`, `raw`
+**Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `beacon`, `dns_query`, `web_scan`, `credential_spray`, `dga_queries`, `dns_tunnel`, `raw`
 
-**Firewall event types:**
+**Firewall/network event types:**
 - `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
-- `blocked_c2` — Periodic denied outbound for blocked C2 beaconing. Fields: `dst_ip`, `dst_port`, `interval`, `duration`, `jitter`. Produces ASA 106023 denies over the specified time range.
+- `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter`, plus all `connection` fields. Use `action: deny` for firewall-blocked beaconing.
+- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate`, `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`.
+- `credential_spray` — Bulk auth attacks. Fields: `target_accounts`, `interval`, `pattern` (spray/brute_force/stuffing), `success` ({account, after}). OS-aware: Windows 4625/4776 or Linux syslog.
+- `dns_query` — Standalone DNS query. Fields: `query`, `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR).
+- `dga_queries` — Bulk DGA domain lookups. Fields: `interval`, `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`.
+- `dns_tunnel` — DNS exfiltration via encoded subdomains. Fields: `base_domain`, `encoding` (base32/base64/hex), `qtype` (TXT/NULL/CNAME), `label_length`, `payload`/`payload_size`.
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 

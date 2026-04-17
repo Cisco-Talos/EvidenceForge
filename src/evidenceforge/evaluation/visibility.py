@@ -188,7 +188,18 @@ class VisibilityModel:
 
         host_local = host_formats & _HOST_LOCAL
         # Network types apply if connection events are present
-        network_types = {"connection", "dhcp_lease", "port_scan", "blocked_c2"}
+        network_types = {
+            "connection",
+            "dhcp_lease",
+            "port_scan",
+            "beacon",
+            "dns_query",
+            "web_scan",
+            "dga_queries",
+            "dns_tunnel",
+        }
+        # Note: credential_spray produces auth events (4625/syslog), not network traces —
+        # intentionally excluded from network_types so eval doesn't require Zeek/ASA traces.
 
         groups: list[tuple[str, set[str]]] = []
         if host_local:
