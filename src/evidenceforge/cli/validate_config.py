@@ -190,6 +190,9 @@ def validate_config() -> ValidationResult:
                 "dll_pool": None,
             },
         },
+        "activity/web_scan_presets.yaml": {
+            "dict_fields": {"presets"},
+        },
     }
 
     overlay_errors = False
