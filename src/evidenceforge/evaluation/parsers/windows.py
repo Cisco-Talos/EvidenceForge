@@ -33,8 +33,9 @@ from . import LogParser, ParsedRecord, register_parser
 # Namespace used in Windows Event XML
 NS = "http://schemas.microsoft.com/win/2004/08/events/event"
 
-# Regex to split XML into individual <Event> blocks
-EVENT_PATTERN = re.compile(r"<Event\s[^>]*>.*?</Event>", re.DOTALL)
+# Regex boundaries used for streaming extraction of individual <Event> blocks
+EVENT_START_PATTERN = re.compile(r"<Event(?:\s|>)")
+EVENT_END_PATTERN = re.compile(r"</Event>")
 
 
 @register_parser
@@ -45,10 +46,29 @@ class WindowsEventParser(LogParser):
         return path.name == "windows_event_security.xml"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
-        content = path.read_text(encoding="utf-8")
-        for i, match in enumerate(EVENT_PATTERN.finditer(content), 1):
-            raw = match.group(0)
-            yield self._parse_event(raw, i)
+        event_index = 0
+        in_event = False
+        event_lines: list[str] = []
+
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not in_event and EVENT_START_PATTERN.search(line):
+                    in_event = True
+                    event_lines = [line]
+                    if EVENT_END_PATTERN.search(line):
+                        event_index += 1
+                        yield self._parse_event("".join(event_lines), event_index)
+                        in_event = False
+                        event_lines = []
+                    continue
+
+                if in_event:
+                    event_lines.append(line)
+                    if EVENT_END_PATTERN.search(line):
+                        event_index += 1
+                        yield self._parse_event("".join(event_lines), event_index)
+                        in_event = False
+                        event_lines = []
 
     def _parse_event(self, raw: str, index: int) -> ParsedRecord:
         fields: dict = {}
@@ -56,6 +76,9 @@ class WindowsEventParser(LogParser):
         timestamp = None
 
         try:
+            if "<!DOCTYPE" in raw or "<!ENTITY" in raw:
+                raise ET.ParseError("DOCTYPE and ENTITY declarations are not allowed")
+
             root = ET.fromstring(raw)
 
             # System fields
