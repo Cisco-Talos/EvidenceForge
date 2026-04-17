@@ -3857,13 +3857,14 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
-        # Unlock is a re-authentication — emit 4624 type 7
+        # Unlock is a re-authentication — emit 4624 type 7 with same session
         self.generate_logon(
             user=user,
             system=system,
             time=time + timedelta(milliseconds=50),
             logon_type=7,
             source_ip=system.ip,
+            logon_id=logon_id,
         )
 
     def generate_wfp_connection(

@@ -568,6 +568,9 @@ class BaselineMixin:
         enabled_users = [u for u in self.scenario.environment.users if u.enabled]
         logger.info(f"Generating baseline for {len(enabled_users)} enabled users")
 
+        # Initialize pending unlocks for cross-hour lock/unlock persistence
+        self._pending_unlocks: dict[str, tuple] = {}
+
         # Emit initial DHCP leases (during warm-up they're suppressed from output
         # but establish lease state for periodic renewals)
         self._emit_dhcp_leases()
@@ -2153,6 +2156,33 @@ class BaselineMixin:
                         process_pid=session.explorer_pid if session else 0,
                     )
 
+    def _emit_unlock(self, user, system, unlock_t, logon_id, rng) -> None:
+        """Emit an unlock event, optionally preceded by a failed password attempt."""
+        self.state_manager.set_current_time(unlock_t)
+        if rng.random() < 0.15:
+            fail_t = unlock_t - timedelta(seconds=rng.randint(3, 15))
+            self.state_manager.set_current_time(fail_t)
+            self.activity_generator.generate_failed_logon(
+                user=user,
+                system=system,
+                time=fail_t,
+                logon_type=7,
+                source_ip=system.ip,
+            )
+            self.state_manager.set_current_time(unlock_t)
+        self.activity_generator.generate_workstation_unlock(
+            user=user,
+            system=system,
+            time=unlock_t,
+            logon_id=logon_id,
+        )
+
+    def _defer_unlock(self, username, unlock_t, logon_id) -> None:
+        """Store a pending unlock for emission in a future hour."""
+        if not hasattr(self, "_pending_unlocks"):
+            self._pending_unlocks = {}
+        self._pending_unlocks[username] = (unlock_t, logon_id)
+
     def _generate_lock_unlock_events(
         self,
         user: User,
@@ -2162,6 +2192,8 @@ class BaselineMixin:
     ) -> None:
         """Generate workstation lock/unlock events for Windows interactive sessions."""
         rng = _get_rng()
+        hour_end = current_hour + timedelta(hours=1)
+
         # Only Windows workstation users with active interactive sessions
         sessions = self.state_manager.get_sessions_for_user(user.username)
         session = next(
@@ -2186,16 +2218,22 @@ class BaselineMixin:
         if not system or _get_os_category(system.os) != "windows":
             return
 
+        # Emit any pending unlock from a prior hour
+        pending = getattr(self, "_pending_unlocks", {})
+        if user.username in pending:
+            unlock_t, pending_logon_id = pending.pop(user.username)
+            if unlock_t < hour_end:
+                self._emit_unlock(user, system, unlock_t, pending_logon_id, rng)
+
         # Per-persona lock frequency
         _pn = (persona_name or "").lower()
         if _pn in ("security_analyst", "sysadmin"):
-            lock_prob = 0.40  # 3-5 locks/day → ~40% per work hour
+            lock_prob = 0.40
         elif _pn in ("developer",):
-            lock_prob = 0.08  # 0-1 locks/day
+            lock_prob = 0.08
         else:
-            lock_prob = 0.20  # 1-3 locks/day
+            lock_prob = 0.20
 
-        # Only during work hours (7-19)
         if not (7 <= local_hour <= 19):
             return
 
@@ -2209,27 +2247,11 @@ class BaselineMixin:
                 time=lock_t,
                 logon_id=session.logon_id,
             )
-            # Unlock after lunch (30-60 min)
             unlock_t = lock_t + timedelta(minutes=rng.randint(30, 60))
-            if unlock_t < current_hour + timedelta(hours=1):
-                self.state_manager.set_current_time(unlock_t)
-                # ~15% chance of failed password before unlock
-                if rng.random() < 0.15:
-                    fail_t = unlock_t - timedelta(seconds=rng.randint(3, 15))
-                    self.state_manager.set_current_time(fail_t)
-                    self.activity_generator.generate_failed_logon(
-                        user=user,
-                        system=system,
-                        time=fail_t,
-                        logon_type=7,
-                        source_ip=system.ip,
-                    )
-                self.activity_generator.generate_workstation_unlock(
-                    user=user,
-                    system=system,
-                    time=unlock_t,
-                    logon_id=session.logon_id,
-                )
+            if unlock_t < hour_end:
+                self._emit_unlock(user, system, unlock_t, session.logon_id, rng)
+            else:
+                self._defer_unlock(user.username, unlock_t, session.logon_id)
             return
 
         # Random meeting-break lock/unlock
@@ -2242,26 +2264,11 @@ class BaselineMixin:
                 time=lock_t,
                 logon_id=session.logon_id,
             )
-            gap_minutes = rng.randint(2, 15)
-            unlock_t = lock_t + timedelta(minutes=gap_minutes)
-            if unlock_t < current_hour + timedelta(hours=1):
-                self.state_manager.set_current_time(unlock_t)
-                if rng.random() < 0.15:
-                    fail_t = unlock_t - timedelta(seconds=rng.randint(3, 15))
-                    self.state_manager.set_current_time(fail_t)
-                    self.activity_generator.generate_failed_logon(
-                        user=user,
-                        system=system,
-                        time=fail_t,
-                        logon_type=7,
-                        source_ip=system.ip,
-                    )
-                self.activity_generator.generate_workstation_unlock(
-                    user=user,
-                    system=system,
-                    time=unlock_t,
-                    logon_id=session.logon_id,
-                )
+            unlock_t = lock_t + timedelta(minutes=rng.randint(2, 15))
+            if unlock_t < hour_end:
+                self._emit_unlock(user, system, unlock_t, session.logon_id, rng)
+            else:
+                self._defer_unlock(user.username, unlock_t, session.logon_id)
 
     def _get_server_ssh_users(self, system) -> list:
         """Return the subset of admin users who would SSH into this server.
