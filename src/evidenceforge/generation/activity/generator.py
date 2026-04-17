@@ -2334,6 +2334,8 @@ class ActivityGenerator:
             event.network.history = "ShADadfF"
             if event.network.duration is None:
                 event.network.duration = rng.uniform(0.01, 2.0)
+            if event.network.orig_bytes == 0:
+                event.network.orig_bytes = event.http.request_body_len or rng.randint(200, 2000)
             if event.network.resp_bytes == 0:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
@@ -3383,6 +3385,12 @@ class ActivityGenerator:
                 "process_query": "query",
             }
             catalog_category = _CATEGORY_MAP.get(activity_type)
+
+            if catalog_category in ("user_app", "browser", "office") and system.type in (
+                "server",
+                "domain_controller",
+            ):
+                return
 
             # Try unified application catalog first (persona-aware, PE-metadata-rich)
             if catalog_category:

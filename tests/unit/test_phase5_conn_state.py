@@ -238,10 +238,10 @@ class TestConnStateByteConsistency:
 
         assert rej_found, "No REJ connection found in 500 attempts"
 
-    def test_http_consistency_sets_duration(
+    def test_http_consistency_sets_duration_and_orig_bytes(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
-        """When HTTP context forces S0->SF, duration must also be set."""
+        """When HTTP context forces S0->SF, duration and orig_bytes must be set."""
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_connection(
@@ -256,4 +256,7 @@ class TestConnStateByteConsistency:
         if event.http is not None and event.network.conn_state == "SF":
             assert event.network.duration is not None, (
                 "SF connection with HTTP context must have a duration"
+            )
+            assert event.network.orig_bytes > 0, (
+                "SF connection with HTTP context must have orig_bytes > 0"
             )
