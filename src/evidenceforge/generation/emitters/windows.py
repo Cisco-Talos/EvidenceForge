@@ -104,6 +104,8 @@ class WindowsEventEmitter(LogEmitter):
         "password_change",
         "password_reset",
         "special_privileges",
+        "workstation_locked",
+        "workstation_unlocked",
     }
 
     @staticmethod
@@ -139,6 +141,8 @@ class WindowsEventEmitter(LogEmitter):
         "group_member_removed_local",
         "group_member_added_universal",
         "group_member_removed_universal",
+        "workstation_locked",
+        "workstation_unlocked",
     }
 
     def _get_host(self, event: SecurityEvent) -> "HostContext":
@@ -191,6 +195,8 @@ class WindowsEventEmitter(LogEmitter):
             "password_change": self._render_password_change,
             "password_reset": self._render_password_reset,
             "special_privileges": self._render_special_privileges,
+            "workstation_locked": self._render_workstation_lock,
+            "workstation_unlocked": self._render_workstation_unlock,
         }.get(event.event_type)
         if renderer is None:
             raise NotImplementedError(
@@ -318,6 +324,48 @@ class WindowsEventEmitter(LogEmitter):
             "PrivilegeList": privs,
         }
         self.emit_event(priv_data)
+
+    def _render_workstation_lock(self, event: SecurityEvent) -> None:
+        """Render Windows 4800 (workstation locked)."""
+        rng = random.Random()
+        auth = event.auth
+        host = self._get_host(event)
+        event_data = {
+            "EventID": 4800,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 500 + rng.randint(0, 100),
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
+            "TargetLogonId": auth.logon_id or "0x0",
+            "SessionId": rng.randint(1, 5),
+        }
+        self.emit_event(event_data)
+
+    def _render_workstation_unlock(self, event: SecurityEvent) -> None:
+        """Render Windows 4801 (workstation unlocked)."""
+        rng = random.Random()
+        auth = event.auth
+        host = self._get_host(event)
+        event_data = {
+            "EventID": 4801,
+            "TimeCreated": event.timestamp,
+            "Computer": host.fqdn,
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 500 + rng.randint(0, 100),
+            "ExecutionThreadID": rng.randint(100, 500),
+            "TargetUserSid": auth.user_sid,
+            "TargetUserName": auth.username,
+            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
+            "TargetLogonId": auth.logon_id or "0x0",
+            "SessionId": rng.randint(1, 5),
+        }
+        self.emit_event(event_data)
 
     def _render_logoff(self, event: SecurityEvent) -> None:
         """Render Windows 4634 (logoff)."""

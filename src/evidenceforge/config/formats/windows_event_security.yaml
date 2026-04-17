@@ -484,6 +484,66 @@ variants:
         required: true
         description: "List of assigned special privileges"
 
+  # EventID 4800: The workstation was locked
+  - name: workstation_locked
+    event_id: "4800"
+    description: "Workstation locked"
+    fields:
+      - name: TargetUserSid
+        type: sid
+        required: true
+        description: "SID of the user who locked the workstation"
+
+      - name: TargetUserName
+        type: string
+        required: true
+        description: "Account name of the user"
+
+      - name: TargetDomainName
+        type: string
+        required: true
+        description: "Domain of the user"
+
+      - name: TargetLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the locked session"
+
+      - name: SessionId
+        type: integer
+        required: true
+        description: "Terminal Services session ID"
+
+  # EventID 4801: The workstation was unlocked
+  - name: workstation_unlocked
+    event_id: "4801"
+    description: "Workstation unlocked"
+    fields:
+      - name: TargetUserSid
+        type: sid
+        required: true
+        description: "SID of the user who unlocked the workstation"
+
+      - name: TargetUserName
+        type: string
+        required: true
+        description: "Account name of the user"
+
+      - name: TargetDomainName
+        type: string
+        required: true
+        description: "Domain of the user"
+
+      - name: TargetLogonId
+        type: hex_string
+        required: true
+        description: "Logon ID of the unlocked session"
+
+      - name: SessionId
+        type: integer
+        required: true
+        description: "Terminal Services session ID"
+
   # EventID 4689: A process has exited
   - name: process_termination
     event_id: "4689"
@@ -1096,7 +1156,7 @@ output:
         <EventID>{{ EventID }}</EventID>
         <Version>{{ 2 if EventID in [4688, 4624] else 1 if EventID == 5156 else 0 }}</Version>
         <Level>{{ Level }}</Level>
-        <Task>{{ {1102: 104, 4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4697: 12289, 4698: 12804, 4699: 12804, 4700: 12804, 4701: 12804, 4720: 13824, 4723: 13824, 4724: 13824, 4726: 13824, 4728: 13826, 4729: 13826, 4732: 13826, 4733: 13826, 4738: 13824, 4756: 13826, 4757: 13826, 4768: 14339, 4769: 14337, 4770: 14339, 4771: 14339, 4776: 14336, 5156: 12810}.get(EventID, 0) }}</Task>
+        <Task>{{ {1102: 104, 4624: 12544, 4625: 12544, 4634: 12545, 4648: 12544, 4672: 12548, 4688: 13312, 4689: 13313, 4697: 12289, 4698: 12804, 4699: 12804, 4700: 12804, 4701: 12804, 4720: 13824, 4723: 13824, 4724: 13824, 4726: 13824, 4728: 13826, 4729: 13826, 4732: 13826, 4733: 13826, 4738: 13824, 4756: 13826, 4757: 13826, 4768: 14339, 4769: 14337, 4770: 14339, 4771: 14339, 4776: 14336, 4800: 12551, 4801: 12551, 5156: 12810}.get(EventID, 0) }}</Task>
         <Opcode>0</Opcode>
         <Keywords>{{ Keywords | default('0x8020000000000000') }}</Keywords>
         <TimeCreated SystemTime="{{ TimeCreated }}"/>
