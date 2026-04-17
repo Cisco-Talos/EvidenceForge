@@ -500,6 +500,87 @@ output:
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_requires_staged_gt(self, mock_engine_class, scenarios_dir, tmp_path):
+        """If engine succeeds but staged GROUND_TRUTH.md is missing, old output preserved."""
+
+        def _fake_generate_no_gt():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                # Deliberately skip creating GROUND_TRUTH.md
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate_no_gt
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert (tmp_path / "data" / "old.xml").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_cleans_stale_rollback(self, mock_engine_class, scenarios_dir, tmp_path):
+        """Stale rollback dirs from prior killed runs are cleaned up."""
+
+        def _fake_generate():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        # Simulate stale rollback dir from a prior killed run
+        stale_dir = tmp_path / ".eforge_rollback_stale123"
+        stale_dir.mkdir()
+        (stale_dir / "data").mkdir()
+        (stale_dir / "data" / "ancient.xml").write_text("ancient data")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert (tmp_path / "data" / "new.xml").read_text() == "new data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
+        # Stale rollback dir should be cleaned up
+        assert not stale_dir.exists()
+        # No rollback dirs should remain
+        assert len(list(tmp_path.glob(".eforge_rollback_*"))) == 0
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_no_prompt_when_clean(self, mock_engine_class, scenarios_dir, tmp_path):
         """Clean output directory should not trigger any prompt."""
         mock_engine = Mock()

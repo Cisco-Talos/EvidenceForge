@@ -350,9 +350,15 @@ def generate(
             staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
             if not gen_data_dir.exists():
                 raise RuntimeError("Staged data/ directory missing after generation")
+            if not staged_gt.exists():
+                raise RuntimeError("Staged GROUND_TRUTH.md missing after generation")
 
-            rollback_dir = ground_truth_dir / ".eforge_rollback"
-            rollback_dir.mkdir(exist_ok=True)
+            # Clean up stale rollback dirs from prior killed runs
+            for stale in ground_truth_dir.glob(".eforge_rollback_*"):
+                logger.warning("Cleaning stale rollback directory: %s", stale)
+                shutil.rmtree(stale, ignore_errors=True)
+
+            rollback_dir = Path(tempfile.mkdtemp(prefix=".eforge_rollback_", dir=ground_truth_dir))
             try:
                 # Step 1: Backup old output
                 if data_dir.exists():
@@ -362,8 +368,7 @@ def generate(
 
                 # Step 2: Install new output
                 gen_data_dir.rename(data_dir)
-                if staged_gt.exists():
-                    staged_gt.rename(gt_path)
+                staged_gt.rename(gt_path)
 
             except BaseException:
                 # Rollback: remove partially-installed new output, restore old
