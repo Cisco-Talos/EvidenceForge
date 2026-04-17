@@ -983,9 +983,10 @@ class ScenarioValidator:
 
                     if get_preset(spec.preset) is None:
                         available = list_preset_names()
+                        has_paths = hasattr(spec, "paths") and spec.paths
                         self.issues.append(
                             ValidationIssue(
-                                severity="warning",
+                                severity="warning" if has_paths else "error",
                                 field_path=f"storyline.{idx}.events.{spec_idx}.preset",
                                 message=(
                                     f"[{event.id}] web_scan preset '{spec.preset}' not found "

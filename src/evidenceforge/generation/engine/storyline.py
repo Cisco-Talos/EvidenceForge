@@ -1496,8 +1496,19 @@ class StorylineMixin:
             success_account = success_spec.get("account") if success_spec else None
             success_after = success_spec.get("after", 0) if success_spec else 0
 
-            # Resolve actor User object for generate_failed_logon
+            # Resolve target accounts — include service accounts as synthetic User
+            # objects so credential_spray targets resolve for both failed and success logons
+            from evidenceforge.models.scenario import User as _User
+
             scenario_users = {u.username: u for u in self.scenario.environment.users}
+            ad_domain = self.scenario.environment.domain or "corp.local"
+            for svc_name in self.scenario.environment.service_accounts:
+                if svc_name not in scenario_users:
+                    scenario_users[svc_name] = _User(
+                        username=svc_name,
+                        full_name=svc_name,
+                        email=f"{svc_name}@{ad_domain}",
+                    )
 
             # Only attach DC for Windows domain-account sprays — Linux SSH brute
             # force or local-account attacks should not produce DC-side 4625/4776
