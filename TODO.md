@@ -47,6 +47,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Recently Resolved
 
+- [x] Security: validate overlay-provided EDR pools to prevent empty/malformed entries from crashing generation (`random.choice`/tuple-unpack DoS).
 - [x] Fix `_find_user_session` mixed tz-aware/naive `start_time` comparison crash (Aardvark finding)
 - [x] Baseline inbound profile traffic no longer depends on outbound role traffic for business-hour gating (fixed UnboundLocalError when outbound profile is empty).
 - [x] Security: validate blocked_c2 interval/duration are > 0 to prevent zero-interval infinite loop DoS
