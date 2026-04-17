@@ -9,13 +9,17 @@ a user overlay from .eforge/config/activity/edr_pools.yaml if present.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import yaml
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
 
 _EDR_POOLS_PATH = get_activity_directory() / "edr_pools.yaml"
 _CACHED: dict[str, Any] | None = None
+logger = logging.getLogger(__name__)
 
 
 def _merge_edr_pools(default: dict, overlay: dict) -> dict:
@@ -37,12 +41,55 @@ def load_edr_pools() -> dict[str, Any]:
     if _CACHED is not None:
         return _CACHED
 
-    _CACHED = load_with_overlay(
+    with open(_EDR_POOLS_PATH) as f:
+        defaults = yaml.safe_load(f)
+
+    merged = load_with_overlay(
         _EDR_POOLS_PATH,
         "activity/edr_pools.yaml",
         _merge_edr_pools,
     )
+    _CACHED = _sanitize_edr_pools(defaults, merged)
     return _CACHED
+
+
+def _is_valid_string_list(value: Any) -> bool:
+    return (
+        isinstance(value, list) and len(value) > 0 and all(isinstance(item, str) for item in value)
+    )
+
+
+def _is_valid_registry_pool(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) == 0:
+        return False
+    for item in value:
+        if not isinstance(item, list | tuple) or len(item) != 3:
+            return False
+        if not all(isinstance(field, str) and field for field in item):
+            return False
+    return True
+
+
+def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dict[str, Any]:
+    """Validate merged EDR pools and fall back to defaults for malformed sections."""
+    validators: dict[str, Any] = {
+        "file_paths_windows": _is_valid_string_list,
+        "file_paths_linux": _is_valid_string_list,
+        "dll_pool": _is_valid_string_list,
+        "registry_keys_hkcu": _is_valid_registry_pool,
+        "registry_keys_hklm": _is_valid_registry_pool,
+    }
+    sanitized = dict(defaults)
+    for key, validator in validators.items():
+        candidate = merged.get(key)
+        if validator(candidate):
+            sanitized[key] = candidate
+        else:
+            logger.warning(
+                "Invalid EDR pool section %s in overlay-merged config; falling back to package defaults",
+                key,
+            )
+    return sanitized
 
 
 def get_file_paths(os_category: str) -> list[str]:
