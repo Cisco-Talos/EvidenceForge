@@ -1392,8 +1392,10 @@ class StorylineMixin:
             if spec.paths:
                 scan_paths.extend(spec.paths)
             if not scan_paths:
-                logger.warning("web_scan has no paths — skipping")
-                return malicious_event
+                raise ValueError(
+                    f"web_scan resolved to zero paths (preset={spec.preset!r}). "
+                    "Check preset name or provide explicit paths."
+                )
 
             # Timing: rate-based → convert to interval
             start = self._parse_storyline_time(spec.start_time) if spec.start_time else time

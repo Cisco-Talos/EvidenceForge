@@ -977,6 +977,24 @@ class ScenarioValidator:
                                 )
                                 break
 
+                # web_scan preset name cross-reference
+                if event_type == "web_scan" and hasattr(spec, "preset") and spec.preset:
+                    from evidenceforge.config.web_scan_presets import get_preset, list_preset_names
+
+                    if get_preset(spec.preset) is None:
+                        available = list_preset_names()
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="warning",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.preset",
+                                message=(
+                                    f"[{event.id}] web_scan preset '{spec.preset}' not found "
+                                    f"(available: {available})"
+                                ),
+                                suggestion="Check the preset name or provide explicit paths",
+                            )
+                        )
+
     def _validate_storyline_linkability(self) -> None:
         """Check consecutive storyline events share a pivotable indicator.
 
