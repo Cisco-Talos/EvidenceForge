@@ -382,6 +382,62 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 ---
 
+## Field Test Gaps (FOR668/FOR669 Exercise Data)
+
+Gaps identified by comparing exercise data requirements against current engine capabilities. Full per-exercise analysis and recommendations in [scenarios/EXERCISE_DATA_REQUIREMENTS.md](scenarios/EXERCISE_DATA_REQUIREMENTS.md).
+
+### Cluster 1: Configurable Bulk Event Framework + DNS Independence
+
+Highest impact — unblocks or improves 10 exercises across all 5 days. These are all variations of "generate N events matching a pattern over a time window." A single YAML-configurable bulk event primitive with type-specific parameter sets covers all of them. DNS independence is part of this because DNS beaconing and DGA are primary use cases driving the framework.
+
+- [ ] General repeating/bulk event primitive (interval, duration, jitter, configurable via YAML)
+- [ ] Built-in type: beacon — any protocol (HTTP/S, SSH, DNS, NTP, arbitrary), permitted or blocked
+- [ ] Built-in type: web_scan — directory enumeration, vuln probing, URI lists, status code distribution
+- [ ] Built-in type: credential_spray — bulk failed_logon against target accounts
+- [ ] Built-in type: dga_queries — domain generation parameters (length, TLD, charset, count, rcode distribution)
+- [ ] Standalone dns_query event type (query, qtype, rcode, ttl) — DNS records independent of TCP connections
+- [ ] DNS TTL control field on dns_query events
+- [ ] Subsume existing `blocked_c2` as one outcome variant of the beacon type
+
+**Exercises:** 1.1 (web_scan), 1.1b (beacon), 1.3 (injection payload volume), 3.3 (beacon), 4.1 (dns_query, dga), 4.2 (dns_query, dga), 5.1 (credential_spray)
+
+### Cluster 2: Format Filtering
+
+High breadth, low cost — makes multi-week generation practical for 5 exercises without deep optimization.
+
+- [ ] `--formats` CLI filter (e.g., `--formats zeek_conn,zeek_dns` or `--formats proxy_access`)
+- [ ] Skip emitters that don't match the filter
+
+**Exercises:** 3.1, 3.2, 3.3, 5.1, 5.2 (all need 2-4 week windows)
+
+### Cluster 3: Temporal Baseline Phases
+
+Single-exercise blocker, but broadly useful for any multi-week scenario.
+
+- [ ] `phases` section in scenario YAML with per-phase baseline intensity/parameters
+- [ ] Support different baseline behavior across time ranges (e.g., "3x outbound from host X starting day 15")
+
+**Exercises:** 3.2 (gradual behavioral shifts)
+
+### Cluster 4: Windows Auth Enrichment
+
+Same area of codebase — baseline engine Windows auth generation, persona work schedules.
+
+- [ ] Broader baseline 4648 generation (RunAs, service account delegation, SCCM/GPO, helpdesk remote)
+- [ ] Event IDs 4800/4801 (workstation lock/unlock)
+
+**Exercises:** 5.1 (4800/4801), 5.2 (4648 breadth)
+
+### Cluster 5: Labeled Data Export
+
+Standalone post-processing. Defer until Day 4 exercises are functional (Cluster 1).
+
+- [ ] `--export-labels` flag mapping storyline events to output records with technique/storyline ID
+
+**Exercises:** 4.2 (MLTK labeled training data)
+
+---
+
 ## Notes
 
 - **Testing:** Write tests alongside implementation, not after
