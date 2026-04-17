@@ -359,6 +359,7 @@ def generate(
                 shutil.rmtree(stale, ignore_errors=True)
 
             rollback_dir = Path(tempfile.mkdtemp(prefix=".eforge_rollback_", dir=ground_truth_dir))
+            swap_succeeded = False
             try:
                 # Step 1: Backup old output
                 if data_dir.exists():
@@ -369,20 +370,25 @@ def generate(
                 # Step 2: Install new output
                 gen_data_dir.rename(data_dir)
                 staged_gt.rename(gt_path)
+                swap_succeeded = True
 
             except BaseException:
                 # Rollback: remove partially-installed new output, restore old
-                if data_dir.exists() and (rollback_dir / "data").exists():
-                    shutil.rmtree(data_dir)
-                if gt_path.exists() and (rollback_dir / "GROUND_TRUTH.md").exists():
-                    gt_path.unlink()
-                if (rollback_dir / "data").exists():
-                    (rollback_dir / "data").rename(data_dir)
-                if (rollback_dir / "GROUND_TRUTH.md").exists():
-                    (rollback_dir / "GROUND_TRUTH.md").rename(gt_path)
+                try:
+                    if data_dir.exists() and (rollback_dir / "data").exists():
+                        shutil.rmtree(data_dir)
+                    if gt_path.exists() and (rollback_dir / "GROUND_TRUTH.md").exists():
+                        gt_path.unlink()
+                    if (rollback_dir / "data").exists():
+                        (rollback_dir / "data").rename(data_dir)
+                    if (rollback_dir / "GROUND_TRUTH.md").exists():
+                        (rollback_dir / "GROUND_TRUTH.md").rename(gt_path)
+                except Exception:
+                    logger.error("Rollback failed — old output may be in: %s", rollback_dir)
                 raise
             finally:
-                shutil.rmtree(rollback_dir, ignore_errors=True)
+                if swap_succeeded:
+                    shutil.rmtree(rollback_dir, ignore_errors=True)
                 shutil.rmtree(staging_dir, ignore_errors=True)
 
             console.print("[dim]Replaced previous output[/dim]")
