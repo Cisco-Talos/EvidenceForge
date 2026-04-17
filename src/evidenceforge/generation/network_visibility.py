@@ -419,9 +419,11 @@ class NetworkVisibilityEngine:
                     if self._ip_matches_src(src_ip, rule) and not dst_segments:
                         key = (sensor_name, rule_idx)
                         port = self._pat_port_counters[key]
-                        # Non-sequential gaps (1-3 ports) derived deterministically from current port
                         gap = 1 + (port % 3)
-                        self._pat_port_counters[key] = port + gap
+                        next_port = port + gap
+                        if next_port > 65535:
+                            next_port = 1024 + (next_port - 1024) % (65535 - 1024 + 1)
+                        self._pat_port_counters[key] = next_port
                         return NatContext(
                             nat_type="dynamic_pat",
                             mapped_src_ip=rule.mapped_ip,

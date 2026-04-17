@@ -95,7 +95,7 @@ class SyslogEmitter(HostMultiplexEmitter):
             ts = parse_iso8601(ts)
         context = {
             "timestamp": ts,
-            "hostname": event_data.get("hostname"),
+            "hostname": event_data.get("hostname") or "",
             "facility": event_data.get("facility"),
             "severity": event_data.get("severity"),
             "app_name": event_data.get("app_name"),

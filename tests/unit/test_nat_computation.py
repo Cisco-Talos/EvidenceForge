@@ -153,6 +153,23 @@ class TestDynamicPat:
         assert result is not None
         assert result.mapped_src_ip == "198.51.100.1"
 
+    def test_pat_port_wraps_at_65535(self):
+        """PAT port counter must wrap around before exceeding 65535."""
+        rules = [NatRule(type="dynamic_pat", src="workstations", mapped_ip="198.51.100.1")]
+        eng = _make_engine(nat_rules=rules)
+        # Force counter near the ceiling
+        key = ("fw01", 0)
+        eng._pat_port_counters[key] = 65534
+        ports = []
+        for _ in range(5):
+            r = eng.compute_nat("10.0.10.50", "203.0.113.50", 54321, 443)
+            assert r is not None
+            assert 1024 <= r.mapped_src_port <= 65535, (
+                f"Port {r.mapped_src_port} out of valid range"
+            )
+            ports.append(r.mapped_src_port)
+        assert len(set(ports)) > 1, "Ports should not all be the same after wrap"
+
 
 class TestStaticNat:
     """Tests for static NAT (one-to-one IP mapping)."""

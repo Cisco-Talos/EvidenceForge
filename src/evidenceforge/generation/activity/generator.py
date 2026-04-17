@@ -2331,7 +2331,9 @@ class ActivityGenerator:
         # with S0/REJ cannot have served an HTTP response.
         if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
             event.network.conn_state = "SF"
-            event.network.history = "ShADadfF"  # Must match SF state
+            event.network.history = "ShADadfF"
+            if event.network.duration is None:
+                event.network.duration = rng.uniform(0.01, 2.0)
             if event.network.resp_bytes == 0:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
@@ -4622,6 +4624,8 @@ class ActivityGenerator:
             fields["_host_fqdn"] = (
                 host_ctx.fqdn if hasattr(host_ctx, "fqdn") and host_ctx.fqdn else host_ctx.hostname
             )
+        if host_ctx and "hostname" not in fields:
+            fields["hostname"] = host_ctx.hostname
         event = SecurityEvent(
             timestamp=time,
             event_type="raw",
