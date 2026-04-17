@@ -207,6 +207,7 @@ class TestAuthContext:
         assert ctx.subject_username == ""
         assert ctx.subject_domain == ""
         assert ctx.subject_logon_id == ""
+        assert ctx.process_pid == 0
 
 
 class TestProcessContext:

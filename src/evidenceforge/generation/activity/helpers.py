@@ -227,7 +227,7 @@ def _parameterize_command(rng, command_line: str, username: str = "") -> str:
     if username and "{username}" in command_line:
         command_line = command_line.replace("{username}", username)
 
-    all_params = {**_GENERAL_PARAMS, **_QUERY_PARAMS}
+    all_params = {**_GENERAL_PARAMS, **_QUERY_PARAMS, **_QUERY_PARAMS_LINUX}
     for _pass in range(3):  # Max 3 passes to resolve nested placeholders
         changed = False
         for key, values in all_params.items():

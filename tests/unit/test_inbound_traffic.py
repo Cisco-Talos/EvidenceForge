@@ -166,7 +166,7 @@ class TestInboundGenerationRegression:
         )
         monkeypatch.setattr(
             "evidenceforge.generation.activity.traffic_profiles.get_role_inbound_connections",
-            lambda _roles, _os_cat: [{"role": "_external", "port": 443, "proto": "tcp"}],
+            lambda _roles, _os_cat: [{"role": "workstation", "port": 443, "proto": "tcp"}],
         )
         monkeypatch.setattr(
             "evidenceforge.generation.activity.traffic_profiles.get_persona_connections",

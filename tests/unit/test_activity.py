@@ -231,6 +231,29 @@ class TestActivityGenerator:
         assert event.process.image == process_name
         assert event.process.command_line == command_line
 
+    def test_generate_explicit_credentials_uses_supplied_process_pid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """generate_explicit_credentials should preserve explicit credential process PID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.50",
+            source_port=50123,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "explicit_credentials"
+        assert event.auth.process_pid == 4242
+
     def test_generate_process_with_parent_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -637,6 +660,21 @@ class TestActivityGenerator:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.protocol == "icmp"
         assert event.network.ip_proto == 1
+
+
+@pytest.fixture()
+def activity_gen():
+    """Create an ActivityGenerator with mock emitters for standalone tests."""
+    sm = StateManager()
+    sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+    mock_emitters = {
+        "windows_event_security": Mock(),
+        "zeek_conn": Mock(),
+        "zeek_dns": Mock(),
+        "ecar": Mock(),
+        "syslog": Mock(),
+    }
+    return ActivityGenerator(sm, mock_emitters)
 
 
 def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):

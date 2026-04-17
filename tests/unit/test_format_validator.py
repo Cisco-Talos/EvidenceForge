@@ -24,6 +24,8 @@
 
 from datetime import datetime
 
+import pytest
+
 from evidenceforge.formats.format_def import (
     EventVariant,
     FieldConstraint,
@@ -344,6 +346,14 @@ class TestValidateFieldConstraints:
         """Test simple JSON Logic rule fails."""
         constraints = FieldConstraint(json_logic={"==": [{"var": "value"}, 42]})
         result = validate_field_constraints("field", 99, constraints)
+        assert result.valid is False
+        assert "Failed JSON Logic" in result.errors[0]
+
+    @pytest.mark.parametrize("falsey_result", [0, "", []])
+    def test_json_logic_falsey_non_boolean_invalid(self, falsey_result):
+        """Test JSON Logic falsey non-boolean outputs fail validation."""
+        constraints = FieldConstraint(json_logic={"var": "value"})
+        result = validate_field_constraints("field", falsey_result, constraints)
         assert result.valid is False
         assert "Failed JSON Logic" in result.errors[0]
 
