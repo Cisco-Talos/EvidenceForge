@@ -29,6 +29,7 @@ from typer.testing import CliRunner
 from evidenceforge.cli.commands import (
     EXIT_ABORTED,
     EXIT_GENERATION_ERROR,
+    EXIT_INPUT_ERROR,
     EXIT_SCHEMA_VALIDATION,
     EXIT_SUCCESS,
     app,
@@ -593,3 +594,94 @@ output:
         assert result.exit_code == EXIT_SUCCESS
         assert "Existing output found" not in result.stdout
         assert mock_engine.generate.called
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_formats_flag_filters_output(self, mock_engine_class, scenarios_dir, tmp_path):
+        """--formats should narrow scenario output.logs to the intersection."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--formats",
+                "zeek_conn",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        # Engine should have been created with narrowed format list
+        call_kwargs = mock_engine_class.call_args.kwargs
+        scenario = call_kwargs["scenario"]
+        fmt_names = {log["format"] for log in scenario.output.logs}
+        assert fmt_names == {"zeek_conn"}
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_formats_flag_supports_groups(self, mock_engine_class, scenarios_dir, tmp_path):
+        """--formats should expand group names before intersecting."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--formats",
+                "zeek",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        call_kwargs = mock_engine_class.call_args.kwargs
+        scenario = call_kwargs["scenario"]
+        fmt_names = {log["format"] for log in scenario.output.logs}
+        assert "zeek_conn" in fmt_names
+        assert "zeek_dns" in fmt_names
+        # Windows should NOT be in the output
+        assert "windows_event_security" not in fmt_names
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_formats_flag_warns_on_mismatch(self, mock_engine_class, scenarios_dir, tmp_path):
+        """--formats with formats not in scenario should warn."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--formats",
+                "zeek_conn,cisco_asa",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "not in scenario" in result.stdout
+        assert "cisco_asa" in result.stdout
+
+    def test_formats_flag_errors_on_empty_intersection(self, scenarios_dir, tmp_path):
+        """--formats with no matching formats should error."""
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--formats",
+                "cisco_asa",
+            ],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "No formats match" in result.stdout

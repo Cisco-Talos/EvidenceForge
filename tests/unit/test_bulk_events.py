@@ -16,7 +16,10 @@ from evidenceforge.models.scenario import (
     DgaQueriesEventSpec,
     DnsQueryEventSpec,
     DnsTunnelEventSpec,
+    ExplicitCredentialsEventSpec,
     WebScanEventSpec,
+    WorkstationLockEventSpec,
+    WorkstationUnlockEventSpec,
     _PeriodicEventBase,
 )
 
@@ -592,3 +595,43 @@ class TestDnsTunnelEventSpec:
                 count=10,
             )
             assert spec.encoding == enc
+
+
+# ── ExplicitCredentialsEventSpec ──────────────────────────────────────────
+
+
+class TestExplicitCredentialsEventSpec:
+    def test_defaults(self):
+        spec = ExplicitCredentialsEventSpec(target_username="admin")
+        assert spec.type == "explicit_credentials"
+        assert spec.target_username == "admin"
+        assert spec.target_server is None
+        assert spec.process_name is None
+        assert spec.source_ip is None
+
+    def test_all_fields(self):
+        spec = ExplicitCredentialsEventSpec(
+            target_username="svc_backup",
+            target_server="FILE-SRV-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            source_ip="10.0.1.5",
+        )
+        assert spec.target_server == "FILE-SRV-01"
+        assert spec.process_name == r"C:\Windows\System32\runas.exe"
+
+    def test_requires_target_username(self):
+        with pytest.raises(ValidationError):
+            ExplicitCredentialsEventSpec()
+
+
+# ── WorkstationLockEventSpec / WorkstationUnlockEventSpec ─────────────────
+
+
+class TestWorkstationLockUnlockEventSpec:
+    def test_lock_defaults(self):
+        spec = WorkstationLockEventSpec()
+        assert spec.type == "workstation_lock"
+
+    def test_unlock_defaults(self):
+        spec = WorkstationUnlockEventSpec()
+        assert spec.type == "workstation_unlock"

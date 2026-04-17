@@ -3818,6 +3818,55 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_workstation_lock(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> None:
+        """Generate workstation lock event (4800)."""
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="workstation_locked",
+            dst_host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
+    def generate_workstation_unlock(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> None:
+        """Generate workstation unlock event (4801 + 4624 type 7)."""
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="workstation_unlocked",
+            dst_host=self._build_host_context(system),
+            auth=AuthContext(
+                username=user.username,
+                user_sid=self._get_sid(user.username),
+                logon_id=logon_id,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+        # Unlock is a re-authentication — emit 4624 type 7 with same session
+        self.generate_logon(
+            user=user,
+            system=system,
+            time=time + timedelta(milliseconds=50),
+            logon_type=7,
+            source_ip=system.ip,
+            logon_id=logon_id,
+        )
+
     def generate_wfp_connection(
         self,
         system: System,

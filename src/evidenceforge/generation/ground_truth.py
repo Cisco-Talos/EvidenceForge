@@ -280,6 +280,15 @@ class GroundTruthGenerator:
             exfil = event.get("bytes_exfiltrated", 0)
             return f"DNS tunnel via {domain} ({enc}, {queries} queries, {exfil} bytes exfiltrated)"
 
+        elif event_type == "explicit_credentials":
+            target = event.get("target_username", "N/A")
+            server = event.get("target_server", "N/A")
+            return f"Explicit credentials: RunAs {target} on {server}"
+
+        elif event_type in ("workstation_lock", "workstation_unlock"):
+            action = "Locked" if event_type == "workstation_lock" else "Unlocked"
+            return f"Workstation {action}"
+
         else:
             return event.get("activity", "N/A")
 
@@ -411,6 +420,11 @@ class GroundTruthGenerator:
                 base = event.get("base_domain", "")
                 if base:
                     iocs["network"].add(f"{base} (DNS Tunnel Endpoint)")
+
+            elif event["type"] == "explicit_credentials":
+                target = event.get("target_username", "")
+                if target:
+                    iocs["users"].add(f"{target} (Explicit Credential Target)")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

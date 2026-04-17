@@ -852,6 +852,32 @@ class DnsTunnelEventSpec(_PeriodicEventBase):
         return self
 
 
+class ExplicitCredentialsEventSpec(_EventSpecBase):
+    """Explicit credential usage event (generates Windows 4648).
+
+    Models RunAs, pass-the-hash, service account delegation, and other
+    scenarios where credentials are explicitly provided for authentication.
+    """
+
+    type: Literal["explicit_credentials"] = "explicit_credentials"
+    target_username: str
+    target_server: str | None = None
+    process_name: str | None = None
+    source_ip: str | None = None
+
+
+class WorkstationLockEventSpec(_EventSpecBase):
+    """Workstation lock event (generates Windows 4800)."""
+
+    type: Literal["workstation_lock"] = "workstation_lock"
+
+
+class WorkstationUnlockEventSpec(_EventSpecBase):
+    """Workstation unlock event (generates Windows 4801 + 4624 type 7)."""
+
+    type: Literal["workstation_unlock"] = "workstation_unlock"
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -890,6 +916,9 @@ EventSpec = Annotated[
     | CredentialSprayEventSpec
     | DgaQueriesEventSpec
     | DnsTunnelEventSpec
+    | ExplicitCredentialsEventSpec
+    | WorkstationLockEventSpec
+    | WorkstationUnlockEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

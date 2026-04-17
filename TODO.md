@@ -412,26 +412,24 @@ Highest impact — unblocks or improves 10 exercises across all 5 days. These ar
 
 High breadth, low cost — makes multi-week generation practical for 5 exercises without deep optimization.
 
-- [ ] `--formats` CLI filter (e.g., `--formats zeek_conn,zeek_dns` or `--formats proxy_access`)
-- [ ] Skip emitters that don't match the filter
+- [x] `--formats` CLI filter with intersection semantics and group name support
+- [x] `format_groups` inventory in `eforge info` output
 
 **Exercises:** 3.1, 3.2, 3.3, 5.1, 5.2 (all need 2-4 week windows)
 
-### Cluster 3: Temporal Baseline Phases
+### Cluster 3: Temporal Baseline Phases — Resolved by Design
 
-Single-exercise blocker, but broadly useful for any multi-week scenario.
+Achievable by composing bulk event primitives (beacon, connection, dns_query) over a stable baseline. Students detect injected activity as statistical outliers. No engine changes needed — documented as a scenario authoring pattern.
 
-- [ ] `phases` section in scenario YAML with per-phase baseline intensity/parameters
-- [ ] Support different baseline behavior across time ranges (e.g., "3x outbound from host X starting day 15")
-
-**Exercises:** 3.2 (gradual behavioral shifts)
+**Exercises:** 3.2 (gradual behavioral shifts — use beacons with start_time offsets and orig_bytes overrides)
 
 ### Cluster 4: Windows Auth Enrichment
 
 Same area of codebase — baseline engine Windows auth generation, persona work schedules.
 
-- [ ] Broader baseline 4648 generation (RunAs, service account delegation, SCCM/GPO, helpdesk remote)
-- [ ] Event IDs 4800/4801 (workstation lock/unlock)
+- [x] Broader baseline 4648 generation (service account delegation, sysadmin RunAs, SCCM/GPO, helpdesk remote)
+- [x] Event IDs 4800/4801 (workstation lock/unlock with persona variance, paired 4624 type 7, failed unlock)
+- [x] Storyline EventSpecs: explicit_credentials, workstation_lock, workstation_unlock
 
 **Exercises:** 5.1 (4800/4801), 5.2 (4648 breadth)
 

@@ -123,6 +123,13 @@ def _collect_web_scan_presets() -> list[str]:
     return list_preset_names()
 
 
+def _collect_format_groups() -> dict[str, list[str]]:
+    """Collect format group names and their expanded formats."""
+    from evidenceforge.events.dispatcher import FORMAT_GROUPS
+
+    return {k: sorted(v) for k, v in FORMAT_GROUPS.items()}
+
+
 def _gather_lightweight() -> dict[str, Any]:
     """Gather lightweight fields that don't require overlay-backed loaders.
 
@@ -189,6 +196,7 @@ def gather_info(field: str | None = None) -> dict[str, Any]:
         "application_ids": _collect_application_ids,
         "system_roles": _collect_system_roles,
         "web_scan_presets": _collect_web_scan_presets,
+        "format_groups": _collect_format_groups,
     }
     for key, collector in inventories.items():
         try:
@@ -270,6 +278,7 @@ _FIELD_DESCRIPTIONS: dict[str, str] = {
     "application_ids": "Application IDs in the catalog",
     "config_writable": "Whether package config files are directly editable",
     "dns_tags": "Defined valid DNS tags (from dns_registry.yaml valid_tags section)",
+    "format_groups": "Format group names and their expanded formats (for --formats flag)",
     "formats": "Supported log format names",
     "install_type": "Package install type (editable or package)",
     "overlay.exists": "Whether a project-local overlay directory exists",
