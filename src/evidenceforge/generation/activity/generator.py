@@ -1383,10 +1383,7 @@ class ActivityGenerator:
                         process=ProcessContext(
                             pid=pid,
                             parent_pid=parent_pid,
-                            image=self._lookup_process_name(
-                                system.hostname, parent_pid, _get_os_category(system.os)
-                            )
-                            or process_name,
+                            image=process_name,
                             command_line=command_line,
                             username=user.username,
                         ),

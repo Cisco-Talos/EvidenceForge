@@ -342,23 +342,55 @@ def generate(
             )
             engine.generate()
 
-        # DESIGN DECISION: Simple delete-then-move swap, not backup-restore.
-        # The staging directory already protects against generation failures
-        # (old output is untouched until generation succeeds). The final move
-        # is os.rename on the same filesystem (atomic). Old GROUND_TRUTH.md
-        # with new data would be semantically wrong, so partial preservation
-        # is intentionally not supported — it's all-or-nothing.
+        # Transactional swap: backup old → install new → cleanup backup.
+        # If any step fails (including KeyboardInterrupt), old output is
+        # restored from backup. data/ and GROUND_TRUTH.md are always kept
+        # as a matched pair — partial preservation is never valid.
         if staging_dir:
-            if data_dir.exists():
-                shutil.rmtree(data_dir)
-            if gt_path.exists():
-                gt_path.unlink()
-            if gen_data_dir.exists():
-                shutil.move(str(gen_data_dir), str(data_dir))
             staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
-            if staged_gt.exists():
-                shutil.move(str(staged_gt), str(gt_path))
-            shutil.rmtree(staging_dir, ignore_errors=True)
+            if not gen_data_dir.exists():
+                raise RuntimeError("Staged data/ directory missing after generation")
+            if not staged_gt.exists():
+                raise RuntimeError("Staged GROUND_TRUTH.md missing after generation")
+
+            # Clean up stale rollback dirs from prior killed runs
+            for stale in ground_truth_dir.glob(".eforge_rollback_*"):
+                logger.warning("Cleaning stale rollback directory: %s", stale)
+                shutil.rmtree(stale, ignore_errors=True)
+
+            rollback_dir = Path(tempfile.mkdtemp(prefix=".eforge_rollback_", dir=ground_truth_dir))
+            swap_succeeded = False
+            try:
+                # Step 1: Backup old output
+                if data_dir.exists():
+                    data_dir.rename(rollback_dir / "data")
+                if gt_path.exists():
+                    gt_path.rename(rollback_dir / "GROUND_TRUTH.md")
+
+                # Step 2: Install new output
+                gen_data_dir.rename(data_dir)
+                staged_gt.rename(gt_path)
+                swap_succeeded = True
+
+            except BaseException:
+                # Rollback: remove partially-installed new output, restore old
+                try:
+                    if data_dir.exists() and (rollback_dir / "data").exists():
+                        shutil.rmtree(data_dir)
+                    if gt_path.exists() and (rollback_dir / "GROUND_TRUTH.md").exists():
+                        gt_path.unlink()
+                    if (rollback_dir / "data").exists():
+                        (rollback_dir / "data").rename(data_dir)
+                    if (rollback_dir / "GROUND_TRUTH.md").exists():
+                        (rollback_dir / "GROUND_TRUTH.md").rename(gt_path)
+                except Exception:
+                    logger.error("Rollback failed — old output may be in: %s", rollback_dir)
+                raise
+            finally:
+                if swap_succeeded:
+                    shutil.rmtree(rollback_dir, ignore_errors=True)
+                shutil.rmtree(staging_dir, ignore_errors=True)
+
             console.print("[dim]Replaced previous output[/dim]")
 
         console.print("\n[bold green]✓ Generation complete![/bold green]")

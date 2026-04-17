@@ -182,13 +182,16 @@ def validate_config() -> ValidationResult:
             "list_fields": {"patterns": None},
         },
         "activity/edr_pools.yaml": {
-            "list_fields": {
-                "file_paths_windows": None,
-                "file_paths_linux": None,
-                "registry_keys_hkcu": None,
-                "registry_keys_hklm": None,
-                "dll_pool": None,
+            "string_list_fields": {
+                "file_paths_windows",
+                "file_paths_linux",
+                "registry_keys_hkcu",
+                "registry_keys_hklm",
+                "dll_pool",
             },
+        },
+        "activity/web_scan_presets.yaml": {
+            "dict_fields": {"presets"},
         },
     }
 
@@ -309,6 +312,32 @@ def validate_config() -> ValidationResult:
                         )
                     )
                     overlay_errors = True
+
+            # Check string list fields (lists of plain strings, e.g., edr_pools paths)
+            string_list_fields = file_schema.get("string_list_fields", set())
+            for field_name in string_list_fields:
+                if field_name in data:
+                    value = data[field_name]
+                    if not isinstance(value, list):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                f"overlay/{rel_path}",
+                                f'Field "{field_name}" should be a list, got {type(value).__name__}',
+                            )
+                        )
+                        overlay_errors = True
+                    else:
+                        for i, item in enumerate(value):
+                            if not isinstance(item, str):
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        f"overlay/{rel_path}",
+                                        f'"{field_name}" entry #{i + 1} should be a string, got {type(item).__name__}',
+                                    )
+                                )
+                                overlay_errors = True
 
     # Validate overlay persona files specifically (one-file-per-persona pattern)
     if overlay_dir:

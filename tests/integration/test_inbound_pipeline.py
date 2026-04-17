@@ -336,19 +336,20 @@ class TestDeniedConnectionProducesTraces:
             ],
             log_formats=[{"format": "cisco_asa"}],
         )
-        # Add a storyline blocked_c2 event
+        # Add a storyline beacon (deny) event
         from evidenceforge.models.scenario import StorylineEvent
 
         scenario.storyline = [
             StorylineEvent(
-                id="evt-blocked-c2",
+                id="evt-beacon-deny",
                 time="+0h30m",
                 actor="SYSTEM",
                 system="SRV-01",
-                activity="Blocked C2 beacon to external IP",
+                activity="Denied beacon to external IP",
                 events=[
                     {
-                        "type": "blocked_c2",
+                        "type": "beacon",
+                        "action": "deny",
                         "dst_ip": "45.33.32.30",
                         "dst_port": 443,
                         "interval": "30m",
@@ -366,15 +367,15 @@ class TestDeniedConnectionProducesTraces:
 
         asa_lines = _read_asa_lines(tmp_path)
 
-        # Should have ASA deny records (106023) for the blocked C2 attempts
+        # Should have ASA deny records (106023) for the denied beacon attempts
         deny_records = [line for line in asa_lines if "106023" in line]
         assert len(deny_records) >= 1, (
-            "Expected ASA deny records (106023) for blocked C2, "
+            "Expected ASA deny records (106023) for denied beacon, "
             f"but found none in {len(asa_lines)} ASA lines"
         )
-        # Deny records should reference the C2 destination
+        # Deny records should reference the beacon destination
         assert any("45.33.32.30" in line for line in deny_records), (
-            "Deny records should reference the C2 destination IP"
+            "Deny records should reference the beacon destination IP"
         )
 
 

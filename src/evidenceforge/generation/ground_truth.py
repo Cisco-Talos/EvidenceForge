@@ -233,12 +233,52 @@ class GroundTruthGenerator:
                 f"{total} denied connections + ASA threat detection alert (733100)"
             )
 
-        elif event_type == "blocked_c2":
+        elif event_type == "beacon":
             dst = event.get("dst_ip", "N/A")
             port = event.get("dst_port", "N/A")
             attempts = event.get("attempt_count", "N/A")
-            duration = event.get("duration", "N/A")
-            return f"Blocked C2 to {dst}:{port} ({attempts} attempts over {duration})"
+            action = event.get("action", "allow")
+            term = event.get("termination", "N/A")
+            label = "Denied beacon" if action == "deny" else "Beacon"
+            return f"{label} to {dst}:{port} ({attempts} attempts, {term})"
+
+        elif event_type == "dns_query":
+            query = event.get("query", "N/A")
+            qtype = event.get("qtype", "A")
+            rcode = event.get("rcode", "NOERROR")
+            return f"DNS query: {query} ({qtype}, {rcode})"
+
+        elif event_type == "web_scan":
+            dst = event.get("dst_ip", "N/A")
+            port = event.get("dst_port", "N/A")
+            preset = event.get("preset", "custom")
+            requests = event.get("request_count", "N/A")
+            return f"Web scan ({preset}) against {dst}:{port} ({requests} requests)"
+
+        elif event_type == "credential_spray":
+            pattern = event.get("pattern", "spray")
+            accounts = event.get("target_accounts", [])
+            attempts = event.get("attempt_count", "N/A")
+            success = event.get("success_account")
+            result = f"Credential {pattern}: {attempts} attempts against {len(accounts)} accounts"
+            if success:
+                at = event.get("success_at_attempt", "?")
+                result += f" (success: {success} at attempt {at})"
+            return result
+
+        elif event_type == "dga_queries":
+            count = event.get("total_queries", "N/A")
+            nxd = event.get("nxdomain_count", "N/A")
+            tld = event.get("tld", ".com")
+            sample = event.get("domain_sample", [])
+            return f"DGA queries: {count} total ({nxd} NXDOMAIN, TLD: {tld}, sample: {sample[:3]})"
+
+        elif event_type == "dns_tunnel":
+            domain = event.get("base_domain", "N/A")
+            enc = event.get("encoding", "hex")
+            queries = event.get("total_queries", "N/A")
+            exfil = event.get("bytes_exfiltrated", 0)
+            return f"DNS tunnel via {domain} ({enc}, {queries} queries, {exfil} bytes exfiltrated)"
 
         else:
             return event.get("activity", "N/A")
@@ -340,11 +380,37 @@ class GroundTruthGenerator:
                 for port in event.get("ports", []):
                     iocs["network"].add(f"Port {port} (scan target)")
 
-            elif event["type"] == "blocked_c2":
+            elif event["type"] == "beacon":
+                dst_ip = event.get("dst_ip", "")
+                dst_port = event.get("dst_port", "")
+                action = event.get("action", "allow")
+                label = "Denied Beacon" if action == "deny" else "Beacon"
+                if dst_ip:
+                    iocs["network"].add(f"{dst_ip}:{dst_port} ({label} Target)")
+
+            elif event["type"] == "dns_query":
+                query = event.get("query", "")
+                if query:
+                    iocs["network"].add(f"{query} (Malicious DNS Query)")
+
+            elif event["type"] == "web_scan":
                 dst_ip = event.get("dst_ip", "")
                 dst_port = event.get("dst_port", "")
                 if dst_ip:
-                    iocs["network"].add(f"{dst_ip}:{dst_port} (Blocked C2 Server)")
+                    iocs["network"].add(f"{dst_ip}:{dst_port} (Web Scan Target)")
+
+            elif event["type"] == "credential_spray":
+                for account in event.get("target_accounts", []):
+                    iocs["users"].add(f"{account} (Spray Target)")
+
+            elif event["type"] == "dga_queries":
+                for domain in event.get("domain_sample", []):
+                    iocs["network"].add(f"{domain} (DGA Domain)")
+
+            elif event["type"] == "dns_tunnel":
+                base = event.get("base_domain", "")
+                if base:
+                    iocs["network"].add(f"{base} (DNS Tunnel Endpoint)")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}
