@@ -2409,6 +2409,9 @@ class BaselineMixin:
                     "smb": "svchost_netsvcs",
                     "ssl": "svchost_netsvcs",
                     "http": "svchost_netsvcs",
+                    "smtp": "svchost_netsvcs",
+                    "ntp": "svchost_local_svc",
+                    "ssh": "sshd",
                 }
                 _pids = sys_pids or {}
                 pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
@@ -3154,7 +3157,9 @@ class BaselineMixin:
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
                     self.state_manager.set_current_time(svc_ts)
                     svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
-                    svc_parent = sys_pids.get(svc_parent_key, sys_pids.get("services", 4))
+                    svc_parent = sys_pids.get(
+                        svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    )
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=svc_ts,
@@ -3162,6 +3167,65 @@ class BaselineMixin:
                         command_line=svc_cmd,
                         parent_pid=svc_parent,
                         username="SYSTEM",
+                    )
+
+            # Baseline registry activity from running services. Real Sysmon
+            # generates hundreds-thousands of Event 12/13 per hour. We emit
+            # 15-40 per host per hour to provide realistic background volume.
+            if os_cat == "windows":
+                from evidenceforge.events.base import SecurityEvent
+                from evidenceforge.events.contexts import (
+                    AuthContext,
+                    ProcessContext,
+                    RegistryContext,
+                )
+                from evidenceforge.generation.activity.edr_pools import (
+                    get_registry_keys_hkcu,
+                    get_registry_keys_hklm,
+                )
+
+                _REG_KEYS_HKCU = get_registry_keys_hkcu()
+                _REG_KEYS_HKLM = get_registry_keys_hklm()
+                _reg_count = rng.randint(50, 120)
+                _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                _host_ctx = self.activity_generator._build_host_context(system)
+                # Only emit HKCU on workstations with a logged-in user;
+                # servers run services, not user desktops.
+                _has_desktop = getattr(system, "assigned_user", None) is not None
+                _hkcu_rate = 0.30 if _has_desktop else 0.0
+                for _ri in range(_reg_count):
+                    _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    if rng.random() >= _hkcu_rate:
+                        _key, _vname, _details = rng.choice(_REG_KEYS_HKLM)
+                        _reg_pid = _svc_pid
+                        _reg_user = "SYSTEM"
+                    else:
+                        _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
+                        _reg_pid = sys_pids.get("explorer", _svc_pid)
+                        _reg_user = system.assigned_user or "SYSTEM"
+                    _target = f"{_key}\\{_vname}"
+                    # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
+                    _reg_action = "delete" if rng.random() < 0.10 else "modify"
+                    self.activity_generator.dispatcher.dispatch(
+                        SecurityEvent(
+                            timestamp=_reg_ts,
+                            event_type="registry_modify",
+                            src_host=_host_ctx,
+                            auth=AuthContext(username=_reg_user),
+                            process=ProcessContext(
+                                pid=_reg_pid,
+                                parent_pid=0,
+                                image=self.activity_generator._lookup_process_name(
+                                    system.hostname, _reg_pid, "windows"
+                                )
+                                or r"C:\Windows\System32\svchost.exe",
+                                command_line="",
+                                username=_reg_user,
+                            ),
+                            registry=RegistryContext(
+                                key=_target, value=_details, action=_reg_action, pid=_reg_pid
+                            ),
+                        )
                     )
 
             # Windows scheduled tasks — diverse per-hour selection from YAML.
@@ -3182,7 +3246,9 @@ class BaselineMixin:
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
-                    parent_pid = sys_pids.get(task_parent_key, sys_pids.get("services", 4))
+                    parent_pid = sys_pids.get(
+                        task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
+                    )
                     cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
                     self.activity_generator.generate_explicit_credentials(
                         user=_SYSTEM_USER,
@@ -3244,6 +3310,41 @@ class BaselineMixin:
                         target_image=tgt_image,
                         granted_access=access,
                     )
+
+            # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
+            # Uses data-driven DLL profiles from system_processes.yaml and
+            # application_catalog.yaml. Picks from processes actually running
+            # on this system (from StateManager) so PIDs are always valid.
+            if os_cat == "windows":
+                from evidenceforge.generation.activity.dll_load_profiles import (
+                    get_dlls_for_process,
+                )
+
+                running = self.state_manager.get_processes_on_system(system.hostname)
+                win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
+                if win_procs:
+                    num_dll = rng.randint(15, 40)
+                    for _ in range(num_dll):
+                        proc_pid, proc_image = rng.choice(win_procs)
+                        exe_name = proc_image.rsplit("\\", 1)[-1]
+                        dll_pool = get_dlls_for_process(exe_name)
+                        if not dll_pool:
+                            continue
+                        dll = rng.choice(dll_pool)
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_image_load(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            pid=proc_pid,
+                            image=proc_image,
+                            dll_path=dll["path"],
+                            signed=dll["signed"],
+                            signature=dll["signature"],
+                            signature_status=dll["signature_status"],
+                        )
 
             # ICMP monitoring pings are now handled by role_traffic profiles
 

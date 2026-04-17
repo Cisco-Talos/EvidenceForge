@@ -1049,7 +1049,9 @@ class WorldPlanner:
             sys_pids = getattr(self.activity_generator, "_system_pids", {}).get(
                 source_system.hostname, {}
             )
-            parent_pid = sys_pids.get("explorer", 4)
+            parent_pid = sys_pids.get(
+                "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+            )
         self.state_manager.set_current_time(time)
         pid = self.activity_generator.generate_process(
             user=user,

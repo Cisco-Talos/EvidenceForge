@@ -95,7 +95,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] Security: sandboxed Jinja template rendering for YAML-defined format templates (SandboxedEnvironment + StrictUndefined) to block SSTI/code execution while preserving safe field interpolation.
 - [x] Security: bound baseline failed-logon synthetic service account selection loops to prevent scenario-controlled infinite loops/DoS.
 - [x] Security: guard persona `activity_intensity` normalization against all-zero values to prevent divide-by-zero DoS during generation (all-zero overrides now safely map to floor probability instead of crashing).
-- [ ] **Re-generation appends to existing output** — `GenerationEngine` creates output directories with `exist_ok=True` and emitters append to existing files. Re-running a scenario without manually clearing the output directory produces mixed old+new data. Should clean the output directory (or at least its per-sensor subdirectories) before writing.
+- [x] **Re-generation appends to existing output** — CLI now checks for existing `data/`, `GROUND_TRUTH.md`, and `ENVIRONMENT.md` before generation. Prompts user to confirm overwrite or abort. `--force` / `-f` flag skips prompt for automation/AI use.
 
 ### Tier 1: Foundational Correctness
 
@@ -157,12 +157,16 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ Sysmon Event 5 (ProcessTerminate), Event 8 baseline noise, Event 10 baseline noise — added to baseline + eCAR THREAD/REMOTE_CREATE and PROCESS/OPEN correlation
 - [x] ✓² Lsass ProcessAccess GrantedAccess hardcoded to 0x1010 for Mimikatz — changed to 0x1FFFFF (PROCESS_ALL_ACCESS) in causal expansion rule
 - [x] ✓² Benign lsass accessors limited to MsMpEng + svchost — added csrss.exe, svchost (netsvcs), services.exe as additional baseline lsass accessors
-- [ ] **P1** Sysmon Event 3 (NetworkConnect), 7 (ImageLoaded), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) not yet implemented — absence of these common EIDs is immediately suspicious to any analyst with real Sysmon experience
+- [x] **P1** Sysmon Event 3 (NetworkConnect), 7 (ImageLoaded), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) — implemented with data-driven filtering via sysmon_filters.yaml (SwiftOnSecurity/Olaf Hartong style). Event 3 include-filters LOLBins + suspicious ports; Event 7 excludes Microsoft-signed System32 DLLs; Event 11 include-filters executable extensions + suspicious paths; Events 12/13 include-filter persistence/tampering keys; Event 22 logs all DNS. User-configurable via .eforge/config/ overlay with per-event enabled toggle.
 - [x] ✓³ ParentCommandLine always "-" — added parent_command_line to ProcessContext; populated via _lookup_parent_command_line() from StateManager
+- [x] Event 7 DLL load profiles per process — `loaded_modules` field on application_catalog.yaml (user apps) and system_processes.yaml (OS processes), using same schema. Unified loader in dll_load_profiles.py collects from both. Common OS loader chain applied to all processes; unprofilesd processes fall back to common-only.
 - [ ] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — real environments show 10-20+ distinct masks from AV, EDR, WMI, etc.
-- [ ] CallTrace offsets limited to 2 patterns — need diverse ntdll/KERNELBASE offsets per call path
-- [ ] Sysmon EventRecordIDs perfectly sequential (no gaps) — real systems drop events under load
+- [x] CallTrace offsets limited to 2 patterns — moved to calltrace_patterns.yaml with 8 distinct call chains (ntdll, KERNELBASE, kernel32, RPCRT4, wbemcomn, combase, advapi32, sechost)
+- [x] Sysmon EventRecordIDs perfectly sequential (no gaps) — gaps widened to 1-7 with 15% chance of 8-50
 - [ ] Event 8 StartModule/StartFunction always empty for benign pairs
+- [ ] **P1** Event 3 process-to-destination mismatch — user app sampling (Teams, Outlook, etc.) pairs process images with random baseline destinations (e.g., Teams→old.reddit.com). The process_network_map needs per-app destination domain constraints so each app only connects to plausible hosts (Teams→Microsoft domains, Outlook→O365, etc.).
+- [ ] **P1** Event 7 (ImageLoaded) volume too thin — only 3-7 DLL load events per host per 6 hours. Real Sysmon with SwiftOnSecurity config logs hundreds. Baseline needs a standalone DLL load generator similar to the registry event generator.
+- [ ] **P2** Registry TargetObject path diversity — baseline registry pool has ~30 unique paths that cycle. Real Sysmon sees hundreds of distinct paths from COM registration, GPO processing, software updates. Need larger pool or dynamic path generation.
 
 **Zeek:**
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
@@ -272,6 +276,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **Cross-Source / General:**
 - [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
 - [x] Cross-sensor timestamp precision identical to 15+ decimal places — microsecond jitter added in snort.py, windows.py, and storyline.py
+- [ ] **P2** Per-host-type event rate multiplier — Domain controllers generate ~50 events/hr but real DCs running AD/DNS/DFS/GPO produce thousands/hr. `system.type` is used for routing but never for volume scaling. Need `event_rate_multiplier` on System model (or implicit per-type defaults) applied in `_calculate_events_for_hour()` and `_generate_system_traffic()`. DCs should be 3-5x workstation baseline; file servers and web servers similarly elevated.
 - [ ] Encoded PowerShell baseline noise identical across hosts (same Get-Service blob) — needs per-host variation
 - [ ] Workstation connection counts suspiciously uniform (808-1068 range) — Hawkes process variance too narrow
 - [ ] Uniform log file sets across all hosts (every workstation has identical format coverage)
@@ -296,7 +301,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 
 - [x] Migrate eCAR FILE/REGISTRY/MODULE to SecurityEvent dispatch (enables 4663 + Sysmon 11/12/13 correlation) — completed in Phase 8.2; probabilistic EDR events dispatch via SecurityEvent with EdrContext
 - [x] Migrate syslog system messages: CRON↔eCAR PROCESS, UFW BLOCK↔Zeek conn, systemd↔eCAR PROCESS — CRON and UFW were already working; systemd now uses paired generate_system_process/generate_system_process_termination lifecycle
-- [ ] Sysmon Event 3 (Network), 11 (FileCreate), 13 (Registry) emission
+- [x] Sysmon Event 3 (Network), 11 (FileCreate), 13 (Registry) emission — implemented alongside Sysmon P1
 
 ---
 

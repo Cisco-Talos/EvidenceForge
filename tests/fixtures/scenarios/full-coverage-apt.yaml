@@ -68,10 +68,10 @@ environment:
       groups: ["reception"]
       enabled: true
 
-    # External threat actor (compromises david.okonkwo)
-    - username: attacker
-      full_name: "External Threat Actor"
-      email: "attacker@external.invalid"
+    # External threat actor operating under compromised contractor account
+    - username: tchen.contractor
+      full_name: "Tom Chen"
+      email: "tchen@hartfield-consulting.com"
       enabled: true
 
   service_accounts:
@@ -230,7 +230,7 @@ storyline:
   # --- Phase 1: Initial Access — Password spray against david.okonkwo ---
   - id: evt-001
     time: "+30m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Failed logon attempt via password spray against david.okonkwo (wrong password)"
     events:
@@ -240,7 +240,7 @@ storyline:
 
   - id: evt-002
     time: "+31m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Failed logon attempt via password spray against david.okonkwo (account lockout threshold)"
     events:
@@ -250,7 +250,7 @@ storyline:
 
   - id: evt-003
     time: "+32m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Successful logon to david.okonkwo workstation with stolen credentials"
     events:
@@ -261,7 +261,7 @@ storyline:
   # --- Phase 2: Reconnaissance ---
   - id: evt-004
     time: "+35m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Execute domain enumeration via net.exe to list domain users"
     events:
@@ -271,7 +271,7 @@ storyline:
 
   - id: evt-005
     time: "+36m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Execute reconnaissance to enumerate domain groups"
     events:
@@ -281,7 +281,7 @@ storyline:
 
   - id: evt-006
     time: "+37m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Execute network share enumeration"
     events:
@@ -292,7 +292,7 @@ storyline:
   # --- Phase 3: Credential Dumping (Sysmon Event 8: CreateRemoteThread) ---
   - id: evt-007
     time: "+42m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Execute credential dumping tool targeting LSASS memory"
     events:
@@ -303,7 +303,7 @@ storyline:
   # --- Phase 4: Lateral Movement via RDP to IT admin workstation ---
   - id: evt-008
     time: "+55m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-JWALKER-01
     activity: "RDP lateral movement to IT admin workstation using james.walker credentials"
     events:
@@ -312,7 +312,7 @@ storyline:
 
   - id: evt-009
     time: "+57m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Logon with explicit credentials (RunAs) to access IT admin context"
     events:
@@ -323,7 +323,7 @@ storyline:
   # --- Phase 5: Privilege Escalation — Add attacker-controlled account to Domain Admins ---
   - id: evt-010
     time: "+1h5m"
-    actor: attacker
+    actor: tchen.contractor
     system: DC-01
     activity: "Authenticate to domain controller with stolen admin credentials"
     events:
@@ -333,7 +333,7 @@ storyline:
 
   - id: evt-011
     time: "+1h7m"
-    actor: attacker
+    actor: tchen.contractor
     system: DC-01
     activity: "Execute command to create backdoor domain account"
     events:
@@ -343,7 +343,7 @@ storyline:
 
   - id: evt-012
     time: "+1h8m"
-    actor: attacker
+    actor: tchen.contractor
     system: DC-01
     activity: "Execute command to add backdoor account to Domain Admins group"
     events:
@@ -354,7 +354,7 @@ storyline:
   # --- Phase 6: Persistence — Scheduled task + service install ---
   - id: evt-013
     time: "+1h15m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-JWALKER-01
     activity: "Execute schtasks to create persistence scheduled task"
     events:
@@ -364,7 +364,7 @@ storyline:
 
   - id: evt-014
     time: "+1h17m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-JWALKER-01
     activity: "Execute sc.exe to install persistence service"
     events:
@@ -375,7 +375,7 @@ storyline:
   # --- Phase 7: SSH lateral movement to Linux web server ---
   - id: evt-015
     time: "+1h30m"
-    actor: attacker
+    actor: tchen.contractor
     system: WEB-01
     activity: "SSH lateral movement to web server from IT admin workstation"
     events:
@@ -384,7 +384,7 @@ storyline:
 
   - id: evt-016
     time: "+1h33m"
-    actor: attacker
+    actor: tchen.contractor
     system: WEB-01
     activity: "Execute reconnaissance commands on Linux web server"
     events:
@@ -394,7 +394,7 @@ storyline:
 
   - id: evt-017
     time: "+1h35m"
-    actor: attacker
+    actor: tchen.contractor
     system: WEB-01
     activity: "Execute command to archive web application database credentials"
     events:
@@ -405,7 +405,7 @@ storyline:
   # --- Phase 8: Collection from file server ---
   - id: evt-018
     time: "+2h"
-    actor: attacker
+    actor: tchen.contractor
     system: FILE-SRV-01
     activity: "Authenticate to file server to access privileged client data"
     events:
@@ -415,7 +415,7 @@ storyline:
 
   - id: evt-019
     time: "+2h5m"
-    actor: attacker
+    actor: tchen.contractor
     system: FILE-SRV-01
     activity: "Execute search for privileged client documents"
     events:
@@ -425,7 +425,7 @@ storyline:
 
   - id: evt-020
     time: "+2h10m"
-    actor: attacker
+    actor: tchen.contractor
     system: FILE-SRV-01
     activity: "Execute 7zip to archive collected client files for exfiltration"
     events:
@@ -436,7 +436,7 @@ storyline:
   # --- Phase 9: SQL server data query ---
   - id: evt-021
     time: "+2h20m"
-    actor: attacker
+    actor: tchen.contractor
     system: SQL-SRV-01
     activity: "Authenticate to SQL server for data collection"
     events:
@@ -446,7 +446,7 @@ storyline:
 
   - id: evt-022
     time: "+2h25m"
-    actor: attacker
+    actor: tchen.contractor
     system: SQL-SRV-01
     activity: "Execute sqlcmd to query client billing records"
     events:
@@ -457,7 +457,7 @@ storyline:
   # --- Phase 10: C2 communication + exfiltration ---
   - id: evt-023
     time: "+3h"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-JWALKER-01
     activity: "Connect to C2 server for command and control communication"
     events:
@@ -468,7 +468,7 @@ storyline:
 
   - id: evt-024
     time: "+3h10m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-JWALKER-01
     activity: "Exfiltrate archived client data to external cloud storage"
     events:
@@ -480,7 +480,7 @@ storyline:
   # --- Phase 11: Defense evasion — clear logs ---
   - id: evt-025
     time: "+3h20m"
-    actor: attacker
+    actor: tchen.contractor
     system: WS-DOKONKWO-01
     activity: "Execute wevtutil to clear Windows Security event log"
     events:
@@ -492,7 +492,7 @@ storyline:
   # --- Phase 12: Account cleanup ---
   - id: evt-026
     time: "+3h25m"
-    actor: attacker
+    actor: tchen.contractor
     system: DC-01
     activity: "Execute command to delete backdoor account and remove evidence"
     events:

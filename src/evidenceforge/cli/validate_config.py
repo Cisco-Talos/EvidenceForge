@@ -144,7 +144,12 @@ def validate_config() -> ValidationResult:
             "list_fields": {"mappings": None},
         },
         "activity/system_processes.yaml": {
-            "dict_fields": {"system_services", "system_binaries"},
+            "dict_fields": {
+                "system_services",
+                "system_binaries",
+                "common_loaded_modules",
+                "process_loaded_modules",
+            },
             "list_fields": {"scheduled_tasks": None},
         },
         "activity/systemd_schedules.yaml": {
@@ -163,6 +168,27 @@ def validate_config() -> ValidationResult:
         "activity/bash_commands.yaml": {
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
             # No structural constraints — skip unexpected-key check
+        },
+        "activity/sysmon_filters.yaml": {
+            "dict_fields": {
+                "network_connect",
+                "image_loaded",
+                "file_create",
+                "registry_event",
+                "dns_query",
+            },
+        },
+        "activity/calltrace_patterns.yaml": {
+            "list_fields": {"patterns": None},
+        },
+        "activity/edr_pools.yaml": {
+            "list_fields": {
+                "file_paths_windows": None,
+                "file_paths_linux": None,
+                "registry_keys_hkcu": None,
+                "registry_keys_hklm": None,
+                "dll_pool": None,
+            },
         },
     }
 

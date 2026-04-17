@@ -1,0 +1,178 @@
+# Sysmon event filtering policy.
+#
+# Simulates community Sysmon configs (SwiftOnSecurity / Olaf Hartong style).
+# All string matching is case-insensitive.
+#
+# Override via .eforge/config/activity/sysmon_filters.yaml — any top-level
+# key you include fully replaces the corresponding default section.
+
+network_connect:  # Event 3
+  enabled: true
+  mode: include  # Only log events matching include rules
+  include_images:
+    - powershell.exe
+    - cmd.exe
+    - rundll32.exe
+    - regsvr32.exe
+    - mshta.exe
+    - wscript.exe
+    - cscript.exe
+    - certutil.exe
+    - bitsadmin.exe
+    - msbuild.exe
+    - wmic.exe
+    - net.exe
+    - net1.exe
+    - psexec.exe
+    - psexesvc.exe
+    - msiexec.exe
+    - sc.exe
+    - schtasks.exe
+    - reg.exe
+    - installutil.exe
+    - cmstp.exe
+    - mmc.exe
+  # System/infra processes whose connections are sampled for baseline Event 3
+  # volume (analysts need these for hunting; full include would be too noisy)
+  include_baseline_images:
+    - svchost.exe
+    - lsass.exe
+    - services.exe
+    - dns.exe
+    - dfsr.exe
+  baseline_sample_rate: 0.10  # Log 10% of matching connections
+  # User applications whose connections are sampled at a low rate.
+  # Provides non-zero Event 3 from normal apps without flooding.
+  include_user_app_images:
+    - slack.exe
+    - zoom.exe
+    - spotify.exe
+    - code.exe
+    - git.exe
+    - onedrive.exe
+    - teams.exe
+    - outlook.exe
+  user_app_sample_rate: 0.05  # 5% of connections logged
+  include_dest_ports:
+    - 22     # SSH
+    - 25     # SMTP
+    - 3389   # RDP
+    - 4444   # Metasploit default
+    - 5985   # WinRM HTTP
+    - 5986   # WinRM HTTPS
+    - 8080   # Alt HTTP
+    - 8443   # Alt HTTPS
+    - 9001   # Tor
+  # Port-process constraints: when a port-based match fires, restrict
+  # which source processes are valid. Prevents e.g. svchost.exe → SSH.
+  # Ports not listed here have no process restriction.
+  port_process_constraints:
+    22:   # SSH
+      - ssh.exe
+      - putty.exe
+      - plink.exe
+      - powershell.exe
+      - cmd.exe
+      - wsl.exe
+    3389: # RDP
+      - mstsc.exe
+      - powershell.exe
+  exclude_dest_ips:
+    - "127.0.0.1"
+    - "::1"
+
+image_loaded:  # Event 7
+  enabled: true
+  mode: exclude  # Log everything except matches
+  exclude_image_loaded_prefixes:
+    - C:\Windows\System32\
+    - C:\Windows\SysWOW64\
+    - C:\Windows\WinSxS\
+    - C:\Windows\assembly\
+    - C:\Windows\Microsoft.NET\
+  exclude_signatures:
+    - Microsoft Windows
+    - Microsoft Corporation
+
+file_create:  # Event 11
+  enabled: true
+  mode: include
+  include_target_paths:
+    - \Start Menu\
+    - \Startup\
+    - \Downloads\
+    - \AppData\Roaming\
+    - \Windows\Temp\
+    - \Windows\System32\Tasks\
+    - \Windows\System32\Drivers\
+    - \ProgramData\
+    - \Users\Public\
+    - \Temp\
+  include_extensions:
+    - .exe
+    - .dll
+    - .sys
+    - .ps1
+    - .bat
+    - .cmd
+    - .vbs
+    - .hta
+    - .scr
+    - .jar
+    - .lnk
+    - .docm
+    - .xlsm
+    - .pptm
+
+registry_event:  # Events 12/13
+  enabled: true
+  mode: include
+  include_key_patterns:
+    # Persistence / tampering keys (high-value for detection)
+    - CurrentVersion\Run
+    - CurrentVersion\RunOnce
+    - Winlogon\Shell
+    - Winlogon\Userinit
+    - Winlogon\Notify
+    - \ServiceDll
+    - \ImagePath
+    - \Start
+    - Group Policy\Scripts
+    - EnableFirewall
+    - DoNotAllowExceptions
+    - DisableAntiSpyware
+    - DisableRealtimeMonitoring
+    - EnableLUA
+    - LocalAccountTokenFilterPolicy
+    - fDenyTSConnections
+    - UseLogonCredential
+    - SecurityProviders
+    # Baseline system activity (provides realistic background volume)
+    - Explorer\Advanced
+    - Explorer\UserAssist
+    - Explorer\ComDlg32
+    - Explorer\Accent
+    - Internet Settings
+    - Themes\Personalize
+    - ContentDeliveryManager
+    - Search\SearchboxTaskbar
+    - InputPersonalization
+    - Office\16.0
+    - \Parameters
+    - Component Based Servicing
+    - WINEVT\Channels
+    - EventLog\Application
+    - Real-Time Protection
+    - Shell Folders
+    - W32Time
+    - LanmanWorkstation
+    - Session Manager\Memory Management
+    - Policies\System
+    - WindowsUpdate
+    - WBEM\CIMOM
+  log_create_key: false  # Only log SetValue (13) and Delete (12), not CreateKey
+
+dns_query:  # Event 22
+  enabled: true
+  mode: include_all  # Log all DNS queries
+  exclude_query_suffixes: []  # e.g., [".corp.local"] to suppress internal lookups

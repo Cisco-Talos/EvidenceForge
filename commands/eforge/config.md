@@ -51,12 +51,16 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add/retag domain | `dns_registry.yaml` | `traffic_profiles.yaml`, `proxy_uri_templates.yaml`, `site_maps.yaml` |
 | Modify traffic patterns | `traffic_profiles.yaml` | `dns_registry.yaml` (validate tags exist) |
 | Add/modify application | `application_catalog.yaml` | `spawn_rules.yaml`, `process_network_map.yaml` |
+| Add/modify DLL load profile | `application_catalog.yaml` or `system_processes.yaml` | `sysmon_filters.yaml` (Event 7 filter) |
 | Create/modify persona | `personas/{name}.yaml` | `application_catalog.yaml` (persona lists), `traffic_profiles.yaml` (persona_traffic) |
 | Modify spawn rules | `spawn_rules.yaml` | `application_catalog.yaml` (validate exe exists) |
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names |
 | Modify systemd schedules | `systemd_schedules.yaml` | (standalone) |
+| Modify Sysmon event filtering | `sysmon_filters.yaml` | (standalone — affects which Events 3/7/11/12/13/22 are emitted) |
+| Modify EDR diversity pools | `edr_pools.yaml` | (standalone — file paths, registry keys, DLL pool for background events) |
+| Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
 
@@ -74,6 +78,7 @@ Also read the relevant reference doc for field schemas and conventions:
 |-------|---------------|
 | DNS, traffic, proxy, site maps, network | `references/config-dns-network.md` |
 | Applications, spawn rules, processes | `references/config-apps-processes.md` |
+| Sysmon filters, EDR pools, CallTrace | `references/config-apps-processes.md` (Sysmon Filtering section) |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog) | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |

@@ -212,6 +212,12 @@ class TestEdrRegistryBackslashEscaping:
         self, activity_gen, win_system, timestamp, mock_emitters
     ):
         """REGISTRY events dispatched via canonical model preserve backslashes (Phase 8.2)."""
-        # Registry keys from the pool all contain backslashes
-        keys = [k for k, v in activity_gen._EDR_REGISTRY_KEYS]
+        from evidenceforge.generation.activity.edr_pools import (
+            get_registry_keys_hkcu,
+            get_registry_keys_hklm,
+        )
+
+        # Registry keys from both YAML pools all contain backslashes
+        keys = [k for k, _vn, _d in get_registry_keys_hkcu()]
+        keys += [k for k, _vn, _d in get_registry_keys_hklm()]
         assert all("\\" in k for k in keys)

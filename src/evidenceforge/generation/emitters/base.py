@@ -30,7 +30,6 @@ from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
 from typing import Any
 
-from jinja2 import StrictUndefined
 from jinja2.sandbox import SandboxedEnvironment
 
 from evidenceforge.events.base import SecurityEvent
@@ -77,7 +76,12 @@ class LogEmitter(ABC):
         self.buffer_size = buffer_size
         self.buffer: list[str] = []
         self.event_count = 0
-        self._template_env = SandboxedEnvironment(undefined=StrictUndefined, autoescape=False)
+        # DESIGN DECISION: StrictUndefined intentionally removed (commit 5a4e7db).
+        # Templates use | default(...) for optional fields that legitimately
+        # render as empty. SandboxedEnvironment remains for SSTI protection.
+        # Template completeness tests in test_sysmon_new_events.py catch
+        # variable name mismatches for required fields.
+        self._template_env = SandboxedEnvironment(autoescape=False)
         self._template = self._template_env.from_string(format_def.output.template)
         self._header_written = False
         self._file_lock = Lock()  # Thread-safe file I/O and buffer access

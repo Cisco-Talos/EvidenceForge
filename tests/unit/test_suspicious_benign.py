@@ -29,11 +29,13 @@ import pytest
 
 from evidenceforge.generation.activity.suspicious_benign import (
     SUSPICIOUS_NOISE_INTENSITY,
+    _generate_encoded_command,
     _get_os_category,
     generate_after_hours_admin,
     generate_failed_logon_burst,
     generate_service_account_anomaly,
     generate_suspicious_cli,
+    generate_unusual_powershell,
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
@@ -355,3 +357,57 @@ class TestGetOsCategory:
     def test_windows_server(self):
         sys = System(hostname="SRV-01", ip="10.0.0.1", os="Windows Server 2019", type="server")
         assert _get_os_category(sys) == "windows"
+
+
+class TestEncodedPowershell:
+    """Fix 2: Encoded PowerShell commands should vary across invocations."""
+
+    def test_encoded_commands_vary(self):
+        """Different RNG seeds produce different encoded commands."""
+        payloads = set()
+        for seed in range(50):
+            rng = random.Random(seed)
+            payloads.add(_generate_encoded_command(rng))
+        # With 7 templates × multiple params, we should get high diversity
+        assert len(payloads) > 10, f"Only {len(payloads)} unique payloads from 50 seeds"
+
+    def test_encoded_command_is_valid_base64(self):
+        """Encoded command should decode to readable PowerShell."""
+        import base64
+
+        rng = random.Random(99)
+        encoded = _generate_encoded_command(rng)
+        decoded = base64.b64decode(encoded).decode("utf-16-le")
+        # Should contain a recognizable PowerShell cmdlet
+        ps_cmdlets = [
+            "Get-Service",
+            "Get-EventLog",
+            "Test-NetConnection",
+            "Get-Process",
+            "Get-ChildItem",
+            "Get-WmiObject",
+            "Get-HotFix",
+        ]
+        assert any(c in decoded for c in ps_cmdlets), f"Decoded command lacks PS cmdlet: {decoded}"
+
+    def test_unusual_powershell_has_varied_encoded(self, rng, users):
+        """generate_unusual_powershell produces varied EncodedCommand payloads."""
+        systems = [
+            System(
+                hostname="WS-01",
+                ip="10.0.0.1",
+                os="Windows 10 Enterprise",
+                type="workstation",
+            )
+        ]
+        encoded_payloads = set()
+        for seed in range(100):
+            rng_local = random.Random(seed)
+            result = generate_unusual_powershell(
+                rng_local, users, systems, datetime(2024, 1, 15, 10, 0)
+            )
+            if result and "-EncodedCommand" in result["command_line"]:
+                payload = result["command_line"].split("-EncodedCommand ")[1]
+                encoded_payloads.add(payload)
+        # Should get multiple distinct base64 payloads
+        assert len(encoded_payloads) > 3, f"Only {len(encoded_payloads)} unique encoded payloads"

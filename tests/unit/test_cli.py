@@ -27,6 +27,7 @@ from unittest.mock import Mock, patch
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import (
+    EXIT_ABORTED,
     EXIT_GENERATION_ERROR,
     EXIT_SCHEMA_VALIDATION,
     EXIT_SUCCESS,
@@ -186,3 +187,132 @@ output:
 
         assert result.exit_code == EXIT_GENERATION_ERROR
         assert "error" in result.stdout.lower()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_prompts_on_existing_output(self, mock_engine_class, scenarios_dir, tmp_path):
+        """Existing output should prompt for confirmation; 'y' proceeds."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        # Create existing output files
+        (tmp_path / "data").mkdir()
+        (tmp_path / "GROUND_TRUTH.md").write_text("old")
+        (tmp_path / "ENVIRONMENT.md").write_text("old")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="y\n",
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Existing output found" in result.stdout
+        assert mock_engine.generate.called
+        # Generated files should have been cleaned
+        assert not (tmp_path / "GROUND_TRUTH.md").exists()
+        # ENVIRONMENT.md is authored by /eforge scenario, not the engine — must be preserved
+        assert (tmp_path / "ENVIRONMENT.md").exists()
+        assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_aborts_on_existing_output_declined(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """Declining overwrite prompt should abort without generating."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        # Create existing output files
+        (tmp_path / "data").mkdir()
+        (tmp_path / "GROUND_TRUTH.md").write_text("old")
+
+        result = runner.invoke(
+            app,
+            ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)],
+            input="n\n",
+        )
+
+        assert result.exit_code == EXIT_ABORTED
+        assert not mock_engine.generate.called
+        # Files should NOT have been deleted
+        assert (tmp_path / "data").exists()
+        assert (tmp_path / "GROUND_TRUTH.md").exists()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_force_skips_prompt(self, mock_engine_class, scenarios_dir, tmp_path):
+        """--force should skip the prompt and overwrite."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        # Create existing output files
+        (tmp_path / "data").mkdir()
+        (tmp_path / "GROUND_TRUTH.md").write_text("old")
+        (tmp_path / "ENVIRONMENT.md").write_text("old")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Overwrite existing output?" not in result.stdout
+        assert mock_engine.generate.called
+        assert not (tmp_path / "GROUND_TRUTH.md").exists()
+        # ENVIRONMENT.md must be preserved (not engine output)
+        assert (tmp_path / "ENVIRONMENT.md").exists()
+        assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_force_preserves_old_output_on_failure(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """If generation fails with --force, previous output should be preserved."""
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = Exception("Generation crashed")
+        mock_engine_class.return_value = mock_engine
+
+        # Create existing output files
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "test.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        # Previous output should be preserved (not deleted)
+        assert (tmp_path / "data" / "test.xml").exists()
+        assert (tmp_path / "data" / "test.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+        # Staging directory should be cleaned up
+        staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+        assert len(staging_dirs) == 0, "Staging directory should be cleaned up on failure"
+        assert "previous output preserved" in result.stdout.lower()
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_no_prompt_when_clean(self, mock_engine_class, scenarios_dir, tmp_path):
+        """Clean output directory should not trigger any prompt."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Existing output found" not in result.stdout
+        assert mock_engine.generate.called

@@ -18,7 +18,7 @@ fields:
     required: true
     description: "Sysmon Event ID"
     constraints:
-      allowed_values: [1, 5, 8, 10]
+      allowed_values: [1, 3, 5, 7, 8, 10, 11, 12, 13, 22]
 
   - name: TimeCreated
     type: timestamp
@@ -215,6 +215,234 @@ variants:
         type: string
         required: false
 
+  # Sysmon EventID 3: Network Connection
+  - name: sysmon_network_connect
+    event_id: "3"
+    description: "TCP/UDP connection detected"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: User
+        type: string
+        required: true
+      - name: Protocol
+        type: string
+        required: true
+      - name: Initiated
+        type: string
+        required: true
+      - name: SourceIsIpv6
+        type: string
+        required: true
+      - name: SourceIp
+        type: string
+        required: true
+      - name: SourceHostname
+        type: string
+        required: false
+      - name: SourcePort
+        type: integer
+        required: true
+      - name: SourcePortName
+        type: string
+        required: false
+      - name: DestinationIsIpv6
+        type: string
+        required: true
+      - name: DestinationIp
+        type: string
+        required: true
+      - name: DestinationHostname
+        type: string
+        required: false
+      - name: DestinationPort
+        type: integer
+        required: true
+      - name: DestinationPortName
+        type: string
+        required: false
+
+  # Sysmon EventID 7: Image Loaded (DLL)
+  - name: sysmon_image_loaded
+    event_id: "7"
+    description: "Module (DLL) loaded into process"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: ImageLoaded
+        type: string
+        required: true
+      - name: FileVersion
+        type: string
+        required: false
+      - name: Description
+        type: string
+        required: false
+      - name: Product
+        type: string
+        required: false
+      - name: Company
+        type: string
+        required: false
+      - name: OriginalFileName
+        type: string
+        required: false
+      - name: Hashes
+        type: string
+        required: false
+      - name: Signed
+        type: string
+        required: true
+      - name: Signature
+        type: string
+        required: false
+      - name: SignatureStatus
+        type: string
+        required: true
+
+  # Sysmon EventID 11: File Created
+  - name: sysmon_file_create
+    event_id: "11"
+    description: "File creation or overwrite detected"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: TargetFilename
+        type: string
+        required: true
+      - name: CreationUtcTime
+        type: string
+        required: true
+
+  # Sysmon EventID 12: Registry Object Created or Deleted
+  - name: sysmon_registry_create_delete
+    event_id: "12"
+    description: "Registry key/value created or deleted"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: EventType
+        type: string
+        required: true
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: TargetObject
+        type: string
+        required: true
+
+  # Sysmon EventID 13: Registry Value Set
+  - name: sysmon_registry_set_value
+    event_id: "13"
+    description: "Registry value modified"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: EventType
+        type: string
+        required: true
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: Image
+        type: string
+        required: true
+      - name: TargetObject
+        type: string
+        required: true
+      - name: Details
+        type: string
+        required: true
+
+  # Sysmon EventID 22: DNS Query
+  - name: sysmon_dns_query
+    event_id: "22"
+    description: "DNS query performed by a process"
+    fields:
+      - name: RuleName
+        type: string
+        required: false
+      - name: UtcTime
+        type: string
+        required: true
+      - name: ProcessGuid
+        type: string
+        required: true
+      - name: ProcessId
+        type: integer
+        required: true
+      - name: QueryName
+        type: string
+        required: true
+      - name: QueryStatus
+        type: string
+        required: true
+      - name: QueryResults
+        type: string
+        required: false
+      - name: Image
+        type: string
+        required: true
+      - name: User
+        type: string
+        required: false
+
 # Output template in Sysmon Event Log XML format
 output:
   format: xml
@@ -229,7 +457,7 @@ output:
       <System>
         <Provider Name="Microsoft-Windows-Sysmon" Guid="{5770385f-c22a-43e0-bf4c-06f5698ffbd9}"/>
         <EventID>{{ EventID }}</EventID>
-        <Version>{{ {1: 5, 5: 3, 8: 2, 10: 3}.get(EventID, 2) }}</Version>
+        <Version>{{ {1: 5, 3: 5, 5: 3, 7: 3, 8: 2, 10: 3, 11: 2, 12: 2, 13: 2, 22: 5}.get(EventID, 2) }}</Version>
         <Level>4</Level>
         <Task>{{ EventID }}</Task>
         <Opcode>0</Opcode>
@@ -300,6 +528,76 @@ output:
         <Data Name="TargetUser">{{ TargetUser }}</Data>
         <Data Name="GrantedAccess">{{ GrantedAccess }}</Data>
         <Data Name="CallTrace">{{ CallTrace | default('') }}</Data>
+        {% elif EventID == 3 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
+        <Data Name="Protocol">{{ Protocol }}</Data>
+        <Data Name="Initiated">{{ Initiated }}</Data>
+        <Data Name="SourceIsIpv6">{{ SourceIsIpv6 | default('false') }}</Data>
+        <Data Name="SourceIp">{{ SourceIp }}</Data>
+        <Data Name="SourceHostname">{{ SourceHostname | default('-') }}</Data>
+        <Data Name="SourcePort">{{ SourcePort }}</Data>
+        <Data Name="SourcePortName">{{ SourcePortName | default('-') }}</Data>
+        <Data Name="DestinationIsIpv6">{{ DestinationIsIpv6 | default('false') }}</Data>
+        <Data Name="DestinationIp">{{ DestinationIp }}</Data>
+        <Data Name="DestinationHostname">{{ DestinationHostname | default('-') }}</Data>
+        <Data Name="DestinationPort">{{ DestinationPort }}</Data>
+        <Data Name="DestinationPortName">{{ DestinationPortName | default('-') }}</Data>
+        {% elif EventID == 7 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="ImageLoaded">{{ ImageLoaded }}</Data>
+        <Data Name="FileVersion">{{ FileVersion | default('-') }}</Data>
+        <Data Name="Description">{{ Description | default('-') }}</Data>
+        <Data Name="Product">{{ Product | default('-') }}</Data>
+        <Data Name="Company">{{ Company | default('-') }}</Data>
+        <Data Name="OriginalFileName">{{ OriginalFileName | default('-') }}</Data>
+        <Data Name="Hashes">{{ Hashes | default('') }}</Data>
+        <Data Name="Signed">{{ Signed }}</Data>
+        <Data Name="Signature">{{ Signature | default('-') }}</Data>
+        <Data Name="SignatureStatus">{{ SignatureStatus }}</Data>
+        {% elif EventID == 11 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="TargetFilename">{{ TargetFilename }}</Data>
+        <Data Name="CreationUtcTime">{{ CreationUtcTime }}</Data>
+        {% elif EventID == 12 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="EventType">{{ EventType }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="TargetObject">{{ TargetObject }}</Data>
+        {% elif EventID == 13 %}
+        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="EventType">SetValue</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="TargetObject">{{ TargetObject }}</Data>
+        <Data Name="Details">{{ Details | default('-') }}</Data>
+        {% elif EventID == 22 %}
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
+        <Data Name="UtcTime">{{ UtcTime }}</Data>
+        <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
+        <Data Name="ProcessId">{{ ProcessId }}</Data>
+        <Data Name="QueryName">{{ QueryName }}</Data>
+        <Data Name="QueryStatus">{{ QueryStatus }}</Data>
+        <Data Name="QueryResults">{{ QueryResults | default('-') }}</Data>
+        <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User | default('NT AUTHORITY\\SYSTEM') }}</Data>
         {% endif %}
       </EventData>
     </Event>

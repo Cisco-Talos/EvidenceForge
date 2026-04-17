@@ -1279,6 +1279,45 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        # Determine integrity level per UAC model:
+        # - SYSTEM processes: "System" (handled in generate_system_process)
+        # - Explicitly elevated (admin tools, installers): "High"
+        # - Everything else (including admin users under UAC): "Medium"
+        _HIGH_INTEGRITY_EXES = {
+            "msiexec.exe",
+            "regedit.exe",
+            "mmc.exe",
+            "dism.exe",
+            "pkgmgr.exe",
+            "setup.exe",
+            "install.exe",
+            "procdump64.exe",
+            "procdump.exe",
+            "mimikatz.exe",
+            "psexec.exe",
+            "psexesvc.exe",
+        }
+        _exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if _exe_lower in _HIGH_INTEGRITY_EXES:
+            _integrity = "High"
+        else:
+            _integrity = "Medium"
+            # Browser child processes (renderers) run at Low integrity.
+            # ~65% of browser children are sandboxed renderers (Low),
+            # ~35% are GPU/utility processes (Medium).
+            _BROWSER_EXES = {"chrome.exe", "msedge.exe", "firefox.exe"}
+            if _exe_lower in _BROWSER_EXES:
+                _parent_image = (
+                    self._lookup_process_name(
+                        system.hostname, parent_pid, _get_os_category(system.os)
+                    )
+                    or ""
+                )
+                _parent_exe = _parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if _parent_exe in _BROWSER_EXES:
+                    rng = _get_rng()
+                    _integrity = "Low" if rng.random() < 0.65 else "Medium"
+
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
             system=system.hostname,
@@ -1286,7 +1325,7 @@ class ActivityGenerator:
             image=process_name,
             command_line=command_line,
             username=user.username,
-            integrity_level="Medium",
+            integrity_level=_integrity,
             logon_id=logon_id,
         )
 
@@ -1308,7 +1347,7 @@ class ActivityGenerator:
                 image=process_name,
                 command_line=command_line,
                 username=user.username,
-                integrity_level="Medium",
+                integrity_level=_integrity,
                 logon_id=logon_id,
                 parent_image=self._lookup_process_name(
                     system.hostname, parent_pid, _get_os_category(system.os)
@@ -1323,18 +1362,38 @@ class ActivityGenerator:
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
 
-        # Guaranteed FILE/CREATE for the process image when requested (storyline processes)
+        # Guaranteed FILE/CREATE for the process image when requested (storyline processes).
+        # Skip for pre-existing binaries in System32/SysWOW64/Program Files — Event 11
+        # should only fire for genuinely new files written to disk (malware drops, downloads).
         if ensure_file_event:
-            self.dispatcher.dispatch(
-                SecurityEvent(
-                    timestamp=time,
-                    event_type="file_create",
-                    src_host=self._build_host_context(system),
-                    auth=AuthContext(username=user.username),
-                    file=FileContext(path=process_name, action="create", pid=pid),
-                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
-                )
+            _lower = process_name.lower().replace("/", "\\")
+            _is_system_binary = (
+                _lower.startswith("c:\\windows\\system32\\")
+                or _lower.startswith("c:\\windows\\syswow64\\")
+                or _lower.startswith("c:\\program files\\")
+                or _lower.startswith("c:\\program files (x86)\\")
             )
+            if not _is_system_binary:
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time,
+                        event_type="file_create",
+                        src_host=self._build_host_context(system),
+                        auth=AuthContext(username=user.username),
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=self._lookup_process_name(
+                                system.hostname, parent_pid, _get_os_category(system.os)
+                            )
+                            or process_name,
+                            command_line=command_line,
+                            username=user.username,
+                        ),
+                        file=FileContext(path=process_name, action="create", pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                    )
+                )
 
         # Phase 8.2: Probabilistic EDR object diversity via canonical SecurityEvent
         rng = _get_rng()
@@ -1343,9 +1402,9 @@ class ActivityGenerator:
         auth_ctx = AuthContext(username=user.username)
         if rng.random() < 0.40:
             action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
-            pool = (
-                self._EDR_FILE_PATHS_WIN if os_category == "windows" else self._EDR_FILE_PATHS_LINUX
-            )
+            from evidenceforge.generation.activity.edr_pools import get_file_paths
+
+            pool = get_file_paths(os_category)
             path = (
                 rng.choice(pool)
                 .replace("{user}", user.username)
@@ -1362,12 +1421,21 @@ class ActivityGenerator:
                     event_type=event_type,
                     src_host=host_ctx,
                     auth=auth_ctx,
+                    process=ProcessContext(
+                        pid=pid,
+                        parent_pid=parent_pid,
+                        image=process_name,
+                        command_line=command_line,
+                        username=user.username,
+                    ),
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
-            dll_path = rng.choice(self._EDR_DLL_POOL)
+            from evidenceforge.generation.activity.edr_pools import get_dll_pool
+
+            dll_path = rng.choice(get_dll_pool())
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
@@ -1378,18 +1446,55 @@ class ActivityGenerator:
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
-        if os_category == "windows" and "system32" in process_name.lower() and rng.random() < 0.20:
-            key, value = rng.choice(self._EDR_REGISTRY_KEYS)
-            self.dispatcher.dispatch(
-                SecurityEvent(
-                    timestamp=time,
-                    event_type="registry_modify",
-                    src_host=host_ctx,
-                    auth=auth_ctx,
-                    registry=RegistryContext(key=key, value=value, action="modify", pid=pid),
-                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
-                )
+        # Only emit registry events for processes that realistically modify registry
+        # (services, shells, installers) — NOT command-line recon tools like net.exe/dsquery.exe
+        _REGISTRY_WRITERS = {
+            "svchost.exe",
+            "services.exe",
+            "explorer.exe",
+            "powershell.exe",
+            "rundll32.exe",
+            "msiexec.exe",
+            "reg.exe",
+            "regedit.exe",
+            "taskhostw.exe",
+            "usoclient.exe",
+            "dllhost.exe",
+        }
+        _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if os_category == "windows" and _exe in _REGISTRY_WRITERS and rng.random() < 0.50:
+            # Service-level processes can write HKLM; user processes only HKCU
+            _HKLM_WRITERS = {"svchost.exe", "services.exe", "reg.exe", "regedit.exe", "msiexec.exe"}
+            # Emit 1-3 registry events per process (registry activity is high-volume)
+            _reg_count = rng.choices([1, 2, 3], weights=[50, 35, 15], k=1)[0]
+            from evidenceforge.generation.activity.edr_pools import (
+                get_registry_keys_hkcu,
+                get_registry_keys_hklm,
             )
+
+            _pool_hkcu = get_registry_keys_hkcu()
+            _pool_hklm = get_registry_keys_hklm()
+            for _ in range(_reg_count):
+                if _exe in _HKLM_WRITERS:
+                    _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
+                else:
+                    _key, _vname, _details = rng.choice(_pool_hkcu)
+                # TargetObject = key\value_name (full path as Sysmon shows it)
+                _target = f"{_key}\\{_vname}"
+                # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
+                reg_action = "delete" if rng.random() < 0.15 else "modify"
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time,
+                        event_type="registry_modify",
+                        src_host=host_ctx,
+                        auth=auth_ctx,
+                        registry=RegistryContext(
+                            key=_target, value=_details, action=reg_action, pid=pid
+                        ),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                    )
+                )
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
@@ -2229,6 +2334,7 @@ class ActivityGenerator:
         # with S0/REJ cannot have served an HTTP response.
         if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
             event.network.conn_state = "SF"
+            event.network.history = "ShADadfF"  # Must match SF state
             if event.network.resp_bytes == 0:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
@@ -2898,12 +3004,17 @@ class ActivityGenerator:
             else:
                 answers = [_generate_rdns_name(rng, dst_ip)]
         elif qtype_roll < 0.98:
-            # SRV record: AD service discovery
+            # SRV record: AD service discovery — must resolve to DCs only
             qtype, qtype_name = 33, "SRV"
             domain = ad_domain
             query = rng.choice(_AD_SRV_QUERIES).format(domain=domain)
-            dc_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-            dc_ip = _get_rng().choice(dc_ips)
+            dc_systems = getattr(self, "_dc_systems", [])
+            if dc_systems:
+                dc_sys = _get_rng().choice(dc_systems)
+                dc_ip = dc_sys.ip
+            else:
+                dc_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
+                dc_ip = _get_rng().choice(dc_ips)
             dc_hostname = REVERSE_DNS.get(dc_ip, f"dc-01.{domain}")
             svc_prefix = query.split(".")[0]
             port = _SRV_PORT_MAP.get(svc_prefix, 389)
@@ -4252,6 +4363,53 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def generate_image_load(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        image: str,
+        dll_path: str,
+        signed: bool = True,
+        signature: str = "Microsoft Windows",
+        signature_status: str = "Valid",
+    ) -> None:
+        """Generate Sysmon Event 7 (ImageLoaded) for DLL/module loading.
+
+        Args:
+            user: User running the process that loaded the DLL
+            system: System where the load occurs
+            time: Event timestamp
+            pid: PID of the process loading the DLL
+            image: Full path of the process image
+            dll_path: Full path of the loaded DLL
+            signed: Whether the DLL is signed
+            signature: Signer name (e.g., "Microsoft Windows")
+            signature_status: Signature validation status (Valid, Expired, etc.)
+        """
+        from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
+
+        event = SecurityEvent(
+            timestamp=time,
+            event_type="image_load",
+            src_host=self._build_host_context(system),
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=image,
+                command_line="",
+                username=user.username,
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=dll_path,
+                signed=signed,
+                signature=signature,
+                signature_status=signature_status,
+            ),
+        )
+        self.dispatcher.dispatch(event)
+
     def generate_account_changed(
         self,
         actor: User,
@@ -4708,11 +4866,15 @@ class ActivityGenerator:
                 ]
                 if shells and rng.random() < 0.6:
                     return shells[-1][0]
-                return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+                return sys_pids.get(
+                    "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
 
             # Prefer session-specific explorer PID over system-wide default
             session_explorer = self._get_session_explorer_pid(system, user)
-            explorer_pid = session_explorer or sys_pids.get("explorer", 4)
+            explorer_pid = session_explorer or sys_pids.get(
+                "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+            )
 
             # Shells and terminals spawn from explorer.exe
             if exe_name in self._WINDOWS_SHELLS:
@@ -4801,8 +4963,12 @@ class ActivityGenerator:
         if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
             if is_shell:
                 # Shells get svchost as parent (realistic: service host spawns shell)
-                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
-            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+                return sys_pids.get(
+                    "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+            return sys_pids.get(
+                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+            )
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
         # Match by logon_id when available to avoid picking the wrong session
@@ -4822,8 +4988,12 @@ class ActivityGenerator:
         is_network_logon = active_session and active_session.logon_type == 3
         if is_network_logon:
             if is_shell:
-                return sys_pids.get("svchost_netsvcs", sys_pids.get("svchost_dcom", 4))
-            return sys_pids.get("services", sys_pids.get("svchost_dcom", 4))
+                return sys_pids.get(
+                    "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+            return sys_pids.get(
+                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+            )
 
         # Look up valid parents from spawn rules
         if os_cat == "windows":
@@ -4910,14 +5080,18 @@ class ActivityGenerator:
         # Safety limit
         if depth > 3:
             if os_cat == "windows":
-                return sys_pids.get("explorer", 4)
+                return sys_pids.get(
+                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+                )
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
         # Pick a parent for child_exe from the rules
         possible_parents = reverse.get(child_exe, [])
         if not possible_parents:
             if os_cat == "windows":
-                return sys_pids.get("explorer", 4)
+                return sys_pids.get(
+                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+                )
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux
@@ -5093,79 +5267,8 @@ class ActivityGenerator:
         return "S-1-0-0"
 
     # Phase 5.2: EDR object type diversity data pools
-    _EDR_FILE_PATHS_WIN = [
-        # User documents
-        "C:\\Users\\{user}\\Documents\\report.docx",
-        "C:\\Users\\{user}\\Documents\\spreadsheet.xlsx",
-        "C:\\Users\\{user}\\Documents\\presentation.pptx",
-        "C:\\Users\\{user}\\Documents\\Q4-review.pdf",
-        "C:\\Users\\{user}\\Documents\\meeting-notes.txt",
-        # Downloads and desktop
-        "C:\\Users\\{user}\\Downloads\\file.pdf",
-        "C:\\Users\\{user}\\Downloads\\installer-{rand}.exe",
-        "C:\\Users\\{user}\\Desktop\\notes.txt",
-        "C:\\Users\\{user}\\Desktop\\shortcut.lnk",
-        # Temp files
-        "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp",
-        "C:\\Users\\{user}\\AppData\\Local\\Temp\\~DF{rand}.tmp",
-        # Application data
-        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Office\\16.0\\OfficeFileCache\\{rand}.dat",
-        "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\data_{rand}",
-        "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\{rand}",
-        "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\report.docx.lnk",
-        # System paths
-        "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\Report.wer",
-        "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf",
-        "C:\\Windows\\Temp\\{rand}.tmp",
-        "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}",
-        "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx",
-    ]
-    _EDR_FILE_PATHS_LINUX = [
-        # User files
-        "/home/{user}/documents/report.odt",
-        "/home/{user}/documents/notes.md",
-        "/home/{user}/downloads/file.pdf",
-        "/home/{user}/downloads/archive-{rand}.tar.gz",
-        "/home/{user}/.bashrc",
-        "/home/{user}/.ssh/known_hosts",
-        # Temp files
-        "/tmp/tmp{rand}",
-        "/tmp/systemd-private-{rand}-apache2.service",
-        "/var/tmp/{rand}.lock",
-        # Application caches
-        "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}",
-        "/home/{user}/.cache/pip/http/{rand}",
-        "/home/{user}/.local/share/recently-used.xbel",
-        # Logs and system
-        "/var/log/syslog",
-        "/var/log/auth.log",
-        "/var/log/apache2/access.log",
-        "/proc/{rand}/status",
-        "/etc/passwd",
-        # Package manager
-        "/var/lib/dpkg/status",
-        "/var/cache/apt/archives/lock",
-        "/var/lib/apt/lists/lock",
-    ]
-    _EDR_REGISTRY_KEYS = [
-        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a"),
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealth"),
-        ("HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin"),
-        ("HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", "Shell"),
-        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "ProxyEnable"),
-    ]
-    _EDR_DLL_POOL = [
-        "C:\\Windows\\System32\\ntdll.dll",
-        "C:\\Windows\\System32\\kernel32.dll",
-        "C:\\Windows\\System32\\user32.dll",
-        "C:\\Windows\\System32\\advapi32.dll",
-        "C:\\Windows\\System32\\msvcrt.dll",
-        "C:\\Windows\\System32\\rpcrt4.dll",
-        "C:\\Windows\\System32\\ole32.dll",
-        "C:\\Windows\\System32\\combase.dll",
-        "C:\\Windows\\System32\\sechost.dll",
-        "C:\\Windows\\System32\\gdi32.dll",
-    ]
+    # EDR file/registry/DLL pools moved to edr_pools.yaml (data-driven config).
+    # Access via: from evidenceforge.generation.activity.edr_pools import get_file_paths, etc.
 
     # _emit_ecar_file_event and _emit_ecar_registry_event removed in Phase 8.2
     # FILE/REGISTRY events now dispatched via SecurityEvent canonical model

@@ -6,6 +6,7 @@
 # per-user typo rate (#22), ProcessGUID boot time (#32).
 
 import random
+from pathlib import Path
 
 from evidenceforge.generation.activity.generator import (
     _KERBEROS_SVC_VALUES,
@@ -176,16 +177,23 @@ class TestProcessGuidBootTime:
     def test_different_hosts_different_parent_guids(self):
         from datetime import UTC, datetime
 
+        from evidenceforge.formats import load_format
         from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 
-        # Two hosts with different boot times
-        boot_a = datetime(2024, 3, 10, 8, 0, tzinfo=UTC)
-        boot_b = datetime(2024, 3, 5, 14, 30, tzinfo=UTC)
+        fmt = load_format("windows_event_sysmon")
+        emitter = SysmonEventEmitter(fmt, Path("/dev/null"))
+        # Set different boot times per host
+        emitter._host_boot_times = {
+            "HOST-A": datetime(2024, 3, 1, 6, 0, tzinfo=UTC),
+            "HOST-B": datetime(2024, 2, 20, 12, 0, tzinfo=UTC),
+        }
 
-        guid_a = SysmonEventEmitter._generate_process_guid("HOST-A", 4, boot_a)
-        guid_b = SysmonEventEmitter._generate_process_guid("HOST-B", 4, boot_b)
+        # Same PID and creation time, but different hosts with different boot times
+        creation_time = datetime(2024, 3, 10, 8, 0, tzinfo=UTC)
+        guid_a = emitter._generate_process_guid("HOST-A", 4, creation_time)
+        guid_b = emitter._generate_process_guid("HOST-B", 4, creation_time)
 
-        # GUIDs should differ (different host + different timestamp)
+        # GUIDs should differ (different host + different boot time)
         assert guid_a != guid_b
         # Both should be valid GUID format
         assert guid_a.startswith("{") and guid_a.endswith("}")

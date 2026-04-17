@@ -319,6 +319,12 @@ Skills are markdown prompt files (`.md`), not Python code. They run inside Claud
 4. Test interactively in Claude Code
 5. Update `install-skills` command if needed
 
+## Known Design Decisions (do not flag as bugs)
+
+- **Sysmon Event 22 shows svchost.exe, not the originating process**: Windows DNS Client service (dnscache, hosted by svchost.exe) proxies all application DNS queries via DnsQuery_A()/getaddrinfo(). Real Sysmon Event 22 attributes to svchost.exe — this is correct Windows behavior, not a data loss bug.
+- **StrictUndefined removed from Jinja templates**: Intentional (commit 5a4e7db). Templates use `| default(...)` for optional fields. SandboxedEnvironment remains for SSTI protection. Template completeness tests in `test_sysmon_new_events.py` catch variable name typos for required fields.
+- **Overwrite swap uses delete-then-move, not backup-restore**: Staging directory protects against generation failures (old output untouched until generation succeeds). The final swap is atomic (`os.rename` on same filesystem). Old GROUND_TRUTH.md + new data would be semantically invalid, so partial preservation is intentionally not supported.
+
 ## Reference
 
 **Key docs:**

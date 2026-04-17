@@ -76,7 +76,7 @@ For scripted or non-interactive use:
 | `eforge install-skills [--global]` | Install Claude Code skills |
 | `eforge version` | Show version |
 
-Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output directory.
+Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output directory, `--force` / `-f` to overwrite existing output without prompting.
 
 ## Customizing Configuration
 
