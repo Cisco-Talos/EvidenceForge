@@ -603,6 +603,12 @@ class SignalIntegrityScorer(DimensionScorer):
                 msg = f.get("message", "")
                 return "Failed password" in msg or "Accepted password" in msg
 
+        elif event_type in ("dga_queries", "dns_tunnel"):
+            if format_name == "zeek_dns":
+                return True  # Any DNS record in time window is a potential match
+            if format_name == "zeek_conn":
+                return f.get("id.resp_p") == 53
+
         return False
 
     def _connection_matches_zeek(self, fields: dict, event: ResolvedEvent) -> bool:

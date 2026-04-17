@@ -1542,6 +1542,208 @@ class StorylineMixin:
             malicious_event["target_accounts"] = accounts
             malicious_event["attempt_count"] = attempt_count
 
+        elif spec.type == "dga_queries":
+            import random as _random
+
+            from evidenceforge.events.contexts import DnsContext
+
+            # Timing
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - time).total_seconds()
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+
+            # DGA RNG — separate from main rng for reproducibility
+            dga_seed = spec.seed if spec.seed is not None else rng.randint(0, 2**31)
+            dga_rng = _random.Random(dga_seed)
+
+            # Rcode distribution
+            rcode_dist = spec.rcode_distribution or {"NXDOMAIN": 0.95, "NOERROR": 0.05}
+            rcode_names = list(rcode_dist.keys())
+            rcode_weights = list(rcode_dist.values())
+
+            _RCODE_MAP = {"NOERROR": 0, "NXDOMAIN": 3, "SERVFAIL": 2, "REFUSED": 5}
+            _QTYPE_MAP = {"A": 1, "AAAA": 28, "TXT": 16, "CNAME": 5}
+
+            query_src_ip = spec.source_ip or system.ip
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+
+            query_count = 0
+            nxdomain_count = 0
+            domain_sample = []
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+
+                # Generate random domain
+                label_len = dga_rng.randint(*spec.length_range)
+                label = "".join(dga_rng.choices(spec.charset, k=label_len))
+                domain = f"{label}{spec.tld}"
+
+                # Select rcode
+                rcode_name = dga_rng.choices(rcode_names, weights=rcode_weights, k=1)[0]
+                rcode_num = _RCODE_MAP.get(rcode_name, 3)
+
+                answers = []
+                ttls = []
+                if rcode_name == "NOERROR" and spec.answer_ip:
+                    answers = [spec.answer_ip]
+                    ttls = [float(dga_rng.randint(60, 3600))]
+                if rcode_name == "NXDOMAIN":
+                    nxdomain_count += 1
+
+                dns_ctx = DnsContext(
+                    query=domain,
+                    query_type="A",
+                    qtype=1,
+                    rcode=rcode_name,
+                    rcode_num=rcode_num,
+                    answers=answers,
+                    TTLs=ttls,
+                    trans_id=rng.randint(1, 65535),
+                    AA=False,
+                    RD=True,
+                    RA=True,
+                    rejected=False,
+                    rtt=rng.uniform(1.0, 50.0),
+                )
+
+                dns_server_ip = rng.choice(dns_server_ips)
+                self.activity_generator.generate_connection(
+                    src_ip=query_src_ip,
+                    dst_ip=dns_server_ip,
+                    time=tick_time,
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    dns=dns_ctx,
+                    emit_dns=False,
+                )
+                query_count += 1
+                if len(domain_sample) < 5:
+                    domain_sample.append(domain)
+
+            malicious_event["total_queries"] = query_count
+            malicious_event["nxdomain_count"] = nxdomain_count
+            malicious_event["domain_sample"] = domain_sample
+            malicious_event["tld"] = spec.tld
+
+        elif spec.type == "dns_tunnel":
+            import base64 as _b64
+
+            from evidenceforge.events.contexts import DnsContext
+
+            _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
+            _RCODE_MAP = {"NOERROR": 0}
+
+            # Timing
+            interval_sec = parse_duration(spec.interval).total_seconds()
+            duration_sec = None
+            count = spec.count
+            if spec.duration is not None:
+                duration_sec = parse_duration(spec.duration).total_seconds()
+            elif spec.end_time is not None:
+                end_dt = self._parse_storyline_time(spec.end_time)
+                duration_sec = (end_dt - time).total_seconds()
+            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+
+            query_src_ip = spec.source_ip or system.ip
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+
+            # Generate or use payload
+            if spec.payload:
+                payload_bytes = spec.payload.encode("utf-8")
+            else:
+                payload_bytes = rng.randbytes(spec.payload_size)
+
+            # Calculate bytes per label based on encoding
+            if spec.encoding == "hex":
+                bytes_per_label = spec.label_length // 2
+            elif spec.encoding == "base32":
+                bytes_per_label = (spec.label_length * 5) // 8
+            else:  # base64
+                bytes_per_label = (spec.label_length * 3) // 4
+            bytes_per_label = max(1, bytes_per_label)
+
+            # Chunk payload
+            chunks = []
+            for i in range(0, len(payload_bytes), bytes_per_label):
+                chunks.append(payload_bytes[i : i + bytes_per_label])
+
+            qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
+            total_bytes = 0
+            query_count = 0
+            chunk_idx = 0
+
+            for tick_time in _iter_periodic_ticks(
+                start, interval_sec, duration_sec, count, spec.jitter, rng
+            ):
+                self.state_manager.set_current_time(tick_time)
+
+                chunk = chunks[chunk_idx % len(chunks)]
+                chunk_idx += 1
+
+                # Encode chunk
+                if spec.encoding == "hex":
+                    encoded = chunk.hex()
+                elif spec.encoding == "base32":
+                    encoded = _b64.b32encode(chunk).decode("ascii").rstrip("=").lower()
+                else:  # base64
+                    encoded = _b64.b64encode(chunk).decode("ascii").rstrip("=")
+
+                # Truncate to label_length
+                encoded = encoded[: spec.label_length]
+                tunnel_query = f"{encoded}.{spec.base_domain}"
+
+                # TXT responses carry data back; CNAME/NULL are smaller
+                if spec.qtype == "TXT":
+                    resp_bytes = rng.randint(200, 2000)
+                else:
+                    resp_bytes = rng.randint(50, 200)
+
+                dns_ctx = DnsContext(
+                    query=tunnel_query,
+                    query_type=spec.qtype,
+                    qtype=qtype_num,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=[f"v={encoded[:20]}"],
+                    TTLs=[float(rng.randint(1, 10))],
+                    trans_id=rng.randint(1, 65535),
+                    AA=False,
+                    RD=True,
+                    RA=True,
+                    rejected=False,
+                    rtt=rng.uniform(5.0, 100.0),
+                )
+
+                dns_server_ip = rng.choice(dns_server_ips)
+                self.activity_generator.generate_connection(
+                    src_ip=query_src_ip,
+                    dst_ip=dns_server_ip,
+                    time=tick_time,
+                    dst_port=53,
+                    proto="udp",
+                    service="dns",
+                    dns=dns_ctx,
+                    emit_dns=False,
+                    resp_bytes=resp_bytes,
+                )
+                total_bytes += len(chunk)
+                query_count += 1
+
+            malicious_event["base_domain"] = spec.base_domain
+            malicious_event["encoding"] = spec.encoding
+            malicious_event["qtype"] = spec.qtype
+            malicious_event["total_queries"] = query_count
+            malicious_event["bytes_exfiltrated"] = total_bytes
+
         elif spec.type == "raw":
             self.activity_generator.generate_raw(
                 time=time,

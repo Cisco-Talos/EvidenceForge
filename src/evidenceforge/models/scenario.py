@@ -752,6 +752,98 @@ class CredentialSprayEventSpec(_PeriodicEventBase):
         return self
 
 
+class DgaQueriesEventSpec(_PeriodicEventBase):
+    """DGA bulk DNS queries — algorithmically generated domain lookups.
+
+    Generates many DNS queries with random domain names, mostly returning
+    NXDOMAIN. Used for botnet/DGA detection training.
+    """
+
+    type: Literal["dga_queries"] = "dga_queries"
+    source_ip: str | None = None
+    length_range: tuple[int, int] = (8, 15)
+    charset: str = "abcdefghijklmnopqrstuvwxyz0123456789"
+    tld: str = ".com"
+    seed: int | None = None  # Deterministic domain generation
+    rcode_distribution: dict[str, float] | None = None  # {"NXDOMAIN": 0.95, "NOERROR": 0.05}
+    answer_ip: str | None = None  # IP for NOERROR responses
+
+    @field_validator("length_range")
+    @classmethod
+    def validate_length_range(cls, v: tuple[int, int]) -> tuple[int, int]:
+        """Validate domain label length bounds."""
+        lo, hi = v
+        if lo < 1:
+            raise ValueError("length_range minimum must be >= 1")
+        if lo > hi:
+            raise ValueError("length_range minimum must be <= maximum")
+        if hi > 63:
+            raise ValueError("length_range maximum must be <= 63 (DNS label limit)")
+        return v
+
+    @model_validator(mode="after")
+    def dga_requires_interval(self) -> "DgaQueriesEventSpec":
+        """DGA uses interval-based timing."""
+        if self.interval is None:
+            raise ValueError("dga_queries requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("dga_queries uses interval, not rate")
+        return self
+
+    @model_validator(mode="after")
+    def validate_rcode_distribution(self) -> "DgaQueriesEventSpec":
+        """Validate rcode_distribution sums to ~1.0 and has valid keys."""
+        if self.rcode_distribution is not None:
+            for key in self.rcode_distribution:
+                if key not in _VALID_RCODES:
+                    raise ValueError(f"Invalid rcode in distribution: '{key}'")
+            total = sum(self.rcode_distribution.values())
+            if abs(total - 1.0) > 0.01:
+                raise ValueError(f"rcode_distribution must sum to ~1.0, got {total:.3f}")
+            # If any NOERROR probability, answer_ip is needed
+            noerror_prob = self.rcode_distribution.get("NOERROR", 0)
+            if noerror_prob > 0 and self.answer_ip is None:
+                raise ValueError("answer_ip is required when rcode_distribution includes NOERROR")
+        return self
+
+
+class DnsTunnelEventSpec(_PeriodicEventBase):
+    """DNS tunneling — data exfiltration via encoded DNS subdomain labels.
+
+    Generates DNS queries with encoded payload chunks as subdomain labels
+    (e.g., aGVsbG8gd29ybGQ.tunnel.evil.com). Supports TXT, NULL, and CNAME
+    query types with base32/base64/hex encoding.
+    """
+
+    type: Literal["dns_tunnel"] = "dns_tunnel"
+    source_ip: str | None = None
+    base_domain: str  # Tunnel endpoint domain
+    encoding: Literal["base32", "base64", "hex"] = "hex"
+    qtype: str = "TXT"  # TXT, NULL, CNAME
+    label_length: int = Field(default=30, ge=1, le=63)
+    payload: str | None = None  # Fixed payload to encode
+    payload_size: int = Field(default=256, ge=1)  # Random payload size if no payload
+
+    @field_validator("qtype")
+    @classmethod
+    def validate_tunnel_qtype(cls, v: str) -> str:
+        """DNS tunnel uses TXT, NULL, or CNAME query types."""
+        v_upper = v.upper()
+        valid = {"TXT", "NULL", "CNAME"}
+        if v_upper not in valid:
+            raise ValueError(f"dns_tunnel qtype must be one of {sorted(valid)}, got '{v}'")
+        return v_upper
+
+    @model_validator(mode="after")
+    def dns_tunnel_requires_interval(self) -> "DnsTunnelEventSpec":
+        """DNS tunnel uses interval-based timing."""
+        if self.interval is None:
+            raise ValueError("dns_tunnel requires interval (not rate)")
+        if self.rate is not None:
+            raise ValueError("dns_tunnel uses interval, not rate")
+        return self
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -787,6 +879,8 @@ EventSpec = Annotated[
     | DnsQueryEventSpec
     | WebScanEventSpec
     | CredentialSprayEventSpec
+    | DgaQueriesEventSpec
+    | DnsTunnelEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

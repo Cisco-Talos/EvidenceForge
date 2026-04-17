@@ -13,7 +13,9 @@ from evidenceforge.generation.engine.storyline import _iter_periodic_ticks
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
     CredentialSprayEventSpec,
+    DgaQueriesEventSpec,
     DnsQueryEventSpec,
+    DnsTunnelEventSpec,
     WebScanEventSpec,
     _PeriodicEventBase,
 )
@@ -437,3 +439,156 @@ class TestWebScanPresets:
         from evidenceforge.config.web_scan_presets import get_preset
 
         assert get_preset("nonexistent") is None
+
+
+# ── DgaQueriesEventSpec ───────────────────────────────────────────────────
+
+
+class TestDgaQueriesEventSpec:
+    def test_defaults(self):
+        spec = DgaQueriesEventSpec(interval="30s", count=100)
+        assert spec.type == "dga_queries"
+        assert spec.length_range == (8, 15)
+        assert spec.tld == ".com"
+        assert spec.seed is None
+
+    def test_custom_params(self):
+        spec = DgaQueriesEventSpec(
+            interval="10s",
+            duration="1h",
+            length_range=(12, 24),
+            charset="abcdef",
+            tld=".net",
+            seed=42,
+            rcode_distribution={"NXDOMAIN": 0.9, "NOERROR": 0.1},
+            answer_ip="1.2.3.4",
+        )
+        assert spec.length_range == (12, 24)
+        assert spec.charset == "abcdef"
+        assert spec.seed == 42
+
+    def test_length_range_min_gt_max(self):
+        with pytest.raises(ValidationError, match="minimum must be <= maximum"):
+            DgaQueriesEventSpec(interval="30s", count=100, length_range=(20, 5))
+
+    def test_length_range_max_gt_63(self):
+        with pytest.raises(ValidationError, match="63"):
+            DgaQueriesEventSpec(interval="30s", count=100, length_range=(1, 64))
+
+    def test_rcode_distribution_bad_sum(self):
+        with pytest.raises(ValidationError, match="sum to"):
+            DgaQueriesEventSpec(
+                interval="30s",
+                count=100,
+                rcode_distribution={"NXDOMAIN": 0.5, "NOERROR": 0.3},
+                answer_ip="1.2.3.4",
+            )
+
+    def test_rcode_distribution_invalid_key(self):
+        with pytest.raises(ValidationError, match="Invalid rcode"):
+            DgaQueriesEventSpec(
+                interval="30s",
+                count=100,
+                rcode_distribution={"BADCODE": 1.0},
+            )
+
+    def test_noerror_requires_answer_ip(self):
+        with pytest.raises(ValidationError, match="answer_ip is required"):
+            DgaQueriesEventSpec(
+                interval="30s",
+                count=100,
+                rcode_distribution={"NXDOMAIN": 0.9, "NOERROR": 0.1},
+            )
+
+    def test_nxdomain_only_no_answer_ip(self):
+        spec = DgaQueriesEventSpec(
+            interval="30s",
+            count=100,
+            rcode_distribution={"NXDOMAIN": 1.0},
+        )
+        assert spec.answer_ip is None
+
+    def test_rejects_rate(self):
+        with pytest.raises(ValidationError, match="interval"):
+            DgaQueriesEventSpec(rate=10.0, duration="1h")
+
+    def test_deterministic_seed(self):
+        """Same seed should produce same validation result."""
+        s1 = DgaQueriesEventSpec(interval="30s", count=10, seed=42)
+        s2 = DgaQueriesEventSpec(interval="30s", count=10, seed=42)
+        assert s1.seed == s2.seed
+
+
+# ── DnsTunnelEventSpec ────────────────────────────────────────────────────
+
+
+class TestDnsTunnelEventSpec:
+    def test_defaults(self):
+        spec = DnsTunnelEventSpec(base_domain="tunnel.evil.com", interval="5s", duration="1h")
+        assert spec.type == "dns_tunnel"
+        assert spec.encoding == "hex"
+        assert spec.qtype == "TXT"
+        assert spec.label_length == 30
+        assert spec.payload_size == 256
+
+    def test_custom_params(self):
+        spec = DnsTunnelEventSpec(
+            base_domain="exfil.bad.com",
+            encoding="base64",
+            qtype="CNAME",
+            label_length=50,
+            payload="secret data here",
+            interval="10s",
+            count=50,
+        )
+        assert spec.encoding == "base64"
+        assert spec.qtype == "CNAME"
+        assert spec.payload == "secret data here"
+
+    def test_invalid_qtype(self):
+        with pytest.raises(ValidationError, match="qtype"):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                qtype="A",
+                interval="5s",
+                duration="1h",
+            )
+
+    def test_label_length_bounds(self):
+        with pytest.raises(ValidationError):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                label_length=0,
+                interval="5s",
+                duration="1h",
+            )
+        with pytest.raises(ValidationError):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                label_length=64,
+                interval="5s",
+                duration="1h",
+            )
+
+    def test_case_insensitive_qtype(self):
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.evil.com",
+            qtype="txt",
+            interval="5s",
+            count=10,
+        )
+        assert spec.qtype == "TXT"
+
+    def test_rejects_rate(self):
+        with pytest.raises(ValidationError, match="interval"):
+            DnsTunnelEventSpec(base_domain="tunnel.evil.com", rate=10.0, duration="1h")
+
+    def test_encodings(self):
+        for enc in ("base32", "base64", "hex"):
+            spec = DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                encoding=enc,
+                interval="5s",
+                count=10,
+            )
+            assert spec.encoding == enc

@@ -266,6 +266,20 @@ class GroundTruthGenerator:
                 result += f" (success: {success} at attempt {at})"
             return result
 
+        elif event_type == "dga_queries":
+            count = event.get("total_queries", "N/A")
+            nxd = event.get("nxdomain_count", "N/A")
+            tld = event.get("tld", ".com")
+            sample = event.get("domain_sample", [])
+            return f"DGA queries: {count} total ({nxd} NXDOMAIN, TLD: {tld}, sample: {sample[:3]})"
+
+        elif event_type == "dns_tunnel":
+            domain = event.get("base_domain", "N/A")
+            enc = event.get("encoding", "hex")
+            queries = event.get("total_queries", "N/A")
+            exfil = event.get("bytes_exfiltrated", 0)
+            return f"DNS tunnel via {domain} ({enc}, {queries} queries, {exfil} bytes exfiltrated)"
+
         else:
             return event.get("activity", "N/A")
 
@@ -388,6 +402,15 @@ class GroundTruthGenerator:
             elif event["type"] == "credential_spray":
                 for account in event.get("target_accounts", []):
                     iocs["users"].add(f"{account} (Spray Target)")
+
+            elif event["type"] == "dga_queries":
+                for domain in event.get("domain_sample", []):
+                    iocs["network"].add(f"{domain} (DGA Domain)")
+
+            elif event["type"] == "dns_tunnel":
+                base = event.get("base_domain", "")
+                if base:
+                    iocs["network"].add(f"{base} (DNS Tunnel Endpoint)")
 
         # Remove empty categories
         iocs = {category: values for category, values in iocs.items() if values}

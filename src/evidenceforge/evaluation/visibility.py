@@ -196,6 +196,8 @@ class VisibilityModel:
             "dns_query",
             "web_scan",
             "credential_spray",
+            "dga_queries",
+            "dns_tunnel",
         }
 
         groups: list[tuple[str, set[str]]] = []
