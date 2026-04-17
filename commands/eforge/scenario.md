@@ -512,6 +512,12 @@ The validator warns if it detects potentially redundant manual specifications al
 
 Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
 
+### Long Time Windows and Baseline Exercises
+
+For scenarios spanning 2+ weeks (e.g., 30-day baseline exercises), scope `output.logs` to only the formats needed for the exercise. Generating all formats over a long time window produces very large datasets and slow generation; declaring just `format: zeek_conn` instead of the full `zeek` group can cut generation time dramatically. The `--formats` CLI flag can also filter at runtime without editing the YAML.
+
+For baseline deviation exercises (e.g., "spot the change in normal traffic"), use `beacon` events with `start_time` offsets and `orig_bytes`/`resp_bytes` overrides to layer gradual drift on top of a stable baseline, rather than modifying `baseline_activity.intensity`. For example, a beacon starting at `+14d` with increasing `orig_bytes` models a compromised host whose C2 traffic grows over time while the rest of the environment stays consistent.
+
 ### Encoded Payloads Must Be Real
 
 When a storyline event includes base64-encoded data, obfuscated commands, or any other encoded content, the encoding must be accurate and decodable — never fake strings that just "look like" base64. Use the Bash tool to produce real encodings.

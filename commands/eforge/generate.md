@@ -48,6 +48,12 @@ eforge generate <scenario.yaml> [options]
 Options:
   --output, -o <dir>     Override output directory (default: from scenario's output.destination)
   --config, -c <file>    Path to config.yaml
+  --formats, -F <list>   Comma-separated format filter. Only generates formats present in both
+                         this list and the scenario's output.logs. Supports group names (zeek,
+                         windows) and individual format names (zeek_conn, cisco_asa). Use
+                         `eforge info format_groups` to see available groups. Example:
+                         `eforge generate scenario.yaml --formats zeek_conn,zeek_dns` to
+                         generate only Zeek connection and DNS logs.
   --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
