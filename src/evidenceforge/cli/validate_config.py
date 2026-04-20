@@ -1015,6 +1015,61 @@ def validate_config() -> ValidationResult:
                 result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
 
     # Deduplicate issues (some checks may flag the same thing multiple times)
+    # --- Check: Web scan preset IDS configuration ---
+    from evidenceforge.config.web_scan_presets import list_preset_names, load_web_scan_presets
+
+    scan_data = load_web_scan_presets()
+    presets = scan_data.get("presets", {})
+    _IDS_REQUIRED_FIELDS = {"sid", "message"}
+    for name in list_preset_names():
+        preset = presets.get(name, {})
+        # Validate ids_ua
+        if "ids_ua" in preset:
+            ids_ua = preset["ids_ua"]
+            for field in _IDS_REQUIRED_FIELDS:
+                if field not in ids_ua:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_ua missing required field "{field}"',
+                        )
+                    )
+        # Validate ids_rate
+        if "ids_rate" in preset:
+            ids_rate = preset["ids_rate"]
+            for field in _IDS_REQUIRED_FIELDS:
+                if field not in ids_rate:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_rate missing required field "{field}"',
+                        )
+                    )
+            threshold = ids_rate.get("threshold")
+            if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "web_scan_presets.yaml",
+                        f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                    )
+                )
+        # Validate per-path ids entries
+        for i, path_entry in enumerate(preset.get("paths", [])):
+            if isinstance(path_entry, dict) and "ids" in path_entry:
+                path_ids = path_entry["ids"]
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in path_ids:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids missing "{field}"',
+                            )
+                        )
+
     seen_issues: set[tuple[str, str, str]] = set()
     deduped: list[Issue] = []
     for issue in result.issues:

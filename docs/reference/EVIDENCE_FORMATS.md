@@ -215,8 +215,15 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
 
+Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
+1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
+2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
+3. **Connection-rate threshold** — generic scan-rate alerts (both TLS and non-TLS)
+
+Alert format: `[sid:gen_id:rev]` where `rev` reflects real ET/Community ruleset revision numbers sourced from `sample_data/snort/`. Each SID in `ids_signatures.yaml` carries a `rev` field.
+
 **Known Limitations:**
-- Limited SID/classification variety
+- IDS alert variety is limited to curated SID pools (not full ruleset simulation)
 
 ---
 
