@@ -71,6 +71,7 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     platforms: dict[str, PlatformConfig]
     categories: list[str]
     personas: list[str]
+    system_types: list[str] | None = None
 
 
 # --- Persona ---
