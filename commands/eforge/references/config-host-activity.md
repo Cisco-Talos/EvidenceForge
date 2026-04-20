@@ -11,6 +11,7 @@ Schema documentation for host-level activity config files. User customizations g
 1. [bash_commands.yaml](#bash_commandsyaml)
 2. [systemd_schedules.yaml](#systemd_schedulesyaml)
 3. [extra_syslog_messages.yaml](#extra_syslog_messagesyaml)
+4. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -159,3 +160,15 @@ programs:
 | `distro` | string | no | Restrict to `ubuntu` (excluded on RHEL-like) |
 | `roles` | list[string] | no | Required host roles (any match includes the entry) |
 | `transient` | bool | no | If `true`, uses random PID per invocation |
+
+---
+
+## Domain Controller Baseline Activity
+
+Domain controllers receive admin-only baseline activity — no user desktop sessions, browsers, Office apps, or user profile artifacts. This is controlled by two mechanisms:
+
+1. **`system_types` in application_catalog.yaml**: User-facing apps have `system_types: [workstation]`, preventing them from appearing on DCs. DC admin tools (dcdiag, repadmin, etc.) have `system_types: [domain_controller]`. See `config-apps-processes.md` for details.
+
+2. **RSAT sessions from `rsat_tools.yaml`**: The baseline generates correlated cross-host admin sessions where mmc.exe and snap-in DLL loads appear on the admin's workstation, while LDAP/RPC connections and type 3 logons appear on the DC. See the `rsat_tools.yaml` section in `config-apps-processes.md` for the schema.
+
+No scenario YAML configuration is needed. RSAT sessions are auto-generated when the environment contains domain controllers and admin personas (sysadmin/help_desk).

@@ -72,6 +72,7 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 28 | sysmon_filters.yaml structure | ERROR | Missing required sections (network_connect, image_loaded, etc.) or invalid types |
 | 29 | edr_pools.yaml structure | ERROR | Missing required sections (file_paths_windows, registry_keys_hkcu, etc.) or empty lists |
 | 30 | calltrace_patterns.yaml structure | ERROR | Patterns list empty, or pattern missing `modules`/`offset_ranges` fields |
+| 31 | rsat_tools.yaml structure | ERROR | Tool missing required fields (`id`, `snap_in`, `command_line`, `target_ports`, `weight`), invalid weight, or target_ports missing `port`/`service` |
 
 ## Output Format
 

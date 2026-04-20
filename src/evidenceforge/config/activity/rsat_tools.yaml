@@ -1,0 +1,80 @@
+# RSAT (Remote Server Administration Tools) session patterns.
+# Models admin workstation -> domain controller management sessions.
+#
+# Each tool produces a correlated event sequence:
+#   1. mmc.exe process on the admin's workstation (parent: explorer.exe)
+#   2. Snap-in DLL loads on the workstation (Sysmon Event 7)
+#   3. Network connections from workstation to target DC (LDAP/RPC/SMB)
+#   4. Type 3 (network) logon on the DC from the workstation IP
+#
+# To add a new RSAT tool:
+#   - Pick a unique id (lowercase, underscore-separated)
+#   - Set snap_in to the .msc filename
+#   - Set command_line to the full mmc.exe invocation
+#   - List target_ports with the services the snap-in contacts on the DC
+#   - List loaded_modules for DLLs the snap-in loads (for Sysmon Event 7)
+#   - Set weight to control relative frequency (higher = more common)
+#
+# Overlay: place partial file in .eforge/config/activity/rsat_tools.yaml.
+# Overlay entries with matching id merge fields; new ids are appended.
+#
+# Depended on by: baseline.py (_generate_rsat_sessions)
+# Depends on: nothing
+
+tools:
+  - id: aduc
+    snap_in: dsa.msc
+    display_name: "Active Directory Users and Computers"
+    command_line: '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\dsa.msc"'
+    target_ports:
+      - {port: 389, service: ldap}
+      - {port: 135, service: rpc}
+    loaded_modules:
+      - {path: 'C:\Windows\System32\dsadmin.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\activeds.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\adsldpc.dll', signature: "Microsoft Corporation"}
+    weight: 40
+
+  - id: dns_mgr
+    snap_in: dnsmgmt.msc
+    display_name: "DNS Manager"
+    command_line: '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\dnsmgmt.msc"'
+    target_ports:
+      - {port: 135, service: rpc}
+    loaded_modules:
+      - {path: 'C:\Windows\System32\dnsmgr.dll', signature: "Microsoft Corporation"}
+    weight: 20
+
+  - id: gpmc
+    snap_in: gpmc.msc
+    display_name: "Group Policy Management"
+    command_line: '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\gpmc.msc"'
+    target_ports:
+      - {port: 389, service: ldap}
+      - {port: 135, service: rpc}
+      - {port: 445, service: smb}
+    loaded_modules:
+      - {path: 'C:\Windows\System32\gpmgmt.dll', signature: "Microsoft Corporation"}
+      - {path: 'C:\Windows\System32\activeds.dll', signature: "Microsoft Corporation"}
+    weight: 25
+
+  - id: dhcp_mgr
+    snap_in: dhcpmgmt.msc
+    display_name: "DHCP Manager"
+    command_line: '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\dhcpmgmt.msc"'
+    target_ports:
+      - {port: 135, service: rpc}
+    loaded_modules:
+      - {path: 'C:\Windows\System32\dhcpsnap.dll', signature: "Microsoft Corporation"}
+    weight: 10
+
+  - id: dfs_mgr
+    snap_in: dfsmgmt.msc
+    display_name: "DFS Management"
+    command_line: '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\dfsmgmt.msc"'
+    target_ports:
+      - {port: 445, service: smb}
+      - {port: 135, service: rpc}
+    loaded_modules:
+      - {path: 'C:\Windows\System32\dfsgui.dll', signature: "Microsoft Corporation"}
+    weight: 5

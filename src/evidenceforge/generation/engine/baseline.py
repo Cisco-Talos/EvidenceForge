@@ -3695,6 +3695,9 @@ class BaselineMixin:
                     allow_existing=True,
                 )
 
+        # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
+        self._generate_rsat_sessions(current_hour, rng, local_dt)
+
         # Service logons (LogonType 5) and ANONYMOUS LOGONs on Windows systems
         for system in self.scenario.environment.systems:
             os_cat_svc = _get_os_category(system.os)
@@ -4442,3 +4445,127 @@ class BaselineMixin:
                             tags=[],
                         ),
                     )
+
+    def _generate_rsat_sessions(self, current_hour: datetime, rng, local_dt) -> None:
+        """Generate correlated RSAT sessions from admin workstations to DCs.
+
+        Produces a temporally-correlated multi-host event sequence for each
+        session: mmc.exe + DLL loads on the workstation, type 3 logon + LDAP/RPC
+        connections on the DC — all within a tight time window.
+        """
+        from evidenceforge.generation.activity import _get_os_category
+        from evidenceforge.generation.activity.rsat_tools import load_rsat_tools, pick_rsat_tool
+
+        systems = self.scenario.environment.systems
+        dcs = [s for s in systems if s.type == "domain_controller"]
+        if not dcs:
+            return
+
+        workstations = [
+            s for s in systems if s.type == "workstation" and _get_os_category(s.os) == "windows"
+        ]
+        if not workstations:
+            return
+
+        if not load_rsat_tools():
+            return
+
+        admin_personas = {"sysadmin", "help_desk"}
+        admin_users = [
+            u
+            for u in self.scenario.environment.users
+            if u.enabled and (u.persona or "").lower() in admin_personas
+        ]
+        if not admin_users:
+            return
+
+        local_hour = local_dt.hour
+        is_business_hours = 8 <= local_hour <= 18
+        base_prob = 0.50 if is_business_hours else 0.10
+        if rng.random() > base_prob:
+            return
+
+        num_sessions = rng.randint(1, 3) if is_business_hours else 1
+
+        for _ in range(num_sessions):
+            admin = rng.choice(admin_users)
+            dc = rng.choice(dcs)
+            tool = pick_rsat_tool(rng)
+
+            ws = self._resolve_rsat_workstation(admin, workstations, rng)
+            if ws is None:
+                continue
+
+            offset = rng.uniform(0, 3599)
+            base_time = current_hour + timedelta(seconds=offset)
+            self.state_manager.set_current_time(base_time)
+
+            logon_id = self._ensure_session_on_system(admin, ws, base_time, rng)
+
+            sessions = self.state_manager.get_sessions_for_user(admin.username)
+            ws_session = next((s for s in sessions if s.system == ws.hostname), None)
+            parent_pid = ws_session.explorer_pid if ws_session and ws_session.explorer_pid else 4
+
+            mmc_time = base_time
+            mmc_pid = self.activity_generator.generate_process(
+                user=admin,
+                system=ws,
+                time=mmc_time,
+                logon_id=logon_id,
+                process_name=r"C:\Windows\System32\mmc.exe",
+                command_line=tool["command_line"],
+                parent_pid=parent_pid,
+            )
+
+            for module in tool.get("loaded_modules", []):
+                dll_time = mmc_time + timedelta(seconds=rng.uniform(0.1, 1.5))
+                self.state_manager.set_current_time(dll_time)
+                self.activity_generator.generate_image_load(
+                    user=admin,
+                    system=ws,
+                    time=dll_time,
+                    pid=mmc_pid,
+                    image=r"C:\Windows\System32\mmc.exe",
+                    dll_path=module["path"],
+                    signed=True,
+                    signature=module.get("signature", "Microsoft Corporation"),
+                    signature_status="Valid",
+                )
+
+            dc_logon_time = mmc_time + timedelta(seconds=rng.uniform(0.5, 2.0))
+            self.state_manager.set_current_time(dc_logon_time)
+            self.activity_generator.generate_logon(
+                user=admin,
+                system=dc,
+                time=dc_logon_time,
+                logon_type=3,
+                source_ip=ws.ip,
+            )
+
+            for port_info in tool["target_ports"]:
+                conn_time = mmc_time + timedelta(seconds=rng.uniform(1.0, 5.0))
+                self.state_manager.set_current_time(conn_time)
+                self.activity_generator.generate_connection(
+                    src_ip=ws.ip,
+                    dst_ip=dc.ip,
+                    time=conn_time,
+                    dst_port=port_info["port"],
+                    proto="tcp",
+                    service=port_info.get("service"),
+                    duration=rng.uniform(0.5, 30.0),
+                    orig_bytes=rng.randint(500, 5000),
+                    resp_bytes=rng.randint(1000, 50000),
+                    pid=mmc_pid,
+                    source_system=ws,
+                )
+
+    def _resolve_rsat_workstation(self, admin, workstations, rng):
+        """Find the admin's Windows workstation for RSAT sessions."""
+        if hasattr(admin, "primary_system") and admin.primary_system:
+            match = [s for s in workstations if s.hostname == admin.primary_system]
+            if match:
+                return match[0]
+        assigned = [s for s in workstations if getattr(s, "assigned_user", None) == admin.username]
+        if assigned:
+            return assigned[0]
+        return rng.choice(workstations) if workstations else None
