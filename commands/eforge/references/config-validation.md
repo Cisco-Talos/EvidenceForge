@@ -73,6 +73,15 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 29 | edr_pools.yaml structure | ERROR | Missing required sections (file_paths_windows, registry_keys_hkcu, etc.) or empty lists |
 | 30 | calltrace_patterns.yaml structure | ERROR | Patterns list empty, or pattern missing `modules`/`offset_ranges` fields |
 | 31 | rsat_tools.yaml structure | ERROR | Tool missing required fields (`id`, `snap_in`, `command_line`, `target_ports`, `weight`), invalid weight, or target_ports missing `port`/`service` |
+| 32 | traffic_rates.yaml structure | ERROR | Missing intensity level (low/medium/high), or level missing required traffic type keys (`user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`), or values not `[lo, hi]` positive integer pairs with lo ≤ hi |
+
+## Scenario Validation: traffic_rates
+
+When `eforge validate` checks a scenario with `baseline_activity.traffic_rates`:
+- Keys must be from: `user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`
+- Integer values must be > 0
+- List values must be `[lo, hi]` with both positive and lo ≤ hi
+- String values must be `low`, `medium`, or `high` (preset name)
 
 ## Output Format
 

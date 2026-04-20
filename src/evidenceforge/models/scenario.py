@@ -310,18 +310,21 @@ class Persona(BaseModel):
 
 
 class BaselineActivity(BaseModel):
-    """Baseline activity configuration (simplified for Phase 1).
+    """Baseline activity configuration.
 
     Defines the baseline ("normal") activity level and variation for the environment.
+    The intensity field scales ALL background traffic types (user activity, web server
+    requests, DNS, SMB, Kerberos, LDAP, persona connections) via traffic_rates.yaml.
 
     Attributes:
         description: Natural language description of baseline activity
-        intensity: Activity intensity (low|medium|high)
-                  Phase 1 mapping: low=5, medium=15, high=40 events/user/hour
+        intensity: Activity intensity (low|medium|high) — scales all traffic types
         variation: Timing variation (low|medium|high)
-                  Phase 1 mapping: low=±10%, medium=±25%, high=±50% stddev
+                  Mapping: low=±10%, medium=±25%, high=±50% stddev
         suspicious_noise: Level of suspicious-but-benign ambient noise
                   low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr (default: high)
+        traffic_rates: Optional per-traffic-type rate overrides. Values can be:
+                  int (fixed rate), [lo, hi] range, or preset name (low|medium|high).
     """
 
     description: str
@@ -332,6 +335,60 @@ class BaselineActivity(BaseModel):
         pattern="^(low|medium|high|ludicrous)$",
         description="Level of suspicious-but-benign ambient noise (default: high)",
     )
+    traffic_rates: dict[str, int | list[int] | str] | None = Field(
+        default=None,
+        description=(
+            "Per-traffic-type rate overrides. Keys: user_activity, web, dns_interval, "
+            "ntp, smb_interval, kerberos, ldap, persona_connections. "
+            "Values: int (fixed rate), [lo, hi] range, or preset name (low|medium|high)."
+        ),
+    )
+
+    @field_validator("traffic_rates")
+    @classmethod
+    def validate_traffic_rates(
+        cls, v: dict[str, int | list[int] | str] | None
+    ) -> dict[str, int | list[int] | str] | None:
+        if v is None:
+            return v
+        from evidenceforge.config.traffic_rates import VALID_TRAFFIC_TYPES
+
+        valid_presets = {"low", "medium", "high"}
+        for key, val in v.items():
+            if key not in VALID_TRAFFIC_TYPES:
+                raise ValueError(
+                    f"Unknown traffic type {key!r}. Valid keys: {sorted(VALID_TRAFFIC_TYPES)}"
+                )
+            if isinstance(val, int):
+                if val <= 0:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: integer value must be > 0, got {val}"
+                    )
+            elif isinstance(val, list):
+                if len(val) != 2:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: list must have exactly 2 elements [lo, hi]"
+                    )
+                if not all(isinstance(x, int) for x in val):
+                    raise ValueError(f"traffic_rates[{key!r}]: list elements must be integers")
+                if val[0] <= 0 or val[1] <= 0:
+                    raise ValueError(f"traffic_rates[{key!r}]: values must be > 0")
+                if val[0] > val[1]:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: lo ({val[0]}) must be <= hi ({val[1]})"
+                    )
+            elif isinstance(val, str):
+                if val not in valid_presets:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: preset must be one of "
+                        f"{sorted(valid_presets)}, got {val!r}"
+                    )
+            else:
+                raise ValueError(
+                    f"traffic_rates[{key!r}]: value must be int, [lo, hi] list, "
+                    f"or preset name (low|medium|high), got {type(val).__name__}"
+                )
+        return v
 
     model_config = ConfigDict(extra="forbid")
 

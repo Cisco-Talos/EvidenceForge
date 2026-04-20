@@ -233,6 +233,34 @@ class SystemBinaryEntry(BaseModel, extra="forbid"):
     path: str
 
 
+# --- Traffic Rates ---
+
+
+class TrafficRateLevel(BaseModel, extra="forbid"):
+    """Rate ranges for one intensity level in traffic_rates.yaml."""
+
+    user_activity: list[int]
+    web: list[int]
+    dns_interval: list[int]
+    ntp: list[int]
+    smb_interval: list[int]
+    kerberos: list[int]
+    ldap: list[int]
+    persona_connections: list[int]
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def validate_rate_range(cls, v: Any) -> Any:
+        if isinstance(v, list):
+            if len(v) != 2:
+                raise ValueError("must be a [lo, hi] pair")
+            if not all(isinstance(x, int) and x > 0 for x in v):
+                raise ValueError("values must be positive integers")
+            if v[0] > v[1]:
+                raise ValueError(f"lo ({v[0]}) must be <= hi ({v[1]})")
+        return v
+
+
 # --- Validation helper ---
 
 

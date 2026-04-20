@@ -291,11 +291,132 @@ def _load_systemd_schedules() -> list[dict[str, Any]]:
     return _CACHED_SCHEDULES
 
 
+# Weighted web request categories for realistic path diversity at high volume.
+# (category_weight, paths_within_category)
+_WEB_REQUEST_CATEGORIES: list[tuple[float, list[tuple[str, str, int, str]]]] = [
+    # (weight, [(path, method, status, mime), ...])
+    (
+        40,
+        [  # Page views
+            ("/", "GET", 200, "text/html"),
+            ("/index.html", "GET", 200, "text/html"),
+            ("/about", "GET", 200, "text/html"),
+            ("/contact", "GET", 200, "text/html"),
+            ("/products", "GET", 200, "text/html"),
+            ("/services", "GET", 200, "text/html"),
+            ("/blog", "GET", 200, "text/html"),
+            ("/login", "GET", 200, "text/html"),
+            ("/dashboard", "GET", 200, "text/html"),
+            ("/search?q=help", "GET", 200, "text/html"),
+        ],
+    ),
+    (
+        30,
+        [  # Static assets
+            ("/assets/main.css", "GET", 200, "text/css"),
+            ("/assets/app.js", "GET", 200, "application/javascript"),
+            ("/assets/vendor.js", "GET", 200, "application/javascript"),
+            ("/images/logo.png", "GET", 200, "image/png"),
+            ("/images/banner.jpg", "GET", 200, "image/jpeg"),
+            ("/favicon.ico", "GET", 200, "image/x-icon"),
+            ("/fonts/roboto.woff2", "GET", 200, "font/woff2"),
+            ("/assets/style.min.css", "GET", 200, "text/css"),
+        ],
+    ),
+    (
+        15,
+        [  # API calls
+            ("/api/v1/health", "GET", 200, "application/json"),
+            ("/api/v1/data", "POST", 200, "application/json"),
+            ("/api/v1/users", "GET", 200, "application/json"),
+            ("/api/v1/status", "GET", 200, "application/json"),
+            ("/api/v2/events", "POST", 200, "application/json"),
+            ("/api/v1/auth/token", "POST", 200, "application/json"),
+        ],
+    ),
+    (
+        8,
+        [  # Bot/crawler probes
+            ("/robots.txt", "GET", 200, "text/plain"),
+            ("/sitemap.xml", "GET", 200, "application/xml"),
+            ("/.well-known/security.txt", "GET", 200, "text/plain"),
+        ],
+    ),
+    (
+        7,
+        [  # 404/403 noise (opportunistic scanners, mistyped URLs)
+            ("/wp-login.php", "GET", 404, "text/html"),
+            ("/admin", "GET", 403, "text/html"),
+            ("/.env", "GET", 403, "text/html"),
+            ("/phpmyadmin/", "GET", 404, "text/html"),
+            ("/xmlrpc.php", "POST", 404, "text/html"),
+            ("/wp-admin/", "GET", 404, "text/html"),
+            ("/cgi-bin/", "GET", 403, "text/html"),
+            ("/backup.sql", "GET", 404, "text/html"),
+        ],
+    ),
+]
+
+# Pre-compute flattened weights for fast sampling
+_WEB_REQ_FLAT: list[tuple[str, str, int, str]] = []
+_WEB_REQ_WEIGHTS: list[float] = []
+for _cat_weight, _cat_paths in _WEB_REQUEST_CATEGORIES:
+    per_path_weight = _cat_weight / len(_cat_paths)
+    for _entry in _cat_paths:
+        _WEB_REQ_FLAT.append(_entry)
+        _WEB_REQ_WEIGHTS.append(per_path_weight)
+
+# Parameterized path templates for additional diversity at high volume
+_PARAMETERIZED_PATHS: list[tuple[str, str, int, str]] = [
+    ("/products/{id}", "GET", 200, "text/html"),
+    ("/users/{id}/profile", "GET", 200, "application/json"),
+    ("/api/v1/items/{id}", "GET", 200, "application/json"),
+    ("/blog/post-{id}", "GET", 200, "text/html"),
+    ("/images/gallery/{id}.jpg", "GET", 200, "image/jpeg"),
+    ("/docs/page/{id}", "GET", 200, "text/html"),
+]
+
+
+def _generate_web_request(rng: random.Random) -> tuple[str, str, int, str]:
+    """Generate a realistic web request (path, method, status, mime).
+
+    Uses weighted categories for realistic URI distribution. Occasionally
+    generates parameterized paths for additional variety.
+    """
+    # 20% chance of parameterized path for extra diversity
+    if rng.random() < 0.20:
+        template, method, status, mime = rng.choice(_PARAMETERIZED_PATHS)
+        path = template.replace("{id}", str(rng.randint(1, 9999)))
+        return (path, method, status, mime)
+
+    choice = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
+    return choice
+
+
 class BaselineMixin:
     """Mixin providing baseline activity generation methods."""
 
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
+
+    def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:
+        """Get (lo, hi) rate for a traffic type — scenario override > config default."""
+        from evidenceforge.config.traffic_rates import get_rates_for_intensity
+
+        overrides = self.scenario.baseline_activity.traffic_rates
+        if overrides and traffic_type in overrides:
+            val = overrides[traffic_type]
+            if isinstance(val, int):
+                return (val, val)
+            if isinstance(val, list):
+                return (val[0], val[1])
+            if isinstance(val, str):
+                return tuple(get_rates_for_intensity(val)[traffic_type])
+
+        intensity = self.scenario.baseline_activity.intensity
+        defaults = get_rates_for_intensity(intensity)
+        rate = defaults[traffic_type]
+        return (rate[0], rate[1])
 
     def _generate_scheduled_tasks(
         self,
@@ -1915,8 +2036,8 @@ class BaselineMixin:
         weekday: int | None = None,
     ) -> int:
         """Calculate number of events for user this hour."""
-        intensity_map = {"low": 5, "medium": 15, "high": 40}
-        base_events = intensity_map[self.scenario.baseline_activity.intensity]
+        lo, hi = self._resolve_traffic_rate("user_activity")
+        base_events = lo if lo == hi else _get_rng().randint(lo, hi)
 
         if persona and persona.risk_profile:
             risk_mult = {"low": 0.7, "medium": 1.0, "high": 1.3}
@@ -2857,8 +2978,9 @@ class BaselineMixin:
             if not persona_conns:
                 continue
             p_weights = [c.get("weight", 1) for c in persona_conns]
-            # Fewer persona connections than role connections; scaled by activity
-            num_persona = rng.randint(3, 10) if is_business else 0
+            # Fewer persona connections than role connections; scaled by intensity
+            _pc_lo, _pc_hi = self._resolve_traffic_rate("persona_connections")
+            num_persona = rng.randint(_pc_lo, _pc_hi) if is_business else 0
             # Clamp timestamps to session lifetime within this hour
             session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
 
@@ -3106,7 +3228,9 @@ class BaselineMixin:
 
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
-                dns_interval = 600 + (_stable_seed(f"dns_iv_{system.hostname}") % 1200)
+                _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
+                _dns_range = max(1, _dns_hi - _dns_lo)
+                dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
                 dns_phase = _stable_seed(f"dns_ph_{system.hostname}") % dns_interval
                 hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = dns_phase
@@ -3221,7 +3345,9 @@ class BaselineMixin:
                     if fs.ip not in smb_targets:
                         smb_targets.append(fs.ip)
 
-                smb_interval = 1200 + (_stable_seed(f"smb_iv_{system.hostname}") % 1800)
+                _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
+                _smb_range = max(1, _smb_hi - _smb_lo)
+                smb_interval = _smb_lo + (_stable_seed(f"smb_iv_{system.hostname}") % _smb_range)
                 smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
                 hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = smb_phase
@@ -3271,7 +3397,8 @@ class BaselineMixin:
 
             # Kerberos
             if "kerberos-client" in services and os_cat == "windows" and dc_targets:
-                num_krb = rng.randint(1, 3)
+                _krb_lo, _krb_hi = self._resolve_traffic_rate("kerberos")
+                num_krb = rng.randint(_krb_lo, _krb_hi)
                 base_interval = 3600 / (num_krb + 1)
                 for i in range(num_krb):
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
@@ -3295,7 +3422,8 @@ class BaselineMixin:
 
             # LDAP
             if "ldap-client" in services and os_cat == "windows" and dc_targets:
-                num_ldap = rng.randint(2, 5)
+                _ldap_lo, _ldap_hi = self._resolve_traffic_rate("ldap")
+                num_ldap = rng.randint(_ldap_lo, _ldap_hi)
                 base_interval = 3600 / (num_ldap + 1)
                 for i in range(num_ldap):
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
@@ -4345,58 +4473,51 @@ class BaselineMixin:
 
         # Web access logs
         if "web_access" in self.emitters:
-            _WEB_PATHS = [
-                ("/", "GET", 200),
-                ("/index.html", "GET", 200),
-                ("/api/v1/health", "GET", 200),
-                ("/favicon.ico", "GET", 200),
-                ("/robots.txt", "GET", 200),
-                ("/assets/main.css", "GET", 200),
-                ("/assets/app.js", "GET", 200),
-                ("/images/logo.png", "GET", 200),
-                ("/wp-login.php", "GET", 404),
-                ("/admin", "GET", 403),
-                ("/.env", "GET", 403),
-                ("/api/v1/data", "POST", 200),
-                ("/phpmyadmin/", "GET", 404),
-                ("/xmlrpc.php", "POST", 404),
-            ]
             _WEB_UAS_BROWSER = [
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
                 "curl/7.88.1",
                 "python-requests/2.31.0",
             ]
             _WEB_UAS_BOT = [
                 "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
                 "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+                "Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)",
             ]
             for sys_obj in systems:
                 if "web_server" not in (sys_obj.roles or []):
                     continue
-                num_reqs = rng.randint(10, 30)
+                _web_lo, _web_hi = self._resolve_traffic_rate("web")
+                num_reqs = rng.randint(_web_lo, _web_hi)
 
                 internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
                 exposure = self._get_system_exposure(sys_obj)
+
+                # Build Zipf-weighted visitor IP pool for realistic frequency distribution
+                ext_pool_size = min(200, max(10, num_reqs // 10))
+                ext_ip_pool = [self._generate_external_client_ip(rng) for _ in range(ext_pool_size)]
+                ext_ip_weights = [1.0 / (i + 1) for i in range(ext_pool_size)]
+
+                from evidenceforge.events.contexts import HttpContext
+
                 for _ in range(num_reqs):
                     offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
-                    path, method, status = rng.choice(_WEB_PATHS)
+                    path, method, status, mime = _generate_web_request(rng)
                     if exposure == "external":
-                        client_ip = self._generate_external_client_ip(rng)
+                        client_ip = rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
                     elif exposure == "both":
                         if rng.random() < 0.6:
-                            client_ip = self._generate_external_client_ip(rng)
+                            client_ip = rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
                         else:
                             client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
                     else:
                         client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
-                    from evidenceforge.events.contexts import HttpContext
 
-                    # Bots only from external IPs; browsers from anywhere
                     is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
-                    # OS-aware UA selection for internal clients
                     ip_map = getattr(self.activity_generator, "_ip_to_system", {})
                     client_sys = ip_map.get(client_ip)
                     if client_sys and _get_os_category(client_sys.os) == "linux":
@@ -4408,17 +4529,6 @@ class BaselineMixin:
                     else:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
-                    _URI_MIME = {
-                        "/": "text/html",
-                        "/index.html": "text/html",
-                        "/api/v1/health": "application/json",
-                        "/favicon.ico": "image/x-icon",
-                        "/robots.txt": "text/plain",
-                        "/assets/main.css": "text/css",
-                        "/assets/app.js": "application/javascript",
-                        "/images/logo.png": "image/png",
-                    }
-                    mime = _URI_MIME.get(path, "text/html")
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=sys_obj.ip,

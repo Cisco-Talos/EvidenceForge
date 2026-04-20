@@ -1,0 +1,43 @@
+# Traffic rate defaults by intensity level.
+#
+# Each traffic type defines [low, high] ranges per hour per host/user.
+# The engine calls rng.randint(low, high) to get the actual count.
+#
+# For interval-based types (dns_interval, smb_interval), values are seconds
+# between events — lower = more traffic.
+#
+# Overridable via .eforge/config/activity/traffic_rates.yaml overlay
+# and per-scenario via baseline_activity.traffic_rates.
+#
+# Depended on by: generation engine (all baseline traffic rates)
+# Depends on: nothing
+
+low:
+  user_activity: [5, 5]           # events/user/hr
+  web: [10, 30]                   # requests/web_server/hr
+  dns_interval: [600, 1800]       # seconds between DNS queries
+  ntp: [1, 1]                     # syncs/host/hr
+  smb_interval: [1200, 3000]      # seconds between SMB ops
+  kerberos: [1, 3]                # tickets/host/hr
+  ldap: [2, 5]                    # queries/host/hr
+  persona_connections: [3, 10]    # connections/user_session/hr
+
+medium:
+  user_activity: [15, 15]
+  web: [800, 1500]
+  dns_interval: [300, 900]
+  ntp: [1, 1]
+  smb_interval: [600, 1500]
+  kerberos: [2, 5]
+  ldap: [4, 10]
+  persona_connections: [5, 15]
+
+high:
+  user_activity: [40, 40]
+  web: [3000, 8000]
+  dns_interval: [120, 600]
+  ntp: [1, 1]
+  smb_interval: [300, 900]
+  kerberos: [4, 8]
+  ldap: [8, 20]
+  persona_connections: [8, 20]

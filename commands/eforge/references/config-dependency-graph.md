@@ -42,6 +42,12 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | system roles | `role_traffic:` keys define valid system roles |
 | **depended on by** | Engine (runtime) | Drives all baseline network connection generation |
 
+### traffic_rates.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone rate table |
+| **depended on by** | Engine (runtime) | Drives all baseline traffic rate calculations (user activity, web, DNS, SMB, Kerberos, LDAP, persona connections) |
+
 ### proxy_uri_templates.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

@@ -206,12 +206,36 @@ time_window:
 ```yaml
 baseline_activity:
   description: "Normal office activity"
-  intensity: medium              # low|medium|high (events/user/hour)
+  intensity: medium              # low|medium|high — scales ALL background traffic
   variation: low                 # low|medium|high (timing variation)
   suspicious_noise: high         # Optional: low|medium|high|ludicrous (default: high)
+  traffic_rates:                 # Optional: per-traffic-type overrides
+    web: [5000, 12000]           # explicit range (requests/web_server/hour)
+    kerberos: low                # use low-level rates despite global intensity
+    ldap: 50                     # fixed rate
 ```
 
-Intensity mapping: low=5, medium=15, high=40 events/user/hour.
+The `intensity` field scales ALL background traffic types via configurable rate tables (see `traffic_rates.yaml`). Default rates by intensity level:
+
+| Traffic Type | Low | Medium | High | Unit |
+|---|---|---|---|---|
+| user_activity | 5 | 15 | 40 | events/user/hr |
+| web | 10-30 | 800-1500 | 3000-8000 | requests/web_server/hr |
+| dns_interval | 600-1800 | 300-900 | 120-600 | seconds between queries |
+| ntp | 1 | 1 | 1 | syncs/host/hr |
+| smb_interval | 1200-3000 | 600-1500 | 300-900 | seconds between SMB ops |
+| kerberos | 1-3 | 2-5 | 4-8 | tickets/host/hr |
+| ldap | 2-5 | 4-10 | 8-20 | queries/host/hr |
+| persona_connections | 3-10 | 5-15 | 8-20 | connections/user_session/hr |
+
+### traffic_rates overrides
+
+The optional `traffic_rates` field accepts per-type overrides in three forms:
+- **Integer**: `web: 500` — fixed rate (500 requests/hr)
+- **Range**: `web: [5000, 12000]` — random in range each hour
+- **Preset name**: `web: low` — use that intensity level's default for this type only
+
+This allows mixing intensities: e.g., `intensity: high` with `traffic_rates: {web: low}` gives high endpoint activity but quiet web servers.
 
 Suspicious noise mapping: low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr. Generates suspicious-but-benign ambient events (after-hours admin logins, PowerShell from non-attackers, failed logon bursts, service account anomalies).
 

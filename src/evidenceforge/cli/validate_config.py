@@ -193,6 +193,9 @@ def validate_config() -> ValidationResult:
         "activity/web_scan_presets.yaml": {
             "dict_fields": {"presets"},
         },
+        "activity/traffic_rates.yaml": {
+            "dict_fields": {"low", "medium", "high"},
+        },
     }
 
     overlay_errors = False

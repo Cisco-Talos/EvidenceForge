@@ -64,6 +64,8 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls proxy session depth — how many pages and subresources each browsing session produces. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
 
+**Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how much background traffic web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
+
 **Stale accounts** — Does the organization have any disabled or inactive accounts that haven't been fully cleaned up? Former employees, decommissioned service accounts, or un-revoked contractor access are common in real environments. Add 2-4 stale accounts to `environment.stale_accounts` with `username`, `last_active` (ISO date), and `reason`. The engine automatically generates background noise from these: failed logons, Kerberos pre-auth failures on DCs, scheduled task failures, and service startup failures — creating realistic "why is this disabled account still here?" ambiguity for analysts.
 
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
@@ -258,8 +260,11 @@ time_window:
 
 baseline_activity:
   description: "Normal office activity"
-  intensity: medium               # low (~5 events/user/hr) | medium (~15) | high (~40)
+  intensity: medium               # low|medium|high — scales ALL background traffic types
   variation: medium               # low (±10%) | medium (±25%) | high (±50%)
+  # traffic_rates:                # Optional: per-traffic-type overrides
+  #   web: [5000, 12000]          # range | int | preset name (low|medium|high)
+  #   kerberos: low               # use low-level rates for this type only
 
 logon_grace_period: "30m"         # Optional (default "30m") — suppresses "no prior logon"
                                   # warnings for events within this duration of time_window.start

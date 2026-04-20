@@ -530,3 +530,53 @@ class TestSensorStartup:
         # Check that the dispatcher was called (events routed to emitters)
         # The mock emitters may or may not receive these depending on can_handle()
         # but the dispatch should not raise errors
+
+
+class TestTrafficRateScaling:
+    """Tests verifying intensity scales system traffic via traffic_rates config."""
+
+    def _make_engine_mock(self, intensity="medium", traffic_rates=None):
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        engine = MagicMock()
+        engine.scenario.baseline_activity.intensity = intensity
+        engine.scenario.baseline_activity.traffic_rates = traffic_rates
+        engine._resolve_traffic_rate = BaselineMixin._resolve_traffic_rate.__get__(engine)
+        return engine
+
+    def test_low_intensity_web_matches_legacy(self):
+        """Low intensity web rate should match the original hardcoded [10, 30]."""
+        engine = self._make_engine_mock(intensity="low")
+        lo, hi = engine._resolve_traffic_rate("web")
+        assert lo == 10
+        assert hi == 30
+
+    def test_high_intensity_web_much_higher(self):
+        """High intensity web rate should be >> 100 (thousands range)."""
+        engine = self._make_engine_mock(intensity="high")
+        lo, hi = engine._resolve_traffic_rate("web")
+        assert lo >= 1000
+        assert hi >= 3000
+
+    def test_scenario_override_int(self):
+        """Integer override should produce fixed rate."""
+        engine = self._make_engine_mock(intensity="high", traffic_rates={"web": 500})
+        lo, hi = engine._resolve_traffic_rate("web")
+        assert lo == 500
+        assert hi == 500
+
+    def test_scenario_override_preset(self):
+        """Preset string override should look up that level's rate."""
+        engine = self._make_engine_mock(intensity="high", traffic_rates={"web": "low"})
+        lo, hi = engine._resolve_traffic_rate("web")
+        assert lo == 10
+        assert hi == 30
+
+    def test_scenario_override_range(self):
+        """List override should pass through directly."""
+        engine = self._make_engine_mock(intensity="low", traffic_rates={"web": [5000, 12000]})
+        lo, hi = engine._resolve_traffic_rate("web")
+        assert lo == 5000
+        assert hi == 12000

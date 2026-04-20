@@ -764,3 +764,110 @@ class TestBaselineActivitySuspiciousNoise:
             BaselineActivity(
                 description="Test", intensity="medium", variation="low", suspicious_noise="extreme"
             )
+
+
+class TestBaselineActivityTrafficRates:
+    """Tests for BaselineActivity.traffic_rates field."""
+
+    def test_traffic_rates_default_none(self):
+        ba = BaselineActivity(description="Test", intensity="medium", variation="low")
+        assert ba.traffic_rates is None
+
+    def test_traffic_rates_empty_dict(self):
+        ba = BaselineActivity(
+            description="Test", intensity="medium", variation="low", traffic_rates={}
+        )
+        assert ba.traffic_rates == {}
+
+    def test_traffic_rates_int_value(self):
+        ba = BaselineActivity(
+            description="Test",
+            intensity="medium",
+            variation="low",
+            traffic_rates={"web": 500},
+        )
+        assert ba.traffic_rates["web"] == 500
+
+    def test_traffic_rates_list_value(self):
+        ba = BaselineActivity(
+            description="Test",
+            intensity="medium",
+            variation="low",
+            traffic_rates={"web": [1000, 5000]},
+        )
+        assert ba.traffic_rates["web"] == [1000, 5000]
+
+    def test_traffic_rates_preset_string(self):
+        ba = BaselineActivity(
+            description="Test",
+            intensity="high",
+            variation="low",
+            traffic_rates={"web": "low", "kerberos": "medium"},
+        )
+        assert ba.traffic_rates["web"] == "low"
+        assert ba.traffic_rates["kerberos"] == "medium"
+
+    def test_traffic_rates_mixed_types(self):
+        ba = BaselineActivity(
+            description="Test",
+            intensity="high",
+            variation="low",
+            traffic_rates={"web": [1000, 2000], "kerberos": 10, "ldap": "low"},
+        )
+        assert ba.traffic_rates["web"] == [1000, 2000]
+        assert ba.traffic_rates["kerberos"] == 10
+        assert ba.traffic_rates["ldap"] == "low"
+
+    def test_traffic_rates_invalid_key(self):
+        with pytest.raises(ValidationError, match="Unknown traffic type"):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"bogus_key": 100},
+            )
+
+    def test_traffic_rates_negative_int(self):
+        with pytest.raises(ValidationError, match="must be > 0"):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": -5},
+            )
+
+    def test_traffic_rates_zero_int(self):
+        with pytest.raises(ValidationError, match="must be > 0"):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": 0},
+            )
+
+    def test_traffic_rates_list_lo_gt_hi(self):
+        with pytest.raises(ValidationError, match="must be <= hi"):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": [5000, 1000]},
+            )
+
+    def test_traffic_rates_list_wrong_length(self):
+        with pytest.raises(ValidationError, match="exactly 2 elements"):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": [100, 200, 300]},
+            )
+
+    def test_traffic_rates_invalid_preset_string(self):
+        with pytest.raises(ValidationError, match="preset must be one of"):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": "extreme"},
+            )
