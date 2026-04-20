@@ -424,10 +424,12 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 f"{dst_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port}"
             )
         else:
+            # Destination NAT (static inbound): public IP is on outside,
+            # real IP is on dmz/inside
             message = (
                 f"Built {nat_label} {proto_upper} translation from "
-                f"{dst_iface}:{net.dst_ip}/{net.dst_port} to "
-                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port}"
+                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} to "
+                f"{dst_iface}:{net.dst_ip}/{net.dst_port}"
             )
         event_data = {
             "timestamp": event.timestamp,
@@ -469,10 +471,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 f"duration {duration}"
             )
         else:
+            # Destination NAT teardown: same interface mapping as 305011
             message = (
                 f"Teardown {nat_label} {proto_upper} translation from "
-                f"{dst_iface}:{net.dst_ip}/{net.dst_port} to "
-                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} "
+                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} to "
+                f"{dst_iface}:{net.dst_ip}/{net.dst_port} "
                 f"duration {duration}"
             )
         event_data = {

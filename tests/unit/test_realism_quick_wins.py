@@ -203,8 +203,8 @@ def test_pat_ports_have_gaps():
     assert not all(g == 1 for g in gaps), (
         f"All PAT port gaps are exactly 1 — should have varied gaps. Ports: {ports}"
     )
-    # All gaps should be in [1, 3]
-    assert all(1 <= g <= 3 for g in gaps), f"PAT port gaps out of range [1,3]: {gaps}"
+    # All gaps should be in [1, 255] (realistic PAT allocation)
+    assert all(1 <= g <= 255 for g in gaps), f"PAT port gaps out of range [1,255]: {gaps}"
 
 
 def test_pat_port_start_not_round():

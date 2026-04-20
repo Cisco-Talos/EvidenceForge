@@ -4025,7 +4025,7 @@ class BaselineMixin:
                             ),
                             (
                                 "systemd-logind",
-                                rng.randint(300, 900),
+                                sys_pids.get("logind", 456),
                                 f"New session {rng.randint(50, 9999)} of user {ssh_user}.",
                             ),
                         ]
