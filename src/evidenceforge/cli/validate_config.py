@@ -1082,6 +1082,57 @@ def validate_config() -> ValidationResult:
                             )
                         )
 
+    # --- RSAT tools validation ---
+    from evidenceforge.generation.activity.rsat_tools import load_rsat_tools
+
+    rsat_tools = load_rsat_tools()
+    _RSAT_REQUIRED = {"id", "snap_in", "command_line", "target_ports", "weight"}
+    for tool in rsat_tools:
+        tool_id = tool.get("id", "<unnamed>")
+        missing = _RSAT_REQUIRED - set(tool.keys())
+        if missing:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "rsat_tools.yaml",
+                    f'Tool "{tool_id}" missing fields: {sorted(missing)}',
+                )
+            )
+        if not isinstance(tool.get("weight", 0), int) or tool.get("weight", 0) < 1:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "rsat_tools.yaml",
+                    f'Tool "{tool_id}" weight must be a positive integer',
+                )
+            )
+        for i, port_info in enumerate(tool.get("target_ports", [])):
+            if "port" not in port_info or "service" not in port_info:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" target_ports[{i}] missing port or service',
+                    )
+                )
+        for i, mod in enumerate(tool.get("loaded_modules", [])):
+            if "path" not in mod:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" loaded_modules[{i}] missing path',
+                    )
+                )
+            elif "\\" not in mod["path"]:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" loaded_modules[{i}] path does not look like a Windows path',
+                    )
+                )
+
     seen_issues: set[tuple[str, str, str]] = set()
     deduped: list[Issue] = []
     for issue in result.issues:

@@ -505,6 +505,7 @@ events:
 - **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
 - **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events
+- **RSAT sessions for DCs** — When the environment contains domain controllers and admin personas (sysadmin/help_desk), the baseline auto-generates correlated RSAT sessions: mmc.exe + DLL loads on the admin workstation, LDAP/RPC connections from workstation to DC, and type 3 logon on the DC. No scenario configuration needed
 
 **When to manually specify these event types:** Only when they are part of the attack narrative itself — not as prerequisites for another event. For example:
 - DNS tunneling exfiltration → manually declare the DNS `connection` events (they ARE the attack, not a prerequisite)
