@@ -1813,6 +1813,10 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
+            # Enforce consistency: resp_pkts > 0 requires resp_bytes > 0
+            # (orig always has at least the SYN, so orig_pkts stays from history)
+            if resp_pkts > 0 and resp_bytes == 0:
+                resp_pkts = 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -2035,12 +2039,16 @@ class ActivityGenerator:
             # Suppressed hostname → no SNI (raw-IP C2, etc.)
             if server_name == "":
                 server_name = None
-            tls_version = rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
-            # Weighted cipher selection (bug #7)
+            _tls_rng = random.Random(_stable_seed(f"tls:{src_ip}:{dst_ip}:{dst_port}"))
+            tls_version = _tls_rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
             if tls_version == "TLSv13":
-                cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+                cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[
+                    0
+                ]
             else:
-                cipher = rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+                cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[
+                    0
+                ]
             # ~2% handshake failure (bug #5)
             ssl_established = rng.random() > _SSL_FAILURE_RATE
             # Weighted SSL history patterns (bug #6)
@@ -2291,7 +2299,9 @@ class ActivityGenerator:
                 precision=float(ntp_rng.randint(-25, -18)),
                 root_delay=ntp_rng.uniform(0.0, 0.1),
                 root_disp=ntp_rng.uniform(0.0, 0.05),
-                ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
+                ref_id=random.Random(_stable_seed(f"ntp_refid_{dst_ip}")).choice(
+                    [".GPS.", ".PPS.", ".GOES.", ".DCFa.", ".ACTS."]
+                ),
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
                 org_ts=round(ntp_epoch + ntp_jitter, 6),
                 rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),

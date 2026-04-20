@@ -284,6 +284,10 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # INBOUND FLOW on destination host (if destination is internal/known)
         if event.dst_host:
+            # Host-based EDR sees the local interface IP, not the NAT VIP
+            dst_ip = net.dst_ip
+            if event.nat and event.nat.mapped_dst_ip and event.nat.mapped_dst_ip != net.dst_ip:
+                dst_ip = event.nat.mapped_dst_ip
             event_data = {
                 "timestamp": event.timestamp,
                 "hostname": event.dst_host.hostname,
@@ -293,7 +297,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 "pid": -1,  # Destination doesn't know the initiating PID
                 "src_ip": net.src_ip,
                 "src_port": net.src_port,
-                "dst_ip": net.dst_ip,
+                "dst_ip": dst_ip,
                 "dst_port": net.dst_port,
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.dst_host),

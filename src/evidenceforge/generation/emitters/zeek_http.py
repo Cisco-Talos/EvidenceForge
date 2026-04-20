@@ -40,11 +40,17 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        return (
-            event.event_type in self._supported_types
-            and event.network is not None
-            and event.http is not None
-        )
+        if event.event_type not in self._supported_types:
+            return False
+        if event.network is None or event.http is None:
+            return False
+        # Standard Zeek cannot inspect TLS-encrypted traffic — only emit
+        # http.log for unencrypted HTTP connections
+        if event.network.service == "ssl" or (
+            event.network.dst_port == 443 and event.network.service != "http"
+        ):
+            return False
+        return True
 
     def emit(self, event: SecurityEvent) -> None:
         net = event.network

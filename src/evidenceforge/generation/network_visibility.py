@@ -30,6 +30,7 @@ If no network config is provided, all connections are visible (backward compat).
 
 import ipaddress
 import logging
+import random
 
 from evidenceforge.events.contexts import NatContext
 from evidenceforge.models.scenario import NatRule, NetworkConfig, NetworkSensor, System
@@ -419,7 +420,8 @@ class NetworkVisibilityEngine:
                     if self._ip_matches_src(src_ip, rule) and not dst_segments:
                         key = (sensor_name, rule_idx)
                         port = self._pat_port_counters[key]
-                        gap = 1 + (port % 3)
+                        pat_rng = random.Random(port)
+                        gap = pat_rng.randint(1, 255)
                         next_port = port + gap
                         if next_port > 65535:
                             next_port = 1024 + (next_port - 1024) % (65535 - 1024 + 1)

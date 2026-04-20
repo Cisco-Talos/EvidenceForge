@@ -2061,7 +2061,14 @@ class BaselineMixin:
             if assigned_systems:
                 system = rng.choice(assigned_systems)
             else:
-                system = rng.choice(self.scenario.environment.systems)
+                candidates = [
+                    s for s in self.scenario.environment.systems if s.type != "domain_controller"
+                ]
+                system = (
+                    rng.choice(candidates)
+                    if candidates
+                    else rng.choice(self.scenario.environment.systems)
+                )
 
         persona = self._get_user_persona(user)
         persona_name = user.persona if user.persona else None
@@ -3999,7 +4006,7 @@ class BaselineMixin:
                     if rng.random() < 0.5:
                         # Login sequence: connection → auth → session open
                         _key_rng = random.Random(
-                            _stable_seed(f"ssh_key:{ssh_user}:{system.hostname}")
+                            _stable_seed(f"ssh_client_key:{ip}:{system.hostname}")
                         )
                         key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
                         key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
@@ -4025,7 +4032,7 @@ class BaselineMixin:
                             ),
                             (
                                 "systemd-logind",
-                                rng.randint(300, 900),
+                                sys_pids.get("logind", 456),
                                 f"New session {rng.randint(50, 9999)} of user {ssh_user}.",
                             ),
                         ]
@@ -4111,7 +4118,11 @@ class BaselineMixin:
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
                     max_size = _j_rng.choice([256, 512, 1024, 2048, 4096])
                     journal_type = _j_rng.choice(["Runtime", "System"])
-                    size = rng.randint(4, max_size - 1)
+                    # Journal size grows monotonically during uptime (logs accumulate)
+                    jkey = f"_journald_size_{system.hostname}"
+                    prev_size = getattr(self, jkey, max_size * 0.1)
+                    size = min(prev_size + rng.uniform(0.5, 8.0), max_size - 1)
+                    setattr(self, jkey, size)
                     free = max_size - size
                     path = (
                         f"/run/log/journal/{machine_id}"
@@ -4320,6 +4331,7 @@ class BaselineMixin:
                         resp_bytes=rng.randint(0, 1000),
                         ids=IdsContext(
                             sid=sig["sid"],
+                            rev=sig.get("rev", 1),
                             message=sig["message"],
                             classification=sig["classification"],
                             priority=sig["priority"],

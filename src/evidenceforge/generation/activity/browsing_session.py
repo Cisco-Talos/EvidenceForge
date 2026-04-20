@@ -88,7 +88,7 @@ def _request_size(rng: random.Random, method: str) -> int:
     """Generate a realistic request size based on HTTP method."""
     if method == "POST":
         return rng.randint(100, 10_000)
-    return rng.randint(100, 500)  # GET/HEAD headers only
+    return 0
 
 
 def _make_referrer(hostname: str, path: str, port: int = 443) -> str:

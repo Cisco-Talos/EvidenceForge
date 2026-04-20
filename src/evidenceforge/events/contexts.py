@@ -187,6 +187,7 @@ class IdsContext:
     message: str
     classification: str
     priority: int = 2
+    rev: int = 1
 
 
 @dataclass(slots=True)
