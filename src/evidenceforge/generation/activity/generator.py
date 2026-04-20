@@ -2039,12 +2039,16 @@ class ActivityGenerator:
             # Suppressed hostname → no SNI (raw-IP C2, etc.)
             if server_name == "":
                 server_name = None
-            tls_version = rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
-            # Weighted cipher selection (bug #7)
+            _tls_rng = random.Random(_stable_seed(f"tls:{src_ip}:{dst_ip}:{dst_port}"))
+            tls_version = _tls_rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
             if tls_version == "TLSv13":
-                cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+                cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[
+                    0
+                ]
             else:
-                cipher = rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+                cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[
+                    0
+                ]
             # ~2% handshake failure (bug #5)
             ssl_established = rng.random() > _SSL_FAILURE_RATE
             # Weighted SSL history patterns (bug #6)

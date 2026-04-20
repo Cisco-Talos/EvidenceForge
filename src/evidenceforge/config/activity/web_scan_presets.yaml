@@ -3,6 +3,33 @@
 # Each preset defines a realistic scanning pattern with URI paths,
 # expected status codes, user-agent strings, and default scan rate.
 #
+# === IDS Alert Configuration ===
+#
+# Each preset supports three layers of Snort IDS alert generation:
+#
+# 1. ids_ua — Scanner user-agent identification rule. Fires once per 60s
+#    threshold window (matching real ET rule thresholds). Only triggers on
+#    non-TLS ports (80, 8080) where Snort can inspect HTTP headers.
+#    Source: ET SCAN rules in sample_data/snort/emerging_threats/rules/emerging-scan.rules
+#
+# 2. Per-path ids entries — Content-based alerts for specific probe paths.
+#    Only paths that would realistically trigger an ET/GPL Snort rule get
+#    an ids field. Typically 25-40% of paths in a preset have mappings;
+#    the rest represent probes that don't match any deployed rule (realistic).
+#    Only triggers on non-TLS ports. Source: emerging-web_server.rules,
+#    emerging-web_specific_apps.rules in sample_data/snort/
+#
+# 3. ids_rate — Connection-rate threshold alert. Fires when scan volume
+#    exceeds a threshold, regardless of TLS. Models Snort threshold/detection_filter
+#    rules that trigger on connection count alone.
+#
+# To add a new scanner preset:
+# 1. Find the scanner's UA detection SID in emerging-scan.rules
+# 2. Map 25-40% of probe paths to matching content-inspection SIDs
+#    from emerging-web_server.rules or emerging-web_specific_apps.rules
+# 3. Set ids_rate threshold to ~20 (connections per 60s window)
+# 4. Look up real rev: numbers from the ET ruleset files
+#
 # Override or extend via .eforge/config/activity/web_scan_presets.yaml
 
 presets:
@@ -10,26 +37,66 @@ presets:
     description: "Nikto web vulnerability scanner"
     user_agent: "Mozilla/5.00 (Nikto/2.1.6) (Evasions:None) (Test:map_codes)"
     default_rate: 10.0
+    ids_ua:
+      sid: 2002677
+      rev: 14
+      message: "ET SCAN Nikto Web App Scan in Progress"
+      classification: "web-application-attack"
+      priority: 2
+    ids_rate:
+      sid: 2002910
+      rev: 4
+      message: "ET SCAN Rapid HTTP/HTTPS Connection Attempts"
+      classification: "attempted-recon"
+      priority: 2
+      threshold: 20
     paths:
       - {uri: "/", method: "GET", status: 200}
-      - {uri: "/robots.txt", method: "GET", status: 200}
+      - uri: "/robots.txt"
+        method: "GET"
+        status: 200
+        ids: {sid: 2101852, rev: 5, message: "GPL WEB_SERVER robots.txt access", classification: "web-application-activity", priority: 3}
       - {uri: "/sitemap.xml", method: "GET", status: 404}
-      - {uri: "/admin/", method: "GET", status: 403}
+      - uri: "/admin/"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
       - {uri: "/admin/login", method: "GET", status: 404}
-      - {uri: "/.env", method: "GET", status: 403}
-      - {uri: "/.git/HEAD", method: "GET", status: 404}
+      - uri: "/.env"
+        method: "GET"
+        status: 403
+        ids: {sid: 2034567, rev: 2, message: "ET WEB_SERVER .env File Access Attempt", classification: "attempted-recon", priority: 2}
+      - uri: "/.git/HEAD"
+        method: "GET"
+        status: 404
+        ids: {sid: 2027885, rev: 3, message: "ET WEB_SERVER Git Repository Access Attempt", classification: "attempted-recon", priority: 2}
       - {uri: "/.git/config", method: "GET", status: 404}
       - {uri: "/wp-admin/", method: "GET", status: 404}
-      - {uri: "/wp-login.php", method: "GET", status: 404}
+      - uri: "/wp-login.php"
+        method: "GET"
+        status: 404
+        ids: {sid: 2014020, rev: 3, message: "ET WEB_SERVER Wordpress Login Bruteforcing Detected", classification: "web-application-attack", priority: 2}
       - {uri: "/wp-content/", method: "GET", status: 404}
       - {uri: "/wp-includes/", method: "GET", status: 404}
       - {uri: "/xmlrpc.php", method: "GET", status: 404}
-      - {uri: "/phpmyadmin/", method: "GET", status: 404}
+      - uri: "/phpmyadmin/"
+        method: "GET"
+        status: 404
+        ids: {sid: 2015737, rev: 5, message: "ET WEB_SERVER PHPMyAdmin BackDoor Access", classification: "web-application-attack", priority: 1}
       - {uri: "/phpMyAdmin/", method: "GET", status: 404}
-      - {uri: "/server-status", method: "GET", status: 403}
+      - uri: "/server-status"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101234, rev: 4, message: "GPL WEB_SERVER Apache server-status access", classification: "web-application-activity", priority: 2}
       - {uri: "/server-info", method: "GET", status: 403}
-      - {uri: "/.htaccess", method: "GET", status: 403}
-      - {uri: "/.htpasswd", method: "GET", status: 403}
+      - uri: "/.htaccess"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101129, rev: 7, message: "GPL WEB_SERVER .htaccess access", classification: "attempted-recon", priority: 2}
+      - uri: "/.htpasswd"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101071, rev: 7, message: "GPL WEB_SERVER .htpasswd access", classification: "attempted-recon", priority: 2}
       - {uri: "/cgi-bin/", method: "GET", status: 403}
       - {uri: "/cgi-bin/test-cgi", method: "GET", status: 404}
       - {uri: "/icons/", method: "GET", status: 403}
@@ -56,8 +123,24 @@ presets:
     description: "DIRB directory brute-force scanner"
     user_agent: "DirBuster-1.0-RC1 (http://www.owasp.org/index.php/Category:OWASP_DirBuster_Project)"
     default_rate: 50.0
+    ids_ua:
+      sid: 2008186
+      rev: 5
+      message: "ET SCAN DirBuster Web App Scan in Progress"
+      classification: "web-application-attack"
+      priority: 2
+    ids_rate:
+      sid: 2002910
+      rev: 4
+      message: "ET SCAN Rapid HTTP/HTTPS Connection Attempts"
+      classification: "attempted-recon"
+      priority: 2
+      threshold: 20
     paths:
-      - {uri: "/admin", method: "GET", status: 403}
+      - uri: "/admin"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
       - {uri: "/administrator", method: "GET", status: 404}
       - {uri: "/api", method: "GET", status: 200}
       - {uri: "/api/v1", method: "GET", status: 200}
@@ -70,7 +153,10 @@ presets:
       - {uri: "/cache", method: "GET", status: 404}
       - {uri: "/cgi", method: "GET", status: 404}
       - {uri: "/conf", method: "GET", status: 404}
-      - {uri: "/config", method: "GET", status: 403}
+      - uri: "/config"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
       - {uri: "/console", method: "GET", status: 404}
       - {uri: "/dashboard", method: "GET", status: 404}
       - {uri: "/data", method: "GET", status: 404}
@@ -95,11 +181,17 @@ presets:
       - {uri: "/media", method: "GET", status: 404}
       - {uri: "/panel", method: "GET", status: 404}
       - {uri: "/portal", method: "GET", status: 404}
-      - {uri: "/private", method: "GET", status: 403}
+      - uri: "/private"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
       - {uri: "/public", method: "GET", status: 200}
       - {uri: "/scripts", method: "GET", status: 404}
       - {uri: "/search", method: "GET", status: 404}
-      - {uri: "/secret", method: "GET", status: 404}
+      - uri: "/secret"
+        method: "GET"
+        status: 404
+        ids: {sid: 2011914, rev: 1, message: "ET SCAN DirBuster Scan in Progress", classification: "attempted-recon", priority: 2}
       - {uri: "/secure", method: "GET", status: 404}
       - {uri: "/setup", method: "GET", status: 404}
       - {uri: "/shell", method: "GET", status: 404}
@@ -122,6 +214,19 @@ presets:
     description: "Gobuster directory enumeration tool"
     user_agent: "gobuster/3.6"
     default_rate: 100.0
+    ids_ua:
+      sid: 2008186
+      rev: 5
+      message: "ET SCAN DirBuster Web App Scan in Progress"
+      classification: "web-application-attack"
+      priority: 2
+    ids_rate:
+      sid: 2002910
+      rev: 4
+      message: "ET SCAN Rapid HTTP/HTTPS Connection Attempts"
+      classification: "attempted-recon"
+      priority: 2
+      threshold: 20
     paths:
       - {uri: "/index.html", method: "GET", status: 200}
       - {uri: "/index.php", method: "GET", status: 404}
@@ -129,10 +234,16 @@ presets:
       - {uri: "/contact", method: "GET", status: 200}
       - {uri: "/login", method: "GET", status: 200}
       - {uri: "/register", method: "GET", status: 404}
-      - {uri: "/admin", method: "GET", status: 403}
+      - uri: "/admin"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
       - {uri: "/dashboard", method: "GET", status: 404}
       - {uri: "/api", method: "GET", status: 200}
-      - {uri: "/api/users", method: "GET", status: 403}
+      - uri: "/api/users"
+        method: "GET"
+        status: 403
+        ids: {sid: 2101411, rev: 6, message: "GPL WEB_SERVER 403 Forbidden", classification: "attempted-recon", priority: 2}
       - {uri: "/api/admin", method: "GET", status: 403}
       - {uri: "/api/config", method: "GET", status: 403}
       - {uri: "/health", method: "GET", status: 200}
@@ -153,36 +264,86 @@ presets:
     description: "SQLMap SQL injection scanner"
     user_agent: "sqlmap/1.7.12#stable (https://sqlmap.org)"
     default_rate: 5.0
+    ids_ua:
+      sid: 2008538
+      rev: 8
+      message: "ET SCAN Sqlmap SQL Injection Scan"
+      classification: "attempted-recon"
+      priority: 2
+    ids_rate:
+      sid: 2002910
+      rev: 4
+      message: "ET SCAN Rapid HTTP/HTTPS Connection Attempts"
+      classification: "attempted-recon"
+      priority: 2
+      threshold: 10
     paths:
       - {uri: "/search?q=1", method: "GET", status: 200}
-      - {uri: "/search?q=1%27", method: "GET", status: 500}
+      - uri: "/search?q=1%27"
+        method: "GET"
+        status: 500
+        ids: {sid: 2006446, rev: 10, message: "ET WEB_SERVER Possible SQL Injection Attempt SELECT FROM", classification: "web-application-attack", priority: 1}
       - {uri: "/search?q=1%27%20OR%20%271%27%3D%271", method: "GET", status: 200}
       - {uri: "/search?q=1%27%20AND%20%271%27%3D%272", method: "GET", status: 200}
-      - {uri: "/search?q=1%20UNION%20SELECT%20NULL--", method: "GET", status: 500}
+      - uri: "/search?q=1%20UNION%20SELECT%20NULL--"
+        method: "GET"
+        status: 500
+        ids: {sid: 2010084, rev: 4, message: "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT", classification: "web-application-attack", priority: 1}
       - {uri: "/search?q=1%20UNION%20SELECT%20NULL%2CNULL--", method: "GET", status: 500}
-      - {uri: "/search?q=1%20UNION%20SELECT%20NULL%2CNULL%2CNULL--", method: "GET", status: 200}
+      - uri: "/search?q=1%20UNION%20SELECT%20NULL%2CNULL%2CNULL--"
+        method: "GET"
+        status: 200
+        ids: {sid: 2010084, rev: 4, message: "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT", classification: "web-application-attack", priority: 1}
       - {uri: "/search?q=1%20UNION%20SELECT%20table_name%2CNULL%2CNULL%20FROM%20information_schema.tables--", method: "GET", status: 200}
       - {uri: "/search?q=1%20UNION%20SELECT%20column_name%2CNULL%2CNULL%20FROM%20information_schema.columns--", method: "GET", status: 200}
-      - {uri: "/search?q=1%27%3B%20WAITFOR%20DELAY%20%270%3A0%3A5%27--", method: "GET", status: 200}
-      - {uri: "/search?q=1%20AND%20SLEEP(5)--", method: "GET", status: 200}
+      - uri: "/search?q=1%27%3B%20WAITFOR%20DELAY%20%270%3A0%3A5%27--"
+        method: "GET"
+        status: 200
+        ids: {sid: 2013926, rev: 3, message: "ET WEB_SERVER MSSQL Time-Based Blind SQL Injection Attempt", classification: "web-application-attack", priority: 1}
+      - uri: "/search?q=1%20AND%20SLEEP(5)--"
+        method: "GET"
+        status: 200
+        ids: {sid: 2016978, rev: 2, message: "ET WEB_SERVER MySQL SLEEP Time-Based Blind SQL Injection Attempt", classification: "web-application-attack", priority: 1}
       - {uri: "/login", method: "POST", status: 200}
       - {uri: "/login", method: "POST", status: 500}
       - {uri: "/api/v1/data?id=1", method: "GET", status: 200}
-      - {uri: "/api/v1/data?id=1%27", method: "GET", status: 500}
+      - uri: "/api/v1/data?id=1%27"
+        method: "GET"
+        status: 500
+        ids: {sid: 2006446, rev: 10, message: "ET WEB_SERVER Possible SQL Injection Attempt SELECT FROM", classification: "web-application-attack", priority: 1}
       - {uri: "/api/v1/data?id=1%20OR%201%3D1", method: "GET", status: 200}
 
   nmap_http:
     description: "Nmap HTTP NSE scripts"
     user_agent: "Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)"
     default_rate: 3.0
+    ids_ua:
+      sid: 2009358
+      rev: 5
+      message: "ET SCAN Nmap Scripting Engine User-Agent Detected"
+      classification: "web-application-attack"
+      priority: 2
+    ids_rate:
+      sid: 2002910
+      rev: 4
+      message: "ET SCAN Rapid HTTP/HTTPS Connection Attempts"
+      classification: "attempted-recon"
+      priority: 2
+      threshold: 8
     paths:
       - {uri: "/", method: "GET", status: 200}
-      - {uri: "/robots.txt", method: "GET", status: 200}
+      - uri: "/robots.txt"
+        method: "GET"
+        status: 200
+        ids: {sid: 2101852, rev: 5, message: "GPL WEB_SERVER robots.txt access", classification: "web-application-activity", priority: 3}
       - {uri: "/favicon.ico", method: "GET", status: 200}
       - {uri: "/nmaplowercheck1234", method: "GET", status: 404}
       - {uri: "/NmapUpperCheck1234", method: "GET", status: 404}
       - {uri: "/Nmap/folder/check1234", method: "GET", status: 404}
-      - {uri: "/.git/HEAD", method: "GET", status: 404}
+      - uri: "/.git/HEAD"
+        method: "GET"
+        status: 404
+        ids: {sid: 2027885, rev: 3, message: "ET WEB_SERVER Git Repository Access Attempt", classification: "attempted-recon", priority: 2}
       - {uri: "/.svn/entries", method: "GET", status: 404}
       - {uri: "/TRACE", method: "TRACE", status: 405}
       - {uri: "/", method: "OPTIONS", status: 200}

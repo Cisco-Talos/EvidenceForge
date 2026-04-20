@@ -1430,6 +1430,15 @@ class StorylineMixin:
             elif scan_src_ip == system.ip:
                 src_sys = system
 
+            from evidenceforge.events.contexts import IdsContext
+
+            is_tls = spec.dst_port == 443
+            ids_ua_def = preset_data.get("ids_ua") if preset_data else None
+            ids_rate_def = preset_data.get("ids_rate") if preset_data else None
+            rate_threshold = ids_rate_def.get("threshold", 20) if ids_rate_def else 20
+            ua_fired = False
+            last_rate_alert_ts = None
+
             request_count = 0
             path_idx = 0
             for tick_time in _iter_periodic_ticks(
@@ -1465,6 +1474,48 @@ class StorylineMixin:
                     tags=[],
                 )
 
+                # 3-layer IDS alert selection
+                ids_ctx = None
+
+                # Layer 1: Scanner UA detection (non-TLS only, once per 60s)
+                if not is_tls and ids_ua_def and not ua_fired:
+                    ids_ctx = IdsContext(
+                        sid=ids_ua_def["sid"],
+                        rev=ids_ua_def.get("rev", 1),
+                        message=ids_ua_def["message"],
+                        classification=ids_ua_def.get("classification", "web-application-attack"),
+                        priority=ids_ua_def.get("priority", 2),
+                    )
+                    ua_fired = True
+
+                # Layer 2: Per-path content alerts (non-TLS only)
+                elif not is_tls and isinstance(path_entry.get("ids"), dict):
+                    path_ids = path_entry["ids"]
+                    ids_ctx = IdsContext(
+                        sid=path_ids["sid"],
+                        rev=path_ids.get("rev", 1),
+                        message=path_ids["message"],
+                        classification=path_ids.get("classification", "web-application-attack"),
+                        priority=path_ids.get("priority", 2),
+                    )
+
+                # Layer 3: Connection-rate threshold (both TLS and non-TLS)
+                if ids_ctx is None and ids_rate_def and request_count >= rate_threshold:
+                    fire_rate = False
+                    if last_rate_alert_ts is None:
+                        fire_rate = True
+                    elif (tick_time - last_rate_alert_ts).total_seconds() >= 60:
+                        fire_rate = True
+                    if fire_rate:
+                        ids_ctx = IdsContext(
+                            sid=ids_rate_def["sid"],
+                            rev=ids_rate_def.get("rev", 1),
+                            message=ids_rate_def["message"],
+                            classification=ids_rate_def.get("classification", "attempted-recon"),
+                            priority=ids_rate_def.get("priority", 2),
+                        )
+                        last_rate_alert_ts = tick_time
+
                 self.activity_generator.generate_connection(
                     src_ip=scan_src_ip,
                     dst_ip=spec.dst_ip,
@@ -1480,6 +1531,7 @@ class StorylineMixin:
                     http=http_ctx,
                     hostname=scan_host if spec.hostname else None,
                     pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                    ids=ids_ctx,
                 )
                 request_count += 1
 
