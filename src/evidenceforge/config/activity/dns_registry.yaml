@@ -25,6 +25,7 @@ valid_tags:
   linux:      "Linux-specific background traffic"
   internal:   "Internal infrastructure (DB servers, etc.)"
   storage:    "Cloud storage (potential exfiltration targets)"
+  os_tags: [windows, linux]  # Tags that trigger OS-aware domain filtering in pick_domain_and_ip()
   dev:        "Developer tool API endpoints"
   social:     "Social media sites"
 
@@ -143,7 +144,7 @@ domains:
     tags: [background, windows]
   - domain: login.microsoftonline.com
     ips: ["40.126.28.17", "40.126.28.19", "20.190.159.64"]
-    tags: [saas, background, windows]
+    tags: [saas, background]
 
   # === Other popular sites ===
   - domain: www.example.com
@@ -419,3 +420,30 @@ ipv6_map:
   "104.16.132.229": "2606:4700::6810:84e5"
   "151.101.1.140": "2a04:4e42::396"
   "93.184.216.34": "2606:2800:220:1:248:1893:25c8:1946"
+
+# IPv6 prefix mapping for AAAA fallback generation.
+# When a domain's IPv4 isn't in the explicit ipv6_map above, the engine
+# derives an IPv6 address using the first octet of the IPv4 to select a
+# provider-appropriate prefix. This prevents Microsoft domains from getting
+# Google IPv6 prefixes, etc.
+#
+# Format: {lo: N, hi: M, prefix: "..."}
+# Matches IPs whose first octet falls in [lo, hi] inclusive.
+# Source: WHOIS lookups on major cloud/CDN provider IP allocations.
+# Extend via .eforge/config/activity/dns_registry.yaml overlay (ranges are concatenated).
+ipv6_prefixes:
+  default: "2a09:bac0"
+  ranges:
+    - {lo: 13, hi: 13, prefix: "2620:1ec"}
+    - {lo: 20, hi: 20, prefix: "2620:1ec"}
+    - {lo: 23, hi: 23, prefix: "2a02:26f0"}
+    - {lo: 40, hi: 40, prefix: "2603:1000"}
+    - {lo: 52, hi: 54, prefix: "2600:1f18"}
+    - {lo: 74, hi: 74, prefix: "2607:f8b0"}
+    - {lo: 104, hi: 104, prefix: "2606:4700"}
+    - {lo: 108, hi: 108, prefix: "2607:f8b0"}
+    - {lo: 140, hi: 140, prefix: "2606:50c0"}
+    - {lo: 142, hi: 142, prefix: "2607:f8b0"}
+    - {lo: 151, hi: 151, prefix: "2a04:4e42"}
+    - {lo: 172, hi: 172, prefix: "2607:f8b0"}
+    - {lo: 209, hi: 209, prefix: "2607:f8b0"}

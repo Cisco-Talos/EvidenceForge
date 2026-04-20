@@ -59,7 +59,6 @@ from .helpers import _get_os_category, _get_rng, _parameterize_command
 from .network import (
     _AD_SRV_QUERIES,
     _IPV6_MAP,
-    _PROVIDER_IP_GROUPS,
     _SRV_PORT_MAP,
     EXTERNAL_IPS,
     REVERSE_DNS,
@@ -2999,11 +2998,10 @@ class ActivityGenerator:
             query = hostname
             # Multi-answer: CDNs/clouds return multiple A records (40% chance)
             if not is_internal and rng.random() < 0.40:
-                sibling_ips = []
-                for provider_ips in _PROVIDER_IP_GROUPS:
-                    if dst_ip in provider_ips:
-                        sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
-                        break
+                from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+                domain_ips = get_domain_ips(hostname) if hostname else []
+                sibling_ips = [ip for ip in domain_ips if ip != dst_ip]
                 if sibling_ips:
                     extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
                     answers = [dst_ip] + extra

@@ -2387,7 +2387,7 @@ class BaselineMixin:
                 tags = self._SERVICE_DNS_DEFAULTS[service]
             else:
                 tags = ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host)
+            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
             return ip, domain
 
         if hasattr(self, "world_model"):

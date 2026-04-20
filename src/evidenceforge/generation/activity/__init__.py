@@ -58,7 +58,6 @@ from .network import (
     _CDN_RANGES,
     _HTTP_URI_STATUS_CACHE,
     _IPV6_MAP,
-    _PROVIDER_IP_GROUPS,
     _SRV_PORT_MAP,
     EXTERNAL_IPS,
     REVERSE_DNS,
