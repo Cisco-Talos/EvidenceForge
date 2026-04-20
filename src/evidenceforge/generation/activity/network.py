@@ -76,12 +76,6 @@ for _act_type, _tag in _TAG_TO_ACTIVITY.items():
         _ips.extend(_e["ips"])
     EXTERNAL_IPS[_act_type] = list(dict.fromkeys(_ips))  # Deduplicate, preserve order
 
-# Per-domain IP groups for DNS multi-answer responses
-# Replaces the old per-provider _PROVIDER_IP_GROUPS with exact per-domain pools
-_PROVIDER_IP_GROUPS: list[list[str]] = [
-    entry["ips"] for entry in load_dns_registry().get("domains", []) if len(entry["ips"]) > 1
-]
-
 # CDN ranges and IPv6 map from registry
 _CDN_RANGES = [tuple(r) for r in get_cdn_ranges()]
 _IPV6_MAP: dict[str, str] = get_ipv6_map()
@@ -105,31 +99,37 @@ _SRV_PORT_MAP = {
 }
 
 
+_CACHED_IPV6_PREFIXES: dict | None = None
+
+
+def _load_ipv6_prefixes() -> dict:
+    """Load IPv6 prefix config from dns_registry.yaml (cached)."""
+    global _CACHED_IPV6_PREFIXES
+    if _CACHED_IPV6_PREFIXES is not None:
+        return _CACHED_IPV6_PREFIXES
+    data = load_dns_registry()
+    _CACHED_IPV6_PREFIXES = data.get("ipv6_prefixes", {"default": "2a09:bac0", "ranges": []})
+    return _CACHED_IPV6_PREFIXES
+
+
 def _ipv4_to_fake_ipv6(ipv4: str) -> str:
     """Generate a deterministic plausible IPv6 address from an IPv4 address.
 
-    Uses diverse prefixes from real providers based on the first octet.
+    Uses provider-specific prefixes loaded from dns_registry.yaml ipv6_prefixes
+    section, keyed by first octet of the IPv4 address.
     """
     octets = ipv4.split(".")
     o0, o1, o2, o3 = int(octets[0]), int(octets[1]), int(octets[2]), int(octets[3])
-    # Select prefix based on first octet range to simulate different providers
-    prefixes = {
-        (13, 13): "2620:1ec",  # Microsoft Azure
-        (23, 23): "2a02:26f0",  # Akamai
-        (52, 54): "2600:1f18",  # AWS
-        (104, 104): "2606:4700",  # Cloudflare
-        (142, 142): "2607:f8b0",  # Google
-        (151, 151): "2a04:4e42",  # Fastly
-        (172, 172): "2607:f8b0",  # Google
-    }
-    # Private IPs get ULA prefix (fd00::/8), not documentation 2001:db8::/32
+
+    # Private IPs get ULA prefix (fd00::/8)
     if o0 == 10 or (o0 == 172 and 16 <= o1 <= 31) or (o0 == 192 and o1 == 168):
         return f"fd00:{o1:02x}{o2:02x}:{o3:04x}::1"
 
-    prefix = "2a00:1450"  # default (generic, not documentation)
-    for (lo, hi), pfx in prefixes.items():
-        if lo <= o0 <= hi:
-            prefix = pfx
+    config = _load_ipv6_prefixes()
+    prefix = config.get("default", "2a09:bac0")
+    for entry in config.get("ranges", []):
+        if entry["lo"] <= o0 <= entry["hi"]:
+            prefix = entry["prefix"]
             break
     return f"{prefix}:{o1:02x}{o2:02x}:{o3:04x}::1"
 

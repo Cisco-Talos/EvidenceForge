@@ -282,3 +282,77 @@ class TestEcarNatAwareIp:
         assert inbound_call["dst_ip"] == "10.10.3.10", (
             f"eCAR should use real IP 10.10.3.10, got {inbound_call['dst_ip']}"
         )
+
+
+# ── DNS multi-answer correctness ────────────────────────────────────────
+
+
+class TestDnsMultiAnswer:
+    def test_get_domain_ips_returns_correct_provider(self):
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        ips = get_domain_ips("mx.office365.com")
+        if ips:
+            for ip in ips:
+                assert ip.startswith("40.107."), (
+                    f"mx.office365.com should only have Microsoft IPs (40.107.x), got {ip}"
+                )
+
+    def test_get_domain_ips_empty_for_unknown(self):
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        assert get_domain_ips("nonexistent.example.com") == []
+
+
+# ── IPv6 prefix correctness ─────────────────────────────────────────────
+
+
+class TestIpv6PrefixCorrectness:
+    def test_microsoft_ip_gets_microsoft_prefix(self):
+        from evidenceforge.generation.activity.network import _ipv4_to_fake_ipv6
+
+        result = _ipv4_to_fake_ipv6("40.107.22.53")
+        assert result.startswith("2603:"), (
+            f"Microsoft IP 40.107.22.53 should get 2603: prefix, got {result}"
+        )
+
+    def test_google_ip_gets_google_prefix(self):
+        from evidenceforge.generation.activity.network import _ipv4_to_fake_ipv6
+
+        result = _ipv4_to_fake_ipv6("142.250.80.46")
+        assert result.startswith("2607:f8b0:"), (
+            f"Google IP 142.250.80.46 should get 2607:f8b0: prefix, got {result}"
+        )
+
+    def test_default_is_not_google(self):
+        from evidenceforge.generation.activity.network import _ipv4_to_fake_ipv6
+
+        result = _ipv4_to_fake_ipv6("77.88.55.88")
+        assert not result.startswith("2a00:1450"), (
+            f"Unknown IP should NOT default to Google 2a00:1450, got {result}"
+        )
+        assert not result.startswith("2607:f8b0"), (
+            f"Unknown IP should NOT default to Google 2607:f8b0, got {result}"
+        )
+
+    def test_private_ip_gets_ula_prefix(self):
+        from evidenceforge.generation.activity.network import _ipv4_to_fake_ipv6
+
+        result = _ipv4_to_fake_ipv6("10.10.1.50")
+        assert result.startswith("fd00:"), f"Private IP should get fd00: ULA prefix, got {result}"
+
+    def test_aws_ip_gets_aws_prefix(self):
+        from evidenceforge.generation.activity.network import _ipv4_to_fake_ipv6
+
+        result = _ipv4_to_fake_ipv6("52.95.110.1")
+        assert result.startswith("2600:1f18:"), (
+            f"AWS IP 52.x should get 2600:1f18: prefix, got {result}"
+        )
+
+    def test_ipv6_prefixes_loaded_from_yaml(self):
+        from evidenceforge.generation.activity.network import _load_ipv6_prefixes
+
+        config = _load_ipv6_prefixes()
+        assert "default" in config
+        assert "ranges" in config
+        assert len(config["ranges"]) >= 10
