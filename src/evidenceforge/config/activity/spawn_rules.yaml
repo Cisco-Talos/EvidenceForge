@@ -46,6 +46,8 @@ windows:
       - regedit.exe
       - notepad.exe
       - mstsc.exe
+      - ServerManager.exe
+      - perfmon.exe
 
   # Applications that spawn child/utility subprocesses of the same exe name
   chrome.exe:
@@ -126,6 +128,13 @@ windows:
       - ssh.exe
       - npm.cmd
       - dsquery.exe
+      - dcdiag.exe
+      - repadmin.exe
+      - ntdsutil.exe
+      - dnscmd.exe
+      - gpupdate.exe
+      - gpresult.exe
+      - certutil.exe
 
   powershell.exe:
     command_templates:
@@ -162,6 +171,13 @@ windows:
       - ssh.exe
       - npm.cmd
       - dsquery.exe
+      - dcdiag.exe
+      - repadmin.exe
+      - ntdsutil.exe
+      - dnscmd.exe
+      - gpupdate.exe
+      - gpresult.exe
+      - certutil.exe
 
   code.exe:
     command_templates:
