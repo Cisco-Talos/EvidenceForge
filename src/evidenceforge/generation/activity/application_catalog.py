@@ -54,10 +54,14 @@ def load_catalog() -> dict[str, Any]:
     return _CACHED_CATALOG
 
 
+_ALL_SYSTEM_TYPES = ["workstation", "server", "domain_controller"]
+
+
 def get_apps_for_persona(
     persona: str,
     os_category: str,
     category: str,
+    system_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return applications available to a persona on a given OS and category.
 
@@ -66,6 +70,10 @@ def get_apps_for_persona(
             "default" if the persona doesn't appear in any app's list.
         os_category: "windows" or "linux".
         category: Category tag to filter on (e.g., "user_app", "code", "build", "query").
+        system_type: Optional system type filter ("workstation", "server",
+            "domain_controller"). Apps with a system_types field are only
+            returned if the system type matches. Apps without system_types
+            are available on all system types.
 
     Returns:
         List of matching application dicts from the catalog. Each dict
@@ -85,6 +93,11 @@ def get_apps_for_persona(
         # Must allow this persona
         if persona_lower not in app.get("personas", []):
             continue
+        # Must be available on this system type (if filtering)
+        if system_type:
+            allowed_types = app.get("system_types", _ALL_SYSTEM_TYPES)
+            if system_type not in allowed_types:
+                continue
         results.append(app)
 
     # Only fall back to "default" if the persona is truly unknown
@@ -96,7 +109,7 @@ def get_apps_for_persona(
         for app in data["applications"]:
             known_personas.update(app.get("personas", []))
         if persona_lower not in known_personas:
-            return get_apps_for_persona("default", os_category, category)
+            return get_apps_for_persona("default", os_category, category, system_type)
 
     return results
 
@@ -336,6 +349,7 @@ def pick_app_and_command(
     os_category: str,
     category: str,
     username: str = "",
+    system_type: str | None = None,
 ) -> tuple[str, str] | None:
     """Pick a random app for the persona and return (image_path, command_template).
 
@@ -345,7 +359,7 @@ def pick_app_and_command(
     For browser-category apps, applies per-user browser affinity: each user
     has a primary browser (90% of the time) with occasional secondary use (10%).
     """
-    apps = get_apps_for_persona(persona, os_category, category)
+    apps = get_apps_for_persona(persona, os_category, category, system_type)
     if not apps:
         return None
 

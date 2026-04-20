@@ -56,6 +56,7 @@ applications:
           - "google-chrome --new-tab {internal_url}"
     categories: [user_app, browser]
     personas: [developer, analyst, sysadmin, security_analyst, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: firefox
     display_name: "Mozilla Firefox"
@@ -92,6 +93,7 @@ applications:
           - "firefox -P default"
     categories: [user_app, browser]
     personas: [developer, analyst, sysadmin, security_analyst, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: outlook
     display_name: "Microsoft Outlook"
@@ -117,6 +119,7 @@ applications:
           - path: 'C:\Windows\System32\ws2_32.dll'
     categories: [user_app, office]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: word
     display_name: "Microsoft Word"
@@ -142,6 +145,7 @@ applications:
           - path: 'C:\Windows\System32\gdi32.dll'
     categories: [user_app, office]
     personas: [executive, analyst, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: excel
     display_name: "Microsoft Excel"
@@ -165,6 +169,7 @@ applications:
           - path: 'C:\Windows\System32\gdi32.dll'
     categories: [user_app, office]
     personas: [analyst, executive, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: edge
     display_name: "Microsoft Edge"
@@ -192,6 +197,7 @@ applications:
           - path: 'C:\Windows\System32\dwrite.dll'
     categories: [user_app, browser]
     personas: [executive, sysadmin, analyst, hr, accountant, help_desk, default]
+    system_types: [workstation]
 
   - id: teams
     display_name: "Microsoft Teams"
@@ -211,6 +217,7 @@ applications:
           - '"C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: onedrive
     display_name: "Microsoft OneDrive"
@@ -229,6 +236,7 @@ applications:
           - '"C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, executive, hr, accountant, intern, help_desk, default]
+    system_types: [workstation]
 
   - id: acrobat
     display_name: "Adobe Acrobat"
@@ -245,6 +253,7 @@ applications:
           - '"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"'
     categories: [user_app, office]
     personas: [executive, analyst, hr, accountant, help_desk, default]
+    system_types: [workstation]
 
   - id: 7zip
     display_name: "7-Zip"
@@ -261,6 +270,7 @@ applications:
           - '"C:\Program Files\7-Zip\7zFM.exe"'
     categories: [user_app]
     personas: [developer, sysadmin, default]
+    system_types: [workstation]
 
   # ===== Windows Code Editors (process_code) =====
   - id: vscode
@@ -394,6 +404,7 @@ applications:
           - "thunderbird"
     categories: [user_app, office]
     personas: [executive, hr, accountant, default]
+    system_types: [workstation]
 
   - id: git
     display_name: "Git"
@@ -418,6 +429,7 @@ applications:
           - "git log --oneline -10"
     categories: [user_app, build]
     personas: [developer, sysadmin]
+    system_types: [workstation, server]
 
   - id: docker
     display_name: "Docker"
@@ -441,6 +453,7 @@ applications:
           - "docker logs --tail=50 {docker_container}"
     categories: [user_app, build]
     personas: [developer, sysadmin]
+    system_types: [workstation, server]
 
   - id: kubectl
     display_name: "Kubernetes CLI"
@@ -465,6 +478,7 @@ applications:
           - "kubectl get nodes -o wide"
     categories: [user_app]
     personas: [developer, sysadmin]
+    system_types: [workstation, server]
 
   - id: ssh
     display_name: "OpenSSH Client"
@@ -486,6 +500,7 @@ applications:
           - "ssh -i ~/.ssh/id_rsa {username}@{ssh_target}"
     categories: [user_app]
     personas: [developer, analyst, sysadmin, default]
+    system_types: [workstation, server]
 
   - id: curl
     display_name: "curl"
@@ -498,6 +513,7 @@ applications:
           - "curl -X GET {internal_url} -H 'Accept: application/json'"
     categories: [user_app]
     personas: [developer, analyst, sysadmin, default]
+    system_types: [workstation, server]
 
   - id: pytest
     display_name: "pytest"
@@ -732,6 +748,7 @@ applications:
     categories: [user_app]
     personas: [analyst, data_analyst, accountant, executive, hr, sales, marketing,
                legal_counsel, project_manager, intern, receptionist, sysadmin, help_desk, default]
+    system_types: [workstation]
 
   - id: mstsc
     display_name: "Remote Desktop Connection"
@@ -778,3 +795,138 @@ applications:
           - 'ldapsearch -x -H ldap://{ssh_target} -b "dc=corp,dc=local" "(objectClass=computer)"'
     categories: [query]
     personas: [sysadmin, help_desk]
+
+  # ===== DC Admin Tools =====
+  # These are only spawned on domain controllers (and optionally servers).
+  # The system_types field restricts where these apps appear in baseline activity.
+  # When system_types is absent, the app is available on all system types.
+
+  - id: dcdiag
+    display_name: "Domain Controller Diagnostics"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\dcdiag.exe'
+        pe_metadata: {description: "DC Diagnosis Utility", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "dcdiag.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'dcdiag.exe /v'
+          - 'dcdiag.exe /test:dns'
+          - 'dcdiag.exe /test:replications'
+          - 'dcdiag.exe /test:services'
+    categories: [query]
+    personas: [sysadmin, help_desk]
+    system_types: [domain_controller]
+
+  - id: repadmin
+    display_name: "AD Replication Admin"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\repadmin.exe'
+        pe_metadata: {description: "NT5DS Replication Diagnostics", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "repadmin.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'repadmin.exe /showrepl'
+          - 'repadmin.exe /replsummary'
+          - 'repadmin.exe /showconn'
+    categories: [query]
+    personas: [sysadmin]
+    system_types: [domain_controller]
+
+  - id: ntdsutil
+    display_name: "NTDS Utility"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\ntdsutil.exe'
+        pe_metadata: {description: "NT Directory Service Utility", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "ntdsutil.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'ntdsutil.exe "metadata cleanup" connections quit quit'
+    categories: [query]
+    personas: [sysadmin]
+    system_types: [domain_controller]
+
+  - id: dnscmd
+    display_name: "DNS Server Command"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\dnscmd.exe'
+        pe_metadata: {description: "DNS Server Command Line Utility", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "dnscmd.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'dnscmd.exe /info'
+          - 'dnscmd.exe /enumzones'
+          - 'dnscmd.exe /statistics'
+    categories: [query]
+    personas: [sysadmin]
+    system_types: [domain_controller, server]
+
+  - id: gpupdate
+    display_name: "Group Policy Update"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\gpupdate.exe'
+        pe_metadata: {description: "Microsoft Group Policy Update Utility", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "GPUpdate.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'gpupdate.exe /force'
+          - 'gpupdate.exe /target:computer'
+    categories: [query]
+    personas: [sysadmin, help_desk]
+
+  - id: gpresult
+    display_name: "Group Policy Result"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\gpresult.exe'
+        pe_metadata: {description: "Microsoft Group Policy Result Tool", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "gpresult.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'gpresult.exe /r'
+          - 'gpresult.exe /scope computer /v'
+    categories: [query]
+    personas: [sysadmin, help_desk]
+
+  - id: certutil
+    display_name: "Certificate Utility"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\certutil.exe'
+        pe_metadata: {description: "CertUtil.exe", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "CertUtil.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'certutil.exe -verify'
+          - 'certutil.exe -catemplates'
+          - 'certutil.exe -store My'
+    categories: [query]
+    personas: [sysadmin]
+    system_types: [domain_controller, server]
+
+  - id: server_manager
+    display_name: "Server Manager"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\ServerManager.exe'
+        pe_metadata: {description: "Server Manager", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "ServerManager.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'ServerManager.exe'
+    categories: [user_app]
+    personas: [sysadmin, help_desk]
+    system_types: [server, domain_controller]
+
+  - id: eventvwr
+    display_name: "Event Viewer"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\eventvwr.exe'
+        pe_metadata: {description: "Event Viewer Snapin Launcher", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "eventvwr.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'eventvwr.exe'
+    categories: [user_app]
+    personas: [sysadmin, help_desk, security_analyst]
+    system_types: [server, domain_controller, workstation]
+
+  - id: perfmon
+    display_name: "Performance Monitor"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\perfmon.exe'
+        pe_metadata: {description: "Resource and Performance Monitor", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "perfmon.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'perfmon.exe'
+          - 'perfmon.exe /res'
+    categories: [user_app]
+    personas: [sysadmin]
+    system_types: [server, domain_controller, workstation]

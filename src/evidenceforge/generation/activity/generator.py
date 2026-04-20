@@ -3431,6 +3431,7 @@ class ActivityGenerator:
                     os_category,
                     catalog_category,
                     username=user.username,
+                    system_type=system.type,
                 )
                 if result:
                     process_name, command_line = result
