@@ -25,6 +25,7 @@ valid_tags:
   linux:      "Linux-specific background traffic"
   internal:   "Internal infrastructure (DB servers, etc.)"
   storage:    "Cloud storage (potential exfiltration targets)"
+  os_tags: [windows, linux]  # Tags that trigger OS-aware domain filtering in pick_domain_and_ip()
   dev:        "Developer tool API endpoints"
   social:     "Social media sites"
 
@@ -143,7 +144,7 @@ domains:
     tags: [background, windows]
   - domain: login.microsoftonline.com
     ips: ["40.126.28.17", "40.126.28.19", "20.190.159.64"]
-    tags: [saas, background, windows]
+    tags: [saas, background]
 
   # === Other popular sites ===
   - domain: www.example.com

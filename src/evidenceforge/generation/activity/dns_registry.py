@@ -139,6 +139,7 @@ def pick_domain_and_ip(
     rng: random.Random,
     *tags: str,
     src_host: str = "",
+    include_os: str | None = None,
 ) -> tuple[str, str]:
     """Pick a domain by tag(s) and select a deterministic primary IP.
 
@@ -150,11 +151,24 @@ def pick_domain_and_ip(
         rng: Random instance for domain selection.
         *tags: Tags to filter domains by (e.g., "web", or "background", "windows").
         src_host: Source hostname for deterministic IP selection.
+        include_os: Source host OS category ("windows" or "linux"). When set,
+            domains tagged for a different OS are excluded. Domains with no
+            OS tag are always included.
 
     Returns:
         (domain, ip) tuple.
     """
     entries = get_domains_by_tag(*tags)
+
+    if include_os and entries:
+        data = load_dns_registry()
+        os_tags = set(data.get("valid_tags", {}).get("os_tags", ["windows", "linux"]))
+        entries = [
+            entry
+            for entry in entries
+            if not (os_tags & set(entry.get("tags", []))) or include_os in entry.get("tags", [])
+        ]
+
     if not entries:
         # Fallback: generate a long-tail domain
         data = load_dns_registry()

@@ -356,3 +356,65 @@ class TestIpv6PrefixCorrectness:
         assert "default" in config
         assert "ranges" in config
         assert len(config["ranges"]) >= 10
+
+
+# ── OS-aware domain filtering ────────────────────────────────────────────
+
+
+class TestOsAwareDomainFiltering:
+    def test_include_os_linux_excludes_windows_domains(self):
+        from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+        rng = random.Random(42)
+        for _ in range(50):
+            domain, ip = pick_domain_and_ip(rng, "background", include_os="linux")
+            from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
+
+            all_bg = get_domains_by_tag("background")
+            entry = next((e for e in all_bg if e["domain"] == domain), None)
+            if entry:
+                assert "windows" not in entry.get("tags", []), (
+                    f"Linux host got Windows domain: {domain}"
+                )
+
+    def test_include_os_windows_can_return_windows_domains(self):
+        from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+        rng = random.Random(42)
+        domains = set()
+        for _ in range(200):
+            domain, _ = pick_domain_and_ip(rng, "background", include_os="windows")
+            domains.add(domain)
+        from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
+
+        windows_bg = get_domains_by_tag("background", "windows")
+        windows_domain_names = {e["domain"] for e in windows_bg}
+        assert domains & windows_domain_names, (
+            "Windows host should be able to get Windows-tagged domains"
+        )
+
+    def test_no_include_os_returns_all(self):
+        from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+        rng = random.Random(42)
+        domains = set()
+        for _ in range(200):
+            domain, _ = pick_domain_and_ip(rng, "background")
+            domains.add(domain)
+        from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
+
+        windows_bg = get_domains_by_tag("background", "windows")
+        windows_domain_names = {e["domain"] for e in windows_bg}
+        assert domains & windows_domain_names, (
+            "Without include_os, Windows domains should be reachable"
+        )
+
+    def test_untagged_domains_always_available(self):
+        from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+
+        rng = random.Random(42)
+        domains = set()
+        for _ in range(200):
+            domain, _ = pick_domain_and_ip(rng, "web", include_os="linux")
+            domains.add(domain)
+        assert len(domains) > 0, "Linux host should get web domains (most are OS-neutral)"
