@@ -418,3 +418,55 @@ class TestOsAwareDomainFiltering:
             domain, _ = pick_domain_and_ip(rng, "web", include_os="linux")
             domains.add(domain)
         assert len(domains) > 0, "Linux host should get web domains (most are OS-neutral)"
+
+
+# ── DC system_type filtering ─────────────────────────────────────────────
+
+
+class TestDcSystemTypeFiltering:
+    def test_dc_no_user_apps(self):
+        from evidenceforge.generation.activity.application_catalog import get_apps_for_persona
+
+        apps = get_apps_for_persona(
+            "sysadmin", "windows", "user_app", system_type="domain_controller"
+        )
+        app_ids = {a["id"] for a in apps}
+        assert "chrome" not in app_ids, "Chrome should not be available on DCs"
+        assert "firefox" not in app_ids, "Firefox should not be available on DCs"
+        assert "outlook" not in app_ids, "Outlook should not be available on DCs"
+
+    def test_dc_admin_tools_available(self):
+        from evidenceforge.generation.activity.application_catalog import get_apps_for_persona
+
+        apps = get_apps_for_persona("sysadmin", "windows", "query", system_type="domain_controller")
+        app_ids = {a["id"] for a in apps}
+        assert "dcdiag" in app_ids, "dcdiag should be available on DCs"
+        assert "repadmin" in app_ids, "repadmin should be available on DCs"
+
+    def test_dc_admin_tools_not_on_workstation(self):
+        from evidenceforge.generation.activity.application_catalog import get_apps_for_persona
+
+        apps = get_apps_for_persona("sysadmin", "windows", "query", system_type="workstation")
+        app_ids = {a["id"] for a in apps}
+        assert "dcdiag" not in app_ids, "dcdiag should not be on workstations"
+        assert "repadmin" not in app_ids, "repadmin should not be on workstations"
+
+    def test_workstation_gets_full_apps(self):
+        from evidenceforge.generation.activity.application_catalog import get_apps_for_persona
+
+        apps = get_apps_for_persona("sysadmin", "windows", "user_app", system_type="workstation")
+        app_ids = {a["id"] for a in apps}
+        assert "chrome" in app_ids or "firefox" in app_ids, (
+            "Workstation sysadmin should have browsers"
+        )
+
+    def test_no_system_type_returns_all(self):
+        from evidenceforge.generation.activity.application_catalog import get_apps_for_persona
+
+        apps_all = get_apps_for_persona("sysadmin", "windows", "query")
+        apps_dc = get_apps_for_persona(
+            "sysadmin", "windows", "query", system_type="domain_controller"
+        )
+        assert len(apps_all) >= len(apps_dc), (
+            "Without system_type filter, should return at least as many apps"
+        )

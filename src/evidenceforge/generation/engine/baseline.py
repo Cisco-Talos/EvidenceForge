@@ -3376,8 +3376,10 @@ class BaselineMixin:
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
                 # Only emit HKCU on workstations with a logged-in user;
-                # servers run services, not user desktops.
-                _has_desktop = getattr(system, "assigned_user", None) is not None
+                # servers and DCs run services, not user desktops.
+                _has_desktop = getattr(
+                    system, "assigned_user", None
+                ) is not None and system.type not in ("server", "domain_controller")
                 _hkcu_rate = 0.30 if _has_desktop else 0.0
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))

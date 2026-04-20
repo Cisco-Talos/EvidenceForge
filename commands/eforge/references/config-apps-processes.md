@@ -56,6 +56,7 @@ applications:
 | `platforms` | object | yes | Per-OS configuration (`windows` and/or `linux`) |
 | `categories` | list[string] | yes | Category tags for persona process weight matching |
 | `personas` | list[string] | yes | Which persona names may spawn this app. Include `default` for universal access. |
+| `system_types` | list[string] | no | System types where this app is available: `workstation`, `server`, `domain_controller`. When absent, the app is available on all types. Use this to restrict user-facing apps to workstations and DC admin tools to domain controllers. |
 
 ### Platform Fields (per OS)
 

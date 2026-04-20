@@ -591,6 +591,18 @@ def validate_config() -> ValidationResult:
                     )
                 )
 
+        # Check: system_types values are valid
+        _VALID_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
+        for st in app.get("system_types", []):
+            if st not in _VALID_SYSTEM_TYPES:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "application_catalog.yaml",
+                        f'App "{app_id}" has invalid system_type "{st}" (valid: {sorted(_VALID_SYSTEM_TYPES)})',
+                    )
+                )
+
         # Check 16-17: Image paths
         for os_name, platform in app.get("platforms", {}).items():
             image_path = platform.get("image_path", "")
