@@ -62,7 +62,9 @@
   - Failed logon burst from a legitimate user who fat-fingered their password 3-4 times before
     succeeding. Should trigger lockout-style alerts but is benign.
   - Large outbound file transfer from a developer workstation to a cloud storage IP — actually a
-    legitimate backup or repo sync, but the volume looks like exfiltration.
+    legitimate backup or repo sync, but the volume looks like exfiltration. Use a physically
+    plausible orig_bytes value (100-500 MB, NOT multi-GB — a 2GB upload in 25 seconds implies
+    670 Mbps sustained throughput which is impossible on a typical corporate LAN uplink).
   - Service account (svc_backup) authenticating from an unusual host (not its normal server) —
     legitimate scheduled task migration, but looks like lateral movement.
 
@@ -94,7 +96,10 @@
   process with the wrong command, connection to wrong host, etc.).
 
   1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
-  (dhcp_lease event). Actor: attacker on rogue device.
+  (dhcp_lease event). Use a realistic MAC address with a known vendor OUI prefix (e.g.,
+  DC:A6:32 for Raspberry Pi, 00:50:56 for VMware, 00:0C:29 for VMware, B4:2E:99 for
+  Glenfly Tech). Do NOT use sequential/placeholder MACs like 00:1A:2B:3C:4D:5E — these
+  are instantly recognizable as fake. Actor: attacker on rogue device.
   2. Initial Access (+1h): External attacker (185.70.41.45) scans and exploits SQL injection on
   WEB-EXT-01's EHR portal. Use connection events with HTTP fields (method: POST, uri with SQLi
   payload, status_code: 500, user_agent, hostname: "ehr-portal.meridianhcs.com") — NOT raw events.
@@ -115,7 +120,13 @@
   LDAP query to DC, net view file shares.
   11. Credential Access (+4h30m): Mimikatz (disguised as ms-index-service.exe) with
   create_remote_thread targeting lsass.exe (auto-generates process_access with 0x1FFFFF).
-  12. Lateral Movement (+5h): PsExec to DC-01 via SMB.
+  12. Lateral Movement (+5h): PsExec to DC-01 via SMB. Model this correctly:
+  PsExec works by deploying PSEXESVC.exe as a Windows service on the remote host.
+  Use a logon (type 3 from source workstation) + service_installed (service_name:
+  "PSEXESVC", service_file_name: "%SystemRoot%\PSEXESVC.exe") + then process events
+  for commands run under the service. Do NOT use "cmd.exe /c PSEXESVC.exe" — that
+  produces the wrong parent chain (explorer→cmd→PSEXESVC instead of the correct
+  services.exe→PSEXESVC).
   13. Privilege Escalation (+5h15m): Create backdoor account svc_sqlreader (account_created event),
   add to Domain Admins (group_member_added event).
   14. Persistence (+5h30m): Install service "HealthMonitorSvc" (service_installed event with
@@ -173,7 +184,13 @@
   specify exactly one of: end_time, duration, or count — plus interval (or rate for web_scan)
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
-  - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges)
+  - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges).
+    This applies to ALL public IPs in the scenario — attacker infrastructure, the org's
+    own public IP block (NAT mapped_ip values, static NAT VIPs), and any third-party IPs.
+    The org's public IP block must NOT overlap with attacker infrastructure IPs or well-known
+    security tools (e.g., do NOT use 45.33.32.1 which is scanme.nmap.org). Use separate
+    realistic ranges for the org's public IPs (e.g., 203.14.x.x) vs attacker IPs (e.g.,
+    45.33.32.x, 89.248.167.x)
   - Baseline activity: medium intensity, medium variation, suspicious_noise: medium
   - Include technique (MITRE ATT&CK ID) and description fields on storyline events for ground truth
 
