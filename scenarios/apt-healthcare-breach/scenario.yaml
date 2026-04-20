@@ -1455,7 +1455,7 @@ red_herrings:
         dst_port: 443
         service: ssl
         hostname: "dev.azure.com"
-        orig_bytes: 2147483648
+        orig_bytes: 209715200
         technique: "T1567 - Exfiltration Over Web Service"
 
   - id: rh-svc-backup-unusual-host

@@ -112,15 +112,30 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_avg_window: int = 60  # seconds for average rate calculation
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
-    def _next_conn_id(self, sensor_hostname: str) -> int:
-        """Get next monotonically increasing connection ID for a sensor."""
-        current = self._conn_id_counters.get(sensor_hostname)
-        if current is None:
-            # Deterministic but non-round start per sensor
-            seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-            current = 1_000_000 + (seed % 0xFFE00000)
-        self._conn_id_counters[sensor_hostname] = current + 1
-        return current
+    def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
+        """Get monotonically increasing connection ID for a sensor.
+
+        Uses timestamp-derived base so IDs remain monotonic after
+        chronological sorting of the output buffer.
+        """
+        if ts is not None:
+            from datetime import datetime
+
+            if isinstance(ts, datetime):
+                epoch = int(ts.timestamp() * 1000)
+            else:
+                epoch = int(float(ts) * 1000)
+            base = epoch % 0xFFFFFFFF
+        else:
+            current = self._conn_id_counters.get(sensor_hostname)
+            if current is None:
+                seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
+                current = 1_000_000 + (seed % 0xFFE00000)
+            base = current
+        sensor_offset = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:4], 16)
+        seq = self._conn_id_counters.get(sensor_hostname, sensor_offset) & 0xFFF
+        self._conn_id_counters[sensor_hostname] = seq + 1
+        return (base & 0xFFFFF000) | (seq & 0xFFF)
 
     def _resolve_interface(self, ip: str, sensor_hostname: str) -> str:
         """Resolve an IP address to an ASA interface name.
@@ -190,7 +205,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         for sensor_hostname in sensor_hosts:
             src_iface = self._resolve_interface(net.src_ip, sensor_hostname)
             dst_iface = self._resolve_interface(net.dst_ip, sensor_hostname)
-            conn_id = self._next_conn_id(sensor_hostname)
+            conn_id = self._next_conn_id(sensor_hostname, event.timestamp)
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:

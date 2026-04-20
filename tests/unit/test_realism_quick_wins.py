@@ -131,20 +131,22 @@ def test_generate_external_ip_excludes_rfc5737():
 
 
 def test_asa_conn_id_not_round():
-    """ASA connection IDs should not start at a round 100000."""
+    """ASA connection IDs should use timestamp-based monotonic values."""
+    from datetime import datetime
+
     fmt = load_format("cisco_asa")
     emitter = CiscoAsaEmitter(
         format_def=fmt,
         output_path=pytest.importorskip("pathlib").Path("/tmp/test_asa_conn"),
         sensor_hostnames=["fw01"],
     )
-    first_id = emitter._next_conn_id("fw01")
-    assert first_id != 1_000_000, "Connection ID should not start at a round number"
-    assert 1_000_000 <= first_id < 0xFFFFFFFF, f"Connection ID {first_id} out of expected range"
+    ts1 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    ts2 = datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC)
+    first_id = emitter._next_conn_id("fw01", ts1)
+    assert first_id > 0, "Connection ID should be positive"
 
-    # Second call should be monotonically increasing
-    second_id = emitter._next_conn_id("fw01")
-    assert second_id > first_id
+    second_id = emitter._next_conn_id("fw01", ts2)
+    assert second_id > first_id, "Later timestamps should produce higher IDs"
 
     # Different sensor should get a different starting ID
     other_id = emitter._next_conn_id("fw02")

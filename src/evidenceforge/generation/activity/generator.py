@@ -1813,6 +1813,10 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
+            # Enforce consistency: resp_pkts > 0 requires resp_bytes > 0
+            # (orig always has at least the SYN, so orig_pkts stays from history)
+            if resp_pkts > 0 and resp_bytes == 0:
+                resp_pkts = 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -2291,7 +2295,9 @@ class ActivityGenerator:
                 precision=float(ntp_rng.randint(-25, -18)),
                 root_delay=ntp_rng.uniform(0.0, 0.1),
                 root_disp=ntp_rng.uniform(0.0, 0.05),
-                ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
+                ref_id=random.Random(_stable_seed(f"ntp_refid_{dst_ip}")).choice(
+                    [".GPS.", ".PPS.", ".GOES.", ".DCFa.", ".ACTS."]
+                ),
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
                 org_ts=round(ntp_epoch + ntp_jitter, 6),
                 rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),

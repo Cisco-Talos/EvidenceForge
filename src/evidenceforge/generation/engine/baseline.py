@@ -4111,7 +4111,11 @@ class BaselineMixin:
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
                     max_size = _j_rng.choice([256, 512, 1024, 2048, 4096])
                     journal_type = _j_rng.choice(["Runtime", "System"])
-                    size = rng.randint(4, max_size - 1)
+                    # Journal size grows monotonically during uptime (logs accumulate)
+                    jkey = f"_journald_size_{system.hostname}"
+                    prev_size = getattr(self, jkey, max_size * 0.1)
+                    size = min(prev_size + rng.uniform(0.5, 8.0), max_size - 1)
+                    setattr(self, jkey, size)
                     free = max_size - size
                     path = (
                         f"/run/log/journal/{machine_id}"
