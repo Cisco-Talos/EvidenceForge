@@ -161,9 +161,9 @@ def test_asa_conn_id_not_round():
 def _make_nat_engine():
     """Create a NetworkVisibilityEngine with a dynamic PAT rule."""
     segments = [
-        NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-        NetworkSegment(name="servers", cidr="10.0.20.0/24"),
-        NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+        NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+        NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
+        NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
     ]
     systems = [
         System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),

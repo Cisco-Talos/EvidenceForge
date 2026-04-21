@@ -239,14 +239,17 @@ environment:
       - name: pos_network
         cidr: "10.10.10.0/24"
         description: "POS terminal network"
+        exposure: internal
         systems: [POS-01, POS-02, POS-03, POS-04, POS-05]
       - name: office_network
         cidr: "10.10.20.0/24"
         description: "Office workstation network"
+        exposure: internal
         systems: [OFFICE-WS-01, OFFICE-WS-02, OFFICE-WS-03, OFFICE-WS-04, OFFICE-WS-05]
       - name: server_network
         cidr: "10.10.30.0/24"
         description: "Back-office server network"
+        exposure: internal
         systems: [BACKOFFICE-SRV-01, FILE-SRV-01, DC-01, MUSIC-SRV-01]
     sensors:
       - type: network

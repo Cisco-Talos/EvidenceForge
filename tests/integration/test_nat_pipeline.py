@@ -65,9 +65,9 @@ def _build_nat_scenario(
         extra_systems: Additional systems beyond WS-01 and SRV-WEB.
     """
     segments = [
-        NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-        NetworkSegment(name="servers", cidr="10.0.20.0/24"),
-        NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+        NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+        NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
+        NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
     ]
     if extra_segments:
         segments.extend(extra_segments)

@@ -45,9 +45,9 @@ T0 = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
 def _make_segments():
     """Create test network segments."""
     return [
-        NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-        NetworkSegment(name="servers", cidr="10.0.20.0/24"),
-        NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+        NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+        NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
+        NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
     ]
 
 
@@ -247,9 +247,9 @@ class TestMultiFirewallScoping:
     def test_multi_firewall_nat_scoped_to_path(self):
         """fw-ext PAT rule should NOT apply to connections through fw-int."""
         segments = [
-            NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-            NetworkSegment(name="servers", cidr="10.0.20.0/24"),
-            NetworkSegment(name="database", cidr="10.0.30.0/24"),
+            NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+            NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
+            NetworkSegment(name="database", cidr="10.0.30.0/24", exposure="internal"),
         ]
         systems = [
             System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
@@ -281,8 +281,8 @@ class TestMultiFirewallScoping:
     def test_nat_rule_from_correct_firewall_used(self):
         """Connection from workstations should match fw-ext's PAT rule."""
         segments = [
-            NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-            NetworkSegment(name="servers", cidr="10.0.20.0/24"),
+            NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+            NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
         ]
         systems = [
             System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),

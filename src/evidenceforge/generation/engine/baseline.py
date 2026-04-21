@@ -3486,7 +3486,7 @@ class BaselineMixin:
             # Baseline registry activity from running services. Real Sysmon
             # generates hundreds-thousands of Event 12/13 per hour. We emit
             # 15-40 per host per hour to provide realistic background volume.
-            if os_cat == "windows":
+            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
                 from evidenceforge.events.base import SecurityEvent
                 from evidenceforge.events.contexts import (
                     AuthContext,
@@ -3628,53 +3628,58 @@ class BaselineMixin:
                         )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
-            if os_cat == "windows":
-                num_crt = rng.randint(1, 3)
-                for _ in range(num_crt):
-                    src_key, src_image, tgt_key, tgt_image = rng.choice(_BENIGN_CRT_PAIRS)
-                    src_pid = sys_pids.get(src_key, rng.randint(1000, 5000))
-                    tgt_pid = sys_pids.get(tgt_key, rng.randint(1000, 5000))
-                    if src_pid == tgt_pid:
-                        continue
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_create_remote_thread(
-                        user=_SYSTEM_USER,
-                        system=system,
-                        time=ts,
-                        source_pid=src_pid,
-                        source_image=src_image,
-                        target_pid=tgt_pid,
-                        target_image=tgt_image,
-                    )
+            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+                # Filter pairs to only those whose PIDs are actually seeded on this host
+                valid_crt = [p for p in _BENIGN_CRT_PAIRS if p[0] in sys_pids and p[2] in sys_pids]
+                if valid_crt:
+                    num_crt = rng.randint(1, 3)
+                    for _ in range(num_crt):
+                        src_key, src_image, tgt_key, tgt_image = rng.choice(valid_crt)
+                        src_pid = sys_pids[src_key]
+                        tgt_pid = sys_pids[tgt_key]
+                        if src_pid == tgt_pid:
+                            continue
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_create_remote_thread(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            source_pid=src_pid,
+                            source_image=src_image,
+                            target_pid=tgt_pid,
+                            target_image=tgt_image,
+                        )
 
             # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
-            if os_cat == "windows":
-                num_pa = rng.randint(3, 8)
-                for _ in range(num_pa):
-                    src_key, src_image, tgt_key, tgt_image, access = rng.choice(_BENIGN_PA_PAIRS)
-                    src_pid = sys_pids.get(src_key, rng.randint(1000, 5000))
-                    tgt_pid = sys_pids.get(tgt_key, rng.randint(1000, 5000))
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_process_access(
-                        user=_SYSTEM_USER,
-                        system=system,
-                        time=ts,
-                        source_pid=src_pid,
-                        source_image=src_image,
-                        target_pid=tgt_pid,
-                        target_image=tgt_image,
-                        granted_access=access,
-                    )
+            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
+                valid_pa = [p for p in _BENIGN_PA_PAIRS if p[0] in sys_pids and p[2] in sys_pids]
+                if valid_pa:
+                    num_pa = rng.randint(3, 8)
+                    for _ in range(num_pa):
+                        src_key, src_image, tgt_key, tgt_image, access = rng.choice(valid_pa)
+                        src_pid = sys_pids[src_key]
+                        tgt_pid = sys_pids[tgt_key]
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_process_access(
+                            user=_SYSTEM_USER,
+                            system=system,
+                            time=ts,
+                            source_pid=src_pid,
+                            source_image=src_image,
+                            target_pid=tgt_pid,
+                            target_image=tgt_image,
+                            granted_access=access,
+                        )
 
             # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
             # Uses data-driven DLL profiles from system_processes.yaml and
             # application_catalog.yaml. Picks from processes actually running
             # on this system (from StateManager) so PIDs are always valid.
-            if os_cat == "windows":
+            if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
                 from evidenceforge.generation.activity.dll_load_profiles import (
                     get_dlls_for_process,
                 )
@@ -4494,12 +4499,26 @@ class BaselineMixin:
                 num_reqs = rng.randint(_web_lo, _web_hi)
 
                 internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
-                exposure = self._get_system_exposure(sys_obj)
+                _segment = self._get_segment_for_system(sys_obj)
+                exposure = _segment.exposure if _segment else self._get_system_exposure(sys_obj)
+                ext_ratio = (
+                    _segment.external_ratio
+                    if _segment is not None and _segment.external_ratio is not None
+                    else 0.6
+                )
 
                 # Build Zipf-weighted visitor IP pool for realistic frequency distribution
                 ext_pool_size = min(200, max(10, num_reqs // 10))
                 ext_ip_pool = [self._generate_external_client_ip(rng) for _ in range(ext_pool_size)]
                 ext_ip_weights = [1.0 / (i + 1) for i in range(ext_pool_size)]
+
+                # Zipf-weighted internal pool for non-uniform health-check / monitoring traffic
+                if internal_ips:
+                    int_ip_weights = [1.0 / (i + 1) for i in range(len(internal_ips))]
+                else:
+                    int_ip_weights = []
+
+                _pub_hosts = getattr(sys_obj, "public_hostnames", None) or []
 
                 from evidenceforge.events.contexts import HttpContext
 
@@ -4510,14 +4529,26 @@ class BaselineMixin:
                     if exposure == "external":
                         client_ip = rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
                     elif exposure == "both":
-                        if rng.random() < 0.6:
+                        if rng.random() < ext_ratio:
                             client_ip = rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
                         else:
-                            client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
+                            client_ip = (
+                                rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
+                                if internal_ips
+                                else "10.0.0.1"
+                            )
                     else:
-                        client_ip = rng.choice(internal_ips) if internal_ips else "10.0.0.1"
+                        client_ip = (
+                            rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
+                            if internal_ips
+                            else "10.0.0.1"
+                        )
 
                     is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
+                    if is_external_client and _pub_hosts:
+                        http_host = rng.choice(_pub_hosts)
+                    else:
+                        http_host = sys_obj.hostname
                     ip_map = getattr(self.activity_generator, "_ip_to_system", {})
                     client_sys = ip_map.get(client_ip)
                     if client_sys and _get_os_category(client_sys.os) == "linux":
@@ -4541,7 +4572,7 @@ class BaselineMixin:
                         resp_bytes=resp_bytes,
                         http=HttpContext(
                             method=method,
-                            host=sys_obj.hostname,
+                            host=http_host,
                             uri=path,
                             version="1.1",
                             user_agent=rng.choice(ua_pool),

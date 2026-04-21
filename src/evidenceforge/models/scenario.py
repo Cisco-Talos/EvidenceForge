@@ -1088,7 +1088,8 @@ class NetworkSegment(BaseModel):
     cidr: str
     description: str = ""
     systems: list[str] = Field(default_factory=list)
-    exposure: Literal["internal", "external", "both"] = "internal"
+    exposure: Literal["internal", "external", "both"]
+    external_ratio: float | None = None
 
     @field_validator("cidr")
     @classmethod
@@ -1099,6 +1100,21 @@ class NetworkSegment(BaseModel):
         except ValueError as e:
             raise ValueError(f"Invalid CIDR notation: {v}") from e
         return v
+
+    @model_validator(mode="after")
+    def validate_external_ratio(self) -> "NetworkSegment":
+        if self.external_ratio is not None:
+            if self.exposure != "both":
+                raise ValueError(
+                    f"external_ratio is only valid when exposure='both' "
+                    f"(segment '{self.name}' has exposure='{self.exposure}')"
+                )
+            if not 0.0 <= self.external_ratio <= 1.0:
+                raise ValueError(
+                    f"external_ratio must be between 0.0 and 1.0 "
+                    f"(segment '{self.name}' has external_ratio={self.external_ratio})"
+                )
+        return self
 
 
 class FirewallRule(BaseModel):

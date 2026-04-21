@@ -28,7 +28,7 @@ def _make_network_config(
 ) -> tuple[NetworkConfig, list[System]]:
     """Build a minimal network config with DMZ, firewall, and optional NAT/public_cidrs."""
     segments = [
-        NetworkSegment(name="corporate", cidr="10.0.1.0/24"),
+        NetworkSegment(name="corporate", cidr="10.0.1.0/24", exposure="internal"),
         NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="both"),
     ]
     fw_sensor = NetworkSensor(

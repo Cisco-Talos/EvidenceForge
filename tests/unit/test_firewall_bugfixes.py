@@ -193,7 +193,7 @@ class TestSourceSideVisibilityDirection:
         )
 
         config = NetworkConfig(
-            segments=[NetworkSegment(name="internal", cidr="10.0.10.0/24")],
+            segments=[NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal")],
             sensors=[
                 NetworkSensor(
                     type="network",
@@ -220,7 +220,7 @@ class TestSourceSideVisibilityDirection:
         )
 
         config = NetworkConfig(
-            segments=[NetworkSegment(name="internal", cidr="10.0.10.0/24")],
+            segments=[NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal")],
             sensors=[
                 NetworkSensor(
                     type="network",
@@ -248,7 +248,7 @@ class TestSourceSideVisibilityDirection:
         )
 
         config = NetworkConfig(
-            segments=[NetworkSegment(name="internal", cidr="10.0.10.0/24")],
+            segments=[NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal")],
             sensors=[
                 NetworkSensor(
                     type="network",
@@ -281,8 +281,8 @@ class TestMultiFirewallVisibility:
 
         config = NetworkConfig(
             segments=[
-                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
-                NetworkSegment(name="database", cidr="10.0.20.0/24"),
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
+                NetworkSegment(name="database", cidr="10.0.20.0/24", exposure="internal"),
             ],
             sensors=[
                 NetworkSensor(
@@ -344,8 +344,8 @@ class TestSingleFirewallSegmentScoping:
 
         config = NetworkConfig(
             segments=[
-                NetworkSegment(name="internal", cidr="10.0.10.0/24"),
-                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+                NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal"),
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
             ],
             sensors=[
                 NetworkSensor(

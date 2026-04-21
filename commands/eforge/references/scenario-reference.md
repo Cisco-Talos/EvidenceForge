@@ -88,20 +88,37 @@ The `roles` field declares a system's function in the network. The engine uses r
 
 ### Network Segment Exposure
 
-Segments can declare their internet exposure via the `exposure` field:
+**`exposure` is required on every segment** — there is no default. Choose the right value for each segment's role:
 
 ```yaml
 network:
   segments:
     - name: workstations
       cidr: "10.0.1.0/24"
-      exposure: internal        # Only internal clients (default)
-    - name: dmz
+      exposure: internal        # Only internal clients; no external traffic
+    - name: servers
       cidr: "10.0.2.0/24"
-      exposure: both            # Internal + external clients
+      exposure: internal        # Internal-only server segment
+    - name: dmz
+      cidr: "10.0.3.0/24"
+      exposure: external        # Internet-facing; all traffic from external IPs
+    - name: public-web
+      cidr: "10.0.4.0/24"
+      exposure: both            # Mix: ~60% external, ~40% internal (default ratio)
+    - name: mostly-external
+      cidr: "10.0.5.0/24"
+      exposure: both
+      external_ratio: 0.85      # 85% external visitors, 15% internal monitoring
 ```
 
-Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
+Values:
+- `internal` — all client traffic from other scenario systems (no external IPs)
+- `external` — all client traffic from external (internet) IPs via Zipf-weighted pool
+- `both` — mix of external and internal traffic; ratio defaults to 0.6 (60% external)
+
+`external_ratio` (optional float, `both` only) — overrides the default 60/40 split. Range 0.0–1.0, where 1.0 = all external and 0.0 = all internal. Setting `external_ratio` on an `internal` or `external` segment is a validation error.
+
+Affects web server client IP generation and inbound connection routing. A web server on an `internal` segment will only see traffic from other scenario hosts — make it `external` or `both` for realistic internet-facing web server logs.
 
 ## Personas
 
