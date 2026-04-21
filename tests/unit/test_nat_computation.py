@@ -45,9 +45,9 @@ T0 = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
 def _make_segments():
     """Create test network segments."""
     return [
-        NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-        NetworkSegment(name="servers", cidr="10.0.20.0/24"),
-        NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+        NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+        NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
+        NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
     ]
 
 
@@ -153,6 +153,23 @@ class TestDynamicPat:
         assert result is not None
         assert result.mapped_src_ip == "198.51.100.1"
 
+    def test_pat_port_wraps_at_65535(self):
+        """PAT port counter must wrap around before exceeding 65535."""
+        rules = [NatRule(type="dynamic_pat", src="workstations", mapped_ip="198.51.100.1")]
+        eng = _make_engine(nat_rules=rules)
+        # Force counter near the ceiling
+        key = ("fw01", 0)
+        eng._pat_port_counters[key] = 65534
+        ports = []
+        for _ in range(5):
+            r = eng.compute_nat("10.0.10.50", "203.0.113.50", 54321, 443)
+            assert r is not None
+            assert 1024 <= r.mapped_src_port <= 65535, (
+                f"Port {r.mapped_src_port} out of valid range"
+            )
+            ports.append(r.mapped_src_port)
+        assert len(set(ports)) > 1, "Ports should not all be the same after wrap"
+
 
 class TestStaticNat:
     """Tests for static NAT (one-to-one IP mapping)."""
@@ -230,9 +247,9 @@ class TestMultiFirewallScoping:
     def test_multi_firewall_nat_scoped_to_path(self):
         """fw-ext PAT rule should NOT apply to connections through fw-int."""
         segments = [
-            NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-            NetworkSegment(name="servers", cidr="10.0.20.0/24"),
-            NetworkSegment(name="database", cidr="10.0.30.0/24"),
+            NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+            NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
+            NetworkSegment(name="database", cidr="10.0.30.0/24", exposure="internal"),
         ]
         systems = [
             System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
@@ -264,8 +281,8 @@ class TestMultiFirewallScoping:
     def test_nat_rule_from_correct_firewall_used(self):
         """Connection from workstations should match fw-ext's PAT rule."""
         segments = [
-            NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
-            NetworkSegment(name="servers", cidr="10.0.20.0/24"),
+            NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
+            NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
         ]
         systems = [
             System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),

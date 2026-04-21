@@ -193,6 +193,9 @@ def validate_config() -> ValidationResult:
         "activity/web_scan_presets.yaml": {
             "dict_fields": {"presets"},
         },
+        "activity/traffic_rates.yaml": {
+            "dict_fields": {"low", "medium", "high"},
+        },
     }
 
     overlay_errors = False
@@ -588,6 +591,18 @@ def validate_config() -> ValidationResult:
                         "WARNING",
                         "application_catalog.yaml",
                         f'App "{app_id}" references persona "{persona}" with no matching file',
+                    )
+                )
+
+        # Check: system_types values are valid
+        _VALID_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
+        for st in app.get("system_types", []):
+            if st not in _VALID_SYSTEM_TYPES:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "application_catalog.yaml",
+                        f'App "{app_id}" has invalid system_type "{st}" (valid: {sorted(_VALID_SYSTEM_TYPES)})',
                     )
                 )
 
@@ -1015,6 +1030,112 @@ def validate_config() -> ValidationResult:
                 result.issues.append(Issue("ERROR", file_name, f'Entry "{entry_id}": {err}'))
 
     # Deduplicate issues (some checks may flag the same thing multiple times)
+    # --- Check: Web scan preset IDS configuration ---
+    from evidenceforge.config.web_scan_presets import list_preset_names, load_web_scan_presets
+
+    scan_data = load_web_scan_presets()
+    presets = scan_data.get("presets", {})
+    _IDS_REQUIRED_FIELDS = {"sid", "message"}
+    for name in list_preset_names():
+        preset = presets.get(name, {})
+        # Validate ids_ua
+        if "ids_ua" in preset:
+            ids_ua = preset["ids_ua"]
+            for field in _IDS_REQUIRED_FIELDS:
+                if field not in ids_ua:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_ua missing required field "{field}"',
+                        )
+                    )
+        # Validate ids_rate
+        if "ids_rate" in preset:
+            ids_rate = preset["ids_rate"]
+            for field in _IDS_REQUIRED_FIELDS:
+                if field not in ids_rate:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_rate missing required field "{field}"',
+                        )
+                    )
+            threshold = ids_rate.get("threshold")
+            if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "web_scan_presets.yaml",
+                        f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                    )
+                )
+        # Validate per-path ids entries
+        for i, path_entry in enumerate(preset.get("paths", [])):
+            if isinstance(path_entry, dict) and "ids" in path_entry:
+                path_ids = path_entry["ids"]
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in path_ids:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids missing "{field}"',
+                            )
+                        )
+
+    # --- RSAT tools validation ---
+    from evidenceforge.generation.activity.rsat_tools import load_rsat_tools
+
+    rsat_tools = load_rsat_tools()
+    _RSAT_REQUIRED = {"id", "snap_in", "command_line", "target_ports", "weight"}
+    for tool in rsat_tools:
+        tool_id = tool.get("id", "<unnamed>")
+        missing = _RSAT_REQUIRED - set(tool.keys())
+        if missing:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "rsat_tools.yaml",
+                    f'Tool "{tool_id}" missing fields: {sorted(missing)}',
+                )
+            )
+        if not isinstance(tool.get("weight", 0), int) or tool.get("weight", 0) < 1:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "rsat_tools.yaml",
+                    f'Tool "{tool_id}" weight must be a positive integer',
+                )
+            )
+        for i, port_info in enumerate(tool.get("target_ports", [])):
+            if "port" not in port_info or "service" not in port_info:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" target_ports[{i}] missing port or service',
+                    )
+                )
+        for i, mod in enumerate(tool.get("loaded_modules", [])):
+            if "path" not in mod:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" loaded_modules[{i}] missing path',
+                    )
+                )
+            elif "\\" not in mod["path"]:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "rsat_tools.yaml",
+                        f'Tool "{tool_id}" loaded_modules[{i}] path does not look like a Windows path',
+                    )
+                )
+
     seen_issues: set[tuple[str, str, str]] = set()
     deduped: list[Issue] = []
     for issue in result.issues:

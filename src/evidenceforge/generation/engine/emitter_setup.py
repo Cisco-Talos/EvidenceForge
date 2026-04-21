@@ -745,6 +745,18 @@ class EmitterSetupMixin:
                 return seg.exposure
         return "internal"
 
+    def _get_segment_for_system(self, system):
+        """Return the NetworkSegment for a system's IP, or None if no match."""
+        if not self.scenario.environment.network:
+            return None
+        import ipaddress as _ipa
+
+        sys_ip = _ipa.ip_address(system.ip)
+        for seg in self.scenario.environment.network.segments:
+            if sys_ip in _ipa.ip_network(seg.cidr, strict=False):
+                return seg
+        return None
+
     def _generate_external_client_ip(self, rng) -> str:
         """Generate a random external (non-RFC1918) IP for web server clients.
 

@@ -56,6 +56,7 @@ applications:
 | `platforms` | object | yes | Per-OS configuration (`windows` and/or `linux`) |
 | `categories` | list[string] | yes | Category tags for persona process weight matching |
 | `personas` | list[string] | yes | Which persona names may spawn this app. Include `default` for universal access. |
+| `system_types` | list[string] | no | System types where this app is available: `workstation`, `server`, `domain_controller`. When absent, the app is available on all types. Use this to restrict user-facing apps to workstations and DC admin tools to domain controllers. |
 
 ### Platform Fields (per OS)
 
@@ -385,3 +386,47 @@ patterns:
 Offsets are fixed per-host within a generation run (matching real ASLR behavior) but vary across hosts. 8 default patterns cover: direct NtOpenProcess, kernel32 path, RPCRT4, WMI, COM/DCOM, AV/EDR, kernel-mode, and sechost paths.
 
 Overlay replaces the entire `patterns:` list.
+
+---
+
+## rsat_tools.yaml
+
+RSAT (Remote Server Administration Tools) session patterns. The baseline engine generates correlated multi-host event sequences from these definitions: mmc.exe process + DLL loads on the admin workstation, type 3 logon + LDAP/RPC connections on the DC — all within a tight time window.
+
+### Structure
+
+```yaml
+tools:
+  - id: aduc                                         # Unique identifier
+    snap_in: dsa.msc                                 # MMC snap-in filename
+    display_name: "Active Directory Users and Computers"
+    command_line: '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\dsa.msc"'
+    target_ports:                                    # Connections to DC
+      - {port: 389, service: ldap}
+      - {port: 135, service: rpc}
+    loaded_modules:                                  # DLLs loaded by snap-in
+      - {path: 'C:\Windows\System32\dsadmin.dll', signature: "Microsoft Corporation"}
+    weight: 40                                       # Relative frequency
+```
+
+### Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | Unique lowercase identifier |
+| `snap_in` | string | yes | MMC snap-in filename (e.g., `dsa.msc`) |
+| `display_name` | string | no | Human-readable tool name |
+| `command_line` | string | yes | Full mmc.exe command line for process creation |
+| `target_ports` | list[object] | yes | DC connections — each with `port` (int) and `service` (string) |
+| `loaded_modules` | list[object] | no | DLLs loaded (Sysmon Event 7) — each with `path` and optional `signature` |
+| `weight` | int | yes | Relative frequency weight (higher = more common) |
+
+### Overlay
+
+Overlay files go in `.eforge/config/activity/rsat_tools.yaml`. Entries with matching `id` merge fields; new IDs are appended.
+
+### Conventions
+
+- RSAT sessions are auto-generated when the environment has DCs + admin personas (sysadmin/help_desk)
+- Business hours: ~50% chance per hour, 1-3 sessions; off-hours: ~10%, 1 session
+- No scenario YAML configuration needed — purely baseline behavior

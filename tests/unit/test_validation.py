@@ -966,8 +966,18 @@ class TestNetworkValidation:
         scenario = self._make_scenario_with_network(
             NetworkConfig(
                 segments=[
-                    NetworkSegment(name="workstations", cidr="10.10.10.0/24", systems=["WS-01"]),
-                    NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01"]),
+                    NetworkSegment(
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
+                    NetworkSegment(
+                        name="servers",
+                        cidr="10.10.30.0/24",
+                        systems=["SRV-01"],
+                        exposure="internal",
+                    ),
                 ],
                 sensors=[
                     NetworkSensor(
@@ -989,7 +999,10 @@ class TestNetworkValidation:
             NetworkConfig(
                 segments=[
                     NetworkSegment(
-                        name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "NONEXISTENT"]
+                        name="workstations",
+                        cidr="10.10.10.0/24",
+                        systems=["WS-01", "NONEXISTENT"],
+                        exposure="internal",
                     ),
                 ],
                 sensors=[
@@ -1010,7 +1023,7 @@ class TestNetworkValidation:
         scenario = self._make_scenario_with_network(
             NetworkConfig(
                 segments=[
-                    NetworkSegment(name="workstations", cidr="10.10.10.0/24"),
+                    NetworkSegment(name="workstations", cidr="10.10.10.0/24", exposure="internal"),
                 ],
                 sensors=[
                     NetworkSensor(
@@ -1034,7 +1047,12 @@ class TestNetworkValidation:
         scenario = self._make_scenario_with_network(
             NetworkConfig(
                 segments=[
-                    NetworkSegment(name="wrong_subnet", cidr="192.168.1.0/24", systems=["WS-01"]),
+                    NetworkSegment(
+                        name="wrong_subnet",
+                        cidr="192.168.1.0/24",
+                        systems=["WS-01"],
+                        exposure="internal",
+                    ),
                 ],
                 sensors=[
                     NetworkSensor(type="network", name="tap", monitoring_segments=["wrong_subnet"]),
@@ -1055,6 +1073,64 @@ class TestNetworkValidation:
         validator = ScenarioValidator(scenario)
         issues = validator.validate()
         assert len(issues) == 0
+
+
+class TestNetworkSegmentExternalRatio:
+    """Tests for NetworkSegment.external_ratio field validation."""
+
+    def test_external_ratio_on_both_segment_ok(self):
+        """external_ratio is valid when exposure='both'."""
+        seg = NetworkSegment(name="dmz", cidr="10.0.3.0/24", exposure="both", external_ratio=0.9)
+        assert seg.external_ratio == 0.9
+
+    def test_external_ratio_none_on_any_exposure_ok(self):
+        """external_ratio=None (default) is valid for all exposure values."""
+        for exp in ("internal", "external", "both"):
+            seg = NetworkSegment(name="seg", cidr="10.0.0.0/24", exposure=exp)
+            assert seg.external_ratio is None
+
+    def test_external_ratio_on_internal_segment_raises(self):
+        """external_ratio set on exposure='internal' should raise ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(
+            ValidationError, match="external_ratio is only valid when exposure='both'"
+        ):
+            NetworkSegment(name="ws", cidr="10.0.1.0/24", exposure="internal", external_ratio=0.5)
+
+    def test_external_ratio_on_external_segment_raises(self):
+        """external_ratio set on exposure='external' should raise ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(
+            ValidationError, match="external_ratio is only valid when exposure='both'"
+        ):
+            NetworkSegment(name="dmz", cidr="10.0.3.0/24", exposure="external", external_ratio=0.5)
+
+    def test_external_ratio_above_1_raises(self):
+        """external_ratio > 1.0 should raise ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="external_ratio must be between 0.0 and 1.0"):
+            NetworkSegment(name="seg", cidr="10.0.0.0/24", exposure="both", external_ratio=1.5)
+
+    def test_external_ratio_below_0_raises(self):
+        """external_ratio < 0.0 should raise ValidationError."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="external_ratio must be between 0.0 and 1.0"):
+            NetworkSegment(name="seg", cidr="10.0.0.0/24", exposure="both", external_ratio=-0.1)
+
+    def test_external_ratio_boundary_values_ok(self):
+        """external_ratio of exactly 0.0 and 1.0 should be valid."""
+        seg0 = NetworkSegment(name="seg", cidr="10.0.0.0/24", exposure="both", external_ratio=0.0)
+        seg1 = NetworkSegment(name="seg", cidr="10.0.0.0/24", exposure="both", external_ratio=1.0)
+        assert seg0.external_ratio == 0.0
+        assert seg1.external_ratio == 1.0
 
 
 class TestFormatOsCompatibility:
@@ -1200,8 +1276,18 @@ class TestSegmentSensorCoverage:
                 ],
                 network=NetworkConfig(
                     segments=[
-                        NetworkSegment(name="workstations", cidr="10.0.0.0/24", systems=["WS-01"]),
-                        NetworkSegment(name="servers", cidr="10.0.1.0/24", systems=["SRV-01"]),
+                        NetworkSegment(
+                            name="workstations",
+                            cidr="10.0.0.0/24",
+                            systems=["WS-01"],
+                            exposure="internal",
+                        ),
+                        NetworkSegment(
+                            name="servers",
+                            cidr="10.0.1.0/24",
+                            systems=["SRV-01"],
+                            exposure="internal",
+                        ),
                     ],
                     sensors=[
                         NetworkSensor(
@@ -1242,7 +1328,12 @@ class TestSegmentSensorCoverage:
                 ],
                 network=NetworkConfig(
                     segments=[
-                        NetworkSegment(name="workstations", cidr="10.0.0.0/24", systems=["WS-01"]),
+                        NetworkSegment(
+                            name="workstations",
+                            cidr="10.0.0.0/24",
+                            systems=["WS-01"],
+                            exposure="internal",
+                        ),
                     ],
                     sensors=[
                         NetworkSensor(

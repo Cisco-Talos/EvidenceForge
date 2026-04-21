@@ -127,14 +127,21 @@ class TestInterfaceResolution:
 
 class TestConnectionIdCounter:
     def test_monotonically_increasing(self, asa_emitter):
-        id1 = asa_emitter._next_conn_id("fw01")
-        id2 = asa_emitter._next_conn_id("fw01")
-        assert id2 == id1 + 1
+        from datetime import datetime
+
+        ts1 = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ts2 = datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC)
+        id1 = asa_emitter._next_conn_id("fw01", ts1)
+        id2 = asa_emitter._next_conn_id("fw01", ts2)
+        assert id2 > id1
 
     def test_per_sensor_counters(self, asa_emitter):
-        id_fw01 = asa_emitter._next_conn_id("fw01")
-        id_fw02 = asa_emitter._next_conn_id("fw02")
-        # Different sensors get different deterministic starting IDs
+        from datetime import datetime
+
+        ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        id_fw01 = asa_emitter._next_conn_id("fw01", ts)
+        id_fw02 = asa_emitter._next_conn_id("fw02", ts)
+        # Different sensors get different sequence bits
         assert id_fw01 != id_fw02
 
 

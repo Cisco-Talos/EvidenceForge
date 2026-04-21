@@ -82,9 +82,17 @@ class TestBidirectionalSensor:
         config = _make_config(
             segments=[
                 NetworkSegment(
-                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01", "WS-02"],
+                    exposure="internal",
                 ),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01", "SRV-02"]),
+                NetworkSegment(
+                    name="servers",
+                    cidr="10.10.30.0/24",
+                    systems=["SRV-01", "SRV-02"],
+                    exposure="internal",
+                ),
             ],
             sensors=[
                 NetworkSensor(
@@ -137,7 +145,10 @@ class TestDirectionFiltering:
         config = _make_config(
             segments=[
                 NetworkSegment(
-                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01", "WS-02"],
+                    exposure="internal",
                 ),
             ],
             sensors=[
@@ -181,10 +192,20 @@ class TestMultiSensorMultiFormat:
         config = _make_config(
             segments=[
                 NetworkSegment(
-                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01", "WS-02"],
+                    exposure="internal",
                 ),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01", "SRV-02"]),
-                NetworkSegment(name="dmz", cidr="10.10.50.0/24", systems=["DMZ-01"]),
+                NetworkSegment(
+                    name="servers",
+                    cidr="10.10.30.0/24",
+                    systems=["SRV-01", "SRV-02"],
+                    exposure="internal",
+                ),
+                NetworkSegment(
+                    name="dmz", cidr="10.10.50.0/24", systems=["DMZ-01"], exposure="external"
+                ),
             ],
             sensors=[
                 NetworkSensor(
@@ -262,8 +283,8 @@ class TestCIDRAutoInference:
         config = _make_config(
             segments=[
                 # No explicit systems list - infer from CIDR
-                NetworkSegment(name="workstations", cidr="10.10.10.0/24"),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24"),
+                NetworkSegment(name="workstations", cidr="10.10.10.0/24", exposure="internal"),
+                NetworkSegment(name="servers", cidr="10.10.30.0/24", exposure="internal"),
             ],
             sensors=[
                 NetworkSensor(
@@ -288,7 +309,10 @@ class TestCIDRAutoInference:
         config = _make_config(
             segments=[
                 NetworkSegment(
-                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01"]
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01"],
+                    exposure="internal",
                 ),  # Only WS-01 explicit
             ],
             sensors=[
@@ -317,9 +341,17 @@ class TestTapVsSpanPlacement:
         config = _make_config(
             segments=[
                 NetworkSegment(
-                    name="workstations", cidr="10.10.10.0/24", systems=["WS-01", "WS-02"]
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01", "WS-02"],
+                    exposure="internal",
                 ),
-                NetworkSegment(name="servers", cidr="10.10.30.0/24", systems=["SRV-01", "SRV-02"]),
+                NetworkSegment(
+                    name="servers",
+                    cidr="10.10.30.0/24",
+                    systems=["SRV-01", "SRV-02"],
+                    exposure="internal",
+                ),
             ],
             sensors=[
                 NetworkSensor(

@@ -318,3 +318,39 @@ issuers:
       - {type: "ecdsa", length: 256, weight: 70}
       - {type: "rsa", length: 2048, weight: 30}
 ```
+
+## traffic_rates.yaml
+
+Defines per-intensity-level rate defaults for all system traffic types. The engine uses these rates when generating background traffic; the `baseline_activity.intensity` field selects which level to use.
+
+**Location:** `src/evidenceforge/config/activity/traffic_rates.yaml`  
+**Overlay:** `.eforge/config/activity/traffic_rates.yaml`
+
+### Structure
+
+Three top-level keys (`low`, `medium`, `high`), each containing the same traffic type keys with `[lo, hi]` ranges:
+
+| Key | Unit | Description |
+|-----|------|-------------|
+| `user_activity` | events/user/hr | Endpoint user activity (logons, processes, connections) |
+| `web` | requests/web_server/hr | Background HTTP requests to web_server hosts |
+| `dns_interval` | seconds between queries | Lower = more DNS traffic |
+| `ntp` | syncs/host/hr | NTP time sync frequency |
+| `smb_interval` | seconds between SMB ops | Lower = more SMB/file share traffic |
+| `kerberos` | tickets/host/hr | Kerberos authentication events |
+| `ldap` | queries/host/hr | LDAP directory queries |
+| `persona_connections` | connections/session/hr | User persona network connections |
+
+### Overlay example
+
+To increase web traffic defaults globally without modifying the package:
+
+```yaml
+# .eforge/config/activity/traffic_rates.yaml
+medium:
+  web: [2000, 4000]
+high:
+  web: [10000, 20000]
+```
+
+Only specified keys/levels are overridden; unmentioned values keep package defaults.

@@ -61,6 +61,7 @@ class SnortEmitter(SensorMultiplexEmitter):
         event_data = {
             "timestamp": ts,
             "sid": ids.sid,
+            "rev": ids.rev,
             "message": ids.message,
             "classification": ids.classification,
             "priority": ids.priority,
@@ -93,6 +94,7 @@ class SnortEmitter(SensorMultiplexEmitter):
         context = {
             "timestamp": event_data.get("timestamp") or event_data.get("ts"),
             "sid": event_data.get("sid"),
+            "rev": event_data.get("rev", 1),
             "classification": event_data.get("classification"),
             "priority": event_data.get("priority"),
             "protocol": proto.upper() if proto else None,

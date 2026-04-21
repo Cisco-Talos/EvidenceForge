@@ -88,20 +88,37 @@ The `roles` field declares a system's function in the network. The engine uses r
 
 ### Network Segment Exposure
 
-Segments can declare their internet exposure via the `exposure` field:
+**`exposure` is required on every segment** — there is no default. Choose the right value for each segment's role:
 
 ```yaml
 network:
   segments:
     - name: workstations
       cidr: "10.0.1.0/24"
-      exposure: internal        # Only internal clients (default)
-    - name: dmz
+      exposure: internal        # Only internal clients; no external traffic
+    - name: servers
       cidr: "10.0.2.0/24"
-      exposure: both            # Internal + external clients
+      exposure: internal        # Internal-only server segment
+    - name: dmz
+      cidr: "10.0.3.0/24"
+      exposure: external        # Internet-facing; all traffic from external IPs
+    - name: public-web
+      cidr: "10.0.4.0/24"
+      exposure: both            # Mix: ~60% external, ~40% internal (default ratio)
+    - name: mostly-external
+      cidr: "10.0.5.0/24"
+      exposure: both
+      external_ratio: 0.85      # 85% external visitors, 15% internal monitoring
 ```
 
-Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
+Values:
+- `internal` — all client traffic from other scenario systems (no external IPs)
+- `external` — all client traffic from external (internet) IPs via Zipf-weighted pool
+- `both` — mix of external and internal traffic; ratio defaults to 0.6 (60% external)
+
+`external_ratio` (optional float, `both` only) — overrides the default 60/40 split. Range 0.0–1.0, where 1.0 = all external and 0.0 = all internal. Setting `external_ratio` on an `internal` or `external` segment is a validation error.
+
+Affects web server client IP generation and inbound connection routing. A web server on an `internal` segment will only see traffic from other scenario hosts — make it `external` or `both` for realistic internet-facing web server logs.
 
 ## Personas
 
@@ -206,12 +223,36 @@ time_window:
 ```yaml
 baseline_activity:
   description: "Normal office activity"
-  intensity: medium              # low|medium|high (events/user/hour)
+  intensity: medium              # low|medium|high — scales ALL background traffic
   variation: low                 # low|medium|high (timing variation)
   suspicious_noise: high         # Optional: low|medium|high|ludicrous (default: high)
+  traffic_rates:                 # Optional: per-traffic-type overrides
+    web: [5000, 12000]           # explicit range (requests/web_server/hour)
+    kerberos: low                # use low-level rates despite global intensity
+    ldap: 50                     # fixed rate
 ```
 
-Intensity mapping: low=5, medium=15, high=40 events/user/hour.
+The `intensity` field scales ALL background traffic types via configurable rate tables (see `traffic_rates.yaml`). Default rates by intensity level:
+
+| Traffic Type | Low | Medium | High | Unit |
+|---|---|---|---|---|
+| user_activity | 5 | 15 | 40 | events/user/hr |
+| web | 10-30 | 800-1500 | 3000-8000 | requests/web_server/hr |
+| dns_interval | 600-1800 | 300-900 | 120-600 | seconds between queries |
+| ntp | 1 | 1 | 1 | syncs/host/hr |
+| smb_interval | 1200-3000 | 600-1500 | 300-900 | seconds between SMB ops |
+| kerberos | 1-3 | 2-5 | 4-8 | tickets/host/hr |
+| ldap | 2-5 | 4-10 | 8-20 | queries/host/hr |
+| persona_connections | 3-10 | 5-15 | 8-20 | connections/user_session/hr |
+
+### traffic_rates overrides
+
+The optional `traffic_rates` field accepts per-type overrides in three forms:
+- **Integer**: `web: 500` — fixed rate (500 requests/hr)
+- **Range**: `web: [5000, 12000]` — random in range each hour
+- **Preset name**: `web: low` — use that intensity level's default for this type only
+
+This allows mixing intensities: e.g., `intensity: high` with `traffic_rates: {web: low}` gives high endpoint activity but quiet web servers.
 
 Suspicious noise mapping: low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr. Generates suspicious-but-benign ambient events (after-hours admin logins, PowerShell from non-attackers, failed logon bursts, service account anomalies).
 

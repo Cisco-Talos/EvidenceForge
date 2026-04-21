@@ -43,8 +43,8 @@ def _make_scenario(sensors=None) -> Scenario:
     """Create a minimal scenario with optional network sensors."""
     network = NetworkConfig(
         segments=[
-            NetworkSegment(name="internal", cidr="10.0.10.0/24"),
-            NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+            NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal"),
+            NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
         ],
         sensors=sensors or [],
     )

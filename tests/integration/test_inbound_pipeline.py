@@ -113,7 +113,7 @@ class TestDmzWebServerPermitInbound:
         """DMZ web server should receive external HTTPS from inbound profiles."""
         scenario = _build_inbound_scenario(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
+                NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
                 NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
             ],
             systems=[
@@ -157,7 +157,7 @@ class TestInternalDbNoExternalInbound:
         """Internal database should have zero external inbound connections."""
         scenario = _build_inbound_scenario(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
+                NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
                 NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
             ],
             systems=[
@@ -206,7 +206,7 @@ class TestFirewallDenyBlocksInboundPort:
         """DMZ web server should get HTTPS (443) but not HTTP (80) when 80 is denied."""
         scenario = _build_inbound_scenario(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
+                NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
                 NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
             ],
             systems=[
@@ -263,7 +263,7 @@ class TestStaticNatInbound:
         """External->VIP inbound should produce NAT translation in ASA records."""
         scenario = _build_inbound_scenario(
             segments=[
-                NetworkSegment(name="workstations", cidr="10.0.10.0/24"),
+                NetworkSegment(name="workstations", cidr="10.0.10.0/24", exposure="internal"),
                 NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
             ],
             systems=[
@@ -319,7 +319,7 @@ class TestDeniedConnectionProducesTraces:
         produce ASA deny records (106023), not be silently dropped."""
         scenario = _build_inbound_scenario(
             segments=[
-                NetworkSegment(name="servers", cidr="10.0.20.0/24"),
+                NetworkSegment(name="servers", cidr="10.0.20.0/24", exposure="internal"),
             ],
             systems=[
                 System(

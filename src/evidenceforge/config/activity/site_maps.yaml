@@ -486,6 +486,149 @@ domains:
           - {host: "st1.zoom.us", path: "/static/{hex8}/css/webclient.css", type: "text/css"}
           - {path: "/favicon.ico", type: "image/x-icon"}
 
+  github.com:
+    cdn_domains: ["github.githubassets.com", "avatars.githubusercontent.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/dashboard", "/explore", "/notifications", "/pulls"]
+        subresources:
+          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/vendors-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/github-{hex16}.css", type: "text/css"}
+          - {host: "avatars.githubusercontent.com", path: "/u/{hex8}?v=4&s=40", type: "image/png"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/dashboard"
+        nav_targets: ["/", "/notifications", "/pulls", "/issues"]
+        subresources:
+          - {host: "github.githubassets.com", path: "/assets/app-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/dashboard-{hex16}.js", type: "application/javascript"}
+          - {host: "github.githubassets.com", path: "/assets/github-{hex16}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  stackoverflow.com:
+    cdn_domains: ["cdn.sstatic.net"]
+    pages:
+      - path: "/"
+        nav_targets: ["/questions", "/tags", "/users"]
+        subresources:
+          - {host: "cdn.sstatic.net", path: "/Js/full.{hex8}.js", type: "application/javascript"}
+          - {host: "cdn.sstatic.net", path: "/Shared/stacks.{hex8}.css", type: "text/css"}
+          - {host: "cdn.sstatic.net", path: "/Sites/stackoverflow/Img/favicon.ico", type: "image/x-icon"}
+      - path: "/questions"
+        nav_targets: ["/", "/questions/tagged/{slug}", "/questions/{n}"]
+        subresources:
+          - {host: "cdn.sstatic.net", path: "/Js/full.{hex8}.js", type: "application/javascript"}
+          - {host: "cdn.sstatic.net", path: "/Shared/stacks.{hex8}.css", type: "text/css"}
+          - {host: "cdn.sstatic.net", path: "/Js/editor.{hex8}.js", type: "application/javascript"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  www.linkedin.com:
+    cdn_domains: ["static.licdn.com", "media.licdn.com"]
+    pages:
+      - path: "/feed/"
+        nav_targets: ["/messaging/", "/mynetwork/", "/jobs/", "/notifications/"]
+        subresources:
+          - {host: "static.licdn.com", path: "/aero-v1/sc/h/{hex16}/voyager-web.js", type: "application/javascript"}
+          - {host: "static.licdn.com", path: "/aero-v1/sc/h/{hex16}/voyager-web.css", type: "text/css"}
+          - {host: "media.licdn.com", path: "/dms/image/v2/{hex8}/profile-displayphoto-shrink_100_100/{hex8}", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/messaging/"
+        nav_targets: ["/feed/", "/mynetwork/"]
+        subresources:
+          - {host: "static.licdn.com", path: "/aero-v1/sc/h/{hex16}/messaging-{hex8}.js", type: "application/javascript"}
+          - {host: "static.licdn.com", path: "/aero-v1/sc/h/{hex16}/voyager-web.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  www.reddit.com:
+    cdn_domains: ["www.redditstatic.com", "preview.redd.it"]
+    pages:
+      - path: "/"
+        nav_targets: ["/r/popular/", "/r/all/", "/r/{slug}/"]
+        subresources:
+          - {host: "www.redditstatic.com", path: "/shreddit/en-US/reddit-client-{hex16}.js", type: "application/javascript"}
+          - {host: "www.redditstatic.com", path: "/shreddit/reddit-style-{hex8}.css", type: "text/css"}
+          - {host: "preview.redd.it", path: "/{hex16}.jpg?width=640&format=pjpg", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  en.wikipedia.org:
+    cdn_domains: ["upload.wikimedia.org"]
+    pages:
+      - path: "/wiki/Main_Page"
+        nav_targets: ["/wiki/{slug}", "/wiki/Special:Search"]
+        subresources:
+          - {path: "/w/load.php?lang=en&modules=startup&raw=1&skin=vector-2022", type: "application/javascript"}
+          - {path: "/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022", type: "text/css"}
+          - {host: "upload.wikimedia.org", path: "/wikipedia/en/thumb/{hex8}/{hex8}.jpg/220px-{hex8}.jpg", type: "image/jpeg"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/wiki/{slug}"
+        nav_targets: ["/wiki/Main_Page", "/wiki/{slug}"]
+        subresources:
+          - {path: "/w/load.php?lang=en&modules=startup&raw=1&skin=vector-2022", type: "application/javascript"}
+          - {path: "/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  console.aws.amazon.com:
+    cdn_domains: ["a.b.cdn.console.awsstatic.com"]
+    pages:
+      - path: "/console/home"
+        nav_targets: ["/ec2/home", "/s3/home", "/iam/home", "/cloudwatch/home"]
+        subresources:
+          - {host: "a.b.cdn.console.awsstatic.com", path: "/assets/vendor.{hex16}.js", type: "application/javascript"}
+          - {host: "a.b.cdn.console.awsstatic.com", path: "/assets/console.{hex16}.js", type: "application/javascript"}
+          - {host: "a.b.cdn.console.awsstatic.com", path: "/assets/console.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/ec2/home"
+        nav_targets: ["/console/home", "/ec2/home#Instances", "/ec2/home#SecurityGroups"]
+        subresources:
+          - {host: "a.b.cdn.console.awsstatic.com", path: "/assets/vendor.{hex16}.js", type: "application/javascript"}
+          - {host: "a.b.cdn.console.awsstatic.com", path: "/assets/ec2.{hex16}.js", type: "application/javascript"}
+          - {host: "a.b.cdn.console.awsstatic.com", path: "/assets/console.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  portal.azure.com:
+    cdn_domains: ["portal.azure.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/#blade/HubsExtension/BrowseAll", "/#blade/Microsoft_Azure_Monitoring/AzureMonitoringBrowseBlade"]
+        subresources:
+          - {path: "/portal/{hex8}/Content/Dynamic/bundleMsPortalFxPortal.{hex16}.js", type: "application/javascript"}
+          - {path: "/portal/{hex8}/Content/Dynamic/AzurePortalStyles.{hex8}.css", type: "text/css"}
+          - {path: "/portal/{hex8}/Content/Images/Logos/AzureLogo.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  docs.google.com:
+    cdn_domains: ["ssl.gstatic.com", "fonts.googleapis.com"]
+    pages:
+      - path: "/document/d/{hex16}/edit"
+        nav_targets: ["/spreadsheets/d/{hex16}/edit", "/presentation/d/{hex16}/edit"]
+        subresources:
+          - {host: "ssl.gstatic.com", path: "/docs/common/cleardot.{hex8}.js", type: "application/javascript"}
+          - {host: "ssl.gstatic.com", path: "/docs/documents/css/kix.{hex8}.css", type: "text/css"}
+          - {host: "fonts.googleapis.com", path: "/css2?family=Roboto:wght@400;500;700", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/spreadsheets/d/{hex16}/edit"
+        nav_targets: ["/document/d/{hex16}/edit"]
+        subresources:
+          - {host: "ssl.gstatic.com", path: "/docs/common/cleardot.{hex8}.js", type: "application/javascript"}
+          - {host: "ssl.gstatic.com", path: "/docs/spreadsheets/css/waffle.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  news.ycombinator.com:
+    cdn_domains: []
+    pages:
+      - path: "/"
+        nav_targets: ["/newest", "/ask", "/show", "/jobs"]
+        subresources:
+          - {path: "/news.css?{hex8}", type: "text/css"}
+          - {path: "/y18.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/item?id={n}"
+        nav_targets: ["/", "/newest"]
+        subresources:
+          - {path: "/news.css?{hex8}", type: "text/css"}
+          - {path: "/y18.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
 # ─── Tier 2: Tag-based synthesis templates ────────────────────────────
 tags:
   saas:
@@ -671,18 +814,43 @@ tags:
         - {path: "/favicon.ico", type: "image/x-icon"}
 
 # ─── Tier 3: Generic fallback ────────────────────────────────────────
-# Domains matching neither curated nor tag-based get this minimal structure
+# Domains matching neither curated nor tag-based get varied page/resource patterns
 generic:
   page_templates:
     - path: "/"
-      nav_targets: ["/about", "/services", "/contact"]
-      subresource_pattern: "generic_site"
+      nav_targets: ["/about", "/services", "/contact", "/blog"]
+      subresource_pattern: "generic_corporate"
     - path: "/about"
-      nav_targets: ["/", "/contact"]
-      subresource_pattern: "generic_site"
+      nav_targets: ["/", "/contact", "/team"]
+      subresource_pattern: "generic_content"
+    - path: "/blog"
+      nav_targets: ["/", "/blog/{slug}"]
+      subresource_pattern: "generic_blog"
+    - path: "/login"
+      nav_targets: ["/dashboard", "/"]
+      subresource_pattern: "generic_webapp"
   subresource_patterns:
-    generic_site:
-      - {path: "/css/style.css", type: "text/css"}
-      - {path: "/js/main.js", type: "application/javascript"}
-      - {path: "/images/banner.jpg", type: "image/jpeg"}
+    generic_corporate:
+      - {path: "/assets/css/main.{hex8}.css", type: "text/css"}
+      - {path: "/assets/js/app.{hex8}.js", type: "application/javascript"}
+      - {path: "/assets/js/vendor.{hex8}.js", type: "application/javascript"}
+      - {path: "/assets/img/hero.{hex8}.webp", type: "image/webp"}
+      - {path: "/assets/img/logo.svg", type: "image/svg+xml"}
+      - {path: "/favicon.ico", type: "image/x-icon"}
+    generic_content:
+      - {path: "/assets/css/main.{hex8}.css", type: "text/css"}
+      - {path: "/assets/js/app.{hex8}.js", type: "application/javascript"}
+      - {path: "/assets/img/content/{hex8}.jpg", type: "image/jpeg"}
+      - {path: "/favicon.ico", type: "image/x-icon"}
+    generic_blog:
+      - {path: "/assets/css/blog.{hex8}.css", type: "text/css"}
+      - {path: "/assets/js/app.{hex8}.js", type: "application/javascript"}
+      - {path: "/assets/img/post/{hex8}.jpg", type: "image/jpeg"}
+      - {path: "/assets/fonts/inter-var.woff2", type: "font/woff2"}
+      - {path: "/favicon.ico", type: "image/x-icon"}
+    generic_webapp:
+      - {path: "/static/js/app.chunk.{hex8}.js", type: "application/javascript"}
+      - {path: "/static/js/vendor.chunk.{hex8}.js", type: "application/javascript"}
+      - {path: "/static/css/main.{hex8}.css", type: "text/css"}
+      - {path: "/api/v1/health", type: "application/json"}
       - {path: "/favicon.ico", type: "image/x-icon"}

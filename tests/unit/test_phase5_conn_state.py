@@ -237,3 +237,26 @@ class TestConnStateByteConsistency:
                     break
 
         assert rej_found, "No REJ connection found in 500 attempts"
+
+    def test_http_consistency_sets_duration_and_orig_bytes(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """When HTTP context forces S0->SF, duration and orig_bytes must be set."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=80,
+            service="http",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        if event.http is not None and event.network.conn_state == "SF":
+            assert event.network.duration is not None, (
+                "SF connection with HTTP context must have a duration"
+            )
+            assert event.network.orig_bytes > 0, (
+                "SF connection with HTTP context must have orig_bytes > 0"
+            )

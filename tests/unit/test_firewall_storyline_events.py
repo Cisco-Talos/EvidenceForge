@@ -258,8 +258,8 @@ class TestSourceOnlyVisibility:
 
         config = NetworkConfig(
             segments=[
-                NetworkSegment(name="internal", cidr="10.0.10.0/24"),
-                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+                NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal"),
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
             ],
             sensors=[
                 NetworkSensor(
@@ -299,8 +299,8 @@ class TestSourceOnlyVisibility:
 
         config = NetworkConfig(
             segments=[
-                NetworkSegment(name="internal", cidr="10.0.10.0/24"),
-                NetworkSegment(name="dmz", cidr="172.16.0.0/24"),
+                NetworkSegment(name="internal", cidr="10.0.10.0/24", exposure="internal"),
+                NetworkSegment(name="dmz", cidr="172.16.0.0/24", exposure="external"),
             ],
             sensors=[
                 NetworkSensor(

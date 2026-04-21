@@ -132,6 +132,16 @@ class TestResolveImagePath:
                 "ssh.exe",
                 "mstsc.exe",
                 "dsquery.exe",
+                "dcdiag.exe",
+                "repadmin.exe",
+                "ntdsutil.exe",
+                "dnscmd.exe",
+                "gpupdate.exe",
+                "gpresult.exe",
+                "certutil.exe",
+                "servermanager.exe",
+                "eventvwr.exe",
+                "perfmon.exe",
             }
             if basename.lower() not in _SYSTEM32_OK:
                 assert "System32" not in resolved, (

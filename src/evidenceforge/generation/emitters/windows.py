@@ -242,13 +242,15 @@ class WindowsEventEmitter(LogEmitter):
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
-            # Admin/service/machine accounts get full privilege set
-            is_admin = (
-                auth.username.endswith("$")
-                or auth.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")
-                or auth.logon_type == 5
-            )
-            if is_admin:
+            is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
+            is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
+            is_admin = is_system or auth.logon_type == 5
+            if is_service_account:
+                privs = (
+                    "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
+                    "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
+                )
+            elif is_admin:
                 privs = (
                     "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
                     "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
@@ -289,12 +291,15 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
 
-        is_admin = (
-            auth.username.endswith("$")
-            or auth.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")
-            or auth.logon_type == 5
-        )
-        if is_admin:
+        is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
+        is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
+        is_admin = is_system or auth.logon_type == 5
+        if is_service_account:
+            privs = (
+                "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
+                "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
+            )
+        elif is_admin:
             privs = (
                 "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
                 "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"

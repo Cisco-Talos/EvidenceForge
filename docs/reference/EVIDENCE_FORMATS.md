@@ -81,6 +81,8 @@ output/
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
 - SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts
 - 4648 (explicit credentials) fires in baseline for scheduled task execution with randomized counts (2-5/hour) plus storyline lateral movement
+- Domain controllers receive admin-only baseline activity: type 3 logons from RSAT sessions (mmc.exe runs on the admin workstation, not the DC), type 10 RDP for direct admin access, and no user desktop sessions (no browsers, Office, or user profile artifacts)
+- RSAT sessions produce correlated cross-host events: mmc.exe + DLL loads on the workstation, LDAP/RPC connections from workstation to DC, and a type 3 logon on the DC — all within seconds
 
 ---
 
@@ -215,8 +217,15 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
 
+Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
+1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
+2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
+3. **Connection-rate threshold** — generic scan-rate alerts (both TLS and non-TLS)
+
+Alert format: `[sid:gen_id:rev]` where `rev` reflects real ET/Community ruleset revision numbers sourced from `sample_data/snort/`. Each SID in `ids_signatures.yaml` carries a `rev` field.
+
 **Known Limitations:**
-- Limited SID/classification variety
+- IDS alert variety is limited to curated SID pools (not full ruleset simulation)
 
 ---
 

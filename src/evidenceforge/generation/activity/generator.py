@@ -59,7 +59,6 @@ from .helpers import _get_os_category, _get_rng, _parameterize_command
 from .network import (
     _AD_SRV_QUERIES,
     _IPV6_MAP,
-    _PROVIDER_IP_GROUPS,
     _SRV_PORT_MAP,
     EXTERNAL_IPS,
     REVERSE_DNS,
@@ -1813,6 +1812,10 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
+            # Enforce consistency: resp_pkts > 0 requires resp_bytes > 0
+            # (orig always has at least the SYN, so orig_pkts stays from history)
+            if resp_pkts > 0 and resp_bytes == 0:
+                resp_pkts = 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -2035,12 +2038,16 @@ class ActivityGenerator:
             # Suppressed hostname → no SNI (raw-IP C2, etc.)
             if server_name == "":
                 server_name = None
-            tls_version = rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
-            # Weighted cipher selection (bug #7)
+            _tls_rng = random.Random(_stable_seed(f"tls:{src_ip}:{dst_ip}:{dst_port}"))
+            tls_version = _tls_rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
             if tls_version == "TLSv13":
-                cipher = rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+                cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[
+                    0
+                ]
             else:
-                cipher = rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+                cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[
+                    0
+                ]
             # ~2% handshake failure (bug #5)
             ssl_established = rng.random() > _SSL_FAILURE_RATE
             # Weighted SSL history patterns (bug #6)
@@ -2291,7 +2298,9 @@ class ActivityGenerator:
                 precision=float(ntp_rng.randint(-25, -18)),
                 root_delay=ntp_rng.uniform(0.0, 0.1),
                 root_disp=ntp_rng.uniform(0.0, 0.05),
-                ref_id=ntp_rng.choice(["GPS", "PPS", "GOES", ".GPS.", ".PPS."]),
+                ref_id=random.Random(_stable_seed(f"ntp_refid_{dst_ip}")).choice(
+                    [".GPS.", ".PPS.", ".GOES.", ".DCFa.", ".ACTS."]
+                ),
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
                 org_ts=round(ntp_epoch + ntp_jitter, 6),
                 rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),
@@ -2331,7 +2340,11 @@ class ActivityGenerator:
         # with S0/REJ cannot have served an HTTP response.
         if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
             event.network.conn_state = "SF"
-            event.network.history = "ShADadfF"  # Must match SF state
+            event.network.history = "ShADadfF"
+            if event.network.duration is None:
+                event.network.duration = rng.uniform(0.01, 2.0)
+            if event.network.orig_bytes == 0:
+                event.network.orig_bytes = event.http.request_body_len or rng.randint(200, 2000)
             if event.network.resp_bytes == 0:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
@@ -2486,6 +2499,24 @@ class ActivityGenerator:
             _candidate = rng.randint(50, 500) + (_epoch_sec - 1700000000)
             session_id = max(_candidate, _last_id + 1)
             self._session_id_state[hostname] = (_epoch_sec, session_id)
+
+            # sshd connection message (precedes auth in real SSH lifecycle)
+            conn_msg_event = SecurityEvent(
+                timestamp=time - timedelta(microseconds=rng.randint(1000, 5000)),
+                event_type="syslog",
+                src_host=event.dst_host,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=sshd_pid,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        f"Connection from {source_ip} port {src_port}"
+                        f' on {target_system.ip} port 22 rdomain ""'
+                    ),
+                ),
+            )
+            self.dispatcher.dispatch(conn_msg_event)
 
             # Primary event: sshd Accepted password
             event.syslog = SyslogContext(
@@ -2967,11 +2998,10 @@ class ActivityGenerator:
             query = hostname
             # Multi-answer: CDNs/clouds return multiple A records (40% chance)
             if not is_internal and rng.random() < 0.40:
-                sibling_ips = []
-                for provider_ips in _PROVIDER_IP_GROUPS:
-                    if dst_ip in provider_ips:
-                        sibling_ips = [ip for ip in provider_ips if ip != dst_ip]
-                        break
+                from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+                domain_ips = get_domain_ips(hostname) if hostname else []
+                sibling_ips = [ip for ip in domain_ips if ip != dst_ip]
                 if sibling_ips:
                     extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
                     answers = [dst_ip] + extra
@@ -3382,6 +3412,12 @@ class ActivityGenerator:
             }
             catalog_category = _CATEGORY_MAP.get(activity_type)
 
+            if catalog_category in ("user_app", "browser", "office") and system.type in (
+                "server",
+                "domain_controller",
+            ):
+                return
+
             # Try unified application catalog first (persona-aware, PE-metadata-rich)
             if catalog_category:
                 from evidenceforge.generation.activity.application_catalog import (
@@ -3395,6 +3431,7 @@ class ActivityGenerator:
                     os_category,
                     catalog_category,
                     username=user.username,
+                    system_type=system.type,
                 )
                 if result:
                     process_name, command_line = result
@@ -4622,6 +4659,8 @@ class ActivityGenerator:
             fields["_host_fqdn"] = (
                 host_ctx.fqdn if hasattr(host_ctx, "fqdn") and host_ctx.fqdn else host_ctx.hostname
             )
+        if host_ctx and "hostname" not in fields:
+            fields["hostname"] = host_ctx.hostname
         event = SecurityEvent(
             timestamp=time,
             event_type="raw",

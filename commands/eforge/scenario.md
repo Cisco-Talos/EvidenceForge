@@ -64,6 +64,8 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls proxy session depth — how many pages and subresources each browsing session produces. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
 
+**Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how much background traffic web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
+
 **Stale accounts** — Does the organization have any disabled or inactive accounts that haven't been fully cleaned up? Former employees, decommissioned service accounts, or un-revoked contractor access are common in real environments. Add 2-4 stale accounts to `environment.stale_accounts` with `username`, `last_active` (ISO date), and `reason`. The engine automatically generates background noise from these: failed logons, Kerberos pre-auth failures on DCs, scheduled task failures, and service startup failures — creating realistic "why is this disabled account still here?" ambiguity for analysts.
 
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
@@ -258,8 +260,11 @@ time_window:
 
 baseline_activity:
   description: "Normal office activity"
-  intensity: medium               # low (~5 events/user/hr) | medium (~15) | high (~40)
+  intensity: medium               # low|medium|high — scales ALL background traffic types
   variation: medium               # low (±10%) | medium (±25%) | high (±50%)
+  # traffic_rates:                # Optional: per-traffic-type overrides
+  #   web: [5000, 12000]          # range | int | preset name (low|medium|high)
+  #   kerberos: low               # use low-level rates for this type only
 
 logon_grace_period: "30m"         # Optional (default "30m") — suppresses "no prior logon"
                                   # warnings for events within this duration of time_window.start
@@ -399,7 +404,7 @@ When building storyline events, each entry needs an `events` list with typed dec
 **Firewall/network event types:**
 - `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
 - `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter`, plus all `connection` fields. Use `action: deny` for firewall-blocked beaconing.
-- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate`, `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`.
+- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate`, `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`. Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). IDS alert definitions are in `web_scan_presets.yaml`.
 - `credential_spray` — Bulk auth attacks. Fields: `target_accounts`, `interval`, `pattern` (spray/brute_force/stuffing), `success` ({account, after}). OS-aware: Windows 4625/4776 or Linux syslog.
 - `dns_query` — Standalone DNS query. Fields: `query`, `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR).
 - `dga_queries` — Bulk DGA domain lookups. Fields: `interval`, `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`.
@@ -505,6 +510,7 @@ events:
 - **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
 - **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events
+- **RSAT sessions for DCs** — When the environment contains domain controllers and admin personas (sysadmin/help_desk), the baseline auto-generates correlated RSAT sessions: mmc.exe + DLL loads on the admin workstation, LDAP/RPC connections from workstation to DC, and type 3 logon on the DC. No scenario configuration needed
 
 **When to manually specify these event types:** Only when they are part of the attack narrative itself — not as prerequisites for another event. For example:
 - DNS tunneling exfiltration → manually declare the DNS `connection` events (they ARE the attack, not a prerequisite)

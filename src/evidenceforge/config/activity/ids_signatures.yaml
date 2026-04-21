@@ -1,0 +1,111 @@
+# Curated IDS signature pool for realistic false-positive alert generation.
+#
+# Sources:
+#   - Snort Community Rules (sample_data/snort/snort_community/snort3-community-rules/sid-msg.map)
+#   - Emerging Threats (sample_data/snort/emerging_threats/rules/sid-msg.map)
+#
+# Selection criteria: common false-positive triggers in enterprise environments.
+# Excludes Suricata-internal SIDs (2100000-2299999 range).
+#
+# Fields:
+#   sid: Snort/ET rule signature ID
+#   rev: Rule revision number (from ET/Community ruleset — look up real values
+#        in sample_data/snort/emerging_threats/rules/ before adding new entries)
+#   message: Alert message text
+#   classification: Snort classification string
+#   priority: Alert priority (1=high, 2=medium, 3=low)
+#   proto: Protocol (tcp, udp, icmp)
+#   dst_port: Destination port the rule fires on (0 = any)
+#   direction: "in" (external->internal) or "out" (internal->external)
+#   target_services: Optional list of services the target system should run
+#   target_os: Optional list of OS categories (windows, linux)
+#
+# Depended on by: baseline.py (IDS alert generation)
+
+signatures:
+  # ===== TCP Outbound (internal -> external) =====
+  # Policy violations: common enterprise noise from legitimate browsing/tools
+  - {sid: 2013028, rev: 4, message: "ET POLICY curl User-Agent Outbound", classification: "policy-violation", priority: 3, proto: tcp, dst_port: 80, direction: out}
+  - {sid: 2010935, rev: 3, message: "ET POLICY Outgoing Basic Auth Base64 HTTP Password detected", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 80, direction: out}
+  - {sid: 2025331, rev: 5, message: "ET POLICY SSLv3 Outbound Connection Detected", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2013504, rev: 3, message: "ET POLICY GNU/Linux APT User-Agent Outbound likely related to package management", classification: "policy-violation", priority: 3, proto: tcp, dst_port: 80, direction: out, target_os: [linux]}
+  - {sid: 2018959, rev: 4, message: "ET POLICY PE EXE or DLL Windows file download HTTP", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 80, direction: out}
+  - {sid: 2000419, rev: 20, message: "ET POLICY PE EXE or DLL Windows file download Non-HTTP", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2000428, rev: 10, message: "ET POLICY ZIP file download", classification: "policy-violation", priority: 3, proto: tcp, dst_port: 80, direction: out}
+  - {sid: 2001114, rev: 9, message: "ET POLICY Mozilla XPI install files download", classification: "policy-violation", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2001115, rev: 7, message: "ET POLICY MSI (microsoft installer file) download", classification: "policy-violation", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2000560, rev: 10, message: "ET POLICY HTTP CONNECT Tunnel Attempt Inbound", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 8080, direction: out}
+
+  # Info: observed domains and services
+  - {sid: 2027316, rev: 2, message: "ET INFO Observed Let's Encrypt Certificate", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2016360, rev: 1, message: "ET INFO Observed Discord Domain (discordapp.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2023882, rev: 2, message: "ET INFO Observed Telegram Domain (t.me)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2025712, rev: 2, message: "ET INFO External IP Lookup Domain (ipify.org)", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2024897, rev: 3, message: "ET INFO External IP Lookup (ipinfo.io)", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2028401, rev: 1, message: "ET JA3 Hash - Possible Malware - Various RAT", classification: "potentially-bad-traffic", priority: 1, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2024290, rev: 2, message: "ET INFO Observed AWS S3 Domain (s3.amazonaws.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2025991, rev: 2, message: "ET INFO Observed Cloudflare DNS Over HTTPS Domain (cloudflare-dns.com)", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2023672, rev: 2, message: "ET INFO Python-urllib Outbound Request", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+  - {sid: 2022476, rev: 1, message: "ET INFO LibreSSL Outbound Connection", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: out}
+
+  # P2P / file sharing (common FP in corporate networks)
+  - {sid: 2000334, rev: 14, message: "ET P2P BitTorrent peer sync", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 6881, direction: out}
+  - {sid: 2000357, rev: 9, message: "ET P2P BitTorrent Traffic", classification: "policy-violation", priority: 2, proto: tcp, dst_port: 6881, direction: out}
+
+  # ===== TCP Inbound (external -> internal) =====
+  # TLS/SSL anomalies
+  - {sid: 2024364, rev: 3, message: "ET INFO TLS Handshake Failure", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: in}
+  - {sid: 2019876, rev: 2, message: "ET INFO Packed Executable Download", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 80, direction: in}
+
+  # Scanning activity
+  - {sid: 2002911, rev: 7, message: "ET SCAN Potential SSH Scan", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 22, direction: in}
+  - {sid: 2010937, rev: 3, message: "ET SCAN Suspicious inbound to mySQL port 3306", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 3306, direction: in, target_services: [mysql, mssql]}
+  - {sid: 2010936, rev: 3, message: "ET SCAN Suspicious inbound to MSSQL port 1433", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 1433, direction: in, target_services: [mssql]}
+  - {sid: 2002910, rev: 5, message: "ET SCAN Potential VNC Scan 5900-5920", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5900, direction: in}
+  - {sid: 2000536, rev: 7, message: "ET SCAN NMAP -sO", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in}
+  - {sid: 2000537, rev: 8, message: "ET SCAN NMAP -sS window 2048", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in}
+  - {sid: 2000545, rev: 8, message: "ET SCAN NMAP -f -sV", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 443, direction: in}
+  - {sid: 2010939, rev: 3, message: "ET SCAN Suspicious inbound to PostgreSQL port 5432", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5432, direction: in}
+  - {sid: 2002106, rev: 6, message: "ET SCAN Rapid POP3 Connection - Possible Brute Force Attack", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 110, direction: in}
+
+  # Web application attacks (inbound to web servers)
+  - {sid: 2009582, rev: 3, message: "ET WEB_SERVER SQL Injection Attempt SELECT FROM", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
+  - {sid: 2009714, rev: 9, message: "ET WEB_SERVER Possible SQL Injection Attempt UNION SELECT", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
+  - {sid: 2024317, rev: 2, message: "ET WEB_SERVER Possible CVE-2021-44228 Log4j RCE Attempt", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 8080, direction: in, target_services: [http, nginx, apache]}
+  - {sid: 2000105, rev: 5, message: "ET WEB_SERVER SQL sp_password attempt", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, iis]}
+  - {sid: 2012647, rev: 6, message: "ET WEB_SERVER PHP Possible file upload attempt", classification: "web-application-attack", priority: 2, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache]}
+  - {sid: 2012887, rev: 2, message: "ET WEB_SERVER Possible CRLF Injection Attempt in HTTP Header", classification: "web-application-attack", priority: 2, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
+
+  # SMB/NetBIOS (inbound to Windows hosts)
+  - {sid: 2000033, rev: 9, message: "ET NETBIOS MS04011 Lsasrv.dll RPC exploit (WinXP)", classification: "attempted-admin", priority: 1, proto: tcp, dst_port: 445, direction: in, target_os: [windows]}
+  - {sid: 2000032, rev: 9, message: "ET NETBIOS LSA exploit", classification: "attempted-admin", priority: 1, proto: tcp, dst_port: 445, direction: in, target_os: [windows]}
+
+  # Snort Community rules (SIDs < 1000000)
+  - {sid: 257, rev: 1, message: "PROTOCOL-DNS named version attempt", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 53, direction: in}
+  - {sid: 255, rev: 1, message: "PROTOCOL-DNS dns zone transfer via TCP detected", classification: "attempted-recon", priority: 1, proto: tcp, dst_port: 53, direction: in}
+
+  # ===== UDP =====
+  # DNS anomalies (outbound)
+  - {sid: 2027865, rev: 4, message: "ET DNS Query to a .top domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out}
+  - {sid: 2029706, rev: 1, message: "ET DNS Query to .cloud TLD", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: out}
+  - {sid: 2001116, rev: 6, message: "ET DNS Standard query response, Format error", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: in}
+  - {sid: 2001117, rev: 6, message: "ET DNS Standard query response, Name Error", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: in}
+  - {sid: 2001119, rev: 6, message: "ET DNS Standard query response, Refused", classification: "misc-activity", priority: 2, proto: udp, dst_port: 53, direction: in}
+  - {sid: 2027757, rev: 2, message: "ET DNS Query for .to TLD", classification: "potentially-bad-traffic", priority: 3, proto: udp, dst_port: 53, direction: out}
+  - {sid: 2027863, rev: 3, message: "ET DNS Query to a .tk domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out}
+  - {sid: 2024291, rev: 4, message: "ET DNS Query to .bit TLD", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out}
+
+  # STUN/VoIP (outbound, common with Teams/Zoom)
+  - {sid: 2016149, rev: 3, message: "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)", classification: "policy-violation", priority: 3, proto: udp, dst_port: 3478, direction: out}
+  - {sid: 2024392, rev: 2, message: "ET INFO STUN Binding Success Response", classification: "misc-activity", priority: 3, proto: udp, dst_port: 3478, direction: in}
+
+  # NTP
+  - {sid: 2017919, rev: 3, message: "ET INFO NTP Monlist Request from non-standard source port", classification: "misc-activity", priority: 2, proto: udp, dst_port: 123, direction: out}
+
+  # ===== ICMP =====
+  - {sid: 384, rev: 1, message: "PROTOCOL-ICMP PING", classification: "icmp-event", priority: 3, proto: icmp, dst_port: 0, direction: in}
+  - {sid: 366, rev: 1, message: "PROTOCOL-ICMP PING BSDtype", classification: "icmp-event", priority: 3, proto: icmp, dst_port: 0, direction: in, target_os: [linux]}
+  - {sid: 480, rev: 1, message: "PROTOCOL-ICMP PING Windows", classification: "icmp-event", priority: 3, proto: icmp, dst_port: 0, direction: in, target_os: [windows]}
+  - {sid: 382, rev: 1, message: "PROTOCOL-ICMP PING Linux", classification: "icmp-event", priority: 3, proto: icmp, dst_port: 0, direction: in, target_os: [linux]}
+  - {sid: 2000575, rev: 8, message: "ET SCAN ICMP PING IPTools", classification: "attempted-recon", priority: 3, proto: icmp, dst_port: 0, direction: in}
+  - {sid: 2003068, rev: 6, message: "ET SCAN ICMP Unusual PING detected", classification: "attempted-recon", priority: 2, proto: icmp, dst_port: 0, direction: in}
