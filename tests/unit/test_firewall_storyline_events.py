@@ -77,7 +77,7 @@ class TestBeaconEventSpec:
         assert spec.protocol == "tcp"
         assert spec.interval == "30m"
         assert spec.duration == "6h"
-        assert spec.jitter == 0.2
+        assert spec.jitter == 0.15  # Beacons use tight jitter by default
         assert spec.action == "deny"
 
     def test_custom_values(self):

@@ -257,6 +257,9 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Proxy lacks session depth — browsing session model generates landing page + subresource cascade (CSS/JS/images/fonts/favicon/API) + navigation to additional pages with referrer chains; persona-driven intensity (light/normal/heavy); cross-domain CDN fan-out; CONNECT tunnel deduplication with 5-min timeout
 - [x] Proxy user-agent mismatch — removed system UAs (Windows-Update-Agent, Microsoft-CryptoAPI) from general _PROXY_UAS_WINDOWS pool; restricted workstation role traffic dns_tags to [background, windows]; added dns_tags to all persona profiles; retagged CDN/API domains in dns_registry
 - [x] Web access log referrer headers — tightened web_access emitter can_handle() to require dst_host (destination is a scenario system); prevents outbound HTTPS connections from creating entries on source workstation
+- [x] Referer header blank across all non-browsing HTTP paths — centralized `pick_referrer()`/`pick_scan_referrer()` helpers; baseline web-server traffic, auto-gen HTTP, storyline HTTP events, and proxy single-connection paths all now emit realistic distributions; scanner Referer behavior declarative via `send_referrer` preset field (Nikto: 30% same-origin; gobuster/sqlmap/dirb/nmap_http: none)
+- [x] Nikto UA static test ID `(Test:map_codes)` — `render_ua()` token substitution engine; Nikto UA template uses `@NIKTO_TESTID@` generating unique 6-digit test IDs per request
+- [x] Uniform jitter default (0.2) across all periodic event types — per-type defaults: BeaconEventSpec 0.15, WebScanEventSpec 0.4, CredentialSprayEventSpec 0.5, DgaQueriesEventSpec 0.3, DnsTunnelEventSpec 0.25
 - [x] DHCP shows full discovery instead of renewals in mid-scenario windows — initial leases emitted during warm-up (suppressed); periodic REQUEST/ACK renewals at T/2 in _generate_system_traffic()
 
 **Cisco ASA:**

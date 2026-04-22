@@ -45,6 +45,7 @@ class HostContext:
     domain: str = ""
     fqdn: str = ""  # Precomputed: hostname.domain (Windows Computer field)
     netbios_domain: str = ""  # Precomputed: domain.split('.')[0].upper()
+    roles: list[str] = field(default_factory=list)  # Scenario roles: web_server, dns_server, etc.
 
 
 @dataclass(slots=True)

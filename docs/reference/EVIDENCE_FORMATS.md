@@ -279,9 +279,9 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 
 HTTP access logs for web server systems.
 
+**Referer field:** Browser-originated traffic carries a realistic Referer distribution — roughly 55% blank (direct/bookmark), 20% search engine (Google/Bing), 20% same-origin, 5% social/news. Bot user-agents (Googlebot, bingbot, AhrefsBot) always have blank Referer. Scanner traffic (`web_scan` events) follows per-preset rules grounded in real scanner behavior: Nikto sends same-origin Referer on ~30% of requests (partial-crawl mode); gobuster, sqlmap, dirb, and nmap_http send no Referer. This means the Referer field is useful for distinguishing human browsing from automated scans in training exercises.
+
 **Known Limitations:**
-- All responses return HTTP 200 (no 301/302/404/500 mix)
-- Limited User-Agent diversity (~4 strings)
 - Only generated for systems with web server role
 
 ---
