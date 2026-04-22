@@ -593,6 +593,7 @@ def _validate_duration_string(v: str, field_name: str) -> str:
 
 _VALID_QTYPES = {"A", "AAAA", "TXT", "CNAME", "MX", "NULL", "SRV", "PTR"}
 _VALID_RCODES = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+_MAX_DNS_TUNNEL_PAYLOAD_BYTES = 1024 * 1024
 
 
 class _PeriodicEventBase(_EventSpecBase):
@@ -886,8 +887,15 @@ class DnsTunnelEventSpec(_PeriodicEventBase):
     encoding: Literal["base32", "base64", "hex"] = "hex"
     qtype: str = "TXT"  # TXT, NULL, CNAME
     label_length: int = Field(default=30, ge=1, le=63)
-    payload: str | None = None  # Fixed payload to encode
-    payload_size: int = Field(default=256, ge=1)  # Random payload size if no payload
+    payload: str | None = Field(
+        default=None,
+        max_length=_MAX_DNS_TUNNEL_PAYLOAD_BYTES,
+    )  # Fixed payload to encode
+    payload_size: int = Field(
+        default=256,
+        ge=1,
+        le=_MAX_DNS_TUNNEL_PAYLOAD_BYTES,
+    )  # Random payload size if no payload
 
     @field_validator("qtype")
     @classmethod
