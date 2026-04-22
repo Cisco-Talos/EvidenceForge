@@ -9,10 +9,13 @@ a user overlay from .eforge/config/activity/web_scan_presets.yaml if present.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
+
+logger = logging.getLogger(__name__)
 
 _PRESETS_PATH = get_activity_directory() / "web_scan_presets.yaml"
 _CACHED: dict[str, Any] | None = None
@@ -28,11 +31,23 @@ def _merge_presets(default: dict, overlay: dict) -> dict:
     result = dict(default)
     overlay_presets = overlay.get("presets", {})
     if not isinstance(overlay_presets, dict):
+        logger.warning(
+            "Config overlay: web_scan presets has invalid structure "
+            "(expected dict, got %s) — ignoring overlay presets",
+            type(overlay_presets).__name__,
+        )
         return result
 
     if overlay_presets:
         default_presets = result.get("presets", {})
-        merged = dict(default_presets) if isinstance(default_presets, dict) else {}
+        if not isinstance(default_presets, dict):
+            logger.warning(
+                "Config overlay: web_scan default presets has invalid structure "
+                "(expected dict, got %s) — treating as empty",
+                type(default_presets).__name__,
+            )
+            default_presets = {}
+        merged = dict(default_presets)
         merged.update(overlay_presets)
         result["presets"] = merged
     return result
