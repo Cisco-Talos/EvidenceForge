@@ -597,6 +597,24 @@ class TestDnsTunnelEventSpec:
             )
             assert spec.encoding == enc
 
+    def test_payload_size_upper_bound(self):
+        with pytest.raises(ValidationError, match="payload_size"):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                interval="5s",
+                count=10,
+                payload_size=(1024 * 1024) + 1,
+            )
+
+    def test_payload_upper_bound(self):
+        with pytest.raises(ValidationError, match="payload"):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                interval="5s",
+                count=10,
+                payload="a" * ((1024 * 1024) + 1),
+            )
+
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────
 
