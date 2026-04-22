@@ -95,9 +95,10 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 
 ### Versioning (Semantic Versioning)
 
-The version is declared in two places that must always match:
+The version is declared in three places that must always match:
 - `pyproject.toml` → `version = "X.Y.Z"`
 - `src/evidenceforge/__init__.py` → `__version__ = "X.Y.Z"`
+- `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
 
 **Bump rules (pre-1.0: breaking changes are allowed in MINOR bumps):**
 
@@ -108,7 +109,7 @@ The version is declared in two places that must always match:
 
 **When to bump:** Once per PR from `dev` to `main`, on the `dev` branch, as the last commit before opening that PR. Do not bump on feature branches or per-commit.
 
-**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, and commit with:
+**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, run `uv sync` to regenerate `uv.lock`, and commit all three with:
 ```
 chore: bump version to X.Y.Z
 ```
