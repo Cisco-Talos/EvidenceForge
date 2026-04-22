@@ -70,6 +70,13 @@ def parse_duration(duration_str: str) -> timedelta:
     return timedelta(seconds=total_seconds)
 
 
+def ensure_utc(dt: datetime) -> datetime:
+    """Return `dt` with UTC tzinfo. Naive datetimes are assumed to be UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 def parse_iso8601(timestamp_str: str) -> datetime:
     """Parse ISO 8601 timestamp to UTC datetime.
 
@@ -101,18 +108,14 @@ def parse_iso8601(timestamp_str: str) -> datetime:
 
 
 def resolve_time_window(time_window: TimeWindow) -> tuple[datetime, datetime]:
-    """Resolve TimeWindow to (start, end) datetimes.
+    """Resolve TimeWindow to (start, end) datetimes in UTC.
 
-    Args:
-        time_window: TimeWindow with start + (end XOR duration)
-
-    Returns:
-        Tuple of (start_datetime, end_datetime) in UTC
+    Naive datetimes are assumed to be UTC.
     """
-    start = time_window.start
+    start = ensure_utc(time_window.start)
 
     if time_window.end:
-        end = time_window.end
+        end = ensure_utc(time_window.end)
     elif time_window.duration:
         duration = parse_duration(time_window.duration)
         end = start + duration

@@ -4,6 +4,35 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## Web Log Realism Improvements (2026-04-22)
+
+Root-cause fixes for three structural realism gaps identified during adversarial evaluation of the `vdf-web-scanning` scenario.
+
+**Fix 1 — Referer header centralization (root cause: 5 of 6 `HttpContext` construction sites dropped the field)**
+- Extracted `pick_referrer()` and `pick_scan_referrer()` into `src/evidenceforge/generation/activity/referrer.py`
+- Baseline web-server traffic now generates realistic Referer distributions: ~55% blank, ~20% search engine, ~20% same-origin, ~5% social/news; bot UAs always blank
+- Auto-generated HTTP connections and both storyline HTTP event types now populate Referer
+- Legacy proxy single-connection paths (`generator.py`) also updated — proxy log realism improved as a side effect
+- Per-scanner Referer behavior is declarative in `web_scan_presets.yaml` via `send_referrer` field, grounded in verified upstream source behavior: Nikto sends same-origin Referer on ~30% of requests (partial-crawl mode); gobuster/sqlmap/dirb/nmap_http send none
+- Scenario authors can pin `referrer` on `connection` and `beacon` event specs for phishing-click and drive-by scenarios
+
+**Fix 2 — Scanner UA token substitution**
+- Added `src/evidenceforge/utils/ua_template.py` with `render_ua()` supporting scanner-scoped tokens (`@NIKTO_TESTID@`, etc.)
+- Nikto UA updated from static `(Test:map_codes)` to `(Test:@NIKTO_TESTID@)` — now generates a unique 6-digit test ID per request, matching real Nikto behavior
+
+**Fix 3 — Per-event-type jitter defaults**
+- Each concrete `_PeriodicEventBase` subclass now carries an event-appropriate jitter default instead of the uniform 0.2:
+  - `BeaconEventSpec`: 0.15 (beacons are deliberately tight)
+  - `WebScanEventSpec`: 0.4 (wide variance from target latency)
+  - `CredentialSprayEventSpec`: 0.5 (self-pacing to avoid lockout)
+  - `DgaQueriesEventSpec`: 0.3
+  - `DnsTunnelEventSpec`: 0.25
+- Scenario authors can still override per-event; existing YAML that omits `jitter` now gets a more realistic default
+
+New tests: `test_referrer.py`, `test_ua_template.py`, `test_scan_referrer.py` (185 new assertions). Full suite: 2083 passed.
+
+---
+
 ## Pre-MVP Quality Fixes
 
 ### World Model Refactor (2026-04-08)

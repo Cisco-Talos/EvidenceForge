@@ -1876,13 +1876,7 @@ class BaselineMixin:
                 # storyline controls when these sessions end.
                 if session.storyline_protected:
                     continue
-                sess_start = session.start_time
-                hour_ts = current_hour
-                if sess_start.tzinfo is not None and hour_ts.tzinfo is None:
-                    hour_ts = hour_ts.replace(tzinfo=UTC)
-                elif sess_start.tzinfo is None and hour_ts.tzinfo is not None:
-                    sess_start = sess_start.replace(tzinfo=UTC)
-                session_age_hours = (hour_ts - sess_start).total_seconds() / 3600
+                session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
                 if session_age_hours < 0.5:
                     continue
 
@@ -4560,6 +4554,21 @@ class BaselineMixin:
                     else:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
+                    chosen_ua = rng.choice(ua_pool)
+                    _ua_is_bot = any(
+                        bot in chosen_ua for bot in ("Googlebot", "bingbot", "AhrefsBot")
+                    )
+                    from evidenceforge.generation.activity.referrer import pick_referrer
+
+                    _site_map = getattr(sys_obj, "site_map", None)
+                    _referer = pick_referrer(
+                        rng,
+                        http_host,
+                        site_map=_site_map,
+                        is_bot=_ua_is_bot,
+                        context="general",
+                        port=80,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=sys_obj.ip,
@@ -4575,13 +4584,14 @@ class BaselineMixin:
                             host=http_host,
                             uri=path,
                             version="1.1",
-                            user_agent=rng.choice(ua_pool),
+                            user_agent=chosen_ua,
                             request_body_len=rng.randint(0, 500) if method == "POST" else 0,
                             response_body_len=resp_bytes,
                             status_code=status,
                             status_msg={200: "OK", 403: "Forbidden", 404: "Not Found"}.get(
                                 status, "OK"
                             ),
+                            referrer=_referer,
                             resp_mime_types=[mime] if status == 200 else [],
                             tags=[],
                         ),

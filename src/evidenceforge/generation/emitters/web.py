@@ -43,16 +43,19 @@ class WebEmitter(HostMultiplexEmitter):
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry an HttpContext and target a web server.
 
-        Only fires when dst_host is set (the destination is a known scenario
-        system).  The src_host fallback was causing external HTTPS connections
-        with HttpContext (from browsing sessions) to write web_access entries
-        on the *source* workstation — incorrect since web access logs belong
-        on the server receiving the request, not the client sending it.
+        Only fires when dst_host has the 'web_server' role.  Two earlier
+        constraints prevent adjacent misrouting:
+        - dst_host must be set (avoids writing on the source workstation for
+          outbound HTTPS browsing sessions).
+        - dst_host must have role 'web_server' (avoids writing on hosts that
+          happen to receive HTTP on internal management ports — e.g., WSUS on
+          8530 targeting Windows workstations).
         """
         return (
             event.event_type in self._supported_types
             and event.http is not None
             and event.dst_host is not None
+            and "web_server" in event.dst_host.roles
         )
 
     def emit(self, event: SecurityEvent) -> None:

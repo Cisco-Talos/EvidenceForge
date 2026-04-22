@@ -25,9 +25,33 @@
 Phase 2.4: Tests parse_work_hours() function for temporal activity distribution.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
-from evidenceforge.utils.time import parse_work_hours
+from evidenceforge.utils.time import ensure_utc, parse_work_hours
+
+
+class TestEnsureUtc:
+    def test_naive_datetime_gets_utc(self):
+        dt = datetime(2024, 7, 15, 12, 0, 0)
+        result = ensure_utc(dt)
+        assert result.tzinfo is UTC
+        assert result.replace(tzinfo=None) == dt
+
+    def test_aware_utc_unchanged(self):
+        dt = datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC)
+        result = ensure_utc(dt)
+        assert result == dt
+
+    def test_aware_non_utc_converted(self):
+        from datetime import timedelta, timezone
+
+        tz_minus5 = timezone(timedelta(hours=-5))
+        dt = datetime(2024, 7, 15, 7, 0, 0, tzinfo=tz_minus5)
+        result = ensure_utc(dt)
+        assert result.tzinfo is UTC
+        assert result == datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC)
 
 
 class TestParseWorkHours:

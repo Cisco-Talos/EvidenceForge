@@ -778,9 +778,12 @@ class StorylineMixin:
                     resp_bytes = rng.randint(200, 5000)
                 else:
                     resp_bytes = rng.randint(5000, 50000)
+                from evidenceforge.generation.activity.referrer import pick_referrer
+
+                _http_host = spec.hostname or dst_ip
                 http_ctx = HttpContext(
                     method=_method,
-                    host=spec.hostname or dst_ip,
+                    host=_http_host,
                     uri=spec.uri or "/",
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
@@ -795,6 +798,9 @@ class StorylineMixin:
                         404: "Not Found",
                         500: "Internal Server Error",
                     }.get(spec.status_code or 200, "OK"),
+                    referrer=spec.referrer
+                    if spec.referrer is not None
+                    else pick_referrer(rng, _http_host, context="general"),
                     resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
                     tags=[],
                 )
@@ -1231,9 +1237,12 @@ class StorylineMixin:
                         resp_bytes = rng.randint(200, 2000)
                     else:
                         resp_bytes = rng.randint(500, 5000)
+                    from evidenceforge.generation.activity.referrer import pick_referrer
+
+                    _http_host2 = spec.hostname or spec.dst_ip
                     http_ctx = HttpContext(
                         method=_method,
-                        host=spec.hostname or spec.dst_ip,
+                        host=_http_host2,
                         uri=spec.uri or "/",
                         version="1.1",
                         user_agent=spec.user_agent or "Mozilla/5.0",
@@ -1248,6 +1257,9 @@ class StorylineMixin:
                             404: "Not Found",
                             500: "Internal Server Error",
                         }.get(spec.status_code or 200, "OK"),
+                        referrer=spec.referrer
+                        if spec.referrer is not None
+                        else pick_referrer(rng, _http_host2, context="general"),
                         resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
                         tags=[],
                     )
@@ -1431,6 +1443,8 @@ class StorylineMixin:
                 src_sys = system
 
             from evidenceforge.events.contexts import IdsContext
+            from evidenceforge.generation.activity.referrer import pick_scan_referrer
+            from evidenceforge.utils.ua_template import render_ua
 
             is_tls = spec.dst_port == 443
             ids_ua_def = preset_data.get("ids_ua") if preset_data else None
@@ -1438,6 +1452,7 @@ class StorylineMixin:
             rate_threshold = ids_rate_def.get("threshold", 20) if ids_rate_def else 20
             ua_fired = False
             last_rate_alert_ts = None
+            _send_referrer_config = preset_data.get("send_referrer") if preset_data else None
 
             request_count = 0
             path_idx = 0
@@ -1451,13 +1466,16 @@ class StorylineMixin:
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")
                 _status = path_entry.get("status", 404)
+                _scan_referrer = pick_scan_referrer(
+                    rng, scan_host, _send_referrer_config, port=spec.dst_port
+                )
 
                 http_ctx = HttpContext(
                     method=_method,
                     host=scan_host,
                     uri=_uri,
                     version="1.1",
-                    user_agent=scan_ua,
+                    user_agent=render_ua(scan_ua, rng),
                     request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
                     response_body_len=rng.randint(200, 5000),
                     status_code=_status,
@@ -1470,6 +1488,7 @@ class StorylineMixin:
                         405: "Method Not Allowed",
                         500: "Internal Server Error",
                     }.get(_status, "OK"),
+                    referrer=_scan_referrer,
                     resp_mime_types=["text/html"] if _status == 200 else [],
                     tags=[],
                 )

@@ -454,6 +454,7 @@ class ConnectionEventSpec(_EventSpecBase):
     uri: str | None = None  # Request URI path
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
+    referrer: str | None = None  # Referer header value (None = auto-generated)
     response_body_len: int | None = None  # Override auto-sized response bytes
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
@@ -653,6 +654,7 @@ class BeaconEventSpec(_PeriodicEventBase):
     """
 
     type: Literal["beacon"] = "beacon"
+    jitter: float = Field(default=0.15, ge=0.0, le=1.0)  # Beacons are deliberately tight
     dst_ip: str
     dst_port: int = 443
     hostname: str | None = None  # Domain name for DNS/SSL SNI
@@ -665,6 +667,7 @@ class BeaconEventSpec(_PeriodicEventBase):
     uri: str | None = None
     status_code: int | None = None
     user_agent: str | None = None
+    referrer: str | None = None  # Referer header value (None = auto-generated)
     response_body_len: int | None = None
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None
@@ -740,6 +743,7 @@ class WebScanEventSpec(_PeriodicEventBase):
     """
 
     type: Literal["web_scan"] = "web_scan"
+    jitter: float = Field(default=0.4, ge=0.0, le=1.0)  # Wide variance from target latency
     dst_ip: str
     dst_port: int = 80
     hostname: str | None = None
@@ -787,6 +791,7 @@ class CredentialSprayEventSpec(_PeriodicEventBase):
     """
 
     type: Literal["credential_spray"] = "credential_spray"
+    jitter: float = Field(default=0.5, ge=0.0, le=1.0)  # Sprays self-pace to avoid lockout
     source_ip: str | None = None
     pattern: Literal["spray", "brute_force", "stuffing"] = "spray"
     target_accounts: list[str] = Field(..., min_length=1)
@@ -825,6 +830,7 @@ class DgaQueriesEventSpec(_PeriodicEventBase):
     """
 
     type: Literal["dga_queries"] = "dga_queries"
+    jitter: float = Field(default=0.3, ge=0.0, le=1.0)
     source_ip: str | None = None
     length_range: tuple[int, int] = (8, 15)
     charset: str = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -881,6 +887,7 @@ class DnsTunnelEventSpec(_PeriodicEventBase):
     """
 
     type: Literal["dns_tunnel"] = "dns_tunnel"
+    jitter: float = Field(default=0.25, ge=0.0, le=1.0)
     source_ip: str | None = None
     base_domain: str  # Tunnel endpoint domain
     encoding: Literal["base32", "base64", "hex"] = "hex"

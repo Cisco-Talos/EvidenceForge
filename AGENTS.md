@@ -93,6 +93,29 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 ### Commits
 - **Conventional Commits** — prefix every commit message with a type: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`. See [CONTRIBUTING.md](/CONTRIBUTING.md#commit-messages) for details and examples.
 
+### Versioning (Semantic Versioning)
+
+The version is declared in three places that must always match:
+- `pyproject.toml` → `version = "X.Y.Z"`
+- `src/evidenceforge/__init__.py` → `__version__ = "X.Y.Z"`
+- `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
+
+**Bump rules (pre-1.0: breaking changes are allowed in MINOR bumps):**
+
+| Commit type(s) on branch | Bump |
+|--------------------------|------|
+| Any `feat:` commit | MINOR (`0.x+1.0`) |
+| Only `fix:` / `docs:` / `test:` / `refactor:` / `chore:` | PATCH (`0.x.y+1`) |
+
+**When to bump:** Once per PR from `dev` to `main`, on the `dev` branch, as the last commit before opening that PR. Do not bump on feature branches or per-commit.
+
+**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, run `uv sync` to regenerate `uv.lock`, and commit all three with:
+```
+chore: bump version to X.Y.Z
+```
+
+The version on `dev` between releases will be ahead of `main` by one unreleased bump — this is expected and correct. Feature branches never touch the version.
+
 ### Linting
 - **Before committing:** always run `uv run ruff check .` and `uv run ruff format --check .` and fix any errors. A `pre-commit` hook enforces this, but verify manually when in doubt.
 - Ruff configuration is in `pyproject.toml` — do not add `# noqa` comments without justification.

@@ -599,6 +599,7 @@ class ActivityGenerator:
             domain=ad_domain,
             fqdn=f"{hostname}.{ad_domain}" if ad_domain else hostname,
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
+            roles=list(system.roles),
         )
 
     def _build_dc_host_context(self, dc_hostname: str) -> HostContext:
@@ -1969,7 +1970,9 @@ class ActivityGenerator:
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
                     url = f"https://{proxy_hostname}{path}"
-                    proxy_referrer = ""
+                    from evidenceforge.generation.activity.referrer import pick_referrer
+
+                    proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=443)
                 else:
                     domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
@@ -1977,7 +1980,9 @@ class ActivityGenerator:
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
                     )
                     url = f"http://{proxy_hostname}{path}"
-                    proxy_referrer = ""
+                    from evidenceforge.generation.activity.referrer import pick_referrer
+
+                    proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=80)
                 # OS-aware proxy User-Agent selection (skip when session set it)
                 if event.http is None:
                     if proxy_ua_override:
@@ -2216,6 +2221,9 @@ class ActivityGenerator:
                 resp_body_len = rng.randint(100, 300)
             elif status_code == 304:
                 resp_body_len = 0
+            from evidenceforge.generation.activity.referrer import pick_referrer
+
+            _http_referer = pick_referrer(rng, host, context="general", port=dst_port)
             event.http = HttpContext(
                 method=http_method,
                 host=host,
@@ -2226,6 +2234,7 @@ class ActivityGenerator:
                 response_body_len=resp_body_len,
                 status_code=status_code,
                 status_msg=status_msg,
+                referrer=_http_referer,
                 resp_mime_types=[mime_type] if status_code == 200 else [],
                 tags=[],
             )

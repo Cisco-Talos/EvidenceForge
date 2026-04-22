@@ -871,3 +871,43 @@ class TestBaselineActivityTrafficRates:
                 variation="low",
                 traffic_rates={"web": "extreme"},
             )
+
+
+class TestPeriodicEventJitterDefaults:
+    """Verify each concrete periodic event spec carries its own jitter default."""
+
+    def test_beacon_jitter_default(self):
+        from evidenceforge.models.scenario import BeaconEventSpec
+
+        spec = BeaconEventSpec(dst_ip="1.2.3.4", interval="5m", count=1)
+        assert spec.jitter == 0.15
+
+    def test_web_scan_jitter_default(self):
+        from evidenceforge.models.scenario import WebScanEventSpec
+
+        spec = WebScanEventSpec(dst_ip="1.2.3.4", rate=10, count=1, preset="nikto")
+        assert spec.jitter == 0.4
+
+    def test_credential_spray_jitter_default(self):
+        from evidenceforge.models.scenario import CredentialSprayEventSpec
+
+        spec = CredentialSprayEventSpec(target_accounts=["user1"], interval="5s", count=1)
+        assert spec.jitter == 0.5
+
+    def test_dga_queries_jitter_default(self):
+        from evidenceforge.models.scenario import DgaQueriesEventSpec
+
+        spec = DgaQueriesEventSpec(interval="1s", count=1)
+        assert spec.jitter == 0.3
+
+    def test_dns_tunnel_jitter_default(self):
+        from evidenceforge.models.scenario import DnsTunnelEventSpec
+
+        spec = DnsTunnelEventSpec(base_domain="tunnel.evil.com", interval="1s", count=1)
+        assert spec.jitter == 0.25
+
+    def test_jitter_can_be_overridden(self):
+        from evidenceforge.models.scenario import BeaconEventSpec
+
+        spec = BeaconEventSpec(dst_ip="1.2.3.4", interval="5m", count=1, jitter=0.05)
+        assert spec.jitter == 0.05

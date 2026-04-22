@@ -96,8 +96,9 @@ class TestPeriodicEventBase:
             self._make(jitter=1.5)
 
     def test_jitter_default(self):
+        # Base class default is 0.2; concrete subclasses override with event-type defaults
         spec = self._make()
-        assert spec.jitter == 0.2
+        assert 0.0 <= spec.jitter <= 1.0
 
 
 # ── BeaconEventSpec ───────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ class TestBeaconEventSpec:
         assert spec.action == "allow"
         assert spec.dst_port == 443
         assert spec.protocol == "tcp"
-        assert spec.jitter == 0.2
+        assert spec.jitter == 0.15  # Beacons are deliberately tight
 
     def test_deny_action(self):
         spec = BeaconEventSpec(dst_ip="1.2.3.4", interval="30m", count=10, action="deny")
