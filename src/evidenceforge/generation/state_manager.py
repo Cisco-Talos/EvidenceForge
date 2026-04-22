@@ -41,6 +41,7 @@ from evidenceforge.models.state import (
     RunningProcess,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
+from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class StateManager:
                 username=username,
                 system=system,
                 logon_type=logon_type,
-                start_time=self.state.current_time,
+                start_time=ensure_utc(self.state.current_time),
                 source_ip=source_ip,
                 source_port=source_port,
                 session_kind=session_kind,
@@ -212,7 +213,7 @@ class StateManager:
                 username=username,
                 system=system,
                 logon_type=logon_type,
-                start_time=start_time,
+                start_time=ensure_utc(start_time),
                 source_ip=source_ip,
                 source_port=source_port,
                 session_kind=session_kind,

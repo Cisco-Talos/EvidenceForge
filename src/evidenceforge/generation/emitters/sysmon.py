@@ -43,6 +43,7 @@ from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.windows import _subject_domain
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -1431,7 +1432,9 @@ class SysmonEventEmitter(LogEmitter):
 
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
-            return ts if isinstance(ts, datetime) else ts
+            if isinstance(ts, datetime):
+                return ensure_utc(ts)
+            return ts
 
         self._event_dicts.sort(key=_sort_key)
 

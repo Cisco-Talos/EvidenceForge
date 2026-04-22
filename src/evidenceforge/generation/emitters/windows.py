@@ -41,6 +41,7 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.utils.paths import sanitize_path_component
+from evidenceforge.utils.time import ensure_utc
 
 win_logger = logging.getLogger(__name__)
 
@@ -1102,7 +1103,9 @@ class WindowsEventEmitter(LogEmitter):
 
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
-            return ts if isinstance(ts, datetime) else ts
+            if isinstance(ts, datetime):
+                return ensure_utc(ts)
+            return ts
 
         self._event_dicts.sort(key=_sort_key)
 

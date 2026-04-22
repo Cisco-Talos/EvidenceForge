@@ -1876,13 +1876,7 @@ class BaselineMixin:
                 # storyline controls when these sessions end.
                 if session.storyline_protected:
                     continue
-                sess_start = session.start_time
-                hour_ts = current_hour
-                if sess_start.tzinfo is not None and hour_ts.tzinfo is None:
-                    hour_ts = hour_ts.replace(tzinfo=UTC)
-                elif sess_start.tzinfo is None and hour_ts.tzinfo is not None:
-                    sess_start = sess_start.replace(tzinfo=UTC)
-                session_age_hours = (hour_ts - sess_start).total_seconds() / 3600
+                session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
                 if session_age_hours < 0.5:
                     continue
 
