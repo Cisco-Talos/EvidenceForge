@@ -863,6 +863,24 @@ class TestBaselineActivityTrafficRates:
                 traffic_rates={"web": [100, 200, 300]},
             )
 
+    def test_traffic_rates_int_above_max(self):
+        with pytest.raises(ValidationError, match="must be <="):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": 50001},
+            )
+
+    def test_traffic_rates_list_above_max(self):
+        with pytest.raises(ValidationError, match="must be <="):
+            BaselineActivity(
+                description="Test",
+                intensity="medium",
+                variation="low",
+                traffic_rates={"web": [100, 50001]},
+            )
+
     def test_traffic_rates_invalid_preset_string(self):
         with pytest.raises(ValidationError, match="preset must be one of"):
             BaselineActivity(
