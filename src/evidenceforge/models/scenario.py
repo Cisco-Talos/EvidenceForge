@@ -351,7 +351,10 @@ class BaselineActivity(BaseModel):
     ) -> dict[str, int | list[int] | str] | None:
         if v is None:
             return v
-        from evidenceforge.config.traffic_rates import VALID_TRAFFIC_TYPES
+        from evidenceforge.config.traffic_rates import (
+            MAX_TRAFFIC_RATE_OVERRIDE,
+            VALID_TRAFFIC_TYPES,
+        )
 
         valid_presets = {"low", "medium", "high"}
         for key, val in v.items():
@@ -364,6 +367,11 @@ class BaselineActivity(BaseModel):
                     raise ValueError(
                         f"traffic_rates[{key!r}]: integer value must be > 0, got {val}"
                     )
+                if val > MAX_TRAFFIC_RATE_OVERRIDE:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: integer value must be <= "
+                        f"{MAX_TRAFFIC_RATE_OVERRIDE}, got {val}"
+                    )
             elif isinstance(val, list):
                 if len(val) != 2:
                     raise ValueError(
@@ -373,6 +381,11 @@ class BaselineActivity(BaseModel):
                     raise ValueError(f"traffic_rates[{key!r}]: list elements must be integers")
                 if val[0] <= 0 or val[1] <= 0:
                     raise ValueError(f"traffic_rates[{key!r}]: values must be > 0")
+                if val[0] > MAX_TRAFFIC_RATE_OVERRIDE or val[1] > MAX_TRAFFIC_RATE_OVERRIDE:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: values must be <= "
+                        f"{MAX_TRAFFIC_RATE_OVERRIDE}, got {val}"
+                    )
                 if val[0] > val[1]:
                     raise ValueError(
                         f"traffic_rates[{key!r}]: lo ({val[0]}) must be <= hi ({val[1]})"
