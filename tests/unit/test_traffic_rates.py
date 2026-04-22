@@ -6,7 +6,6 @@
 import pytest
 
 from evidenceforge.config.traffic_rates import (
-    MAX_TRAFFIC_RATE_OVERRIDE,
     VALID_TRAFFIC_TYPES,
     get_rates_for_intensity,
     load_traffic_rates,
@@ -120,20 +119,6 @@ class TestResolveTrafficRate:
         # Should get high defaults, not affected by web override
         high_rates = get_rates_for_intensity("high")
         assert (lo, hi) == tuple(high_rates["kerberos"])
-
-    def test_resolver_caps_int_override_above_max(self):
-        engine = self._make_engine(
-            intensity="high", traffic_rates={"web": MAX_TRAFFIC_RATE_OVERRIDE + 1}
-        )
-        lo, hi = engine._resolve_traffic_rate("web")
-        assert (lo, hi) == (MAX_TRAFFIC_RATE_OVERRIDE, MAX_TRAFFIC_RATE_OVERRIDE)
-
-    def test_resolver_caps_list_override_above_max(self):
-        engine = self._make_engine(
-            intensity="high", traffic_rates={"web": [5000, MAX_TRAFFIC_RATE_OVERRIDE + 1]}
-        )
-        lo, hi = engine._resolve_traffic_rate("web")
-        assert (lo, hi) == (5000, MAX_TRAFFIC_RATE_OVERRIDE)
 
     def test_empty_overrides_uses_defaults(self):
         engine = self._make_engine(intensity="medium", traffic_rates={})

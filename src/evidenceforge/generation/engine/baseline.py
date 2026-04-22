@@ -401,35 +401,15 @@ class BaselineMixin:
 
     def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:
         """Get (lo, hi) rate for a traffic type — scenario override > config default."""
-        from evidenceforge.config.traffic_rates import (
-            MAX_TRAFFIC_RATE_OVERRIDE,
-            get_rates_for_intensity,
-        )
+        from evidenceforge.config.traffic_rates import get_rates_for_intensity
 
         overrides = self.scenario.baseline_activity.traffic_rates
         if overrides and traffic_type in overrides:
             val = overrides[traffic_type]
             if isinstance(val, int):
-                capped = min(val, MAX_TRAFFIC_RATE_OVERRIDE)
-                if capped != val:
-                    logger.warning(
-                        "traffic_rates[%s]=%s exceeds max %s; capping override",
-                        traffic_type,
-                        val,
-                        MAX_TRAFFIC_RATE_OVERRIDE,
-                    )
-                return (capped, capped)
+                return (val, val)
             if isinstance(val, list):
-                lo = min(val[0], MAX_TRAFFIC_RATE_OVERRIDE)
-                hi = min(val[1], MAX_TRAFFIC_RATE_OVERRIDE)
-                if (lo, hi) != (val[0], val[1]):
-                    logger.warning(
-                        "traffic_rates[%s]=%s exceeds max %s; capping override",
-                        traffic_type,
-                        val,
-                        MAX_TRAFFIC_RATE_OVERRIDE,
-                    )
-                return (lo, hi)
+                return (val[0], val[1])
             if isinstance(val, str):
                 return tuple(get_rates_for_intensity(val)[traffic_type])
 
