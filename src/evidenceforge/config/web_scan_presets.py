@@ -27,8 +27,12 @@ def _merge_presets(default: dict, overlay: dict) -> dict:
     """
     result = dict(default)
     overlay_presets = overlay.get("presets", {})
+    if not isinstance(overlay_presets, dict):
+        return result
+
     if overlay_presets:
-        merged = dict(result.get("presets", {}))
+        default_presets = result.get("presets", {})
+        merged = dict(default_presets) if isinstance(default_presets, dict) else {}
         merged.update(overlay_presets)
         result["presets"] = merged
     return result

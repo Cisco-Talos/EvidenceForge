@@ -443,6 +443,21 @@ class TestWebScanPresets:
 
         assert get_preset("nonexistent") is None
 
+    def test_merge_presets_ignores_non_dict_overlay_presets(self):
+        from evidenceforge.config.web_scan_presets import _merge_presets
+
+        default = {"presets": {"nikto": {"paths": ["/admin"]}}}
+
+        assert _merge_presets(default, {"presets": ["bad"]}) == default
+        assert _merge_presets(default, {"presets": "bad"}) == default
+
+    def test_merge_presets_handles_non_dict_default_presets(self):
+        from evidenceforge.config.web_scan_presets import _merge_presets
+
+        merged = _merge_presets({"presets": "bad-default"}, {"presets": {"nikto": {"paths": []}}})
+
+        assert merged["presets"] == {"nikto": {"paths": []}}
+
 
 # ── DgaQueriesEventSpec ───────────────────────────────────────────────────
 
