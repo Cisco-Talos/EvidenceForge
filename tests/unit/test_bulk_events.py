@@ -444,6 +444,37 @@ class TestWebScanPresets:
 
         assert get_preset("nonexistent") is None
 
+    def test_merge_presets_ignores_non_dict_overlay_presets(self, caplog):
+        import logging
+
+        from evidenceforge.config.web_scan_presets import _merge_presets
+
+        default = {"presets": {"nikto": {"paths": ["/admin"]}}}
+
+        with caplog.at_level(logging.WARNING, logger="evidenceforge.config.web_scan_presets"):
+            result_list = _merge_presets(default, {"presets": ["bad"]})
+        assert result_list == default
+        assert "invalid structure" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="evidenceforge.config.web_scan_presets"):
+            result_str = _merge_presets(default, {"presets": "bad"})
+        assert result_str == default
+        assert "invalid structure" in caplog.text
+
+    def test_merge_presets_handles_non_dict_default_presets(self, caplog):
+        import logging
+
+        from evidenceforge.config.web_scan_presets import _merge_presets
+
+        with caplog.at_level(logging.WARNING, logger="evidenceforge.config.web_scan_presets"):
+            merged = _merge_presets(
+                {"presets": "bad-default"}, {"presets": {"nikto": {"paths": []}}}
+            )
+
+        assert merged["presets"] == {"nikto": {"paths": []}}
+        assert "invalid structure" in caplog.text
+
 
 # ── DgaQueriesEventSpec ───────────────────────────────────────────────────
 
