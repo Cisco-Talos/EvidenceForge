@@ -444,6 +444,37 @@ class TestWebScanPresets:
 
         assert get_preset("nonexistent") is None
 
+    def test_merge_presets_ignores_non_dict_overlay_presets(self, caplog):
+        import logging
+
+        from evidenceforge.config.web_scan_presets import _merge_presets
+
+        default = {"presets": {"nikto": {"paths": ["/admin"]}}}
+
+        with caplog.at_level(logging.WARNING, logger="evidenceforge.config.web_scan_presets"):
+            result_list = _merge_presets(default, {"presets": ["bad"]})
+        assert result_list == default
+        assert "invalid structure" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="evidenceforge.config.web_scan_presets"):
+            result_str = _merge_presets(default, {"presets": "bad"})
+        assert result_str == default
+        assert "invalid structure" in caplog.text
+
+    def test_merge_presets_handles_non_dict_default_presets(self, caplog):
+        import logging
+
+        from evidenceforge.config.web_scan_presets import _merge_presets
+
+        with caplog.at_level(logging.WARNING, logger="evidenceforge.config.web_scan_presets"):
+            merged = _merge_presets(
+                {"presets": "bad-default"}, {"presets": {"nikto": {"paths": []}}}
+            )
+
+        assert merged["presets"] == {"nikto": {"paths": []}}
+        assert "invalid structure" in caplog.text
+
 
 # ── DgaQueriesEventSpec ───────────────────────────────────────────────────
 
@@ -596,6 +627,24 @@ class TestDnsTunnelEventSpec:
                 count=10,
             )
             assert spec.encoding == enc
+
+    def test_payload_size_upper_bound(self):
+        with pytest.raises(ValidationError, match="payload_size"):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                interval="5s",
+                count=10,
+                payload_size=(1024 * 1024) + 1,
+            )
+
+    def test_payload_upper_bound(self):
+        with pytest.raises(ValidationError, match="payload"):
+            DnsTunnelEventSpec(
+                base_domain="tunnel.evil.com",
+                interval="5s",
+                count=10,
+                payload="a" * ((1024 * 1024) + 1),
+            )
 
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────

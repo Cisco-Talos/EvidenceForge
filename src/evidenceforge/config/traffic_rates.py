@@ -17,6 +17,8 @@ from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 _RATES_PATH = get_activity_directory() / "traffic_rates.yaml"
 _CACHED: dict[str, Any] | None = None
 
+MAX_TRAFFIC_RATE_OVERRIDE = 50_000
+
 VALID_TRAFFIC_TYPES = frozenset(
     {
         "user_activity",

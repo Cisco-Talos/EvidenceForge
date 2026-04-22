@@ -351,7 +351,10 @@ class BaselineActivity(BaseModel):
     ) -> dict[str, int | list[int] | str] | None:
         if v is None:
             return v
-        from evidenceforge.config.traffic_rates import VALID_TRAFFIC_TYPES
+        from evidenceforge.config.traffic_rates import (
+            MAX_TRAFFIC_RATE_OVERRIDE,
+            VALID_TRAFFIC_TYPES,
+        )
 
         valid_presets = {"low", "medium", "high"}
         for key, val in v.items():
@@ -364,6 +367,11 @@ class BaselineActivity(BaseModel):
                     raise ValueError(
                         f"traffic_rates[{key!r}]: integer value must be > 0, got {val}"
                     )
+                if val > MAX_TRAFFIC_RATE_OVERRIDE:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: integer value must be <= "
+                        f"{MAX_TRAFFIC_RATE_OVERRIDE}, got {val}"
+                    )
             elif isinstance(val, list):
                 if len(val) != 2:
                     raise ValueError(
@@ -373,6 +381,11 @@ class BaselineActivity(BaseModel):
                     raise ValueError(f"traffic_rates[{key!r}]: list elements must be integers")
                 if val[0] <= 0 or val[1] <= 0:
                     raise ValueError(f"traffic_rates[{key!r}]: values must be > 0")
+                if val[0] > MAX_TRAFFIC_RATE_OVERRIDE or val[1] > MAX_TRAFFIC_RATE_OVERRIDE:
+                    raise ValueError(
+                        f"traffic_rates[{key!r}]: values must be <= "
+                        f"{MAX_TRAFFIC_RATE_OVERRIDE}, got {val}"
+                    )
                 if val[0] > val[1]:
                     raise ValueError(
                         f"traffic_rates[{key!r}]: lo ({val[0]}) must be <= hi ({val[1]})"
@@ -594,6 +607,7 @@ def _validate_duration_string(v: str, field_name: str) -> str:
 
 _VALID_QTYPES = {"A", "AAAA", "TXT", "CNAME", "MX", "NULL", "SRV", "PTR"}
 _VALID_RCODES = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+_MAX_DNS_TUNNEL_PAYLOAD_BYTES = 1024 * 1024
 
 
 class _PeriodicEventBase(_EventSpecBase):
@@ -893,8 +907,15 @@ class DnsTunnelEventSpec(_PeriodicEventBase):
     encoding: Literal["base32", "base64", "hex"] = "hex"
     qtype: str = "TXT"  # TXT, NULL, CNAME
     label_length: int = Field(default=30, ge=1, le=63)
-    payload: str | None = None  # Fixed payload to encode
-    payload_size: int = Field(default=256, ge=1)  # Random payload size if no payload
+    payload: str | None = Field(
+        default=None,
+        max_length=_MAX_DNS_TUNNEL_PAYLOAD_BYTES,
+    )  # Fixed payload to encode
+    payload_size: int = Field(
+        default=256,
+        ge=1,
+        le=_MAX_DNS_TUNNEL_PAYLOAD_BYTES,
+    )  # Random payload size if no payload
 
     @field_validator("qtype")
     @classmethod

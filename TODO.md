@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-08
+**Last Updated:** 2026-04-22
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -47,6 +47,9 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Recently Resolved
 
+- [x] Security: cap `baseline_activity.traffic_rates` override values (max 50,000) to prevent scenario-driven resource exhaustion DoS.
+- [x] Security: cap `dns_tunnel` payload/payload_size to 1 MiB to prevent memory exhaustion from untrusted scenarios
+- [x] Security: guard web_scan preset overlay merge against non-dict `presets` payloads to prevent malformed overlay crash/DoS
 - [x] Fix `_find_user_session` mixed tz-aware/naive `start_time` comparison crash (Aardvark finding)
 - [x] Baseline inbound profile traffic no longer depends on outbound role traffic for business-hour gating (fixed UnboundLocalError when outbound profile is empty).
 - [x] Security: validate blocked_c2 interval/duration are > 0 to prevent zero-interval infinite loop DoS
