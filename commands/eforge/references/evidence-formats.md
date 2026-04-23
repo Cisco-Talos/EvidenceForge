@@ -12,6 +12,9 @@ output/
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
     bash_history/<username>.bash_history    # Per-user bash history (Linux only)
+    ecar.json                              # eCAR EDR/XDR telemetry (NDJSON)
+    syslog.log                             # Linux syslog (BSD format)
+    web_access.log                         # Apache/Nginx access log
   <sensor-name>/                           # Per-sensor directories (network)
     conn.json                              # Zeek conn.log (NDJSON)
     dns.json                               # Zeek dns.log
@@ -19,10 +22,7 @@ output/
     ssl.json                               # Zeek ssl.log
     files.json                             # Zeek files.log
     ...                                    # Other Zeek logs
-  ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
-  syslog.log                               # Linux syslog (BSD format)
-  snort_alert.log                          # Snort/Suricata IDS alerts
-  web_access.log                           # Apache/Nginx access log
+    snort_alert.log                        # Snort/Suricata IDS alerts
   <proxy-hostname.domain>/                 # Per-proxy-host directories
     proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
 ```
@@ -87,15 +87,20 @@ output/
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
 | 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. |
+| 3 | NetworkConnect | Network | Outbound connection attributed to originating process. Source/destination IP, port, protocol. Skipped if the process cannot be resolved. svchost.exe is used for DNS/NTP; shows initiating process for attack tool connections. |
 | 5 | ProcessTerminate | Execution | Version 3. Emitted for both baseline stale-process cleanup and storyline process completions. Storyline processes terminate with realistic delays based on command type (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination). ProcessGuid matches the Event 1 that created the process. |
+| 7 | ImageLoaded | Execution | DLL/module loads. Includes file hashes, signing status, and signature details. |
 | 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. |
 | 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz -> lsass). Source and target process GUIDs, GrantedAccess mask. |
+| 11 | FileCreate | Defense Evasion / Execution | File creation events. TargetFilename is the created file path. |
+| 12/13 | RegistryEvent | Persistence | Event 12 for key create/delete; Event 13 for value set. Includes target registry key and (for Event 13) the value written. |
+| 22 | DNSQuery | Discovery | DNS lookups as seen by the Windows DNS Client service (svchost.exe). QueryName, QueryStatus, and resolved addresses. |
 
 **Known Limitations:**
 - ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
-- Only events 1, 5, 8, and 10 are implemented; real Sysmon has 29 event types (network connections, registry, file create, etc.)
+- Events 1, 3, 5, 7, 8, 10, 11, 12/13, and 22 are implemented; real Sysmon has 30+ event types
 
 ---
 
@@ -110,8 +115,8 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 |----------|------|-------------|-------|
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, MX query types. NXDOMAIN for suffix search. AA flag for internal zones. |
-| http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
-| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for port 443 connections. |
+| http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Generated for unencrypted HTTP connections (any port); excludes TLS/SSL traffic. |
+| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for any connection carrying TLS context, not restricted to port 443. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
@@ -125,7 +130,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 **Known Limitations:**
 - No SMB-specific log (smb_files.log, smb_mapping.log) — SMB traffic appears only in conn.log
 - No SMTP log — email traffic appears in conn.log only
-- http.log only for port 80; HTTPS content is not decrypted (as expected)
+- http.log covers unencrypted HTTP on any port; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
 - All timestamps use 6-digit microsecond precision
 
@@ -133,7 +138,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 ## eCAR Format (EDR/XDR Telemetry)
 
-**File:** `ecar.json`
+**File:** `<hostname.domain>/ecar.json`
 **Format:** NDJSON
 
 EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
@@ -162,7 +167,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 ## Linux Syslog
 
-**File:** `syslog.log`
+**File:** `<hostname.domain>/syslog.log`
 **Format:** BSD syslog (RFC 3164 text format)
 
 Authentication and system logs from Linux hosts. All syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
@@ -203,7 +208,7 @@ Per-user command history for Linux systems.
 
 ## Snort/Suricata IDS Alerts
 
-**File:** `snort_alert.log`
+**File:** `<sensor-name>/snort_alert.log`
 **Format:** Snort fast alert format
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
@@ -215,7 +220,7 @@ Network intrusion detection alerts. Baseline generates false-positive alerts (e.
 
 ## Web Access Log
 
-**File:** `web_access.log`
+**File:** `<hostname.domain>/web_access.log`
 **Format:** Apache/Nginx combined log format
 
 HTTP access logs for web server systems.
