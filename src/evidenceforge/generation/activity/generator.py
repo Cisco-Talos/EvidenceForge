@@ -748,6 +748,150 @@ class ActivityGenerator:
             proxy_fqdn=self._proxy_fqdn(proxy_sys),
         )
 
+    def _attach_ssl_context(
+        self,
+        event: SecurityEvent,
+        *,
+        hostname: str | None,
+        dns: Optional["DnsContext"],
+        dst_ip: str,
+        rng: random.Random,
+        allow_failure: bool = True,
+    ) -> None:
+        """Attach Zeek SSL and x509 contexts to an established TLS connection."""
+        from evidenceforge.events.contexts import SslContext
+
+        net = event.network
+        if net is None or event.ssl is not None:
+            return
+
+        # Hostname was resolved once at the top of generate_connection().
+        # Fall back to DnsContext query or IP-based generation only for
+        # connections that skipped early resolution (no emit_dns, internal).
+        server_name = hostname
+        if server_name is None and dns is not None and dns.query:
+            server_name = dns.query
+        if server_name is None:
+            server_name = REVERSE_DNS.get(dst_ip)
+        if server_name is None:
+            server_name = _generate_random_hostname(rng, dst_ip)
+        # Suppressed hostname -> no SNI (raw-IP C2, etc.)
+        if server_name == "":
+            server_name = None
+
+        _tls_rng = random.Random(_stable_seed(f"tls:{net.src_ip}:{dst_ip}:{net.dst_port}"))
+        tls_version = _tls_rng.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[0]
+        if tls_version == "TLSv13":
+            cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+        else:
+            cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+
+        ssl_established = (rng.random() > _SSL_FAILURE_RATE) if allow_failure else True
+        if ssl_established:
+            ssl_hist = rng.choices(
+                _SSL_HIST_SUCCESS_VALUES, weights=_SSL_HIST_SUCCESS_WEIGHTS, k=1
+            )[0]
+        else:
+            ssl_hist = rng.choices(
+                _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
+            )[0]
+        event.ssl = SslContext(
+            version=tls_version,
+            cipher=cipher if ssl_established else "",
+            server_name=server_name,
+            resumed=rng.random() < 0.45 if ssl_established else False,
+            established=ssl_established,
+            ssl_history=ssl_hist,
+        )
+        if not ssl_established:
+            net.conn_state = rng.choice(["S1", "SH"])
+            net.history = "Sh" if net.conn_state == "SH" else "ShR"
+            net.resp_bytes = 0
+            net.orig_bytes = 0
+            if net.duration is not None:
+                net.duration = rng.uniform(0.0, 0.5)
+            return
+
+        import hashlib
+
+        from evidenceforge.events.contexts import X509Context
+
+        # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
+        cert_name = server_name or dst_ip
+        cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
+        cert_fuid = f"F{cert_hash[:16]}"
+        # Issuer-aware certificate generation from YAML config
+        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+        issuer_cfg = pick_issuer(rng, server_name=cert_name)
+        key_type, key_length = pick_key_type(rng, issuer_cfg)
+        is_ecdsa = key_type == "ecdsa"
+        now_epoch = int(event.timestamp.timestamp())
+        # Support validity_days_min/max ranges; fall back to scalar validity_days
+        _vd_fallback = issuer_cfg.get("validity_days", 397)
+        _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
+        _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
+        validity_days = rng.randint(_vd_min, _vd_max)
+        not_before_max = issuer_cfg.get("not_before_max_days", 300)
+        not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
+        remaining_days = validity_days - not_before_days
+        # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
+        # real hostnames get the domain + wildcard SAN.
+        _is_ip = False
+        try:
+            import ipaddress as _ipa
+
+            _ipa.ip_address(cert_name)
+            _is_ip = True
+        except ValueError:
+            pass
+        if _is_ip:
+            san_dns_list: list[str] = []
+        elif "." in cert_name:
+            san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
+        else:
+            san_dns_list = [cert_name]
+        event.x509 = X509Context(
+            fuid=cert_fuid,
+            fingerprint=cert_hash,
+            certificate_version=3,
+            certificate_serial=f"{rng.getrandbits(128):032X}",
+            certificate_subject=f"CN={cert_name}",
+            certificate_issuer=issuer_cfg["name"],
+            certificate_not_valid_before=now_epoch - not_before_days * 86400,
+            certificate_not_valid_after=now_epoch + remaining_days * 86400,
+            certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+            certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
+            certificate_key_type=key_type,
+            certificate_key_length=key_length,
+            certificate_exponent="65537" if not is_ecdsa else "",
+            san_dns=san_dns_list,
+            basic_constraints_ca=False,
+            host_cert=True,
+            client_cert=False,
+        )
+        event.ssl.cert_chain_fuids = [cert_fuid]
+
+        # OCSP response (~30% of SSL connections)
+        if rng.random() < 0.30:
+            from evidenceforge.events.contexts import OcspContext
+            from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
+
+            event.ocsp = OcspContext(
+                id=_gen_uid("F"),
+                hash_algorithm="sha256",
+                issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[
+                    :40
+                ],
+                issuer_key_hash=hashlib.sha256(
+                    f"key_{event.x509.certificate_issuer}".encode()
+                ).hexdigest()[:40],
+                serial_number=event.x509.certificate_serial,
+                cert_status="good",
+                this_update=now_epoch - rng.randint(0, 86400),
+                next_update=now_epoch + rng.randint(86400, 86400 * 7),
+            )
+
     def _build_expansion_context(
         self,
         event_type: str,
@@ -2321,145 +2465,14 @@ class ActivityGenerator:
         # Skip for local-only events (no network sensor will see them)
         rng = _get_rng()
         if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
-            from evidenceforge.events.contexts import SslContext
-
-            # Hostname was resolved once at the top of generate_connection().
-            # Fall back to DnsContext query or IP-based generation only for
-            # connections that skipped early resolution (no emit_dns, internal).
-            server_name = hostname
-            if server_name is None and dns is not None and dns.query:
-                server_name = dns.query
-            if server_name is None:
-                server_name = REVERSE_DNS.get(dst_ip)
-            if server_name is None:
-                server_name = _generate_random_hostname(rng, dst_ip)
-            # Suppressed hostname → no SNI (raw-IP C2, etc.)
-            if server_name == "":
-                server_name = None
-            _tls_rng = random.Random(_stable_seed(f"tls:{src_ip}:{dst_ip}:{dst_port}"))
-            tls_version = _tls_rng.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[
-                0
-            ]
-            if tls_version == "TLSv13":
-                cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[
-                    0
-                ]
-            else:
-                cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[
-                    0
-                ]
-            # ~2% handshake failure (bug #5)
-            ssl_established = rng.random() > _SSL_FAILURE_RATE
-            # Weighted SSL history patterns (bug #6)
-            if ssl_established:
-                ssl_hist = rng.choices(
-                    _SSL_HIST_SUCCESS_VALUES, weights=_SSL_HIST_SUCCESS_WEIGHTS, k=1
-                )[0]
-            else:
-                ssl_hist = rng.choices(
-                    _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
-                )[0]
-            event.ssl = SslContext(
-                version=tls_version,
-                cipher=cipher if ssl_established else "",
-                server_name=server_name,
-                resumed=rng.random() < 0.45 if ssl_established else False,
-                established=ssl_established,
-                ssl_history=ssl_hist,
+            self._attach_ssl_context(
+                event,
+                hostname=hostname,
+                dns=dns,
+                dst_ip=dst_ip,
+                rng=rng,
+                allow_failure=True,
             )
-            # Failed handshake side-effects on connection state
-            if not ssl_established:
-                event.network.conn_state = rng.choice(["S1", "SH"])
-                event.network.history = "Sh" if event.network.conn_state == "SH" else "ShR"
-                event.network.resp_bytes = 0
-                event.network.orig_bytes = 0
-                if event.network.duration is not None:
-                    event.network.duration = rng.uniform(0.0, 0.5)
-
-            # X.509 certificate for SSL connections (fan-out to x509.log)
-            # Only for established handshakes — failed ones have no cert exchange.
-            if ssl_established:
-                import hashlib
-
-                from evidenceforge.events.contexts import X509Context
-
-                # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
-                cert_name = server_name or dst_ip
-                cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
-                cert_fuid = f"F{cert_hash[:16]}"
-                # Issuer-aware certificate generation from YAML config
-                from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
-
-                issuer_cfg = pick_issuer(rng, server_name=cert_name)
-                key_type, key_length = pick_key_type(rng, issuer_cfg)
-                is_ecdsa = key_type == "ecdsa"
-                now_epoch = int(event.timestamp.timestamp())
-                # Support validity_days_min/max ranges; fall back to scalar validity_days
-                _vd_fallback = issuer_cfg.get("validity_days", 397)
-                _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
-                _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
-                validity_days = rng.randint(_vd_min, _vd_max)
-                not_before_max = issuer_cfg.get("not_before_max_days", 300)
-                not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
-                remaining_days = validity_days - not_before_days
-                # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
-                # real hostnames get the domain + wildcard SAN.
-                _is_ip = False
-                try:
-                    import ipaddress as _ipa
-
-                    _ipa.ip_address(cert_name)
-                    _is_ip = True
-                except ValueError:
-                    pass
-                if _is_ip:
-                    san_dns_list: list[str] = []
-                elif "." in cert_name:
-                    san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
-                else:
-                    san_dns_list = [cert_name]
-                event.x509 = X509Context(
-                    fuid=cert_fuid,
-                    fingerprint=cert_hash,
-                    certificate_version=3,
-                    certificate_serial=f"{rng.getrandbits(128):032X}",
-                    certificate_subject=f"CN={cert_name}",
-                    certificate_issuer=issuer_cfg["name"],
-                    certificate_not_valid_before=now_epoch - not_before_days * 86400,
-                    certificate_not_valid_after=now_epoch + remaining_days * 86400,
-                    certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-                    certificate_sig_alg="ecdsa-with-SHA256"
-                    if is_ecdsa
-                    else "sha256WithRSAEncryption",
-                    certificate_key_type=key_type,
-                    certificate_key_length=key_length,
-                    certificate_exponent="65537" if not is_ecdsa else "",
-                    san_dns=san_dns_list,
-                    basic_constraints_ca=False,
-                    host_cert=True,
-                    client_cert=False,
-                )
-                event.ssl.cert_chain_fuids = [cert_fuid]
-
-                # OCSP response (~30% of SSL connections)
-                if rng.random() < 0.30:
-                    from evidenceforge.events.contexts import OcspContext
-                    from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
-
-                    event.ocsp = OcspContext(
-                        id=_gen_uid("F"),
-                        hash_algorithm="sha256",
-                        issuer_name_hash=hashlib.sha256(
-                            event.x509.certificate_issuer.encode()
-                        ).hexdigest()[:40],
-                        issuer_key_hash=hashlib.sha256(
-                            f"key_{event.x509.certificate_issuer}".encode()
-                        ).hexdigest()[:40],
-                        serial_number=event.x509.certificate_serial,
-                        cert_status="good",
-                        this_update=now_epoch - rng.randint(0, 86400),
-                        next_update=now_epoch + rng.randint(86400, 86400 * 7),
-                    )
 
         elif (
             not local_only
@@ -2652,6 +2665,21 @@ class ActivityGenerator:
                 event.network.orig_bytes = event.http.request_body_len or rng.randint(200, 2000)
             if event.network.resp_bytes == 0:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
+
+        if (
+            not local_only
+            and event.network.service == "ssl"
+            and event.network.conn_state == "SF"
+            and event.ssl is None
+        ):
+            self._attach_ssl_context(
+                event,
+                hostname=hostname,
+                dns=dns,
+                dst_ip=dst_ip,
+                rng=rng,
+                allow_failure=False,
+            )
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)

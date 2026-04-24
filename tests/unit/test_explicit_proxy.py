@@ -393,3 +393,38 @@ class TestExplicitProxyVisibility:
             for query in queries
             for public_hint in ("hotjar", "hubspot", "amplitude", "intercom", "linkedin")
         )
+
+    def test_established_ssl_connection_always_has_ssl_context(self):
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        emitters = _emitters()
+        generator = ActivityGenerator(state_manager, emitters)
+
+        generator.generate_connection(
+            src_ip="10.0.3.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            hostname="example.com",
+            conn_state="S0",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                version="1.1",
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        conn_event = emitters["zeek_conn"].emit.call_args.args[0]
+        assert conn_event.network.conn_state == "SF"
+        assert conn_event.ssl is not None
+        assert conn_event.ssl.established is True
+        assert conn_event.x509 is not None
+        assert conn_event.ssl.cert_chain_fuids == [conn_event.x509.fuid]
