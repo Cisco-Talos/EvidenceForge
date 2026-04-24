@@ -190,6 +190,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states — rebalanced TCP distribution: SF 82%→62%, added S2/S3 half-closed states, increased S0/REJ/RSTO/RSTR
 - [x] SSL ssl_history limited to 2 values (CsiI, CsijI) — stale audit finding: generator now has 5 success patterns + 2 failure patterns, and `tests/unit/test_network_realism.py` verifies diversity.
 - [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
+- [ ] Zeek files not chronologically ordered after multi-source generation — agent eval on the HTTP/proxy sample found timestamp inversions in `conn.json`, `http.json`, `ssl.json`, and `x509.json`. Determine whether this is intended merged-worker behavior or whether Zeek emitters should sort on close like web/proxy access logs.
 - [ ] SMB volume too low for Windows file server environments
 - [x] ~~DNS UIDs missing from conn.log (~7%)~~ — no longer reproduces (0/6487 orphans on apt-healthcare-breach); prior visibility fixes resolved this
 - [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
@@ -264,6 +265,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Proxy logs omitted/mis-scored in evaluation — proxy parser existed but was not imported into the evaluation parser registry, and optional dash fields were parsed as invalid nulls. Registered `ProxyAccessParser`, added discovery coverage for host-directory `proxy_access.log`, and aligned optional field parsing/format validation.
 - [x] Web/proxy access logs not chronologically sorted — baseline audit found per-web-server timestamp inversions. Host-multiplexed web/proxy access writers now sort by rendered request timestamp before flush; focused emitter tests added.
 - [x] Web scan request counts too identical across campaigns — duration/end-time web_scan events treated `rate` as exact throughput. Explicit `count` remains exact, while duration/end-time scans now apply deterministic per-campaign rate drift so repeated scanner runs do not produce identical request totals.
+- [ ] Proxy access logs lack coherent Zeek-observed proxy path — agent eval found 53,729 proxy records but only 1,120 Zeek connections involving `proxy01`, 0 on port 3128, and most proxy records line up with direct client→origin SSL instead of client→proxy or proxy→origin. Model explicit/transparent/SSL-bump proxy deployment semantics before expanding proxy realism further.
 - [x] ✓² Proxy user-agent pool limited to 2 agents — expanded to 8 diverse agents (Chrome/Firefox/Edge/Opera/IE11)
 - [x] ✓² Proxy/SSL hostname uses CDN reverse-DNS PTR records instead of domain names — now prefers dns.query from DnsContext; partial fix (first connections per host still use PTR when no DNS context exists)
 - [x] ✓² Proxy URL paths all root "/" only — added pool of 18 realistic URI paths
