@@ -45,6 +45,7 @@ from evidenceforge.generation.activity.create_remote_thread_patterns import (
 )
 from evidenceforge.generation.activity.generator import _dns_rtt
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
     pick_granted_access,
@@ -1440,7 +1441,7 @@ class BaselineMixin:
                         query_type="A",
                         rcode="NOERROR",
                         rcode_num=0,
-                        answers=[f"198.51.100.{rng.randint(1, 254)}"],
+                        answers=[_generate_random_external_ip(rng)],
                         TTLs=[float(rng.randint(30, 300))],
                         rtt=_dns_rtt(rng),
                     )
@@ -4656,7 +4657,12 @@ class BaselineMixin:
                             else "10.0.0.1"
                         )
 
-                    is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
+                    is_external_client = not _is_private_ip(client_ip)
+                    dst_port = 80
+                    dst_service = "http"
+                    if is_external_client and rng.random() < 0.85:
+                        dst_port = 443
+                        dst_service = "ssl"
                     if is_external_client and _pub_hosts:
                         http_host = rng.choice(_pub_hosts)
                     else:
@@ -4685,15 +4691,21 @@ class BaselineMixin:
                         site_map=_site_map,
                         is_bot=_ua_is_bot,
                         context="general",
-                        port=80,
+                        port=dst_port,
                     )
+                    effective_dst_ip = sys_obj.ip
+                    if is_external_client and hasattr(self, "dispatcher"):
+                        visibility = self.dispatcher.visibility_engine
+                        vip = visibility._real_ip_to_vip.get(sys_obj.ip) if visibility else None
+                        if vip:
+                            effective_dst_ip = vip
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
-                        dst_ip=sys_obj.ip,
+                        dst_ip=effective_dst_ip,
                         time=ts,
-                        dst_port=80,
+                        dst_port=dst_port,
                         proto="tcp",
-                        service="http",
+                        service=dst_service,
                         duration=rng.uniform(0.01, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=resp_bytes,
@@ -4713,6 +4725,7 @@ class BaselineMixin:
                             resp_mime_types=[mime] if status == 200 else [],
                             tags=[],
                         ),
+                        hostname=http_host,
                     )
 
     def _generate_rsat_sessions(self, current_hour: datetime, rng, local_dt) -> None:

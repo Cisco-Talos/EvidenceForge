@@ -43,16 +43,8 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
 
-# Teardown reason strings weighted by likelihood
-_TEARDOWN_REASONS = [
-    "TCP FINs",
-    "TCP FINs",
-    "TCP FINs",
-    "TCP Reset-O",
-    "TCP Reset-I",
-    "Conn-timeout",
-    "SYN Timeout",
-]
+_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs", "TCP FINs", "TCP FINs", "TCP Reset-O", "TCP Reset-I")
+_TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 
 
 def _asa_timestamp_sort_key(line: str) -> str:
@@ -118,24 +110,29 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         Uses timestamp-derived base so IDs remain monotonic after
         chronological sorting of the output buffer.
         """
-        if ts is not None:
-            from datetime import datetime
+        current = self._conn_id_counters.get(sensor_hostname)
+        if current is None:
+            seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
+            current = 1_000_000 + (seed % 100_000_000)
+        self._conn_id_counters[sensor_hostname] = current + 1
+        return current
 
-            if isinstance(ts, datetime):
-                epoch = int(ts.timestamp() * 1000)
-            else:
-                epoch = int(float(ts) * 1000)
-            base = epoch % 0xFFFFFFFF
-        else:
-            current = self._conn_id_counters.get(sensor_hostname)
-            if current is None:
-                seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-                current = 1_000_000 + (seed % 0xFFE00000)
-            base = current
-        sensor_offset = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:4], 16)
-        seq = self._conn_id_counters.get(sensor_hostname, sensor_offset) & 0xFFF
-        self._conn_id_counters[sensor_hostname] = seq + 1
-        return (base & 0xFFFFF000) | (seq & 0xFFF)
+    @staticmethod
+    def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:
+        """Choose an ASA teardown reason consistent with connection outcome."""
+        if protocol != "tcp":
+            return ""
+        state = getattr(net, "conn_state", "") or ""
+        payload_bytes = (getattr(net, "orig_bytes", 0) or 0) + (getattr(net, "resp_bytes", 0) or 0)
+        if state in {"S0", "S1", "SH", "SHR"} and payload_bytes == 0:
+            return "SYN Timeout"
+        if state in {"REJ", "RSTO"}:
+            return "TCP Reset-O"
+        if state == "RSTR":
+            return "TCP Reset-I"
+        reasons = _TCP_SUCCESS_TEARDOWN_REASONS if payload_bytes else _TCP_PARTIAL_TEARDOWN_REASONS
+        reason_idx = int(hashlib.md5(f"{conn_id}".encode()).hexdigest()[:4], 16) % len(reasons)
+        return reasons[reason_idx]
 
     def _resolve_interface(self, ip: str, sensor_hostname: str) -> str:
         """Resolve an IP address to an ASA interface name.
@@ -176,6 +173,15 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         minutes = (total_seconds % 3600) // 60
         secs = total_seconds % 60
         return f"{hours}:{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _format_teardown_duration(net: Any, protocol: str, reason: str, conn_id: int) -> str:
+        """Format teardown duration, including realistic SYN timeout waits."""
+        duration = getattr(net, "duration", None)
+        if protocol == "tcp" and reason == "SYN Timeout" and (duration is None or duration < 1):
+            timeout_seconds = 15 + (conn_id % 31)
+            return CiscoAsaEmitter._format_duration(float(timeout_seconds))
+        return CiscoAsaEmitter._format_duration(duration)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
@@ -318,7 +324,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         fw_hostname: str,
     ) -> None:
         """Emit a Teardown connection record (302014/302016/302021)."""
-        duration = self._format_duration(net.duration)
+        reason = self._teardown_reason(net, protocol, conn_id)
+        duration = self._format_teardown_duration(net, protocol, reason, conn_id)
         total_bytes = (net.orig_bytes or 0) + (net.resp_bytes or 0)
         teardown_ts = event.timestamp
         if net.duration and net.duration > 0:
@@ -336,11 +343,6 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         else:
             msg_id = 302014 if protocol == "tcp" else 302016
             proto_upper = protocol.upper()
-            # Pick a realistic teardown reason
-            reason_idx = int(hashlib.md5(f"{conn_id}".encode()).hexdigest()[:4], 16) % len(
-                _TEARDOWN_REASONS
-            )
-            reason = _TEARDOWN_REASONS[reason_idx] if protocol == "tcp" else ""
             # Inbound static NAT: teardown shows real (post-NAT) dst IP
             nat = event.nat
             is_inbound_nat = (
@@ -433,18 +435,25 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         # Determine if source or destination was translated
         is_src_nat = nat.mapped_src_ip != net.src_ip
         if is_src_nat:
+            mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
+                "_default", "outside"
+            )
             message = (
                 f"Built {nat_label} {proto_upper} translation from "
                 f"{src_iface}:{net.src_ip}/{net.src_port} to "
-                f"{dst_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port}"
+                f"{mapped_src_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port}"
             )
         else:
             # Destination NAT (static inbound): public IP is on outside,
             # real IP is on dmz/inside
+            public_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
+                "_default", "outside"
+            )
+            real_iface = self._resolve_interface(nat.mapped_dst_ip, sensor_hostname)
             message = (
                 f"Built {nat_label} {proto_upper} translation from "
-                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} to "
-                f"{dst_iface}:{net.dst_ip}/{net.dst_port}"
+                f"{public_iface}:{net.dst_ip}/{net.dst_port} to "
+                f"{real_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port}"
             )
         event_data = {
             "timestamp": event.timestamp,
@@ -479,18 +488,25 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             teardown_ts = event.timestamp + timedelta(seconds=net.duration)
         is_src_nat = nat.mapped_src_ip != net.src_ip
         if is_src_nat:
+            mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
+                "_default", "outside"
+            )
             message = (
                 f"Teardown {nat_label} {proto_upper} translation from "
                 f"{src_iface}:{net.src_ip}/{net.src_port} to "
-                f"{dst_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port} "
+                f"{mapped_src_iface}:{nat.mapped_src_ip}/{nat.mapped_src_port} "
                 f"duration {duration}"
             )
         else:
             # Destination NAT teardown: same interface mapping as 305011
+            public_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(
+                "_default", "outside"
+            )
+            real_iface = self._resolve_interface(nat.mapped_dst_ip, sensor_hostname)
             message = (
                 f"Teardown {nat_label} {proto_upper} translation from "
-                f"{src_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} to "
-                f"{dst_iface}:{net.dst_ip}/{net.dst_port} "
+                f"{public_iface}:{net.dst_ip}/{net.dst_port} to "
+                f"{real_iface}:{nat.mapped_dst_ip}/{nat.mapped_dst_port} "
                 f"duration {duration}"
             )
         event_data = {

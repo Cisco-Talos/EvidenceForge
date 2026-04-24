@@ -151,6 +151,8 @@ class TestExplicitProxyVisibility:
         )
         assert conn_event.network.orig_bytes >= proxy_event.proxy.cs_bytes
         assert conn_event.network.resp_bytes >= proxy_event.proxy.sc_bytes
+        assert conn_event.network.orig_bytes >= proxy_event.proxy.cs_bytes + 500
+        assert conn_event.network.resp_bytes >= proxy_event.proxy.sc_bytes + 5000
         assert conn_event.network.resp_pkts > 0
         assert not emitters["zeek_ssl"].emit.called
 
@@ -199,6 +201,39 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.host == "dynsync-update.net"
         assert proxy_event.proxy.method == "GET"
 
+    def test_auto_generated_proxy_get_has_no_zeek_request_body(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+        )
+
+        http_event = emitters["zeek_http"].emit.call_args.args[0]
+        assert http_event.http.method == "GET"
+        assert http_event.http.request_body_len == 0
+        assert http_event.network.orig_bytes > 0
+
     def test_egress_sensor_sees_proxy_to_origin_only(self):
         generator, emitters = _generator(
             [
@@ -227,7 +262,11 @@ class TestExplicitProxyVisibility:
             conn_state="SF",
         )
 
-        assert _conn_pairs(emitters) == [("10.0.3.10", "93.184.216.34", 443)]
+        pairs = _conn_pairs(emitters)
+        assert any(pair[0] == "10.0.3.10" and pair[2] == 53 for pair in pairs)
+        assert ("10.0.3.10", "93.184.216.34", 443) in pairs
+        assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
+        assert emitters["zeek_dns"].emit.called
         assert emitters["zeek_ssl"].emit.called
 
     def test_sensor_monitoring_both_sides_sees_both_proxy_legs(self):

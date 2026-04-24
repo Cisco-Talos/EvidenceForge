@@ -251,9 +251,9 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 
 **Example records:**
 ```
-<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to outside:203.0.113.50/443 (203.0.113.50/443)
-<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection 100042 for inside:10.0.10.50/54321 to outside:203.0.113.50/443 duration 0:01:23 bytes 5120 TCP FINs
-<164>Jun 15 14:23:10 fw01 %ASA-4-106023: Deny tcp src outside:198.51.100.1/44231 dst inside:10.0.10.50/445 by access-group "outside_access_in" [0x0, 0x0]
+<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to outside:45.83.221.50/443 (45.83.221.50/443)
+<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection 100042 for inside:10.0.10.50/54321 to outside:45.83.221.50/443 duration 0:01:23 bytes 5120 TCP FINs
+<164>Jun 15 14:23:10 fw01 %ASA-4-106023: Deny tcp src outside:104.248.71.33/44231 dst inside:10.0.10.50/445 by access-group "outside_access_in" [0x0, 0x0]
 <164>Jun 15 14:23:15 fw01 %ASA-4-733100: [Scanning] drop rate-1 exceeded. Current burst rate is 87 per second, max configured rate is 10; Current average rate is 45 per second, max configured rate is 5; Cumulative total count is 2340
 ```
 

@@ -8,9 +8,15 @@
 # - public_cidrs model field and validation
 
 import ipaddress
+from datetime import UTC, datetime
+from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.contexts import HttpContext
+from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import (
     FirewallRule,
     NatRule,
@@ -127,6 +133,60 @@ class TestVipSegmentRegistration:
         real_segs = engine._resolve_ip_segments("172.16.0.5")
         assert vip_segs == real_segs
         assert "dmz" in vip_segs
+
+    def test_connection_to_vip_resolves_destination_host_context(self):
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+
+        config, systems = _make_network_config(
+            nat_rules=[
+                NatRule(type="static", src=["dmz"], mapped_ip="203.0.113.5", real_ip="172.16.0.5")
+            ]
+        )
+        visibility = NetworkVisibilityEngine(network_config=config, systems=systems)
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        emitters = {
+            "web_access": Mock(),
+            "zeek_conn": Mock(),
+            "cisco_asa": Mock(),
+        }
+        emitters["web_access"].can_handle.side_effect = lambda event: event.http is not None
+        emitters["zeek_conn"].can_handle.side_effect = lambda event: event.network is not None
+        emitters["cisco_asa"].can_handle.side_effect = lambda event: event.network is not None
+        dispatcher = EventDispatcher(state_manager, emitters, visibility_engine=visibility)
+        generator = ActivityGenerator(
+            state_manager,
+            emitters,
+            network_visibility=visibility,
+            dispatcher=dispatcher,
+        )
+        generator._ip_to_system = {system.ip: system for system in systems}
+
+        generator.generate_connection(
+            src_ip="45.33.49.112",
+            dst_ip="203.0.113.5",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=0,
+            resp_bytes=5000,
+            hostname="www.example.org",
+            http=HttpContext(
+                method="GET",
+                host="www.example.org",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=5000,
+            ),
+            conn_state="SF",
+        )
+
+        web_event = emitters["web_access"].emit.call_args.args[0]
+        assert web_event.dst_host is not None
+        assert web_event.dst_host.hostname == "WEB-01"
+        assert web_event.network.dst_ip == "203.0.113.5"
 
 
 class TestPublicCidrAutoDerivation:

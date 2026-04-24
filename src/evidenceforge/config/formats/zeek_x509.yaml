@@ -84,6 +84,16 @@ fields:
     required: false
     description: "RSA exponent"
 
+  - name: san.dns
+    type: list
+    required: false
+    description: "DNS subject alternative names"
+
+  - name: basic_constraints.ca
+    type: boolean
+    required: false
+    description: "Whether the certificate is a CA certificate"
+
   - name: host_cert
     type: boolean
     required: true

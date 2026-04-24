@@ -35,7 +35,7 @@
       - type: static
         src: dmz
         real_ip: 10.10.3.10 (WEB-EXT-01)
-        mapped_ip: 198.51.100.10
+        mapped_ip: 45.33.32.10
     policy:
       - {src: external, dst: dmz, ports: [80, 443]}          # Allow web traffic to DMZ
       - {src: corporate_lan, dst: any}                         # Users can reach anything
@@ -257,7 +257,7 @@
   - 305012 (Teardown NAT translation) present
   - Built messages show mapped IPs in parentheses that differ from real IPs
   - Outside Zeek sensors show post-NAT source IPs; inside sensors show real IPs
-  - Static NAT: inbound connections to VIP (198.51.100.10) translated to real IP (10.10.3.10)
+  - Static NAT: inbound connections to VIP (45.33.32.10) translated to real IP (10.10.3.10)
 
   Data Realism coverage (verify in generated data):
   - Causal expansion: DNS queries precede TCP connections in zeek_dns/zeek_conn; Kerberos 4768/4769

@@ -790,7 +790,7 @@ class EmitterSetupMixin:
     def _generate_external_client_ip(self, rng) -> str:
         """Generate a random external (non-RFC1918) IP for web server clients.
 
-        Excludes RFC 1918, RFC 5737, loopback, and the scenario's own
+        Excludes non-global special-use ranges and the scenario's own
         org CIDRs (internal segments + public_cidrs) so generated external
         client IPs never accidentally land inside the org's address space.
         """
@@ -799,23 +799,11 @@ class EmitterSetupMixin:
         org_nets = getattr(self, "_org_cidr_networks", [])
         for _ in range(1000):  # safety bound
             ip = f"{rng.randint(1, 223)}.{rng.randint(0, 255)}.{rng.randint(0, 255)}.{rng.randint(1, 254)}"
-            first = int(ip.split(".")[0])
-            if first == 10 or first == 127:
-                continue
-            if ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31:
-                continue
-            if ip.startswith("192.168."):
-                continue
-            # Exclude RFC 5737 documentation/TEST-NET ranges
-            if (
-                ip.startswith("203.0.113.")
-                or ip.startswith("198.51.100.")
-                or ip.startswith("192.0.2.")
-            ):
+            addr = _ipa_ext.ip_address(ip)
+            if not addr.is_global:
                 continue
             # Exclude org's own CIDRs
             if org_nets:
-                addr = _ipa_ext.ip_address(ip)
                 if any(addr in net for net in org_nets):
                     continue
             return ip

@@ -198,6 +198,7 @@ class ScenarioValidator:
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
+        self._validate_storyline_time_window()
         self._validate_expansion_redundancy()
         self._validate_process_network_pairing()
         self._validate_firewall_config()
@@ -1277,20 +1278,72 @@ class ScenarioValidator:
                 return td.total_seconds()
             except (ValueError, TypeError):
                 return None
-        else:
-            # Absolute ISO 8601
-            try:
-                from datetime import datetime
+        # Absolute ISO 8601
+        try:
+            from datetime import datetime
 
-                dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                start = self.scenario.time_window.start
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=UTC)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=UTC)
-                return (dt - start).total_seconds()
+            dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+            start = self.scenario.time_window.start
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return (dt - start).total_seconds()
+        except (ValueError, TypeError):
+            return None
+
+    def _time_window_seconds(self) -> float | None:
+        """Return configured generation window length in seconds, if resolvable."""
+        from evidenceforge.utils.time import parse_duration
+
+        if self.scenario.time_window.duration:
+            try:
+                return parse_duration(self.scenario.time_window.duration).total_seconds()
             except (ValueError, TypeError):
                 return None
+        if self.scenario.time_window.end:
+            start = self.scenario.time_window.start
+            end = self.scenario.time_window.end
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=UTC)
+            return (end - start).total_seconds()
+        return None
+
+    def _validate_storyline_time_window(self) -> None:
+        """Warn when storyline steps are scheduled outside the generation window."""
+        if not self.scenario.storyline:
+            return
+
+        window_seconds = self._time_window_seconds()
+        if window_seconds is None:
+            return
+
+        for idx, event in enumerate(self.scenario.storyline):
+            event_seconds = self._resolve_event_time(event)
+            if event_seconds is None:
+                continue
+            if event_seconds < 0 or event_seconds > window_seconds:
+                window_label = (
+                    self.scenario.time_window.duration
+                    if self.scenario.time_window.duration
+                    else self.scenario.time_window.end
+                )
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{idx}.time",
+                        message=(
+                            f"Storyline event time '{event.time}' falls outside "
+                            f"the configured time_window ({window_label})"
+                        ),
+                        suggestion=(
+                            "Extend time_window so baseline and all storyline evidence share "
+                            "the same collection horizon, or move the storyline step inside it."
+                        ),
+                    )
+                )
 
     def _validate_expansion_redundancy(self) -> None:
         """Warn when scenario manually specifies events the causal expansion engine auto-generates.

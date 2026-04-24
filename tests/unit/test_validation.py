@@ -112,6 +112,56 @@ class TestScenarioValidator:
         assert "developer" in issues[0].suggestion
         assert validator.has_errors()
 
+    def test_storyline_event_outside_time_window_warns(self):
+        """Storyline events outside the generation window should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        primary_system="TEST-01",
+                    )
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-001",
+                    time="+2h",
+                    actor="testuser",
+                    system="TEST-01",
+                    activity="malicious activity",
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                )
+            ],
+            output=OutputSpec(
+                logs=[{"format": "windows_event_security"}],
+                destination="./output",
+                compression=False,
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "warning"
+            and issue.field_path == "storyline.0.time"
+            and "outside the configured time_window" in issue.message
+            for issue in issues
+        )
+
     def test_invalid_system_assigned_user(self):
         """System assigned_user referencing non-existent user should error."""
         scenario = Scenario(

@@ -863,7 +863,7 @@ class SignalIntegrityScorer(DimensionScorer):
         """Pick the sub-event detail dict whose IPs best match the trace record.
 
         For compound storyline steps with multiple connections (e.g., webshell
-        access to 10.10.3.10 AND reverse shell to 198.51.100.30), the merged
+        access to 10.10.3.10 AND reverse shell to 45.83.221.30), the merged
         details dict has last-writer-wins IPs. This selects the sub-event that
         actually matches the trace.
         """

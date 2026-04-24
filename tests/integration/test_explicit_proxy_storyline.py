@@ -138,3 +138,110 @@ class TestStorylineBeaconExplicitProxy:
         assert all(
             " GET http://dynsync-update.net/jquery-3.3.1.min.js " in line for line in beacon_lines
         )
+        assert all(
+            "Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko" in line
+            for line in beacon_lines
+        )
+
+    def test_allowed_https_beacon_preserves_user_agent_on_connect(self, tmp_path):
+        """HTTPS storyline beacons should write the specified UA to proxy CONNECT rows."""
+        custom_ua = "EvilBeacon/4.2 (compatible; legacy-updater)"
+        scenario = Scenario(
+            version="1.0",
+            name="beacon-proxy-https-ua",
+            description="HTTPS beacon User-Agent passthrough repro",
+            environment=Environment(
+                description="Repro environment",
+                proxy=ProxyConfig(mode="explicit", listener_port=3128),
+                users=[
+                    User(
+                        username="jsmith",
+                        full_name="Jane Smith",
+                        email="j.smith@example.com",
+                        persona="analyst",
+                        primary_system="ws01",
+                    )
+                ],
+                systems=[
+                    System(
+                        hostname="proxy01",
+                        ip="192.168.1.20",
+                        os="Ubuntu 24.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                        services=["squid"],
+                    ),
+                    System(
+                        hostname="ws01",
+                        ip="192.168.2.10",
+                        os="Windows 11",
+                        type="workstation",
+                        assigned_user="jsmith",
+                    ),
+                ],
+                network=NetworkConfig(
+                    segments=[
+                        NetworkSegment(
+                            name="corporate_lan",
+                            cidr="192.168.2.0/24",
+                            exposure="internal",
+                            systems=["ws01"],
+                        ),
+                        NetworkSegment(
+                            name="services",
+                            cidr="192.168.1.0/24",
+                            exposure="internal",
+                            systems=["proxy01"],
+                        ),
+                    ],
+                    sensors=[
+                        NetworkSensor(
+                            type="network",
+                            name="tap01",
+                            monitoring_segments=["services", "corporate_lan"],
+                            direction="bidirectional",
+                            placement="tap",
+                            log_formats=["zeek"],
+                        )
+                    ],
+                ),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 10, 14, 4, 0, tzinfo=UTC), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Normal browsing", intensity="low", variation="low"
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-beacon",
+                    time="+1m",
+                    actor="jsmith",
+                    system="ws01",
+                    activity="C2 HTTPS beacon to dynsync-update.net",
+                    events=[
+                        {
+                            "type": "beacon",
+                            "dst_ip": "45.33.49.112",
+                            "dst_port": 443,
+                            "hostname": "dynsync-update.net",
+                            "service": "ssl",
+                            "user_agent": custom_ua,
+                            "status_code": 200,
+                            "interval": "6m",
+                            "count": 3,
+                            "jitter": 0.0,
+                            "technique": "T1071.001 - Application Layer Protocol: Web Protocols",
+                        }
+                    ],
+                )
+            ],
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+
+        GenerationEngine(scenario, tmp_path).generate()
+
+        beacon_lines = [
+            line for line in _read_proxy_lines(tmp_path) if "dynsync-update.net" in line
+        ]
+        assert len(beacon_lines) == 3
+        assert all(" CONNECT dynsync-update.net:443 " in line for line in beacon_lines)
+        assert all(custom_ua in line for line in beacon_lines)

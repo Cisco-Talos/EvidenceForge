@@ -1238,8 +1238,10 @@ class StorylineMixin:
                 service = service or (
                     "ssl" if spec.dst_port == 443 else "http" if spec.dst_port == 80 else "ssl"
                 )
-                # Build HttpContext if HTTP fields are provided
-                if spec.method or spec.uri:
+                # Build HttpContext if HTTP/proxy-visible request metadata is provided.
+                # HTTPS CONNECT beacons still need this for proxy User-Agent fidelity
+                # even though no origin-side Zeek http.log is emitted for TLS.
+                if spec.method or spec.uri or spec.user_agent:
                     from evidenceforge.events.contexts import HttpContext
 
                     _method = spec.method or "GET"

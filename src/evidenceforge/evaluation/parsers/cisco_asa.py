@@ -67,7 +67,7 @@ TEARDOWN_ICMP = re.compile(
     r"(\w+):(\S+)/(\d+)"
 )
 
-# Deny: "Deny tcp src outside:198.51.100.1/44231 dst inside:10.0.10.50/445 ..."
+# Deny: "Deny tcp src outside:104.248.71.33/44231 dst inside:10.0.10.50/445 ..."
 DENY = re.compile(
     r"Deny\s+(\w+)\s+src\s+(\w+):(\S+?)(?:/(\d+))?\s+"
     r"dst\s+(\w+):(\S+?)(?:/(\d+))?\s+"
@@ -75,7 +75,7 @@ DENY = re.compile(
     r'by\s+access-group\s+"([^"]+)"'
 )
 
-# NAT Built 305011: "Built dynamic TCP translation from inside:10.0.10.50/54321 to outside:198.51.100.1/12345"
+# NAT Built 305011: "Built dynamic TCP translation from inside:10.0.10.50/54321 to outside:45.83.220.1/12345"
 NAT_BUILT = re.compile(
     r"Built\s+(dynamic|static)\s+(\w+)\s+translation\s+from\s+"
     r"(\w+):(\S+)/(\d+)\s+to\s+"

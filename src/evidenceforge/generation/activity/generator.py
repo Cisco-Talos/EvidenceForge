@@ -600,6 +600,7 @@ class ActivityGenerator:
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
         self._tls_seen_server_names: set[str] = set()
+        self._tls_cert_validity: dict[str, tuple[int, int]] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -902,15 +903,20 @@ class ActivityGenerator:
             f"cert_fuid_{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}".encode()
         ).hexdigest()
         cert_fuid = f"F{cert_fuid_hash[:16]}"
-        now_epoch = int(event.timestamp.timestamp())
         # Support validity_days_min/max ranges; fall back to scalar validity_days
         _vd_fallback = issuer_cfg.get("validity_days", 397)
         _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
         _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
-        validity_days = cert_rng.randint(_vd_min, _vd_max)
-        not_before_max = issuer_cfg.get("not_before_max_days", 300)
-        not_before_days = cert_rng.randint(1, min(not_before_max, validity_days - 1))
-        remaining_days = validity_days - not_before_days
+        validity = self._tls_cert_validity.get(cert_name)
+        if validity is None:
+            now_epoch = int(event.timestamp.timestamp())
+            validity_days = cert_rng.randint(_vd_min, _vd_max)
+            not_before_max = issuer_cfg.get("not_before_max_days", 300)
+            not_before_days = cert_rng.randint(1, min(not_before_max, validity_days - 1))
+            not_valid_before = now_epoch - not_before_days * 86400
+            not_valid_after = not_valid_before + validity_days * 86400
+            validity = (not_valid_before, not_valid_after)
+            self._tls_cert_validity[cert_name] = validity
         # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
         # real hostnames get the domain + wildcard SAN.
         _is_ip = False
@@ -931,11 +937,13 @@ class ActivityGenerator:
             fuid=cert_fuid,
             fingerprint=cert_hash,
             certificate_version=3,
-            certificate_serial=f"{cert_rng.getrandbits(128):032X}",
+            certificate_serial=(
+                f"{random.Random(_stable_seed(f'tls_cert_serial:{cert_name}')).getrandbits(128):032X}"
+            ),
             certificate_subject=f"CN={cert_name}",
             certificate_issuer=issuer_cfg["name"],
-            certificate_not_valid_before=now_epoch - not_before_days * 86400,
-            certificate_not_valid_after=now_epoch + remaining_days * 86400,
+            certificate_not_valid_before=validity[0],
+            certificate_not_valid_after=validity[1],
             certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
             certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
             certificate_key_type=key_type,
@@ -964,8 +972,8 @@ class ActivityGenerator:
                 ).hexdigest()[:40],
                 serial_number=event.x509.certificate_serial,
                 cert_status="good",
-                this_update=now_epoch - rng.randint(0, 86400),
-                next_update=now_epoch + rng.randint(86400, 86400 * 7),
+                this_update=int(event.timestamp.timestamp()) - rng.randint(0, 86400),
+                next_update=int(event.timestamp.timestamp()) + rng.randint(86400, 86400 * 7),
             )
 
     def _build_expansion_context(
@@ -1975,6 +1983,7 @@ class ActivityGenerator:
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         hostname_is_external = (
             bool(hostname)
+            and "." in hostname
             and not hostname.endswith(f".{ad_domain}")
             and not hostname.endswith(".local")
         )
@@ -2096,13 +2105,16 @@ class ActivityGenerator:
                     resp_mime_types=list(http.resp_mime_types),
                 )
             else:
+                request_body_len = 0
+                if proxy_context.method not in ("GET", "HEAD", "CONNECT", "OPTIONS"):
+                    request_body_len = proxy_context.cs_bytes
                 client_http = HttpContext(
                     method=proxy_context.method,
                     host=proxy_context.host,
                     uri=proxy_context.url,
                     version="1.1",
                     user_agent=proxy_context.user_agent,
-                    request_body_len=proxy_context.cs_bytes,
+                    request_body_len=request_body_len,
                     response_body_len=proxy_context.sc_bytes,
                     status_code=proxy_context.status_code,
                     status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
@@ -2113,6 +2125,15 @@ class ActivityGenerator:
                     else [],
                 )
 
+            client_orig_bytes = max(1, proxy_context.cs_bytes or orig_bytes or 1)
+            client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
+            client_duration = min(duration or 0.2, 2.0)
+            if dst_port == 443 and proxy_context.status_code < 400:
+                rng = _get_rng()
+                client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
+                client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
+                client_duration = duration or rng.uniform(0.5, 10.0)
+
             client_uid = self.generate_connection(
                 src_ip=src_ip,
                 dst_ip=proxy_sys.ip,
@@ -2120,9 +2141,9 @@ class ActivityGenerator:
                 dst_port=listener_port,
                 proto="tcp",
                 service="http",
-                duration=min(duration or 0.2, 2.0),
-                orig_bytes=max(1, proxy_context.cs_bytes or orig_bytes or 1),
-                resp_bytes=max(0, proxy_context.sc_bytes or 0),
+                duration=client_duration,
+                orig_bytes=client_orig_bytes,
+                resp_bytes=client_resp_bytes,
                 src_port=src_port,
                 emit_dns=False,
                 pid=pid,
@@ -2143,6 +2164,13 @@ class ActivityGenerator:
                     _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
                 ).lognormvariate(3.0, 0.65)
             )
+            if hostname:
+                self._emit_dns_lookup(
+                    proxy_sys.ip,
+                    dst_ip,
+                    time + egress_delay,
+                    hostname=hostname,
+                )
             self.generate_connection(
                 src_ip=proxy_sys.ip,
                 dst_ip=dst_ip,
@@ -2153,7 +2181,7 @@ class ActivityGenerator:
                 duration=duration,
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes,
-                emit_dns=emit_dns,
+                emit_dns=False,
                 pid=-1,
                 source_system=proxy_sys,
                 conn_state=conn_state,
@@ -2427,6 +2455,10 @@ class ActivityGenerator:
         dst_host_ctx = None
         if hasattr(self, "_ip_to_system") and dst_ip in self._ip_to_system:
             dst_host_ctx = self._build_host_context(self._ip_to_system[dst_ip])
+        elif self.dispatcher and self.dispatcher.visibility_engine:
+            real_dst_ip = self.dispatcher.visibility_engine._vip_to_real_ip.get(dst_ip)
+            if real_dst_ip and real_dst_ip in self._ip_to_system:
+                dst_host_ctx = self._build_host_context(self._ip_to_system[real_dst_ip])
 
         # Resolve eCAR actor_id from initiating process (if pid is known)
         conn_actor_id = ""
@@ -2479,6 +2511,19 @@ class ActivityGenerator:
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
             event.dns = dns
+        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+            dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
+            event.dns = DnsContext(
+                query=dns_query,
+                trans_id=rng.randint(1, 65535),
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR" if resp_bytes else "SERVFAIL",
+                rcode_num=0 if resp_bytes else 2,
+                answers=[dst_ip] if resp_bytes else [],
+                TTLs=[float(rng.randint(30, 900))] if resp_bytes else [],
+                rtt=_dns_rtt(rng) if resp_bytes else None,
+            )
 
         # Proxy context: attach only for established outbound internet traffic.
         # Forward proxies only see egress that completes (not blocked/denied flows).
@@ -2784,16 +2829,17 @@ class ActivityGenerator:
 
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
         # the connection must have completed successfully (SF). A connection
-        # with S0/REJ cannot have served an HTTP response.
-        if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
+        # with a handshake-only, reset, or half-close state cannot have served
+        # a Zeek HTTP transaction with request/response body accounting.
+        if (
+            event.http is not None
+            and event.network.protocol == "tcp"
+            and event.network.conn_state != "SF"
+        ):
             event.network.conn_state = "SF"
             event.network.history = "ShADadfF"
             if event.network.duration is None:
                 event.network.duration = rng.uniform(0.01, 2.0)
-            if not event.network.orig_bytes:
-                event.network.orig_bytes = event.http.request_body_len or rng.randint(200, 2000)
-            if not event.network.resp_bytes:
-                event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
 
         if event.network.protocol == "tcp" and event.network.conn_state == "SF":
             if event.http is not None:
@@ -3444,23 +3490,29 @@ class ActivityGenerator:
         cache_ttl = rng.choice([60, 120, 300, 600])  # Varied TTLs
         if ts_epoch - last_query < cache_ttl:
             return  # Cache hit — skip DNS emission
-        self._dns_cache[cache_key] = ts_epoch
 
-        # Determine DNS server IP from network visibility or use default
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        is_internal = hostname.endswith(f".{ad_domain}") or hostname.endswith(".local")
+
+        # Determine DNS server IP from network visibility or use default. Forward
+        # proxies often use upstream resolvers for Internet destinations; this
+        # also keeps explicit-proxy DNS visible when the proxy and DC share a
+        # same-segment TAP that would not observe local resolver traffic.
         dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-        dns_server_ip = _get_rng().choice(dns_ips)
+        src_system = getattr(self, "_ip_to_system", {}).get(src_ip)
+        if src_system and "forward_proxy" in (src_system.roles or []) and not is_internal:
+            dns_server_ip = _get_rng().choice(["1.1.1.1", "8.8.8.8", "9.9.9.9"])
+        else:
+            dns_server_ip = _get_rng().choice(dns_ips)
 
         _src_os = "windows"
-        if hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            _src_os = _get_os_category(self._ip_to_system[src_ip].os)
+        if src_system is not None:
+            _src_os = _get_os_category(src_system.os)
         src_port = _ephemeral_port(rng, _src_os)
 
         from evidenceforge.events.contexts import DnsContext
 
         dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
-        ad_domain = getattr(self, "_ad_domain", "corp.local")
-        is_internal = hostname.endswith(f".{ad_domain}") or hostname.endswith(".local")
-
         # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
         if rng.random() < 0.002:
             dns_ctx = DnsContext(
@@ -3562,6 +3614,12 @@ class ActivityGenerator:
         cache_age = rng.randint(0, max(1, base_ttl - 1))
         shared_ttl = float(max(1, base_ttl - cache_age))
         ttls = [shared_ttl] * len(answers)
+
+        # Only address lookups for the requested hostname populate the client
+        # DNS cache. PTR/SRV/MX companions should not hide future A/AAAA
+        # evidence for high-volume proxy or browser destinations.
+        if query == hostname and qtype in (1, 28):
+            self._dns_cache[cache_key] = ts_epoch
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(

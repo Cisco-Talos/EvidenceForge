@@ -1257,7 +1257,7 @@ class NetworkConfig(BaseModel):
     sensors: list[NetworkSensor]
     public_cidrs: list[str] = Field(
         default_factory=list,
-        description="Public address blocks allocated to the org (e.g., ['203.0.113.0/28']). "
+        description="Public address blocks allocated to the org (e.g., ['45.83.220.0/28']). "
         "External scans/probes target these ranges. When empty, auto-derived "
         "from static NAT VIPs by grouping into /24 blocks.",
     )

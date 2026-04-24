@@ -182,10 +182,10 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
       nat_rules:
         - type: dynamic_pat
           src: [workstations, servers]
-          mapped_ip: 198.51.100.1
+          mapped_ip: 45.83.220.1
         - type: static
           real_ip: 172.16.0.5
-          mapped_ip: 203.0.113.5
+          mapped_ip: 45.83.220.5
       policy:                   # Ordered rules — first match wins
         - {src: external, dst: dmz, ports: [80, 443]}
         - {src: workstations, dst: any}
@@ -204,12 +204,12 @@ The `public_cidrs` field on `NetworkConfig` declares the org's public IP address
 
 ```yaml
 network:
-  public_cidrs: ["203.0.113.0/28"]  # Optional — auto-derived from VIPs if omitted
+  public_cidrs: ["45.83.220.0/28"]  # Optional — auto-derived from VIPs if omitted
   segments: [...]
   sensors: [...]
 ```
 
-**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `203.0.113.10` and `203.0.113.14` produce `["203.0.113.0/24"]`.
+**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `45.83.220.10` and `45.83.220.14` produce `["45.83.220.0/24"]`.
 
 **Inbound traffic flow:** External clients connect to VIPs (public IPs). The NAT engine translates to real (internal) IPs per sensor — outside Zeek sees VIPs, inside Zeek sees real IPs, ASA shows both in Built/Teardown records.
 - Rules are evaluated in order; first match wins (like real ACLs)
@@ -372,6 +372,11 @@ internal state (DNS cache, process trees, active sessions, Kerberos tickets, Haw
 Events generated during warm-up update state but are **not** written to output files. This makes
 the first minutes of output look like a running system rather than a cold start. Minimum 1 hour;
 default 8 hours covers a full day/night transition for maximum realism.
+
+All `storyline` and `red_herrings` times should fall inside the configured `time_window`. For
+example, if the final storyline step is scheduled at `+36h`, set `duration` longer than 36 hours
+so baseline logs, proxy/firewall evidence, and attack traces cover the same collection horizon.
+`eforge validate` warns when a storyline step falls outside the window.
 
 ## Baseline Activity
 
@@ -579,7 +584,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
   activity: "C2 beacon to attacker infrastructure"
   events:
     - type: beacon
-      dst_ip: "198.51.100.30"
+      dst_ip: "45.83.221.30"
       dst_port: 443
       hostname: "cdn-analytics.example.com"
       interval: "5m"
@@ -595,7 +600,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
   activity: "Blocked C2 beaconing — firewall denies outbound from DC"
   events:
     - type: beacon
-      dst_ip: "198.51.100.30"
+      dst_ip: "45.83.221.30"
       dst_port: 443
       interval: "30m"
       duration: "12h"
@@ -646,7 +651,7 @@ Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, S
       dst_ip: "10.10.20.10"
       dst_port: 80
       hostname: "portal.example.com"
-      source_ip: "203.0.113.45"
+      source_ip: "104.248.71.33"
       preset: nikto
       rate: 10                        # 10 requests/second
       duration: "15m"
@@ -721,7 +726,7 @@ Use `dga_queries` for domain generation algorithm (DGA) traffic — algorithmica
       rcode_distribution:
         NXDOMAIN: 0.95
         NOERROR: 0.05
-      answer_ip: "198.51.100.99"
+      answer_ip: "45.83.221.99"
       technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
 ```
 
@@ -785,7 +790,7 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       dst_ip: "10.10.20.10"
       dst_port: 80
       service: http
-      source_ip: "203.0.113.45"
+      source_ip: "104.248.71.33"
       method: "GET"
       uri: "/ehr/login.php?id=1%27%20OR%201=1--"
       status_code: 200

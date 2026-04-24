@@ -22,11 +22,12 @@
 
 """Tests for activity generator SSL/HTTP/FileTransfer context population."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
+from evidenceforge.events.contexts import HttpContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
@@ -124,6 +125,27 @@ class TestSslContextPopulation:
         event = events[-1]
         assert event.ssl is None
 
+    def test_dns_service_gets_dns_context(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.01,
+            orig_bytes=60,
+            resp_bytes=120,
+            hostname="example.com",
+        )
+
+        event = events[-1]
+        assert event.dns is not None
+        assert event.dns.query == "example.com"
+        assert event.dns.answers == ["10.0.20.10"]
+
     def test_tls12_cipher_matches_certificate_key_type(self, activity_gen):
         gen, events = activity_gen
 
@@ -170,6 +192,34 @@ class TestSslContextPopulation:
         if event.ssl is not None:
             # server_name should be set (either from REVERSE_DNS or fallback to IP)
             assert event.ssl.server_name != ""
+
+    def test_same_certificate_identity_has_stable_validity_window(self, activity_gen):
+        gen, events = activity_gen
+
+        for offset in (0, 3600):
+            gen.generate_connection(
+                src_ip="10.0.10.50",
+                dst_ip="142.250.72.36",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(seconds=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="www.gstatic.com",
+                conn_state="SF",
+            )
+            gen._tls_seen_server_names.clear()
+
+        cert_events = [event for event in events if event.x509 is not None]
+        assert len(cert_events) == 2
+        first = cert_events[0].x509
+        second = cert_events[1].x509
+        assert first.fingerprint == second.fingerprint
+        assert first.certificate_serial == second.certificate_serial
+        assert first.certificate_not_valid_before == second.certificate_not_valid_before
+        assert first.certificate_not_valid_after == second.certificate_not_valid_after
 
 
 class TestHttpContextPopulation:
@@ -235,6 +285,37 @@ class TestHttpContextPopulation:
 
         event = events[-1]
         assert event.http is None
+
+    def test_caller_provided_http_forces_conn_accounting_consistency(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=0,
+            resp_bytes=0,
+            conn_state="S1",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/index.html",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=4096,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        event = events[-1]
+        assert event.network.conn_state == "SF"
+        assert event.network.resp_bytes >= event.http.response_body_len
+        assert event.network.resp_pkts > 0
 
 
 class TestFileTransferContext:

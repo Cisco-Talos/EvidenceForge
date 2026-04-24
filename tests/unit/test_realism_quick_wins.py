@@ -22,13 +22,14 @@
 
 """Tests for realism quick-win fixes.
 
-1. RFC 5737 documentation IP exclusion
+1. External client IP special-use range exclusion
 2. ASA connection ID non-round start
 3. PAT port gaps (non-sequential)
 4. Snort microsecond timestamps
 5. ASA chronological sort on flush
 """
 
+import ipaddress
 import random
 from datetime import UTC, datetime, timedelta
 
@@ -51,7 +52,7 @@ from evidenceforge.models.scenario import (
 T0 = datetime(2024, 6, 15, 14, 0, 0, tzinfo=UTC)
 
 # ---------------------------------------------------------------------------
-# Fix 1: RFC 5737 documentation IP exclusion
+# Fix 1: Special-use external IP exclusion
 # ---------------------------------------------------------------------------
 
 
@@ -120,6 +121,58 @@ def test_generate_external_ip_excludes_rfc5737():
     obj._org_cidr_networks = []
     for _ in range(5000):
         ip = EmitterSetupMixin._generate_external_client_ip(obj, rng)
+        assert not ip.startswith("203.0.113."), f"RFC 5737 TEST-NET-3: {ip}"
+        assert not ip.startswith("198.51.100."), f"RFC 5737 TEST-NET-2: {ip}"
+        assert not ip.startswith("192.0.2."), f"RFC 5737 TEST-NET-1: {ip}"
+
+
+def test_generate_external_ip_excludes_non_global_special_use_ranges():
+    """External web clients must not use benchmark, private, loopback, or other special IPs."""
+    from unittest.mock import MagicMock
+
+    from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+    octets = [
+        198,
+        18,
+        100,
+        27,  # benchmark range that previously leaked into public web traffic
+        172,
+        16,
+        10,
+        20,  # RFC1918 private
+        127,
+        0,
+        0,
+        1,  # loopback
+        45,
+        33,
+        49,
+        112,  # global fallback
+    ]
+
+    def rigged_randint(lo, hi):
+        value = octets.pop(0)
+        assert lo <= value <= hi
+        return value
+
+    rng = MagicMock()
+    rng.randint = rigged_randint
+    obj = MagicMock(spec=[])
+    obj._org_cidr_networks = []
+    ip = EmitterSetupMixin._generate_external_client_ip(obj, rng)
+
+    assert ip == "45.33.49.112"
+    assert ipaddress.ip_address(ip).is_global
+
+
+def test_random_activity_external_ip_excludes_rfc5737():
+    """Activity-level external IP fallback must avoid documentation ranges."""
+    from evidenceforge.generation.activity.network import _generate_random_external_ip
+
+    rng = random.Random(42)
+    for _ in range(5000):
+        ip = _generate_random_external_ip(rng)
         assert not ip.startswith("203.0.113."), f"RFC 5737 TEST-NET-3: {ip}"
         assert not ip.startswith("198.51.100."), f"RFC 5737 TEST-NET-2: {ip}"
         assert not ip.startswith("192.0.2."), f"RFC 5737 TEST-NET-1: {ip}"
