@@ -39,8 +39,16 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.generation.activity.create_remote_thread_patterns import (
+    load_create_remote_thread_patterns,
+    pick_create_remote_thread_pattern,
+)
 from evidenceforge.generation.activity.generator import _dns_rtt
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.process_access_patterns import (
+    load_process_access_patterns,
+    pick_granted_access,
+)
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
@@ -135,114 +143,129 @@ def _hawkes_params_from_persona(persona: Persona | None) -> dict:
     return _HAWKES_RISK_PARAMS.get(risk, _HAWKES_RISK_PARAMS["medium"])
 
 
-# Benign CreateRemoteThread pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image)
-_BENIGN_CRT_PAIRS = [
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "explorer",
-        r"C:\Windows\explorer.exe",
-    ),
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "runtime_broker",
-        r"C:\Windows\System32\RuntimeBroker.exe",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "svchost_local_system",
-        r"C:\Windows\System32\svchost.exe",
-    ),
-    (
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "taskhostw",
-        r"C:\Windows\System32\taskhostw.exe",
-    ),
-]
+def _signature_for_loaded_module(path: str) -> str:
+    """Infer a plausible signer for a generic baseline DLL path."""
+    lower = path.lower()
+    if "google\\chrome" in lower:
+        return "Google LLC"
+    if "mozilla firefox" in lower:
+        return "Mozilla Corporation"
+    if "adobe" in lower:
+        return "Adobe Inc."
+    if "vmware" in lower:
+        return "VMware, Inc."
+    if "dell" in lower:
+        return "Dell Inc."
+    if "cisco" in lower:
+        return "Cisco Systems, Inc."
+    if "git\\" in lower:
+        return "Git for Windows"
+    if "videolan" in lower:
+        return "VideoLAN"
+    if "notepad++" in lower:
+        return "Notepad++"
+    if "7-zip" in lower:
+        return "-"
+    return "Microsoft Corporation"
 
-# Benign ProcessAccess pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image, granted_access)
-_BENIGN_PA_PAIRS = [
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "explorer",
-        r"C:\Windows\explorer.exe",
-        "0x1410",
-    ),
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "0x1010",
-    ),
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1410",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "explorer",
-        r"C:\Windows\explorer.exe",
-        "0x1000",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "svchost_local_system",
-        r"C:\Windows\System32\svchost.exe",
-        "0x1000",
-    ),
-    (
-        "services",
-        r"C:\Windows\System32\services.exe",
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "0x1000",
-    ),
-    (
-        "services",
-        r"C:\Windows\System32\services.exe",
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "0x1000",
-    ),
-    (
-        "svchost_local_system",
-        r"C:\Windows\System32\svchost.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-    (
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-    (
-        "services",
-        r"C:\Windows\System32\services.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-]
+
+def _module_matches_process(exe_name: str, module_path: str) -> bool:
+    """Return whether a generic DLL path plausibly belongs to a process."""
+    exe = exe_name.lower()
+    path = module_path.lower()
+    if "google\\chrome" in path:
+        return exe in {"chrome.exe", "msedge.exe"}
+    if "mozilla firefox" in path:
+        return exe == "firefox.exe"
+    if "microsoft onedrive" in path:
+        return exe in {"onedrive.exe", "explorer.exe"}
+    if "microsoft office" in path or "clicktorun" in path:
+        return exe in {"outlook.exe", "winword.exe", "excel.exe", "powerpnt.exe", "onedrive.exe"}
+    if "7-zip" in path or "notepad++" in path:
+        return exe == "explorer.exe"
+    if "windows defender" in path:
+        return exe in {"msmpeng.exe", "svchost.exe", "taskhostw.exe"}
+    if "vmware tools" in path or "dell\\supportassist" in path:
+        return exe in {"services.exe", "svchost.exe", "taskhostw.exe"}
+    if "cisco\\cisco anyconnect" in path:
+        return exe in {"vpnui.exe", "vpnagent.exe", "svchost.exe"}
+    if "git\\mingw64" in path:
+        return exe in {"git.exe", "code.exe", "powershell.exe", "cmd.exe"}
+    if "videolan" in path:
+        return exe == "vlc.exe"
+    if "microsoft vs code" in path:
+        return exe == "code.exe"
+    return "windows\\system32" in path
+
+
+def _registry_writer_candidates(
+    key: str,
+    sys_pids: dict[str, int],
+    desktop_user: str | None,
+) -> list[tuple[int, str, str]]:
+    """Choose plausible registry writer processes for a key family."""
+    key_lower = key.lower()
+
+    def _candidate(pid_key: str, image: str, user: str = "SYSTEM") -> tuple[int, str, str] | None:
+        pid = sys_pids.get(pid_key)
+        if pid is None:
+            return None
+        return pid, image, user
+
+    candidates: list[tuple[int, str, str] | None]
+    if key.startswith("HKCU\\"):
+        user = desktop_user or "SYSTEM"
+        candidates = [
+            _candidate("explorer", r"C:\Windows\explorer.exe", user),
+            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", user),
+            _candidate("search_indexer", r"C:\Windows\System32\SearchIndexer.exe", "SYSTEM"),
+        ]
+    elif "windows defender" in key_lower:
+        candidates = [
+            _candidate(
+                "msmpeng", r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe"
+            ),
+            _candidate(
+                "mpcmdrun",
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe",
+            ),
+            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
+        ]
+    elif "windowsupdate" in key_lower or "component based servicing" in key_lower:
+        candidates = [
+            _candidate("svchost_wusvcs", r"C:\Windows\System32\svchost.exe"),
+            _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+        ]
+    elif "wbem" in key_lower or "cimom" in key_lower:
+        candidates = [
+            _candidate("wmiprvse", r"C:\Windows\System32\wbem\WmiPrvSE.exe", "NETWORK SERVICE"),
+            _candidate("svchost_dcom", r"C:\Windows\System32\svchost.exe"),
+        ]
+    elif "schedule\\taskcache" in key_lower:
+        candidates = [
+            _candidate("taskhostw", r"C:\Windows\System32\taskhostw.exe"),
+            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
+        ]
+    elif "installer" in key_lower or "uninstall" in key_lower or "app paths" in key_lower:
+        candidates = [
+            _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+        ]
+    elif "tcpip" in key_lower or "w32time" in key_lower or "netlogon" in key_lower:
+        candidates = [
+            _candidate("svchost_netsvcs", r"C:\Windows\System32\svchost.exe", "NETWORK SERVICE"),
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+        ]
+    else:
+        candidates = [
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+            _candidate("svchost_netsvcs", r"C:\Windows\System32\svchost.exe", "NETWORK SERVICE"),
+            _candidate("dllhost", r"C:\Windows\System32\dllhost.exe"),
+        ]
+
+    return [candidate for candidate in candidates if candidate is not None]
+
 
 # Synthetic SYSTEM user for baseline Event 8/10 generation
 _SYSTEM_USER = User(
@@ -3024,6 +3047,7 @@ class BaselineMixin:
                         service=conn["service"],
                         rng=rng,
                         effective_persona=eff_persona,
+                        destination_hostname=hostname,
                     )
 
                 self.state_manager.set_current_time(ts)
@@ -3136,11 +3160,23 @@ class BaselineMixin:
             req_dst_ip = dst_ip
             req_hostname = hostname
             if req.hostname != hostname:
-                req_hostname = req.hostname
-                # Resolve CDN domain to an IP
-                _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
-                if cdn_ip:
-                    req_dst_ip = cdn_ip
+                app_specific_tags = [
+                    tag for tag in ("outlook", "teams", "onedrive") if tag in domain_tags
+                ]
+                if app_specific_tags:
+                    # App clients fetch supporting resources from their own
+                    # SaaS endpoint family, not arbitrary web/CDN domains.
+                    req_hostname, req_dst_ip = pick_domain_and_ip(
+                        rng,
+                        rng.choice(app_specific_tags),
+                        src_host=system.hostname,
+                    )
+                else:
+                    req_hostname = req.hostname
+                    # Resolve CDN domain to an IP
+                    _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
+                    if cdn_ip:
+                        req_dst_ip = cdn_ip
 
             http_ctx = HttpContext(
                 method=req.method,
@@ -3490,6 +3526,7 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.edr_pools import (
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
+                    materialize_edr_template,
                 )
 
                 _REG_KEYS_HKCU = get_registry_keys_hkcu()
@@ -3505,14 +3542,28 @@ class BaselineMixin:
                 _hkcu_rate = 0.30 if _has_desktop else 0.0
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                    if rng.random() >= _hkcu_rate:
-                        _key, _vname, _details = rng.choice(_REG_KEYS_HKLM)
-                        _reg_pid = _svc_pid
-                        _reg_user = "SYSTEM"
-                    else:
+                    if rng.random() < _hkcu_rate:
                         _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
-                        _reg_pid = sys_pids.get("explorer", _svc_pid)
-                        _reg_user = system.assigned_user or "SYSTEM"
+                    else:
+                        dynamic_hklm = [entry for entry in _REG_KEYS_HKLM if "{" in entry[0]]
+                        static_hklm = [entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]]
+                        pool = dynamic_hklm if dynamic_hklm and rng.random() < 0.65 else static_hklm
+                        _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
+                    _template_user = system.assigned_user or "SYSTEM"
+                    _key = materialize_edr_template(_key, rng, _template_user)
+                    _vname = materialize_edr_template(_vname, rng, _template_user)
+                    _details = materialize_edr_template(_details, rng, _template_user)
+                    writer_candidates = _registry_writer_candidates(
+                        _key,
+                        sys_pids,
+                        system.assigned_user,
+                    )
+                    if writer_candidates:
+                        _reg_pid, _reg_image, _reg_user = rng.choice(writer_candidates)
+                    else:
+                        _reg_pid = _svc_pid
+                        _reg_image = r"C:\Windows\System32\svchost.exe"
+                        _reg_user = "SYSTEM"
                     _target = f"{_key}\\{_vname}"
                     # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
                     _reg_action = "delete" if rng.random() < 0.10 else "modify"
@@ -3525,10 +3576,7 @@ class BaselineMixin:
                             process=ProcessContext(
                                 pid=_reg_pid,
                                 parent_pid=0,
-                                image=self.activity_generator._lookup_process_name(
-                                    system.hostname, _reg_pid, "windows"
-                                )
-                                or r"C:\Windows\System32\svchost.exe",
+                                image=_reg_image,
                                 command_line="",
                                 username=_reg_user,
                             ),
@@ -3623,12 +3671,19 @@ class BaselineMixin:
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
             if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
-                # Filter pairs to only those whose PIDs are actually seeded on this host
-                valid_crt = [p for p in _BENIGN_CRT_PAIRS if p[0] in sys_pids and p[2] in sys_pids]
+                valid_crt = [
+                    p
+                    for p in load_create_remote_thread_patterns()
+                    if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
+                ]
                 if valid_crt:
                     num_crt = rng.randint(1, 3)
                     for _ in range(num_crt):
-                        src_key, src_image, tgt_key, tgt_image = rng.choice(valid_crt)
+                        pattern = pick_create_remote_thread_pattern(valid_crt, rng)
+                        src_key = pattern["source_pid_key"]
+                        src_image = pattern["source_image"]
+                        tgt_key = pattern["target_pid_key"]
+                        tgt_image = pattern["target_image"]
                         src_pid = sys_pids[src_key]
                         tgt_pid = sys_pids[tgt_key]
                         if src_pid == tgt_pid:
@@ -3648,11 +3703,19 @@ class BaselineMixin:
 
             # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
             if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
-                valid_pa = [p for p in _BENIGN_PA_PAIRS if p[0] in sys_pids and p[2] in sys_pids]
+                valid_pa = [
+                    p
+                    for p in load_process_access_patterns()
+                    if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
+                ]
                 if valid_pa:
                     num_pa = rng.randint(3, 8)
                     for _ in range(num_pa):
-                        src_key, src_image, tgt_key, tgt_image, access = rng.choice(valid_pa)
+                        pattern = rng.choice(valid_pa)
+                        src_key = pattern["source_pid_key"]
+                        src_image = pattern["source_image"]
+                        tgt_key = pattern["target_pid_key"]
+                        tgt_image = pattern["target_image"]
                         src_pid = sys_pids[src_key]
                         tgt_pid = sys_pids[tgt_key]
                         offset = rng.uniform(0, 3599)
@@ -3666,7 +3729,7 @@ class BaselineMixin:
                             source_image=src_image,
                             target_pid=tgt_pid,
                             target_image=tgt_image,
-                            granted_access=access,
+                            granted_access=pick_granted_access(pattern, rng),
                         )
 
             # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
@@ -3677,15 +3740,39 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.dll_load_profiles import (
                     get_dlls_for_process,
                 )
+                from evidenceforge.generation.activity.edr_pools import (
+                    get_dll_pool,
+                    materialize_edr_template,
+                )
 
                 running = self.state_manager.get_processes_on_system(system.hostname)
                 win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
                 if win_procs:
-                    num_dll = rng.randint(15, 40)
+                    generic_dll_pool = get_dll_pool()
+                    num_dll = rng.randint(20, 45)
                     for _ in range(num_dll):
                         proc_pid, proc_image = rng.choice(win_procs)
                         exe_name = proc_image.rsplit("\\", 1)[-1]
-                        dll_pool = get_dlls_for_process(exe_name)
+                        profiled_dlls = get_dlls_for_process(exe_name)
+                        dll_pool = list(profiled_dlls)
+                        for path in generic_dll_pool:
+                            if not _module_matches_process(exe_name, path):
+                                continue
+                            dll_pool.append(
+                                {
+                                    "path": materialize_edr_template(
+                                        path,
+                                        rng,
+                                        system.assigned_user or "SYSTEM",
+                                    ),
+                                    "signed": not any(
+                                        vendor in path
+                                        for vendor in ["7-Zip", "VideoLAN", "Notepad++"]
+                                    ),
+                                    "signature": _signature_for_loaded_module(path),
+                                    "signature_status": "Valid",
+                                }
+                            )
                         if not dll_pool:
                             continue
                         dll = rng.choice(dll_pool)

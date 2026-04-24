@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-22
+**Last Updated:** 2026-04-24
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -46,6 +46,11 @@ Runtime ownership state was expanded to track exact session/process/connection p
 Verification is complete: dedicated `tests/unit/test_world_model.py` coverage was added and `uv run pytest -v --include-slow` passed (`1483 passed`).
 
 ### Recently Resolved
+
+- [x] TODO.md reality audit — verified high-signal open realism/code-cleanup findings against the current codebase, marked stale items, and identified the generated-output validation pass needed before deeper realism work.
+  Targeted verification: `uv run pytest tests/unit/test_network_realism.py tests/unit/test_activity_helpers.py tests/unit/test_dc_kerberos_logon.py -q --no-cov` passed (25 tests).
+
+- [x] Generated-output TODO validation — generated two temporary 12-hour audit datasets under `/tmp` from the VDF scenario, including a network/IDS sensor variant. Evaluator parsed 1,057,006 records from 11 sources with 99.998% parsability and overall score 86.64. Output metrics confirmed several stale TODOs and several still-real Sysmon/DNS/ASA findings.
 
 - [x] Security: cap `baseline_activity.traffic_rates` override values (max 50,000) to prevent scenario-driven resource exhaustion DoS.
 - [x] Security: cap `dns_tunnel` payload/payload_size to 1 MiB to prevent memory exhaustion from untrusted scenarios
@@ -147,9 +152,9 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ ICMP connections carry TCP/UDP ports — force src_port=0, dst_port=0 for ICMP in generate_connection()
 - [x] ✓² Snort baseline volume too low (1-3/hour) — increased to 5-15/hour per sensor; experts still consider 73/day low vs thousands in real environments
 - [x] ✓² Snort alert timestamps not chronologically sorted — enabled _sort_before_flush on SnortEmitter
-- [ ] Snort SID revisions all `:1:1` — should vary to match real ET ruleset update patterns
+- [x] Snort SID revisions all `:1:1` — stale audit finding: generated IDS output used varied SIDs and revisions (e.g., `[2012887:1:2]`, `[2000575:1:8]`, `[2009714:1:9]`).
 - [x] ~~Snort baseline scan IPs absent from Zeek conn~~ — no longer reproduces; prior visibility fixes (denied traffic visibility, external deny scoping) resolved this
-- [ ] Snort alert volume still 10-100x too low for real perimeter IDS (experts expect thousands/day)
+- [x] Snort alert volume still 10-100x too low for real perimeter IDS (experts expect thousands/day) — stale audit finding: generated IDS sensor produced 4,065 alerts in 12h (~8,130/day) on the audit scenario.
 - [x] No ET POLICY, ET INFO, ET DNS categories in baseline — added ET POLICY (curl UA, Basic Auth, SSLv3, APT, PE download), ET INFO (Let's Encrypt, Discord, Telegram, IP lookup, TLS failure, STUN), ET DNS (.top/.cloud TLDs) in baseline.py
 
 **Sysmon:**
@@ -163,42 +168,48 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] **P1** Sysmon Event 3 (NetworkConnect), 7 (ImageLoaded), 11 (FileCreate), 12/13 (Registry), 22 (DNSQuery) — implemented with data-driven filtering via sysmon_filters.yaml (SwiftOnSecurity/Olaf Hartong style). Event 3 include-filters LOLBins + suspicious ports; Event 7 excludes Microsoft-signed System32 DLLs; Event 11 include-filters executable extensions + suspicious paths; Events 12/13 include-filter persistence/tampering keys; Event 22 logs all DNS. User-configurable via .eforge/config/ overlay with per-event enabled toggle.
 - [x] ✓³ ParentCommandLine always "-" — added parent_command_line to ProcessContext; populated via _lookup_parent_command_line() from StateManager
 - [x] Event 7 DLL load profiles per process — `loaded_modules` field on application_catalog.yaml (user apps) and system_processes.yaml (OS processes), using same schema. Unified loader in dll_load_profiles.py collects from both. Common OS loader chain applied to all processes; unprofilesd processes fall back to common-only.
-- [ ] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — real environments show 10-20+ distinct masks from AV, EDR, WMI, etc.
+- [x] GrantedAccess diversity limited to 3-4 values (0x1000/0x1010/0x1410/0x1FFFFF) — fixed with data-driven `process_access_patterns.yaml` baseline pairs and weighted mask alternatives. Verification audit output: 949 Event 10 records used 6 distinct masks (`0x1000`, `0x1400`, `0x1010`, `0x0400`, `0x1410`, `0x0410`).
 - [x] CallTrace offsets limited to 2 patterns — moved to calltrace_patterns.yaml with 8 distinct call chains (ntdll, KERNELBASE, kernel32, RPCRT4, wbemcomn, combase, advapi32, sechost)
 - [x] Sysmon EventRecordIDs perfectly sequential (no gaps) — gaps widened to 1-7 with 15% chance of 8-50
-- [ ] Event 8 StartModule/StartFunction always empty for benign pairs
-- [ ] **P1** Event 3 process-to-destination mismatch — user app sampling (Teams, Outlook, etc.) pairs process images with random baseline destinations (e.g., Teams→old.reddit.com). The process_network_map needs per-app destination domain constraints so each app only connects to plausible hosts (Teams→Microsoft domains, Outlook→O365, etc.).
-- [x] **P1** Event 3 sampling uses non-deterministic `random.random()` — baseline and user-app connection sampling in `_render_sysmon_network_connect()` uses the process-wide global RNG instead of a seeded/stable decision. Same scenario produces different Sysmon Event 3 record sets across runs, violating the deterministic-generation contract. Replace with `_stable_seed(host, uid, pid, time)` or pass a seeded RNG into the emitter path.
-- [ ] **P1** Event 7 (ImageLoaded) volume too thin — only 3-7 DLL load events per host per 6 hours. Real Sysmon with SwiftOnSecurity config logs hundreds. Baseline needs a standalone DLL load generator similar to the registry event generator.
-- [ ] **P2** Registry TargetObject path diversity — baseline registry pool has ~30 unique paths that cycle. Real Sysmon sees hundreds of distinct paths from COM registration, GPO processing, software updates. Need larger pool or dynamic path generation.
+- [x] Event 8 StartModule/StartFunction always empty for benign pairs — fixed by deterministic source-aware StartModule/StartFunction selection in the Sysmon emitter. Verification audit output: 325/325 Event 8 records had populated StartModule/StartFunction values.
+- [x] **P1** Event 3 process-to-destination mismatch — fixed with data-driven `process_network_map.yaml` `dns_tags`, app-specific DNS registry tags, and hostname-aware process attribution in `WorldPlanner.ensure_connection_process()`. Audit regeneration showed 0 bad Teams/Outlook/OneDrive Event 3 pairs; office app records only used allowed endpoint families.
+- [x] **P1** Event 3 sampling uses non-deterministic `random.random()` — fixed with per-connection stable sampling using Zeek UID/connection ID/time fallback, plus low-rate browser/app sampling. Verification audit output: 3,478 Event 3 records with 46 unique destination hostnames.
+- [x] **P1** Event 7 (ImageLoaded) volume too thin — fixed with process-aware application DLL pool materialization and higher standalone baseline sampling. Verification audit output: 459 Event 7 records across 14 Windows hosts over 12h with 46 unique ImageLoaded paths and no template-wide app DLL assignment to unrelated system processes.
+- [x] **P2** Registry TargetObject path diversity — fixed with registry template materialization in `edr_pools.yaml` (`{guid}`, `{hex}`, `{doc}`, `{mru}`, etc.) and process-create registry events. Verification audit output: Event 12/13 records used 1,048 unique TargetObject paths with 0 double-braced TargetObject artifacts.
+- [x] Sysmon actor-diversity review follow-up — independent reviewer score improved from 82% synthetic (initial) to 78% synthetic after Sysmon cleanup; completed an actor-diversity pass targeting the remaining process fingerprints.
+- [x] Event 8 source/target pairs too narrow — fixed by moving benign CreateRemoteThread pairs into `create_remote_thread_patterns.yaml` and widening seeded actors. Verification audit output: 326 Event 8 records used 10 source/target pairs.
+- [x] Event 10 source/target pairs too narrow — fixed by widening `process_access_patterns.yaml` and seeded long-lived process actors. Verification audit output: 950 Event 10 records used 16 source/target pairs.
+- [x] Registry writer processes too narrow — fixed with key-family-aware writer selection. Verification audit output: Event 12/13 records used 12 writer process images and 1,968 unique TargetObject paths with 0 template artifacts.
+- [x] Event 7 residual attribution issues — tightened generic module/process matching and retained process-aware DLL materialization. Verification audit output: 380 Event 7 records used 42 unique ImageLoaded paths.
+- [ ] Cross-source distribution realism layer — defer until data-source reviews are complete. Independent Sysmon reviews found that field-level realism improved, but per-host event volumes and recipe selection remain too uniform. Design a deterministic host/activity profile layer derived from scenario facts (host type, roles, assigned_user, persona, services, stable seed) and use it to shape Sysmon, Windows Security, Zeek, syslog, firewall, web, proxy, and eCAR/EDR rates. Avoid implementing Sysmon-only profile logic unless needed as a narrow bug fix.
 
 **Zeek:**
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
 - [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
 - [x] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states — rebalanced TCP distribution: SF 82%→62%, added S2/S3 half-closed states, increased S0/REJ/RSTO/RSTR
-- [ ] SSL ssl_history limited to 2 values (CsiI, CsijI) — need 10-20+ patterns including resumed sessions, failed handshakes
+- [x] SSL ssl_history limited to 2 values (CsiI, CsijI) — stale audit finding: generator now has 5 success patterns + 2 failure patterns, and `tests/unit/test_network_realism.py` verifies diversity.
 - [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
 - [ ] SMB volume too low for Windows file server environments
 - [x] ~~DNS UIDs missing from conn.log (~7%)~~ — no longer reproduces (0/6487 orphans on apt-healthcare-breach); prior visibility fixes resolved this
 - [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
 - [x] weird.json TCP-specific types attributed to UDP sources — split into protocol-specific pools; UDP gets DNS/checksum/length anomalies at 0.5% rate vs TCP's 3%
 - [x] Exfiltration connections show 0 bytes transferred — auto-size by technique/description heuristic; added orig_bytes/resp_bytes/conn_state to ConnectionEventSpec; storyline defaults to SF
-- [ ] No port 135 (RPC/EPMAP) traffic
+- [x] No port 135 (RPC/EPMAP) traffic — stale audit finding: baseline legitimate lateral movement, scan ports, blocked ports, RSAT tooling, and Sysmon port-name mapping all include 135/RPC.
 - [ ] Inconsistent sensor coverage for SSH pivot
 
 **DNS:**
 - [x] DNS IP pool reuse: 15+ unrelated SaaS domains resolve to same IP — switched to domain-first selection for baseline web/SaaS; FORWARD_DNS maps domain→IP; fixed 93.184.216.34 mapping (was Reuters, now example.com)
-- [ ] DNS AAAA records: unrelated services share IPv6 prefix (cross-provider)
-- [ ] CloudFront distributions resolve to Microsoft IP ranges (cross-provider)
+- [x] DNS AAAA records: unrelated services share IPv6 prefix (cross-provider) — stale audit finding: `dns_registry.yaml` now has explicit IPv6 mappings and provider-prefix fallback ranges keyed by IPv4 allocation.
+- [x] CloudFront distributions resolve to Microsoft IP ranges (cross-provider) — stale audit finding: CloudFront/AWS registry entries now resolve to AWS-style 52/54 ranges, not Microsoft-owned ranges.
 - [ ] No TXT queries (SPF/DKIM/DMARC checks)
-- [ ] No Windows telemetry noise in query set
+- [x] No Windows telemetry noise in query set — stale audit finding: registry includes Windows/background domains such as `settings-win.data.microsoft.com`, `ctldl.windowsupdate.com`, `crl.microsoft.com`, and `arc.msn.com`.
 - [x] TTL distribution too uniform — Phase 6.0: varied TTLs with cache-aging jitter
-- [ ] Queries default to corp.local instead of scenario domain
+- [x] Queries default to corp.local instead of scenario domain — stale audit finding: generated internal DNS used `vandynefoundation.org` (e.g., `dc01.vandynefoundation.org`, `_kerberos._tcp.vandynefoundation.org`, `wpad.vandynefoundation.org`), not `corp.local`.
 - [ ] MX records for CDN domains that shouldn't have mail exchangers
 
 **TLS/SSL:**
-- [ ] TLSv13 ratio too low for 2024 timeframe
+- [ ] TLSv13 ratio too low for 2024 timeframe — audit output showed TLSv13 at 19,669/56,372 SSL records (~35%), which may still be low for modern browser/SaaS traffic.
 - [ ] TLS version/cipher suite mismatches
 - [x] x509 Let's Encrypt certs show 280+ day validity (should be 90) — tls_issuers.yaml with per-issuer validity (LE=90d, DigiCert=397d, etc.); issuer-aware key type selection
 - [x] No SSL certificate subject/issuer data in ssl.log — zeek_x509.yaml includes subject/issuer fields; generation uses tls_issuers.yaml
@@ -217,7 +228,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Session IDs appear out-of-order (assigned in generation order, not chronological)
 - [ ] NTP server mismatch (Zeek shows NIST, syslog shows Ubuntu pool)
 - [ ] No SSH protocol negotiation messages
-- [ ] Logrotate/cron.daily fire too frequently (should be daily, not multiple times per hour)
+- [x] Logrotate/cron.daily fire too frequently (should be daily, not multiple times per hour) — stale audit finding: `systemd_schedules.yaml` defines logrotate and cron-daily as daily scheduled jobs with per-host jitter, outside the per-hour probability loop.
 - [x] Centralized syslog timestamps not chronologically sorted — _sort_flat_file = True in syslog.py; sorting in host_base.py
 - [ ] Dual SSH syslog entries with mismatched PIDs/ports
 
@@ -225,19 +236,19 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ IpAddress "::ffff:-" malformed — handle "-" string in _ipv6_mapped()
 - [ ] DLL file as NewProcessName in 4688
 - [x] Low 4689:4688 process termination ratio (57% vs 80-90%) — raised termination probability from 0.5 to 0.85
-- [ ] EventRecordID gaps too regular
-- [ ] 4769 TargetUserName double-realm format
-- [ ] KeyLength always 0 for NTLM logons
+- [x] EventRecordID gaps too regular — stale audit finding: audit output had 189 distinct Windows Security EventRecordID gaps (max 200) and 50 distinct Sysmon gaps (max 50).
+- [x] 4769 TargetUserName double-realm format — stale audit finding: audit output had 3,495 Event 4769 records and 0 double-realm TargetUserName values.
+- [x] KeyLength always 0 for NTLM logons — stale audit finding: audit output included both `KeyLength=0` and `KeyLength=128` values.
 - [ ] 4648 targets localhost instead of DC for domain commands
 - [ ] 4728 MemberName is "-" (should be DN of added member)
 - [ ] No 4778/4779 (RDP reconnect/disconnect)
 - [x] Process creation timestamp can precede its authorizing logon
 - [x] Missing 4634 logoff events for network logon sessions — paired logoffs for type 3 machine account logons on DCs (1-30s delay); baseline type 3/5 already had logoff pairing
-- [ ] Only AES-256 Kerberos encryption; no RC4/AES-128 mix
+- [x] Only AES-256 Kerberos encryption; no RC4/AES-128 mix — stale audit finding: Kerberos TGT/TGS/renewal generation samples `0x12`, `0x11`, and `0x17` with weighted probabilities.
 - [x] Only 2 unique TicketOptions values; zero 4771 pre-auth failures — randomized TicketOptions per event type; boosted stale 4771 probability to 15%; added active-user typo 4771 at 2%/hour
 - [x] File server has no domain user logon events — type 3 logon+logoff pairs for SMB access in baseline traffic profiles and storyline causal expansion
 - [x] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY" — _subject_domain() helper in windows.py returns "NT AUTHORITY" for SYSTEM/NETWORK SERVICE/LOCAL SERVICE
-- [ ] Event 4672 LogonId 0x3e7 for domain users — SYSTEM-only logon ID (0x3e7) assigned to regular domain users (e.g., james.washington, aisha.johnson) in Special Privileges events
+- [x] Event 4672 LogonId 0x3e7 for domain users — stale audit finding: DC-side special privileges now use `_get_user_logon_id(user.username, dc_hostname)` and targeted Kerberos/DC tests pass.
 
 **Process Trees:**
 - [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)
@@ -279,7 +290,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ensure_file_event PID/image mismatch — Event 11 file_create used child PID with parent image, breaking PID-based joins; fixed to use child's process_name for consistent attribution
 - [x] No USER_SESSION events for server-side RDP lateral movement — generate_rdp_session() calls generate_logon() on target, which dispatches USER_SESSION/LOGIN to eCAR with EdrContext
 - [x] Vary filenames in file operations — expanded _EDR_FILE_PATHS_WIN from 7 to 21 entries, _EDR_FILE_PATHS_LINUX from 5 to 20 entries
-- [ ] Template variable leak — literal `{psql_db}` appearing in eCAR output; unsubstituted template variable in process command line or file path
+- [x] Template variable leak — literal `{psql_db}` appearing in eCAR output; stale audit finding: Linux query placeholders are handled by `_parameterize_command()`, with `tests/unit/test_activity_helpers.py` covering `{psql_db}` replacement.
 
 **Cross-Source / General:**
 - [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
@@ -295,7 +306,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()
 - [x] Bash history still lacks typos, repeated commands, tab-completion artifacts — bash_commands.yaml with per-role command vocabularies (sysadmin/dba/webadmin/developer/security), template parameterization, 5% typo rate; per-server RBAC user rosters via _get_server_ssh_users()
 - [x] Baseline generates IPs outside defined network segments — external IP generator excludes org CIDRs; diagnostic validator warns on out-of-segment internal IPs
-- [ ] Parsability at ~95% (5% records fail structure validation)
+- [x] Parsability at ~95% (5% records fail structure validation) — stale audit finding: evaluator parsed 1,056,984/1,057,006 records successfully (99.998% parsability).
+- [ ] Evaluation schema missing Windows Security EventIDs 4800/4801 — audit evaluator failures were the 22 generated workstation lock/unlock events rejected by `windows_event_security` allowed_values, despite the template task map already including 4800/4801.
 
 ### Tier 4: Eval Fixes
 

@@ -25,6 +25,9 @@ caches data after first load. Two files (`network_params.yaml`,
 | `application_catalog.yaml` | `application_catalog.py` | Unified app definitions: image paths, PE metadata, command templates, persona filtering, child processes. |
 | `traffic_profiles.yaml` | `traffic_profiles.py` | Role-based and persona-based network traffic profiles. See `docs/design/traffic-profiles-design.md`. |
 | `process_network_map.yaml` | `process_network.py` | Process-to-network service mappings for PID attribution and process-network correlation. |
+| `process_access_patterns.yaml` | `process_access_patterns.py` | Sysmon Event 10 baseline source/target pairs and weighted GrantedAccess masks. |
+| `create_remote_thread_patterns.yaml` | `create_remote_thread_patterns.py` | Sysmon Event 8 benign source/target pairs for baseline CreateRemoteThread noise. |
+| `edr_pools.yaml` | `edr_pools.py` | File, registry, and DLL diversity pools with template placeholders for ambient EDR/Sysmon events. |
 
 ## Adding a New Data File
 

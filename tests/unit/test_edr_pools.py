@@ -10,6 +10,7 @@ from evidenceforge.generation.activity.edr_pools import (
     get_registry_keys_hkcu,
     get_registry_keys_hklm,
     load_edr_pools,
+    materialize_edr_template,
 )
 
 
@@ -88,16 +89,47 @@ class TestRegistryKeys:
 class TestDllPool:
     """Test DLL path pool content."""
 
-    def test_contains_system32_dlls(self):
+    def test_contains_system32_and_application_dlls(self):
         dlls = get_dll_pool()
         assert len(dlls) >= 5
-        assert all("System32" in d for d in dlls)
+        assert any("System32" in d for d in dlls)
+        assert any("Program Files" in d for d in dlls)
 
     def test_contains_common_dlls(self):
         dlls = get_dll_pool()
         dll_names = [d.rsplit("\\", 1)[-1].lower() for d in dlls]
         assert "ntdll.dll" in dll_names
         assert "kernel32.dll" in dll_names
+
+
+class TestTemplateMaterialization:
+    """Test EDR template placeholder expansion."""
+
+    def test_materializes_registry_and_dll_placeholders(self):
+        import random
+
+        rng = random.Random(7)
+        value = materialize_edr_template(
+            r"HKCU\Software\Test\{guid}\Document {doc}\{hex}\{user}",
+            rng,
+            "alice",
+        )
+
+        assert "{guid}" not in value
+        assert "{doc}" not in value
+        assert "{hex}" not in value
+        assert value.endswith(r"\alice")
+
+    def test_materializes_guid_with_single_registry_braces(self):
+        import random
+
+        rng = random.Random(9)
+        value = materialize_edr_template(r"Interfaces\{{{guid}}}\DhcpIPAddress", rng)
+
+        assert "{{" not in value
+        assert "}}" not in value
+        assert value.startswith(r"Interfaces\{")
+        assert value.endswith(r"}\DhcpIPAddress")
 
 
 class TestOverlayValidation:

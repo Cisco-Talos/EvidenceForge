@@ -779,6 +779,7 @@ class WorldPlanner:
         service: str,
         rng: random.Random,
         effective_persona: str | None = None,
+        destination_hostname: str | None = None,
     ) -> int:
         """Resolve or create a user process that can own a network connection.
 
@@ -786,14 +787,42 @@ class WorldPlanner:
             effective_persona: Override persona for catalog filtering. When set
                 (e.g. ``"_server_admin"``), restricts executables to those
                 cataloged for this persona instead of the user's normal one.
+            destination_hostname: Optional resolved destination hostname used to
+                select a plausible owning app for generic services like SSL.
         """
         compatible_exes = get_service_to_exes().get(service, [])
         if not compatible_exes:
             return -1
 
+        destination_tags: set[str] = set()
+        exe_tag_index: dict[str, set[str]] = {}
+        if destination_hostname:
+            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+            from evidenceforge.generation.activity.process_network import get_exe_to_service
+
+            destination_tags = set(get_domain_tags(destination_hostname))
+            exe_tag_index = {
+                exe.lower(): set(info.get("dns_tags") or [])
+                for exe, info in get_exe_to_service().items()
+            }
+
+        broad_tags = {"web", "saas", "cdn", "social", "background", "windows", "linux"}
+
+        def _destination_score(exe: str) -> int:
+            if not destination_tags:
+                return 1
+            exe_tags = exe_tag_index.get(exe.lower(), set())
+            if not exe_tags:
+                return 0
+            specific = destination_tags - broad_tags
+            specific_hits = len(exe_tags & specific)
+            broad_hits = len(exe_tags & destination_tags & broad_tags)
+            return specific_hits * 100 + broad_hits
+
         history_key = (system.hostname, user.username)
         history = self.activity_generator._user_process_history.get(history_key, [])
-        for pid, image in reversed(history):
+        best_existing: tuple[int, int, int] | None = None
+        for idx, (pid, image) in enumerate(reversed(history)):
             proc = self.state_manager.get_process(system.hostname, pid)
             if proc is None or proc.start_time > time:
                 continue
@@ -801,7 +830,11 @@ class WorldPlanner:
                 continue
             exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
             if exe in compatible_exes:
-                return pid
+                score = _destination_score(exe)
+                if score > 0 and (best_existing is None or (score, -idx) > best_existing[:2]):
+                    best_existing = (score, -idx, pid)
+        if best_existing is not None:
+            return best_existing[2]
 
         from evidenceforge.generation.activity.application_catalog import (
             get_app_categories,
@@ -837,12 +870,19 @@ class WorldPlanner:
             return allowed
 
         os_exes = [e for e in compatible_exes if _is_allowed(e)]
+        if destination_tags:
+            scored_exes = [(e, _destination_score(e)) for e in os_exes]
+            os_exes = [e for e, score in scored_exes if score > 0]
         if not os_exes:
             # No persona-approved executable for this service — don't
             # relax past the allowlist (that would spawn forbidden tools
             # like sqlcmd.exe for accountants).  Return -1 (no owning process).
             return -1
-        target_exe = rng.choice(os_exes)
+        if destination_tags:
+            weights = [_destination_score(e) for e in os_exes]
+            target_exe = rng.choices(os_exes, weights=weights, k=1)[0]
+        else:
+            target_exe = rng.choice(os_exes)
         image = resolve_image_path(target_exe, os_cat, username=user.username)
 
         # Build a realistic command line from the catalog template when

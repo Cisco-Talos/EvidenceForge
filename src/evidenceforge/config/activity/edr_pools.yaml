@@ -85,6 +85,18 @@ registry_keys_hkcu:
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search", "SearchboxTaskbarMode", "DWORD (0x00000002)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent", "AccentPalette", "hex:9B,9A,99,00"]
   - ["HKCU\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore", "HarvestContacts", "DWORD (0x00000001)"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU", "{mru}", "hex(2):43,00,3a,00"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\docx", "{mru}", "hex(2):43,00,3a,00"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\pdf", "{mru}", "hex(2):43,00,3a,00"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document {doc}", "Datetime", "2024-11-12T13:{mru}:00"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Excel\\File MRU", "Item {mru}", "[F00000000][T01D9]C:\\Users\\{user}\\Documents\\budget-{doc}.xlsx"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\File MRU", "Item {mru}", "[F00000000][T01D9]C:\\Users\\{user}\\Documents\\briefing-{doc}.pptx"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.docx", "{mru}", "hex:7b,{hex}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.pdf", "{mru}", "hex:7b,{hex}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}}\\Count", "HRZR_EHACNGU{doc}", "00 00 00 00 {hex}"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\Shell\\BagMRU\\{mru}", "NodeSlot", "DWORD (0x0000{mru})"]
+  - ["HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\Bags\\{doc}\\Shell", "FolderType", "Generic"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths", "url{mru}", "C:\\Users\\{user}\\Documents"]
 
 registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "SecurityHealthSystray", "C:\\Windows\\System32\\SecurityHealthSystray.exe"]
@@ -104,6 +116,16 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters", "ListenAddresses", "DWORD (0x00000001)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging", "DWORD (0x00000002)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\{package}~31bf3856ad364e35~amd64~~10.0.{rand}", "CurrentState", "DWORD (0x00000070)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{hex}\\InstallProperties", "DisplayVersion", "{version}"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{guid}}}", "DisplayName", "Microsoft Update Health Tools"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\app-{doc}.exe", "Path", "C:\\Program Files\\Common Files\\Vendor\\app-{doc}.exe"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "DWORD (0x00000001)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "DynamicSiteName", "Default-First-Site-Name"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", "C:\\ProgramData\\Vendor\\Cache\\{doc}", "DWORD (0x00000000)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{guid}}}", "EndTimeHi", "DWORD (0x00000000)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan {doc}", "Id", "{{{guid}}}"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e972-e325-11ce-bfc1-08002be10318}}\\{mru}", "DriverDesc", "Intel(R) Ethernet Connection"]
 
 dll_pool:
   - "C:\\Windows\\System32\\ntdll.dll"
@@ -116,3 +138,23 @@ dll_pool:
   - "C:\\Windows\\System32\\combase.dll"
   - "C:\\Windows\\System32\\sechost.dll"
   - "C:\\Windows\\System32\\gdi32.dll"
+  - "C:\\Program Files\\Google\\Chrome\\Application\\{version}\\chrome_elf.dll"
+  - "C:\\Program Files\\Google\\Chrome\\Application\\{version}\\libegl.dll"
+  - "C:\\Program Files\\Mozilla Firefox\\xul.dll"
+  - "C:\\Program Files\\Mozilla Firefox\\nss3.dll"
+  - "C:\\Program Files\\Microsoft OneDrive\\{version}\\FileSyncShell64.dll"
+  - "C:\\Program Files\\Microsoft Office\\root\\Office16\\AppVIsvSubsystems64.dll"
+  - "C:\\Program Files\\Microsoft Office\\root\\Office16\\GrooveUtil.DLL"
+  - "C:\\Program Files\\7-Zip\\7-zip.dll"
+  - "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\plug_ins\\Accessibility.api"
+  - "C:\\Program Files\\Common Files\\Microsoft Shared\\ClickToRun\\AppVShNotify.dll"
+  - "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
+  - "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\{version}\\MpClient.dll"
+  - "C:\\Program Files\\VMware\\VMware Tools\\vmStatsProvider.dll"
+  - "C:\\Program Files\\Dell\\SupportAssistAgent\\bin\\pcdrsysinfosoftware.p5x"
+  - "C:\\Program Files\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnapi.dll"
+  - "C:\\Program Files\\Git\\mingw64\\bin\\libcrypto-3-x64.dll"
+  - "C:\\Program Files\\Git\\mingw64\\bin\\libssl-3-x64.dll"
+  - "C:\\Program Files\\VideoLAN\\VLC\\libvlccore.dll"
+  - "C:\\Program Files\\Notepad++\\plugins\\mimeTools\\mimeTools.dll"
+  - "C:\\Program Files\\Microsoft VS Code\\resources\\app\\node_modules.asar.unpacked\\keytar\\build\\Release\\keytar.node"

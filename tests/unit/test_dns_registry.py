@@ -97,6 +97,20 @@ class TestTagQueries:
         entries = get_domains_by_tag("background", "linux")
         assert len(entries) >= 2
 
+    def test_office_app_tags_return_specific_entries(self):
+        assert {entry["domain"] for entry in get_domains_by_tag("outlook")} >= {
+            "outlook.office365.com",
+            "outlook.office.com",
+        }
+        assert {entry["domain"] for entry in get_domains_by_tag("teams")} >= {
+            "teams.microsoft.com",
+            "login.microsoftonline.com",
+        }
+        assert {entry["domain"] for entry in get_domains_by_tag("onedrive")} >= {
+            "sharepoint.com",
+            "onedrive.live.com",
+        }
+
     def test_multi_tag_filters_correctly(self):
         """Entries returned by multi-tag query have ALL specified tags."""
         entries = get_domains_by_tag("background", "windows")

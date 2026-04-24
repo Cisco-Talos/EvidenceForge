@@ -248,6 +248,7 @@ mappings:
     service: ssl                      # Zeek service label
     port: 443                         # Destination port
     external: true                    # true = external IPs, false = internal
+    dns_tags: [web]                   # Optional: constrain external destinations
 ```
 
 ### Field Reference
@@ -258,12 +259,15 @@ mappings:
 | `service` | string | yes | Zeek service label (e.g., `ssl`, `http`, `dns`, `mssql`) |
 | `port` | int | yes | Destination port |
 | `external` | bool | yes | `true` if connection targets external IPs, `false` for internal |
+| `dns_tags` | list[string] | no | DNS registry tags used as destination alternatives for this process |
 
 ### Conventions
 
 - Group related executables in a single mapping entry
 - Include both Windows (.exe) and Linux (no extension) variants where applicable
 - Match exe names exactly as they appear in application_catalog image_path basenames
+- Use `dns_tags` for app-specific SaaS clients so Event 3 process/destination pairs stay plausible (for example, Teams should use Teams/M365 endpoints, not arbitrary web domains)
+- Multiple `dns_tags` are alternatives for process-correlated destination selection and process attribution. Use one tag for tightly scoped apps, or several broad tags for browsers and generic clients.
 
 ---
 
@@ -361,11 +365,11 @@ Provides file path, registry key, and DLL pools for probabilistic background eve
 
 - `file_paths_windows:` — Windows file paths with `{user}` and `{rand}` templates (documents, temp, cache, WER, prefetch)
 - `file_paths_linux:` — Linux paths (home, tmp, /var/log, /proc)
-- `registry_keys_hkcu:` — `[key, Details]` pairs for HKCU writes (Explorer, Office, Internet Settings)
-- `registry_keys_hklm:` — `[key, Details]` pairs for HKLM writes (Run, Defender, WDigest, Firewall)
-- `dll_pool:` — System32 DLL paths for module load events
+- `registry_keys_hkcu:` — `[key, value_name, details]` triples for HKCU writes (Explorer, Office, Internet Settings)
+- `registry_keys_hklm:` — `[key, value_name, details]` triples for HKLM writes (Run, Defender, WDigest, Firewall)
+- `dll_pool:` — System32 and application DLL paths for module load events
 
-Overlay replaces entire sections (section-replace merge). Details values use Sysmon format: `"DWORD (0x00000001)"` for REG_DWORD, string for REG_SZ.
+Overlay replaces entire sections (section-replace merge). Details values use Sysmon format: `"DWORD (0x00000001)"` for REG_DWORD, string for REG_SZ. Registry and DLL entries may use `{user}`, `{rand}`, `{hex}`, `{guid}`, `{mru}`, `{doc}`, `{package}`, and `{version}` placeholders; these are materialized per emitted event to avoid repetitive TargetObject paths.
 
 ---
 
@@ -386,6 +390,72 @@ patterns:
 Offsets are fixed per-host within a generation run (matching real ASLR behavior) but vary across hosts. 8 default patterns cover: direct NtOpenProcess, kernel32 path, RPCRT4, WMI, COM/DCOM, AV/EDR, kernel-mode, and sechost paths.
 
 Overlay replaces the entire `patterns:` list.
+
+---
+
+## ProcessAccess Patterns (`process_access_patterns.yaml`)
+
+Baseline Sysmon Event 10 source/target process pairs and weighted `GrantedAccess` masks.
+Use this file when tuning benign ProcessAccess noise volume or access-mask diversity. CallTrace
+DLL chains are controlled separately by `calltrace_patterns.yaml`.
+
+### Structure
+
+```yaml
+baseline_pairs:
+  - source_pid_key: msmpeng
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    target_pid_key: lsass
+    target_image: 'C:\Windows\System32\lsass.exe'
+    access_masks:
+      - {mask: "0x1410", weight: 45}
+      - {mask: "0x1010", weight: 35}
+```
+
+### Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `source_pid_key` | string | yes | Key from the engine's seeded Windows system PID table |
+| `source_image` | string | yes | Full Windows image path for the source process |
+| `target_pid_key` | string | yes | Key from the seeded Windows system PID table |
+| `target_image` | string | yes | Full Windows image path for the target process |
+| `access_masks` | list[object] | yes | Weighted `GrantedAccess` alternatives |
+| `access_masks[].mask` | string | yes | Hex access mask, e.g. `"0x1010"` |
+| `access_masks[].weight` | int | yes | Positive relative selection weight |
+
+Overlay extends `baseline_pairs:`.
+
+---
+
+## CreateRemoteThread Patterns (`create_remote_thread_patterns.yaml`)
+
+Baseline Sysmon Event 8 source/target process pairs. Use this file when tuning
+benign remote-thread noise diversity. Source and target keys must refer to
+processes seeded in the Windows system PID table.
+
+### Structure
+
+```yaml
+baseline_pairs:
+  - source_pid_key: wmiprvse
+    source_image: 'C:\Windows\System32\wbem\WmiPrvSE.exe'
+    target_pid_key: svchost_local_system
+    target_image: 'C:\Windows\System32\svchost.exe'
+    weight: 10
+```
+
+### Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `source_pid_key` | string | yes | Key from the engine's seeded Windows system PID table |
+| `source_image` | string | yes | Full Windows image path for the source process |
+| `target_pid_key` | string | yes | Key from the seeded Windows system PID table |
+| `target_image` | string | yes | Full Windows image path for the target process |
+| `weight` | int | no | Positive relative selection weight |
+
+Overlay extends `baseline_pairs:`.
 
 ---
 

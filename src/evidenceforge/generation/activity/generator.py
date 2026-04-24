@@ -1467,6 +1467,7 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.edr_pools import (
                 get_registry_keys_hkcu,
                 get_registry_keys_hklm,
+                materialize_edr_template,
             )
 
             _pool_hkcu = get_registry_keys_hkcu()
@@ -1476,6 +1477,10 @@ class ActivityGenerator:
                     _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
                 else:
                     _key, _vname, _details = rng.choice(_pool_hkcu)
+                _template_user = user.username if user else "SYSTEM"
+                _key = materialize_edr_template(_key, rng, _template_user)
+                _vname = materialize_edr_template(_vname, rng, _template_user)
+                _details = materialize_edr_template(_details, rng, _template_user)
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
                 # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
@@ -3246,18 +3251,34 @@ class ActivityGenerator:
             return
 
         conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
+        ext_hostname = None
 
         if conn_info["external"]:
-            # External connection: domain-first selection
+            # External connection: domain-first selection. App-specific mappings
+            # can constrain destinations via DNS registry tags (e.g., Teams →
+            # Teams/M365 endpoints instead of arbitrary web/CDN domains).
             from evidenceforge.generation.activity.dns_registry import (
                 _domain_to_ip as _d2ip,
             )
             from evidenceforge.generation.activity.dns_registry import (
                 generate_long_tail_domain as _gen_lt_domain,
             )
+            from evidenceforge.generation.activity.dns_registry import (
+                pick_domain_and_ip as _pick_domain_and_ip,
+            )
 
-            ext_hostname = _gen_lt_domain(rng)
-            dst_ip = _d2ip(ext_hostname)
+            dns_tags = conn_info.get("dns_tags") or []
+            if dns_tags:
+                tag = rng.choice(dns_tags)
+                ext_hostname, dst_ip = _pick_domain_and_ip(
+                    rng,
+                    tag,
+                    src_host=system.hostname,
+                    include_os=_get_os_category(system.os),
+                )
+            else:
+                ext_hostname = _gen_lt_domain(rng)
+                dst_ip = _d2ip(ext_hostname)
         else:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])

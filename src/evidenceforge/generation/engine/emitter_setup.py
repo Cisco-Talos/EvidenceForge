@@ -623,6 +623,36 @@ class EmitterSetupMixin:
             "SearchIndexer.exe",
             "SYSTEM",
         )
+        pids["wmiprvse"] = _c(
+            pids["svchost_dcom"],
+            r"C:\Windows\System32\wbem\WmiPrvSE.exe",
+            "WmiPrvSE.exe -Embedding",
+            "NETWORK SERVICE",
+        )
+        pids["dllhost"] = _c(
+            pids["svchost_dcom"],
+            r"C:\Windows\System32\dllhost.exe",
+            "dllhost.exe /Processid:{02D4B3F1-FD88-11D1-960D-00805FC79235}",
+            "SYSTEM",
+        )
+        pids["search_protocol_host"] = _c(
+            pids["search_indexer"],
+            r"C:\Windows\System32\SearchProtocolHost.exe",
+            "SearchProtocolHost.exe Global\\UsGthrFltPipeMssGthrPipe",
+            "SYSTEM",
+        )
+        pids["mpcmdrun"] = _c(
+            pids["msmpeng"],
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe",
+            "MpCmdRun.exe -Scan -ScanType 1",
+            "SYSTEM",
+        )
+        pids["msiexec"] = _c(
+            pids["services"],
+            r"C:\Windows\System32\msiexec.exe",
+            "msiexec.exe /V",
+            "SYSTEM",
+        )
         pids["taskhostw"] = _c(
             pids["services"], r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe", "SYSTEM"
         )

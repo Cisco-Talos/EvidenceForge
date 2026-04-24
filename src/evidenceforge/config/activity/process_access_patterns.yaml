@@ -1,0 +1,166 @@
+# Sysmon Event 10 (ProcessAccess) baseline patterns.
+#
+# Each baseline pair names a long-lived source and target process from the
+# StateManager system PID table. Access masks are weighted alternatives so
+# benign ProcessAccess noise does not collapse to one mask per source/target
+# pair.
+#
+# Override via .eforge/config/activity/process_access_patterns.yaml — the
+# baseline_pairs list is extended by overlay entries.
+
+baseline_pairs:
+  - source_pid_key: msmpeng
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    target_pid_key: explorer
+    target_image: 'C:\Windows\explorer.exe'
+    access_masks:
+      - {mask: "0x1410", weight: 45}
+      - {mask: "0x1010", weight: 30}
+      - {mask: "0x1400", weight: 15}
+      - {mask: "0x0410", weight: 10}
+
+  - source_pid_key: msmpeng
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    target_pid_key: svchost_netsvcs
+    target_image: 'C:\Windows\System32\svchost.exe'
+    access_masks:
+      - {mask: "0x1010", weight: 40}
+      - {mask: "0x1410", weight: 25}
+      - {mask: "0x1400", weight: 20}
+      - {mask: "0x1000", weight: 15}
+
+  - source_pid_key: msmpeng
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    target_pid_key: lsass
+    target_image: 'C:\Windows\System32\lsass.exe'
+    access_masks:
+      - {mask: "0x1410", weight: 45}
+      - {mask: "0x1010", weight: 35}
+      - {mask: "0x1400", weight: 15}
+      - {mask: "0x0410", weight: 5}
+
+  - source_pid_key: csrss_s0
+    source_image: 'C:\Windows\System32\csrss.exe'
+    target_pid_key: explorer
+    target_image: 'C:\Windows\explorer.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 55}
+      - {mask: "0x1400", weight: 25}
+      - {mask: "0x0400", weight: 20}
+
+  - source_pid_key: csrss_s0
+    source_image: 'C:\Windows\System32\csrss.exe'
+    target_pid_key: svchost_local_system
+    target_image: 'C:\Windows\System32\svchost.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 50}
+      - {mask: "0x1400", weight: 30}
+      - {mask: "0x0400", weight: 20}
+
+  - source_pid_key: services
+    source_image: 'C:\Windows\System32\services.exe'
+    target_pid_key: svchost_netsvcs
+    target_image: 'C:\Windows\System32\svchost.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 60}
+      - {mask: "0x0400", weight: 25}
+      - {mask: "0x1400", weight: 15}
+
+  - source_pid_key: services
+    source_image: 'C:\Windows\System32\services.exe'
+    target_pid_key: msmpeng
+    target_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 55}
+      - {mask: "0x0400", weight: 25}
+      - {mask: "0x1010", weight: 20}
+
+  - source_pid_key: svchost_local_system
+    source_image: 'C:\Windows\System32\svchost.exe'
+    target_pid_key: lsass
+    target_image: 'C:\Windows\System32\lsass.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 50}
+      - {mask: "0x1010", weight: 25}
+      - {mask: "0x1400", weight: 25}
+
+  - source_pid_key: csrss_s0
+    source_image: 'C:\Windows\System32\csrss.exe'
+    target_pid_key: lsass
+    target_image: 'C:\Windows\System32\lsass.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 55}
+      - {mask: "0x1400", weight: 25}
+      - {mask: "0x0400", weight: 20}
+
+  - source_pid_key: svchost_netsvcs
+    source_image: 'C:\Windows\System32\svchost.exe'
+    target_pid_key: lsass
+    target_image: 'C:\Windows\System32\lsass.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 45}
+      - {mask: "0x1010", weight: 30}
+      - {mask: "0x1400", weight: 25}
+
+  - source_pid_key: services
+    source_image: 'C:\Windows\System32\services.exe'
+    target_pid_key: lsass
+    target_image: 'C:\Windows\System32\lsass.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 50}
+      - {mask: "0x0400", weight: 30}
+      - {mask: "0x1400", weight: 20}
+
+  - source_pid_key: wmiprvse
+    source_image: 'C:\Windows\System32\wbem\WmiPrvSE.exe'
+    target_pid_key: svchost_local_system
+    target_image: 'C:\Windows\System32\svchost.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 45}
+      - {mask: "0x0400", weight: 30}
+      - {mask: "0x1400", weight: 25}
+
+  - source_pid_key: search_indexer
+    source_image: 'C:\Windows\System32\SearchIndexer.exe'
+    target_pid_key: search_protocol_host
+    target_image: 'C:\Windows\System32\SearchProtocolHost.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 60}
+      - {mask: "0x0400", weight: 25}
+      - {mask: "0x1010", weight: 15}
+
+  - source_pid_key: dllhost
+    source_image: 'C:\Windows\System32\dllhost.exe'
+    target_pid_key: explorer
+    target_image: 'C:\Windows\explorer.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 50}
+      - {mask: "0x1400", weight: 30}
+      - {mask: "0x0400", weight: 20}
+
+  - source_pid_key: mpcmdrun
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe'
+    target_pid_key: msmpeng
+    target_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    access_masks:
+      - {mask: "0x1010", weight: 45}
+      - {mask: "0x1410", weight: 35}
+      - {mask: "0x0410", weight: 20}
+
+  - source_pid_key: msiexec
+    source_image: 'C:\Windows\System32\msiexec.exe'
+    target_pid_key: services
+    target_image: 'C:\Windows\System32\services.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 55}
+      - {mask: "0x0400", weight: 25}
+      - {mask: "0x1400", weight: 20}
+
+  - source_pid_key: taskhostw
+    source_image: 'C:\Windows\System32\taskhostw.exe'
+    target_pid_key: runtime_broker
+    target_image: 'C:\Windows\System32\RuntimeBroker.exe'
+    access_masks:
+      - {mask: "0x1000", weight: 55}
+      - {mask: "0x0400", weight: 25}
+      - {mask: "0x1400", weight: 20}

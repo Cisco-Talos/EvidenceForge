@@ -1,0 +1,69 @@
+# Sysmon Event 8 (CreateRemoteThread) benign baseline patterns.
+#
+# Each pair names source and target processes from the seeded Windows system PID
+# table. These are benign service, Defender, COM/WMI, shell, and indexing
+# relationships that create remote threads without representing attack activity.
+#
+# Override via .eforge/config/activity/create_remote_thread_patterns.yaml — the
+# baseline_pairs list is extended by overlay entries.
+
+baseline_pairs:
+  - source_pid_key: msmpeng
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    target_pid_key: explorer
+    target_image: 'C:\Windows\explorer.exe'
+    weight: 20
+
+  - source_pid_key: msmpeng
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    target_pid_key: runtime_broker
+    target_image: 'C:\Windows\System32\RuntimeBroker.exe'
+    weight: 18
+
+  - source_pid_key: csrss_s0
+    source_image: 'C:\Windows\System32\csrss.exe'
+    target_pid_key: svchost_local_system
+    target_image: 'C:\Windows\System32\svchost.exe'
+    weight: 12
+
+  - source_pid_key: svchost_netsvcs
+    source_image: 'C:\Windows\System32\svchost.exe'
+    target_pid_key: taskhostw
+    target_image: 'C:\Windows\System32\taskhostw.exe'
+    weight: 14
+
+  - source_pid_key: wmiprvse
+    source_image: 'C:\Windows\System32\wbem\WmiPrvSE.exe'
+    target_pid_key: svchost_local_system
+    target_image: 'C:\Windows\System32\svchost.exe'
+    weight: 10
+
+  - source_pid_key: search_indexer
+    source_image: 'C:\Windows\System32\SearchIndexer.exe'
+    target_pid_key: search_protocol_host
+    target_image: 'C:\Windows\System32\SearchProtocolHost.exe'
+    weight: 8
+
+  - source_pid_key: dllhost
+    source_image: 'C:\Windows\System32\dllhost.exe'
+    target_pid_key: explorer
+    target_image: 'C:\Windows\explorer.exe'
+    weight: 6
+
+  - source_pid_key: taskhostw
+    source_image: 'C:\Windows\System32\taskhostw.exe'
+    target_pid_key: runtime_broker
+    target_image: 'C:\Windows\System32\RuntimeBroker.exe'
+    weight: 6
+
+  - source_pid_key: mpcmdrun
+    source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe'
+    target_pid_key: msmpeng
+    target_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
+    weight: 4
+
+  - source_pid_key: services
+    source_image: 'C:\Windows\System32\services.exe'
+    target_pid_key: svchost_wusvcs
+    target_image: 'C:\Windows\System32\svchost.exe'
+    weight: 4
