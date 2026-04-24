@@ -154,6 +154,51 @@ class TestExplicitProxyVisibility:
         assert conn_event.network.resp_pkts > 0
         assert not emitters["zeek_ssl"].emit.called
 
+    def test_documentation_ip_with_external_hostname_routes_through_proxy(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="203.0.113.45",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="dynsync-update.net",
+            http=HttpContext(
+                method="GET",
+                host="dynsync-update.net",
+                uri="/jquery-3.3.1.min.js",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                status_code=200,
+                status_msg="OK",
+            ),
+            conn_state="SF",
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        assert ("10.0.3.10", "203.0.113.45", 80) in pairs
+        assert ("10.0.1.10", "203.0.113.45", 80) not in pairs
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.host == "dynsync-update.net"
+        assert proxy_event.proxy.method == "GET"
+
     def test_egress_sensor_sees_proxy_to_origin_only(self):
         generator, emitters = _generator(
             [

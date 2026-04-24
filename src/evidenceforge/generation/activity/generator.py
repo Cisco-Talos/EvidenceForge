@@ -1978,6 +1978,7 @@ class ActivityGenerator:
             and not hostname.endswith(f".{ad_domain}")
             and not hostname.endswith(".local")
         )
+        proxyable_external_destination = hostname_is_external or not _is_private_ip(dst_ip)
         dns_server_ips = set(getattr(self, "_dns_server_ips", []))
         if (
             proto == "tcp"
@@ -2006,7 +2007,7 @@ class ActivityGenerator:
             and proto == "tcp"
             and service in ("ssl", "http")
             and dst_port in (80, 443)
-            and not _is_private_ip(dst_ip)
+            and proxyable_external_destination
             and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
         )
         if explicit_proxy:
