@@ -304,6 +304,7 @@ oui_prefixes:
 ## tls_issuers.yaml
 
 TLS certificate issuer configurations for realistic Zeek x509/SSL log generation. Standalone — no cross-file dependencies.
+`domain_ca_overrides` maps well-known domains to their expected issuing CA so SNI, x509 subject, and issuer stay plausible.
 
 ### Structure
 

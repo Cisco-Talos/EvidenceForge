@@ -55,6 +55,7 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
 
         event_data: dict[str, Any] = {
             "ts": event.timestamp,
+            "id": x509.fuid,
             "fingerprint": x509.fingerprint,
             "certificate.version": x509.certificate_version,
             "certificate.serial": x509.certificate_serial,

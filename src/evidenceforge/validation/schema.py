@@ -184,6 +184,7 @@ class ScenarioValidator:
         self._validate_network_segments()
         self._validate_network_sensors()
         self._validate_output_formats()
+        self._validate_proxy_output_topology()
         # Eval-informed checks
         self._validate_format_os_compatibility()
         self._validate_segment_sensor_coverage()
@@ -592,6 +593,33 @@ class ScenarioValidator:
                         suggestion=f"Known formats: {', '.join(sorted(known_output_formats))}",
                     )
                 )
+
+    def _validate_proxy_output_topology(self) -> None:
+        """Warn when proxy logs are requested but no forward proxy exists."""
+        expanded_formats = self._get_expanded_formats()
+        if "proxy_access" not in expanded_formats:
+            return
+
+        has_forward_proxy = any(
+            "forward_proxy" in (system.roles or []) for system in self.scenario.environment.systems
+        )
+        if has_forward_proxy:
+            return
+
+        self.issues.append(
+            ValidationIssue(
+                severity="warning",
+                field_path="output.logs",
+                message=(
+                    "Format 'proxy_access' is requested but no system has "
+                    "roles: [forward_proxy], so proxy access logs will not be generated"
+                ),
+                suggestion=(
+                    "Add a proxy system with roles: [forward_proxy] and an appropriate "
+                    "service such as squid, or remove proxy_access from output.logs"
+                ),
+            )
+        )
 
     def _get_system_ip(self, hostname: str) -> str | None:
         """Get IP address for a system by hostname."""

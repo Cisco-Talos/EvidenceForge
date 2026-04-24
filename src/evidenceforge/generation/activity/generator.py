@@ -409,6 +409,9 @@ _NTP_STRATUM_TIMING = {
 }
 
 # TLS cipher distributions (weighted)
+_TLS_VERSION_VALUES = ("TLSv12", "TLSv13")
+_TLS_VERSION_WEIGHTS = (45, 55)
+
 _TLS12_CIPHER_DIST = (
     ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", 60),
     ("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", 25),
@@ -2049,7 +2052,9 @@ class ActivityGenerator:
             if server_name == "":
                 server_name = None
             _tls_rng = random.Random(_stable_seed(f"tls:{src_ip}:{dst_ip}:{dst_port}"))
-            tls_version = _tls_rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
+            tls_version = _tls_rng.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[
+                0
+            ]
             if tls_version == "TLSv13":
                 cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[
                     0
@@ -2096,6 +2101,7 @@ class ActivityGenerator:
                 # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
                 cert_name = server_name or dst_ip
                 cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
+                cert_fuid = f"F{cert_hash[:16]}"
                 # Issuer-aware certificate generation from YAML config
                 from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
 
@@ -2128,6 +2134,7 @@ class ActivityGenerator:
                 else:
                     san_dns_list = [cert_name]
                 event.x509 = X509Context(
+                    fuid=cert_fuid,
                     fingerprint=cert_hash,
                     certificate_version=3,
                     certificate_serial=f"{rng.getrandbits(128):032X}",
@@ -2147,6 +2154,7 @@ class ActivityGenerator:
                     host_cert=True,
                     client_cert=False,
                 )
+                event.ssl.cert_chain_fuids = [cert_fuid]
 
                 # OCSP response (~30% of SSL connections)
                 if rng.random() < 0.30:

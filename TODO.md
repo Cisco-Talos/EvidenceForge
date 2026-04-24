@@ -209,7 +209,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] MX records for CDN domains that shouldn't have mail exchangers
 
 **TLS/SSL:**
-- [ ] TLSv13 ratio too low for 2024 timeframe — audit output showed TLSv13 at 19,669/56,372 SSL records (~35%), which may still be low for modern browser/SaaS traffic.
+- [x] TLS/x509 correlation gaps — baseline audit found SSL records without `cert_chain_fuids` and x509 issuer/subject pairings that looked implausible. Added deterministic certificate file UIDs, linked ssl.log to x509.log, and tightened domain-to-CA overrides for common CA-owned/Microsoft domains.
+- [x] TLSv13 ratio too low for 2024 timeframe — audit output showed TLSv13 at 19,669/56,372 SSL records (~35%). TLS version selection now uses explicit weighted constants with TLSv13 as the modern majority default.
 - [ ] TLS version/cipher suite mismatches
 - [x] x509 Let's Encrypt certs show 280+ day validity (should be 90) — tls_issuers.yaml with per-issuer validity (LE=90d, DigiCert=397d, etc.); issuer-aware key type selection
 - [x] No SSL certificate subject/issuer data in ssl.log — zeek_x509.yaml includes subject/issuer fields; generation uses tls_issuers.yaml
@@ -259,6 +260,10 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Mimikatz at Medium integrity would succeed in scenario but fail in reality — generator doesn't model integrity levels
 
 **HTTP/Proxy:**
+- [x] Validate requested proxy output requires proxy topology — when `proxy_access` is requested but no scenario system has `roles: [forward_proxy]`, `eforge validate` now warns with actionable topology guidance. Handled in validation, not generation; tests, docs, scenario skill, and skill reference updated.
+- [x] Proxy logs omitted/mis-scored in evaluation — proxy parser existed but was not imported into the evaluation parser registry, and optional dash fields were parsed as invalid nulls. Registered `ProxyAccessParser`, added discovery coverage for host-directory `proxy_access.log`, and aligned optional field parsing/format validation.
+- [x] Web/proxy access logs not chronologically sorted — baseline audit found per-web-server timestamp inversions. Host-multiplexed web/proxy access writers now sort by rendered request timestamp before flush; focused emitter tests added.
+- [x] Web scan request counts too identical across campaigns — duration/end-time web_scan events treated `rate` as exact throughput. Explicit `count` remains exact, while duration/end-time scans now apply deterministic per-campaign rate drift so repeated scanner runs do not produce identical request totals.
 - [x] ✓² Proxy user-agent pool limited to 2 agents — expanded to 8 diverse agents (Chrome/Firefox/Edge/Opera/IE11)
 - [x] ✓² Proxy/SSL hostname uses CDN reverse-DNS PTR records instead of domain names — now prefers dns.query from DnsContext; partial fix (first connections per host still use PTR when no DNS context exists)
 - [x] ✓² Proxy URL paths all root "/" only — added pool of 18 realistic URI paths
@@ -278,10 +283,10 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 
 **Cisco ASA:**
 - [x] Security: bound threat-detection deny timestamp tracking window to prevent unbounded memory/CPU growth
-- [ ] ASA Built/Teardown counts perfectly balanced — real logs have orphans from log rotation boundaries
+- [ ] ASA imperfect-observation realism — deferred to a general solution for configurable evidence gaps. Built/Teardown counts are currently perfectly balanced, while real logs can have orphans from rotation boundaries, packet loss, sensor downtime, or collection windows. Keep exact pairing as the training-friendly default unless a realism profile enables dropped/partial firewall evidence.
 - [ ] ASA message type diversity limited to 106023/302013-16/305011-12 — missing 111008, 113004, 733100, 106001, 725001, 304001
-- [ ] ASA deny baseline uniformly spaced (3-7s) — real scans arrive in bursty patterns
-- [ ] ASA deny events use `[0x0, 0x0]` hash values uniformly
+- [ ] ASA deny baseline burstiness/profile variance — defer to a general per-source activity profile rather than a one-off ASA fix. Current deny events are uniformly spaced (3-7s); real scans should have configurable burst/quiet periods, campaign-level cadence, and source-specific variance.
+- [ ] ASA deny metadata diversity — defer to a general field-distribution realism layer. Current deny events use `[0x0, 0x0]` hash values uniformly; a later profile should model when hashes remain zero vs vary by platform/message/context.
 - [ ] NAT mapped_ip 45.33.32.1 is scanme.nmap.org — recognizable IP used as scenario PAT address
 
 **eCAR:**
@@ -293,12 +298,12 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Template variable leak — literal `{psql_db}` appearing in eCAR output; stale audit finding: Linux query placeholders are handled by `_parameterize_command()`, with `tests/unit/test_activity_helpers.py` covering `{psql_db}` replacement.
 
 **Cross-Source / General:**
-- [ ] Cross-source correlation too perfect — every attack action appears in exactly the expected formats with no gaps
+- [ ] Configurable cross-source evidence disagreement — deferred by design. Perfect cross-source correlation is useful for training/huntability and should remain the default feature unless a scenario/evaluation profile asks for realism gaps. Later design a deterministic setting for dropped/partial/ambiguous corroborating evidence across Zeek, web, proxy, firewall, IDS, Windows, Sysmon, and eCAR without breaking ground-truth traceability.
 - [x] Cross-sensor timestamp precision identical to 15+ decimal places — microsecond jitter added in snort.py, windows.py, and storyline.py
 - [ ] **P2** Per-host-type event rate multiplier — Domain controllers generate ~50 events/hr but real DCs running AD/DNS/DFS/GPO produce thousands/hr. `system.type` is used for routing but never for volume scaling. Need `event_rate_multiplier` on System model (or implicit per-type defaults) applied in `_calculate_events_for_hour()` and `_generate_system_traffic()`. DCs should be 3-5x workstation baseline; file servers and web servers similarly elevated.
-- [ ] Encoded PowerShell baseline noise identical across hosts (same Get-Service blob) — needs per-host variation
-- [ ] Workstation connection counts suspiciously uniform (808-1068 range) — Hawkes process variance too narrow
-- [ ] Uniform log file sets across all hosts (every workstation has identical format coverage)
+- [ ] Configurable per-entity artifact variation — deferred to the general host/activity profile layer. Encoded PowerShell baseline noise is currently identical across hosts (same Get-Service blob); later profiles should derive stable per-host command variants, encoded payloads, tool versions, and operator habits.
+- [ ] Configurable per-host volume variance — deferred to the general host/activity profile layer. Workstation connection counts are suspiciously uniform (808-1068 range); later profiles should widen variance by role, persona, weekday, installed apps, and stable host-specific multipliers.
+- [ ] Configurable per-host/source log coverage — deferred to the general imperfect-observation/profile layer. Uniform log file sets across all hosts can be useful for training, but a later setting should allow host-specific telemetry coverage differences, disabled sensors, partial deployment, and collection gaps.
 - [x] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.) — domain-first selection ensures consistent domain→IP mapping via FORWARD_DNS
 - [ ] AWS region mismatch between DNS PTR and SSL SNI for same IP
 
@@ -307,11 +312,12 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Bash history still lacks typos, repeated commands, tab-completion artifacts — bash_commands.yaml with per-role command vocabularies (sysadmin/dba/webadmin/developer/security), template parameterization, 5% typo rate; per-server RBAC user rosters via _get_server_ssh_users()
 - [x] Baseline generates IPs outside defined network segments — external IP generator excludes org CIDRs; diagnostic validator warns on out-of-segment internal IPs
 - [x] Parsability at ~95% (5% records fail structure validation) — stale audit finding: evaluator parsed 1,056,984/1,057,006 records successfully (99.998% parsability).
-- [ ] Evaluation schema missing Windows Security EventIDs 4800/4801 — audit evaluator failures were the 22 generated workstation lock/unlock events rejected by `windows_event_security` allowed_values, despite the template task map already including 4800/4801.
+- [x] Evaluation schema missing Windows Security EventIDs 4800/4801 — audit evaluator failures were the 22 generated workstation lock/unlock events rejected by `windows_event_security` allowed_values, despite the template task map already including 4800/4801. Added the IDs to the base allowed-values list and covered the regression in format-definition tests.
 
 ### Tier 4: Eval Fixes
 
 - [x] Harden temporal causal-account exclusion against non-string SubjectUserName/principal values to prevent evaluator exceptions on malformed logs
+- [x] Signal integrity misses web_scan traces in host-scoped web logs and responder-side Zeek HTTP records — generated evidence exists, but evaluator indexing could not find `web_access.log` records by host directory or inbound Zeek HTTP by destination IP. Parser records now carry source-host metadata, and signal-integrity indexing includes responder IPs. Event Presence improved from 1/9 to 9/9 on the HTTP/proxy eval sample.
 - [ ] Storyline Trace Coverage hostname normalization bug (traces exist but bare vs FQDN mismatch)
 - [ ] Ground truth File IOCs section truncated in GROUND_TRUTH.md output
 

@@ -294,6 +294,8 @@ class SignalIntegrityScorer(DimensionScorer):
                     if val and isinstance(val, str):
                         hostname = val
                         break
+                if hostname is None and rec.source_host:
+                    hostname = rec.source_host
                 # For zeek/snort, index by originator IP too
                 ts = rec.timestamp
                 if ts.tzinfo is None:
@@ -304,6 +306,9 @@ class SignalIntegrityScorer(DimensionScorer):
                 orig_ip = rec.fields.get("id.orig_h")
                 if orig_ip:
                     host_time_index[f"{orig_ip}|{bucket}"][format_name].append(rec)
+                resp_ip = rec.fields.get("id.resp_h")
+                if resp_ip and resp_ip != orig_ip:
+                    host_time_index[f"{resp_ip}|{bucket}"][format_name].append(rec)
                 # cisco_asa: index by src_ip and dst_ip from parsed message body
                 asa_src = rec.fields.get("src_ip")
                 if asa_src:
@@ -590,10 +595,17 @@ class SignalIntegrityScorer(DimensionScorer):
         elif event_type == "web_scan":
             expected_dst = event.details.get("dst_ip", "")
             expected_port = event.details.get("dst_port")
-            if format_name in ("web_access", "zeek_http"):
-                return f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+            expected_src = event.details.get("source_ip")
+            if format_name == "web_access":
+                source_ok = not expected_src or f.get("client_ip") == expected_src
+                return source_ok and self._host_matches(record.source_host, event.system)
+            if format_name == "zeek_http":
+                source_ok = not expected_src or f.get("id.orig_h") == expected_src
+                return source_ok and f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
             if format_name == "zeek_conn":
-                return f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
+                source_ok = not expected_src or f.get("id.orig_h") == expected_src
+                port_ok = expected_port is None or f.get("id.resp_p") == expected_port
+                return source_ok and f.get("id.resp_h") == expected_dst and port_ok
 
         elif event_type == "credential_spray":
             target_accounts = event.details.get("target_accounts", [])

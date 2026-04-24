@@ -47,6 +47,20 @@ class ProxyEmitter(HostMultiplexEmitter):
 
     _log_filename = "proxy_access.log"
     _supported_types: set[str] = {"connection"}
+    _sort_flat_file = True
+    _defer_sorted_flush_until_close = True
+
+    @staticmethod
+    def _sort_key(line: str) -> tuple[datetime, str]:
+        """Extract W3C date/time prefix for chronological flush sorting."""
+        parts = line.split(maxsplit=2)
+        if len(parts) < 2 or parts[0].startswith("#"):
+            return (datetime.max, line)
+        try:
+            ts = datetime.strptime(f"{parts[0]} {parts[1]}", "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return (datetime.max, line)
+        return (ts, line)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

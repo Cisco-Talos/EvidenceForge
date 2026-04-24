@@ -647,7 +647,7 @@ Fields:
 - `paths` (optional): Custom URI path list — `[{uri: "/admin", method: "GET", status: 403}]`
 - `user_agent` (optional): Override the preset's default user agent
 - `status_codes` (optional): Override status code distribution (e.g., `{"404": 0.7, "200": 0.2, "403": 0.1}`)
-- `rate` (required): Requests per second
+- `rate` (required): Average requests per second. With `duration`/`end_time`, the engine applies deterministic per-campaign throughput drift so repeated scans with the same nominal rate do not produce identical request totals. With explicit `count`, the count remains exact.
 - `duration` / `count` / `end_time`: Termination condition (exactly one required)
 - `jitter` (default: **0.4**): Timing variation — wide variance reflects real-world latency jitter from target server response times
 
@@ -915,7 +915,9 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated.
 
 #### Format Filtering
 

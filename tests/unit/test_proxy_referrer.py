@@ -101,6 +101,45 @@ class TestProxyEmitterReferrer:
         assert len(rendered_lines) == 1
         assert '"-"' in rendered_lines[0]
 
+    def test_proxy_access_flush_sorts_by_request_timestamp(self, tmp_path):
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, tmp_path, buffer_size=2)
+
+        for ts in [
+            datetime(2024, 3, 15, 10, 5, 0, tzinfo=UTC),
+            datetime(2024, 3, 15, 10, 1, 0, tzinfo=UTC),
+            datetime(2024, 3, 15, 10, 3, 0, tzinfo=UTC),
+        ]:
+            event = SecurityEvent(
+                timestamp=ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                ),
+                proxy=ProxyContext(
+                    client_ip="10.0.10.50",
+                    method="GET",
+                    url="http://example.com/page",
+                    host="example.com",
+                    proxy_fqdn="PROXY-01",
+                ),
+            )
+            emitter.emit(event)
+
+        emitter.close()
+
+        lines = (tmp_path / "PROXY-01" / "proxy_access.log").read_text().splitlines()
+        assert lines[0].startswith("2024-03-15 10:01:00")
+        assert lines[1].startswith("2024-03-15 10:03:00")
+        assert lines[2].startswith("2024-03-15 10:05:00")
+
 
 class TestConnectTunnelBehavior:
     """Verify CONNECT is emitted once per tunnel, not per request."""

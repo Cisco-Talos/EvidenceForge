@@ -327,6 +327,8 @@ The `os` field on systems determines which native log formats are generated:
 - **web_access** → Generated for systems with `roles: [web_server]`
 - **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
 
+If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a realistic service such as `squid`; otherwise validation warns and no proxy log file will be generated.
+
 For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
 
 ### Database Service Inference
@@ -404,7 +406,7 @@ When building storyline events, each entry needs an `events` list with typed dec
 **Firewall/network event types:**
 - `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
 - `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter` (default: 0.15), `referrer` (optional HTTP Referer, auto-generated if omitted), plus all `connection` fields. Use `action: deny` for firewall-blocked beaconing.
-- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate`, `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
+- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate` (average requests/second; exact only when `count` is set), `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
 - `credential_spray` — Bulk auth attacks. Fields: `target_accounts`, `interval`, `pattern` (spray/brute_force/stuffing), `success` ({account, after}), `jitter` (default: 0.5). OS-aware: Windows 4625/4776 or Linux syslog.
 - `dns_query` — Standalone DNS query. Fields: `query`, `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR).
 - `dga_queries` — Bulk DGA domain lookups. Fields: `interval`, `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`.

@@ -1256,6 +1256,82 @@ class TestFormatOsCompatibility:
         assert len(os_issues) == 0
 
 
+class TestProxyOutputTopology:
+    """Tests for _validate_proxy_output_topology."""
+
+    def test_proxy_access_without_forward_proxy_warns(self):
+        """proxy_access output with no forward_proxy system should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="LNX-01",
+                        ip="10.0.0.1",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["web_server"],
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning"
+            and i.field_path == "output.logs"
+            and "forward_proxy" in i.message
+        ]
+        assert len(warnings) == 1
+        assert "roles: [forward_proxy]" in (warnings[0].suggestion or "")
+
+    def test_proxy_access_with_forward_proxy_no_topology_warning(self):
+        """proxy_access output with a forward_proxy system should not warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                        services=["squid"],
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i for i in issues if i.field_path == "output.logs" and "forward_proxy" in i.message
+        ]
+        assert len(warnings) == 0
+
+
 class TestSegmentSensorCoverage:
     """Tests for _validate_segment_sensor_coverage."""
 

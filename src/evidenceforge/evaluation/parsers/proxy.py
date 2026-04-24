@@ -89,7 +89,8 @@ class ProxyAccessParser(LogParser):
         fields["timestamp"] = ts_str
         fields["client_ip"] = match.group(2)
         username = match.group(3)
-        fields["username"] = username if username != "-" else None
+        if username != "-":
+            fields["username"] = username
         fields["method"] = match.group(4)
         fields["url"] = match.group(5)
         fields["status_code"] = int(match.group(6))
@@ -97,12 +98,15 @@ class ProxyAccessParser(LogParser):
         fields["cs_bytes"] = int(match.group(8))
         fields["time_taken"] = int(match.group(9))
         ua = match.group(10)
-        fields["user_agent"] = ua if ua != "-" else None
+        if ua != "-":
+            fields["user_agent"] = ua
         fields["host"] = match.group(11)
         ct = match.group(12)
-        fields["content_type"] = ct if ct != "-" else None
+        if ct != "-":
+            fields["content_type"] = ct
         cr = match.group(13)
-        fields["cache_result"] = cr if cr != "-" else None
+        if cr != "-":
+            fields["cache_result"] = cr
 
         return ParsedRecord(
             source_format=self.format_name,

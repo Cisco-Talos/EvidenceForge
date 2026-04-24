@@ -102,6 +102,9 @@ class TestSslContextPopulation:
             assert event.ssl.version in {"TLSv12", "TLSv13"}
             assert event.ssl.cipher != ""
             assert event.ssl.established is True
+            assert event.x509 is not None
+            assert event.x509.fuid.startswith("F")
+            assert event.ssl.cert_chain_fuids == [event.x509.fuid]
 
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen

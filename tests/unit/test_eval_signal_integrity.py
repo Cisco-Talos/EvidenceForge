@@ -223,6 +223,93 @@ class TestEventPresence:
         ep = next(s for s in result.sub_scores if s.key == "event_presence")
         assert ep.score == 100.0
 
+    def test_web_scan_found_from_host_scoped_web_access_log(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-web-scan",
+                    "time": "+1h",
+                    "actor": "attacker",
+                    "system": "SRV-01",
+                    "activity": "Directory brute-force scan",
+                    "events": [
+                        {
+                            "type": "web_scan",
+                            "dst_ip": "10.0.20.10",
+                            "source_ip": "192.0.2.45",
+                            "count": 1,
+                            "rate": 1,
+                            "paths": [{"uri": "/admin"}],
+                        }
+                    ],
+                }
+            ]
+        )
+        records = {
+            "web_access": [
+                _record(
+                    "web_access",
+                    {
+                        "client_ip": "192.0.2.45",
+                        "method": "GET",
+                        "path": "/admin",
+                        "status_code": 404,
+                    },
+                    ts=T0 + timedelta(hours=1),
+                ).model_copy(update={"source_host": "SRV-01"})
+            ],
+        }
+
+        scorer = SignalIntegrityScorer()
+        result = scorer.score(records, scenario)
+
+        ep = next(s for s in result.sub_scores if s.key == "event_presence")
+        assert ep.score == 100.0
+
+    def test_web_scan_found_from_zeek_http_responder_ip(self):
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-web-scan-zeek",
+                    "time": "+1h",
+                    "actor": "attacker",
+                    "system": "SRV-01",
+                    "activity": "Directory brute-force scan",
+                    "events": [
+                        {
+                            "type": "web_scan",
+                            "dst_ip": "10.0.20.10",
+                            "source_ip": "192.0.2.45",
+                            "count": 1,
+                            "rate": 1,
+                            "paths": [{"uri": "/admin"}],
+                        }
+                    ],
+                }
+            ]
+        )
+        records = {
+            "zeek_http": [
+                _record(
+                    "zeek_http",
+                    {
+                        "id.orig_h": "192.0.2.45",
+                        "id.resp_h": "10.0.20.10",
+                        "id.resp_p": 80,
+                        "method": "GET",
+                        "uri": "/admin",
+                    },
+                    ts=T0 + timedelta(hours=1),
+                )
+            ],
+        }
+
+        scorer = SignalIntegrityScorer()
+        result = scorer.score(records, scenario)
+
+        ep = next(s for s in result.sub_scores if s.key == "event_presence")
+        assert ep.score == 100.0
+
     def test_missing_events(self):
         scenario = _scenario_with_storyline(
             [

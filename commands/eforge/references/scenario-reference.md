@@ -316,9 +316,12 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8 | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
+| `web_scan` | web_access + Zeek HTTP + Zeek conn | `dst_ip`, `rate`, one of `duration`/`end_time`/`count` | `preset`, `paths`, `hostname`, `user_agent`, `jitter` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+For `web_scan`, `rate` is average requests/second. Duration/end-time scans apply deterministic per-campaign throughput drift; explicit `count` remains exact.
 
 ### DHCP Lease Events
 
@@ -519,6 +522,8 @@ output:
 ```
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy_access`.
+
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated.
 
 ## Backward Compatibility
 

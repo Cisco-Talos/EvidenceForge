@@ -302,6 +302,7 @@ class SslContext:
     resumed: bool = False
     established: bool = True
     ssl_history: str = ""  # e.g., "CsiI"
+    cert_chain_fuids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -351,6 +352,7 @@ class FileTransferContext:
 class X509Context:
     """X.509 certificate details for Zeek x509.log."""
 
+    fuid: str = ""  # Zeek file UID referenced by ssl.cert_chain_fuids
     fingerprint: str = ""  # SHA256 hex
     certificate_version: int = 3
     certificate_serial: str = ""

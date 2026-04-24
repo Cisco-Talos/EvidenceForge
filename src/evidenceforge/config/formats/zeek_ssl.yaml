@@ -74,6 +74,11 @@ fields:
     required: false
     description: "SSL handshake history"
 
+  - name: cert_chain_fuids
+    type: list
+    required: false
+    description: "Zeek file UIDs for certificates observed in the server certificate chain"
+
 output:
   format: json
   file_extension: ".json"
@@ -103,5 +108,8 @@ output:
       {%- endif %}
       {%- if ssl_history is not none %},
       "ssl_history": {{ ssl_history | tojson }}
+      {%- endif %}
+      {%- if cert_chain_fuids is not none %},
+      "cert_chain_fuids": {{ cert_chain_fuids | tojson }}
       {%- endif %}
     }
