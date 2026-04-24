@@ -38,6 +38,7 @@ When no sensors are configured (backward compat), writes directly to:
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from queue import Empty
@@ -59,7 +60,7 @@ class _SingleZeekWriter:
         output_path: Path,
         buffer_size: int = 10000,
         sort_before_flush: bool = False,
-        sort_key: Any = None,
+        sort_key: Callable[[str], Any] | None = None,
     ):
         self.output_path = output_path
         self.buffer: list[str] = []
@@ -96,6 +97,24 @@ class _SingleZeekWriter:
                     f.write("\n")
         self.buffer.clear()
 
+    def close(self) -> None:
+        """Flush pending lines and sort the complete NDJSON file by timestamp."""
+        with self._lock:
+            self._flush_unlocked()
+            if not self._sort_before_flush or not self.output_path.exists():
+                return
+            lines = [line for line in self.output_path.read_text(encoding="utf-8").splitlines()]
+            if not lines:
+                return
+            if self._sort_key:
+                lines.sort(key=self._sort_key)
+            else:
+                lines.sort()
+            with open(self.output_path, "w", encoding="utf-8") as f:
+                for line in lines:
+                    f.write(line)
+                    f.write("\n")
+
 
 class SensorMultiplexEmitter(LogEmitter):
     """Base class for network sensor emitters with per-sensor directory routing.
@@ -109,7 +128,7 @@ class SensorMultiplexEmitter(LogEmitter):
     _log_filename: str = "output.json"  # Override in subclasses (e.g., "conn.json")
     _flat_filename: str = ""  # Override for backward-compat flat output (e.g., "zeek_conn.json")
     _supported_types: set[str] = set()
-    _sort_before_flush: bool = False
+    _sort_before_flush: bool = True
 
     def __init__(
         self,
@@ -152,7 +171,7 @@ class SensorMultiplexEmitter(LogEmitter):
                 path,
                 self._buffer_size,
                 sort_before_flush=self._sort_before_flush,
-                sort_key=getattr(self, "_sort_key_func", None),
+                sort_key=getattr(self, "_sort_key_func", self._sort_key_func),
             )
             self._writers[safe_sensor] = writer
             logger.debug(f"Created Zeek writer: {path}")
@@ -327,6 +346,18 @@ class SensorMultiplexEmitter(LogEmitter):
         except json.JSONDecodeError:
             return rendered.strip()
 
+    @staticmethod
+    def _sort_key_func(line: str) -> tuple[float, str]:
+        """Sort Zeek NDJSON by `ts`, with malformed lines last and stable tie-breaking."""
+        try:
+            data = json.loads(line)
+            ts = data.get("ts")
+            if isinstance(ts, int | float):
+                return (float(ts), line)
+        except json.JSONDecodeError:
+            pass
+        return (float("inf"), line)
+
     def _run(self) -> None:
         """Thread run loop — dispatch events to per-sensor writers."""
         logger.debug(f"Emitter thread started for {self.format_def.name}")
@@ -360,7 +391,9 @@ class SensorMultiplexEmitter(LogEmitter):
         """Close emitter and flush all sensor writers."""
         if self.threaded:
             self.stop_thread()
-        self.flush()
+        with self._writers_lock:
+            for writer in self._writers.values():
+                writer.close()
 
     @property
     def event_count(self) -> int:

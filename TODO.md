@@ -190,7 +190,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] OTH/"Cc" conn_state over-represented; SF at 88% (real: 55-75%); missing SH/S2/S3 states — rebalanced TCP distribution: SF 82%→62%, added S2/S3 half-closed states, increased S0/REJ/RSTO/RSTR
 - [x] SSL ssl_history limited to 2 values (CsiI, CsijI) — stale audit finding: generator now has 5 success patterns + 2 failure patterns, and `tests/unit/test_network_realism.py` verifies diversity.
 - [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
-- [ ] Zeek files not chronologically ordered after multi-source generation — agent eval on the HTTP/proxy sample found timestamp inversions in `conn.json`, `http.json`, `ssl.json`, and `x509.json`. Determine whether this is intended merged-worker behavior or whether Zeek emitters should sort on close like web/proxy access logs.
+- [x] Zeek files not chronologically ordered after multi-source generation — Zeek sensor writers now preserve normal flush behavior and sort the complete NDJSON file by `ts` on close. Focused regression coverage verifies cross-flush ordering for direct and per-sensor outputs.
 - [ ] SMB volume too low for Windows file server environments
 - [x] ~~DNS UIDs missing from conn.log (~7%)~~ — no longer reproduces (0/6487 orphans on apt-healthcare-breach); prior visibility fixes resolved this
 - [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
