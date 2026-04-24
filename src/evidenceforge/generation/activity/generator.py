@@ -1745,7 +1745,37 @@ class ActivityGenerator:
         if hostname is None:
             hostname = REVERSE_DNS.get(dst_ip)
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
-            hostname = _generate_random_hostname(_get_rng(), dst_ip)
+            if _is_private_ip(dst_ip):
+                hostname = _generate_internal_hostname(
+                    _get_rng(), dst_ip, getattr(self, "_ad_domain", "corp.local")
+                )
+            else:
+                hostname = _generate_random_hostname(_get_rng(), dst_ip)
+
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        hostname_is_external = (
+            bool(hostname)
+            and not hostname.endswith(f".{ad_domain}")
+            and not hostname.endswith(".local")
+        )
+        dns_server_ips = set(getattr(self, "_dns_server_ips", []))
+        if (
+            proto == "tcp"
+            and dst_port in (80, 443)
+            and hostname_is_external
+            and dst_ip in dns_server_ips
+        ):
+            from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+            src_host = source_system.hostname if source_system else src_ip
+            dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+
+        # Infer common payload service from destination port before proxy
+        # routing and DNS expansion. Some callers provide only port/protocol;
+        # explicit proxy semantics still need to catch 80/443 before a
+        # client-side origin DNS lookup is emitted.
+        if proto == "tcp" and dst_port in (80, 443) and service not in ("http", "ssl"):
+            service = "http" if dst_port == 80 else "ssl"
 
         proxy_routes = getattr(self, "_proxy_routes", {})
         proxy_chain = proxy_routes.get(src_ip)

@@ -200,6 +200,21 @@ def get_domain_ips(domain: str) -> list[str]:
     return forward.get(domain, [])
 
 
+def resolve_domain_ip(domain: str, src_host: str = "") -> str:
+    """Resolve a domain to a deterministic external IP.
+
+    Registered domains use their configured IP pool. Unregistered long-tail
+    domains derive a stable IP from the domain name.
+    """
+    ips = get_domain_ips(domain)
+    if not ips:
+        return _domain_to_ip(domain)
+    if len(ips) == 1:
+        return ips[0]
+    ip_idx = _stable_seed(f"dns_ip_{src_host}_{domain}") % len(ips)
+    return ips[ip_idx]
+
+
 def generate_long_tail_domain(rng: random.Random) -> str:
     """Generate a plausible SaaS/CDN/analytics domain for long-tail traffic.
 

@@ -32,6 +32,7 @@ def _system(hostname: str, ip: str, roles: list[str] | None = None) -> System:
 def _emitters() -> dict[str, Mock]:
     emitters = {
         "zeek_conn": Mock(),
+        "zeek_dns": Mock(),
         "zeek_http": Mock(),
         "zeek_ssl": Mock(),
         "proxy_access": Mock(),
@@ -39,6 +40,7 @@ def _emitters() -> dict[str, Mock]:
         "cisco_asa": Mock(),
     }
     emitters["zeek_conn"].can_handle.side_effect = lambda event: event.network is not None
+    emitters["zeek_dns"].can_handle.side_effect = lambda event: event.dns is not None
     emitters["zeek_http"].can_handle.side_effect = lambda event: event.http is not None
     emitters["zeek_ssl"].can_handle.side_effect = lambda event: event.ssl is not None
     emitters["proxy_access"].can_handle.side_effect = lambda event: event.proxy is not None
@@ -305,3 +307,89 @@ class TestExplicitProxyVisibility:
         assert not emitters["zeek_ssl"].emit.called
         assert not emitters["snort_alert"].emit.called
         assert not emitters["cisco_asa"].emit.called
+
+    def test_port_only_web_connection_resolves_origin_from_proxy(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="egress-tap",
+                    monitoring_segments=["dmz"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                ),
+            ]
+        )
+        generator._dns_server_ips = ["10.0.0.1"]
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="10.0.0.1",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service=None,
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        origin_pairs = [pair for pair in pairs if pair[0] == "10.0.3.10" and pair[2] == 443]
+        assert origin_pairs
+        assert all(pair[1] != "10.0.0.1" for pair in origin_pairs)
+        assert all(pair[0] != "10.0.1.10" or pair[1] == "10.0.3.10" for pair in pairs)
+        dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
+        assert dns_events
+        assert all(event.network.src_ip == "10.0.3.10" for event in dns_events)
+        assert all("10.0.0.1" not in event.dns.answers for event in dns_events)
+        assert all(event.dns.query != "PROXY-01.example.org" for event in dns_events)
+        assert any(event.dns.query == "example.com" for event in dns_events)
+
+    def test_private_destination_without_hostname_does_not_invent_public_dns(self):
+        workstation = _system("WKS-01", "10.0.1.10")
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        emitters = _emitters()
+        generator = ActivityGenerator(state_manager, emitters)
+        generator._ip_to_system = {workstation.ip: workstation}
+        generator._dns_server_ips = ["10.0.0.1"]
+        generator._ad_domain = "example.org"
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="10.0.0.1",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service=None,
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=workstation,
+            emit_dns=True,
+            conn_state="SF",
+        )
+
+        dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
+        assert dns_events
+        assert all(event.network.src_ip == "10.0.1.10" for event in dns_events)
+        queries = {event.dns.query for event in dns_events}
+        assert any(query.endswith(".example.org") for query in queries)
+        assert not any(
+            public_hint in query
+            for query in queries
+            for public_hint in ("hotjar", "hubspot", "amplitude", "intercom", "linkedin")
+        )

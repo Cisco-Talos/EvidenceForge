@@ -14,6 +14,7 @@ from evidenceforge.generation.activity.dns_registry import (
     get_reverse_dns,
     load_dns_registry,
     pick_domain_and_ip,
+    resolve_domain_ip,
 )
 
 
@@ -154,6 +155,20 @@ class TestPickDomainAndIp:
         domain, ip = pick_domain_and_ip(rng, "nonexistent_tag", src_host="WS-01")
         assert isinstance(domain, str)
         assert "." in domain
+
+
+class TestResolveDomainIp:
+    """Tests for deterministic direct domain resolution."""
+
+    def test_registered_domain_uses_configured_pool(self):
+        fdns = get_forward_dns()
+        ip = resolve_domain_ip("outlook.office365.com", src_host="WS-01")
+        assert ip in fdns["outlook.office365.com"]
+
+    def test_unregistered_domain_uses_external_hash_mapping(self):
+        ip = resolve_domain_ip("static.hotjar.com", src_host="WS-01")
+        assert ip == _domain_to_ip("static.hotjar.com")
+        assert not ip.startswith("10.")
 
 
 class TestLongTailDomains:
