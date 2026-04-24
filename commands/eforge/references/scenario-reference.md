@@ -94,7 +94,7 @@ proxy:
   listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
 ```
 
-Use `transparent` when Zeek/IDS should look like clients connected directly to origins while proxy logs are present. Use `explicit` for PAC/browser-configured proxies; the generator emits client-to-proxy and proxy-to-origin network legs, and each sensor sees only the leg its placement can observe.
+Use `transparent` when Zeek/IDS should look like clients connected directly to origins while proxy logs are present. Use `explicit` for PAC/browser-configured proxies; the generator emits client-to-proxy and proxy-to-origin network legs, and each Zeek/IDS/firewall sensor sees only the leg its placement can observe. Denied proxy requests stop at the proxy and do not emit proxy-to-origin evidence.
 
 ### Network Segment Exposure
 

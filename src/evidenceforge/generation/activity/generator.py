@@ -1845,6 +1845,9 @@ class ActivityGenerator:
                 proxy_bypass=True,
             )
 
+            if proxy_context.cache_result == "DENIED":
+                return client_uid
+
             egress_http = http if dst_port == 80 and service == "http" else None
             self.generate_connection(
                 src_ip=proxy_sys.ip,

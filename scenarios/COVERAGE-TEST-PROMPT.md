@@ -286,7 +286,8 @@
   - Include environment.proxy.mode; use explicit for PAC/browser-configured proxy coverage
   - proxy_access logs show client_ip, username, method, url, host, status_code, cache_result
   - HTTP CONNECT method for HTTPS tunneling through proxy
-  - Explicit proxy mode shows client→proxy and proxy→origin Zeek/IDS legs, not direct client→origin, unless a sensor legitimately sees both sides
+  - Explicit proxy mode shows client→proxy and proxy→origin Zeek/IDS/firewall legs, not direct client→origin, unless a sensor legitimately sees both sides
+  - DENIED proxy requests stop at the proxy and do not produce proxy→origin Zeek, IDS, or firewall transactions
   - Cache hit/miss distribution (HIT, MISS, NONE, DENIED)
   - Proxy logs correlate with Zeek HTTP/SSL logs for the same transactions
 
