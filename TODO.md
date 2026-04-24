@@ -93,6 +93,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] Security: cap firewall deny baseline amplification (`deny_ratio`/hourly deny volume) to prevent scenario-driven local DoS — `NetworkSensor.deny_ratio` now enforces `<= 50.0`.
 - [x] Security: prevent IPv6 scenario DoS in DNS AAAA fallback (`_ipv4_to_fake_ipv6` no longer evaluates for IPv6 destination IPs; AAAA uses mapped IPv6 or preserves IPv6 literal).
 - [x] Security: bounded/pruned ActivityGenerator DNS cache (60s prune cadence, 600s TTL-horizon eviction, 50k hard cap) to prevent unbounded memory growth from unique `(src_ip, hostname)` keys.
+- [ ] `eforge generate --force` overwrite can fail for scenarios that do not emit `GROUND_TRUTH.md` — explicit-proxy smoke testing exposed that replacing an existing output directory expects staged ground truth even when fresh no-storyline generation produced only `data/`. Decide whether no-storyline generation should always write an empty `GROUND_TRUTH.md` or overwrite swap should tolerate its absence.
 
 - [x] **`uv.lock` not committed** — gitignored, so CI `setup-uv@v4` cache fails. Remove from `.gitignore` and commit.
 - [x] **`eforge validate` can't find personas in dev mode** — works when installed (`eforge validate`) but not via `uv run eforge validate`. Blocks dev workflow.
@@ -213,6 +214,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] TLS/x509 correlation gaps — baseline audit found SSL records without `cert_chain_fuids` and x509 issuer/subject pairings that looked implausible. Added deterministic certificate file UIDs, linked ssl.log to x509.log, and tightened domain-to-CA overrides for common CA-owned/Microsoft domains.
 - [x] TLSv13 ratio too low for 2024 timeframe — audit output showed TLSv13 at 19,669/56,372 SSL records (~35%). TLS version selection now uses explicit weighted constants with TLSv13 as the modern majority default.
 - [ ] TLS version/cipher suite mismatches
+- [ ] Proxy SSL inspection / SSL bump realism — defer until explicit proxy path modeling is complete. Future config should model `ssl_inspection` separately because it affects proxy URL visibility, Zeek SSL/x509 certificate chains, HTTP visibility inside CONNECT tunnels, and IDS content inspection semantics.
 - [x] x509 Let's Encrypt certs show 280+ day validity (should be 90) — tls_issuers.yaml with per-issuer validity (LE=90d, DigiCert=397d, etc.); issuer-aware key type selection
 - [x] No SSL certificate subject/issuer data in ssl.log — zeek_x509.yaml includes subject/issuer fields; generation uses tls_issuers.yaml
 
@@ -265,7 +267,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Proxy logs omitted/mis-scored in evaluation — proxy parser existed but was not imported into the evaluation parser registry, and optional dash fields were parsed as invalid nulls. Registered `ProxyAccessParser`, added discovery coverage for host-directory `proxy_access.log`, and aligned optional field parsing/format validation.
 - [x] Web/proxy access logs not chronologically sorted — baseline audit found per-web-server timestamp inversions. Host-multiplexed web/proxy access writers now sort by rendered request timestamp before flush; focused emitter tests added.
 - [x] Web scan request counts too identical across campaigns — duration/end-time web_scan events treated `rate` as exact throughput. Explicit `count` remains exact, while duration/end-time scans now apply deterministic per-campaign rate drift so repeated scanner runs do not produce identical request totals.
-- [ ] Proxy access logs lack coherent Zeek-observed proxy path — agent eval found 53,729 proxy records but only 1,120 Zeek connections involving `proxy01`, 0 on port 3128, and most proxy records line up with direct client→origin SSL instead of client→proxy or proxy→origin. Model explicit/transparent/SSL-bump proxy deployment semantics before expanding proxy realism further.
+- [x] Proxy access logs lack coherent Zeek-observed proxy path — added `environment.proxy.mode` (`transparent` default, `explicit` for PAC/browser-configured proxy) and `listener_port` (explicit default 8080). Explicit proxy generation now emits client→proxy and proxy→origin legs through normal sensor visibility instead of the original direct client→origin network event; validator, signal-integrity eval, docs, skills, and regression tests were updated. SSL bump/inspection remains deferred.
 - [x] ✓² Proxy user-agent pool limited to 2 agents — expanded to 8 diverse agents (Chrome/Firefox/Edge/Opera/IE11)
 - [x] ✓² Proxy/SSL hostname uses CDN reverse-DNS PTR records instead of domain names — now prefers dns.query from DnsContext; partial fix (first connections per host still use PTR when no DNS context exists)
 - [x] ✓² Proxy URL paths all root "/" only — added pool of 18 realistic URI paths

@@ -291,7 +291,7 @@ HTTP access logs for web server systems.
 **File:** `<proxy-hostname.domain>/proxy_access.log`
 **Format:** W3C Extended Log Format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. HTTPS connections emit a CONNECT entry followed by the actual request. Includes cache hit/miss status and full destination URLs.
+Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS sensor sees only the leg its topology can observe.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
 
@@ -301,5 +301,6 @@ Forward proxy access logs for systems with the `forward_proxy` role. Outbound HT
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
+- SSL inspection / SSL bump is not yet modeled
 - Cache hit/miss status is probabilistic, not based on actual content caching logic
 - Limited to HTTP and HTTPS traffic

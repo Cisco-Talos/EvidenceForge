@@ -283,8 +283,10 @@
 
   Proxy coverage (verify in generated data):
   - Forward proxy (PROXY-01 with roles: [forward_proxy]) routes web traffic for internal systems
+  - Include environment.proxy.mode; use explicit for PAC/browser-configured proxy coverage
   - proxy_access logs show client_ip, username, method, url, host, status_code, cache_result
   - HTTP CONNECT method for HTTPS tunneling through proxy
+  - Explicit proxy mode shows client→proxy and proxy→origin Zeek/IDS legs, not direct client→origin, unless a sensor legitimately sees both sides
   - Cache hit/miss distribution (HIT, MISS, NONE, DENIED)
   - Proxy logs correlate with Zeek HTTP/SSL logs for the same transactions
 

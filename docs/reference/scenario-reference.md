@@ -96,6 +96,21 @@ systems:
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
 
+### Proxy Deployment
+
+```yaml
+proxy:
+  mode: transparent              # Optional: transparent|explicit (default: transparent)
+  listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+```
+
+`environment.proxy` controls how systems with `roles: [forward_proxy]` appear in network evidence:
+
+- `transparent` preserves direct-looking client-to-origin Zeek/IDS traffic while still generating proxy access logs.
+- `explicit` models PAC/browser-configured proxy behavior by replacing the logical client-to-origin connection with two concrete legs: client-to-proxy on `listener_port`, then proxy-to-origin on the destination port. Sensor placement determines which leg each Zeek/IDS source sees.
+
+If `proxy_access` is requested and `environment.proxy` is omitted, validation warns and defaults to `transparent`. If `mode: explicit` is set without `listener_port`, validation warns and defaults to `8080`.
+
 ### System Roles
 
 The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
@@ -917,7 +932,7 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
-`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated.
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear.
 
 #### Format Filtering
 

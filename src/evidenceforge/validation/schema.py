@@ -595,7 +595,7 @@ class ScenarioValidator:
                 )
 
     def _validate_proxy_output_topology(self) -> None:
-        """Warn when proxy logs are requested but no forward proxy exists."""
+        """Warn when proxy logs are requested but proxy topology/config is incomplete."""
         expanded_formats = self._get_expanded_formats()
         if "proxy_access" not in expanded_formats:
             return
@@ -603,23 +603,55 @@ class ScenarioValidator:
         has_forward_proxy = any(
             "forward_proxy" in (system.roles or []) for system in self.scenario.environment.systems
         )
-        if has_forward_proxy:
+        if not has_forward_proxy:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="output.logs",
+                    message=(
+                        "Format 'proxy_access' is requested but no system has "
+                        "roles: [forward_proxy], so proxy access logs will not be generated"
+                    ),
+                    suggestion=(
+                        "Add a proxy system with roles: [forward_proxy] and an appropriate "
+                        "service such as squid, or remove proxy_access from output.logs"
+                    ),
+                )
+            )
             return
 
-        self.issues.append(
-            ValidationIssue(
-                severity="warning",
-                field_path="output.logs",
-                message=(
-                    "Format 'proxy_access' is requested but no system has "
-                    "roles: [forward_proxy], so proxy access logs will not be generated"
-                ),
-                suggestion=(
-                    "Add a proxy system with roles: [forward_proxy] and an appropriate "
-                    "service such as squid, or remove proxy_access from output.logs"
-                ),
+        proxy_config = self.scenario.environment.proxy
+        if "proxy" not in self.scenario.environment.model_fields_set:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.proxy",
+                    message=(
+                        "proxy_access is requested but environment.proxy is not set; "
+                        "defaulting to transparent proxy mode"
+                    ),
+                    suggestion=(
+                        "Add environment.proxy.mode: transparent or explicit. Use explicit "
+                        "for PAC/browser-configured forward proxies."
+                    ),
+                )
             )
-        )
+
+        if proxy_config.mode == "explicit" and "listener_port" not in proxy_config.model_fields_set:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.proxy.listener_port",
+                    message=(
+                        "Explicit proxy mode is configured without listener_port; "
+                        "defaulting to 8080"
+                    ),
+                    suggestion=(
+                        "Set environment.proxy.listener_port to the client-visible proxy "
+                        "port, such as 8080, 3128, or a product-specific value."
+                    ),
+                )
+            )
 
     def _get_system_ip(self, hostname: str) -> str | None:
         """Get IP address for a system by hostname."""

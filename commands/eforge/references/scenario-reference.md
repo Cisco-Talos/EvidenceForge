@@ -86,6 +86,16 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `dns_server` — DNS resolution target
 - `mail_server` — mail relay/server
 
+### Proxy Deployment
+
+```yaml
+proxy:
+  mode: transparent              # Optional: transparent|explicit (default: transparent)
+  listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+```
+
+Use `transparent` when Zeek/IDS should look like clients connected directly to origins while proxy logs are present. Use `explicit` for PAC/browser-configured proxies; the generator emits client-to-proxy and proxy-to-origin network legs, and each sensor sees only the leg its placement can observe.
+
 ### Network Segment Exposure
 
 **`exposure` is required on every segment** — there is no default. Choose the right value for each segment's role:
@@ -523,7 +533,7 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy_access`.
 
-`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated.
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, set `environment.proxy.mode` explicitly; omitted config defaults to `transparent` with a warning.
 
 ## Backward Compatibility
 

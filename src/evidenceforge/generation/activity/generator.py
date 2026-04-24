@@ -46,6 +46,7 @@ from evidenceforge.events.contexts import (
     HttpContext,
     IdsContext,
     KerberosContext,
+    ProxyContext,
     RegistryContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
@@ -592,6 +593,8 @@ class ActivityGenerator:
 
         # Network visibility stored on dispatcher; keep local ref for fast-path check
         self._network_visibility = network_visibility
+        self._proxy_mode = "transparent"
+        self._proxy_listener_port = 8080
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -632,6 +635,117 @@ class ActivityGenerator:
             domain=ad_domain,
             fqdn=f"{dc_hostname}.{ad_domain}" if ad_domain else dc_hostname,
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
+        )
+
+    def _proxy_fqdn(self, proxy_sys: "System") -> str:
+        """Return the FQDN used to route proxy access logs."""
+        proxy_fqdn = getattr(proxy_sys, "hostname", "")
+        ad_domain = getattr(self, "_ad_domain", "")
+        if ad_domain and "." not in proxy_fqdn:
+            proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
+        return proxy_fqdn
+
+    def _build_proxy_context(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        service: str | None,
+        duration: float | None,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        hostname: str | None,
+        source_system: Optional["System"],
+        proxy_sys: "System",
+        http: Optional["HttpContext"] = None,
+        explicit_mode: bool = False,
+    ) -> ProxyContext:
+        """Build a proxy access context from the logical origin request."""
+        rng = _get_rng()
+        proxy_hostname = hostname
+        if proxy_hostname is None:
+            proxy_hostname = REVERSE_DNS.get(dst_ip)
+        if proxy_hostname is None:
+            proxy_hostname = _generate_random_hostname(rng, dst_ip)
+        if proxy_hostname == "":
+            proxy_hostname = dst_ip
+
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+        from evidenceforge.generation.activity.referrer import pick_referrer
+
+        proxy_ua_override = None
+        if explicit_mode and dst_port == 443:
+            proxy_method = "CONNECT"
+            url = f"{proxy_hostname}:443"
+            proxy_content_type = ""
+            proxy_referrer = ""
+            user_agent = http.user_agent if http is not None else ""
+        elif http is not None:
+            scheme = "https" if dst_port == 443 or service == "ssl" else "http"
+            proxy_method = http.method
+            url = f"{scheme}://{proxy_hostname}{http.uri}"
+            proxy_content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
+            user_agent = http.user_agent
+            proxy_referrer = http.referrer
+        else:
+            domain_tags = get_domain_tags(proxy_hostname)
+            source_os = _get_os_category(source_system.os) if source_system else None
+            path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
+                rng, proxy_hostname, domain_tags, source_os=source_os
+            )
+            scheme = "https" if dst_port == 443 or service == "ssl" else "http"
+            url = f"{scheme}://{proxy_hostname}{path}"
+            proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
+            user_agent = ""
+
+        if not user_agent:
+            if proxy_ua_override:
+                user_agent = proxy_ua_override
+            elif source_system and _get_os_category(source_system.os) == "linux":
+                user_agent = rng.choice(_PROXY_UAS_LINUX)
+            else:
+                user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+
+        cache_roll = rng.random()
+        if explicit_mode and proxy_method == "CONNECT":
+            cache_result = "NONE"
+        elif cache_roll < 0.30:
+            cache_result = "HIT"
+        elif cache_roll < 0.95:
+            cache_result = "MISS"
+        else:
+            cache_result = "DENIED"
+
+        cs_bytes = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+        if cache_result == "DENIED":
+            sc_bytes = rng.randint(500, 2000)
+        elif cache_result == "HIT":
+            response_bytes = max(1, resp_bytes or 0)
+            sc_bytes = rng.randint(
+                max(1, int(response_bytes * 0.4)), max(2, int(response_bytes * 1.1))
+            )
+        elif proxy_method == "CONNECT":
+            sc_bytes = 0
+            cs_bytes = 0
+        else:
+            sc_bytes = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+
+        return ProxyContext(
+            client_ip=src_ip,
+            method=proxy_method,
+            url=url,
+            host=proxy_hostname,
+            status_code=200 if cache_result != "DENIED" else 403,
+            sc_bytes=sc_bytes,
+            cs_bytes=cs_bytes,
+            time_taken=int((duration or 0) * 1000),
+            user_agent=user_agent,
+            content_type=proxy_content_type,
+            cache_result=cache_result,
+            referrer=proxy_referrer,
+            proxy_fqdn=self._proxy_fqdn(proxy_sys),
         )
 
     def _build_expansion_context(
@@ -1585,8 +1699,10 @@ class ActivityGenerator:
         dns: Optional["DnsContext"] = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
+        proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
+        proxy_bypass: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1630,6 +1746,128 @@ class ActivityGenerator:
             hostname = REVERSE_DNS.get(dst_ip)
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
             hostname = _generate_random_hostname(_get_rng(), dst_ip)
+
+        proxy_routes = getattr(self, "_proxy_routes", {})
+        proxy_chain = proxy_routes.get(src_ip)
+        explicit_proxy = (
+            not proxy_bypass
+            and getattr(self, "_proxy_mode", "transparent") == "explicit"
+            and proxy_chain
+            and proto == "tcp"
+            and service in ("ssl", "http")
+            and dst_port in (80, 443)
+            and not _is_private_ip(dst_ip)
+            and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
+        )
+        if explicit_proxy:
+            proxy_sys = proxy_chain[0]
+            listener_port = int(getattr(self, "_proxy_listener_port", 8080))
+            proxy_context = self._build_proxy_context(
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                hostname=hostname,
+                source_system=source_system,
+                proxy_sys=proxy_sys,
+                http=http,
+                explicit_mode=True,
+            )
+
+            client_http: HttpContext | None = None
+            if dst_port == 443:
+                client_http = HttpContext(
+                    method="CONNECT",
+                    host=proxy_context.host,
+                    uri=f"{proxy_context.host}:443",
+                    version="1.1",
+                    user_agent=proxy_context.user_agent,
+                    response_body_len=0,
+                    status_code=200,
+                    status_msg="Connection Established",
+                    tags=[],
+                )
+            elif http is not None:
+                client_http = HttpContext(
+                    method=http.method,
+                    host=proxy_context.host,
+                    uri=proxy_context.url,
+                    version=http.version,
+                    user_agent=http.user_agent,
+                    request_body_len=http.request_body_len,
+                    response_body_len=http.response_body_len,
+                    status_code=http.status_code,
+                    status_msg=http.status_msg,
+                    referrer=http.referrer,
+                    trans_depth=http.trans_depth,
+                    tags=list(http.tags),
+                    resp_mime_types=list(http.resp_mime_types),
+                )
+            else:
+                client_http = HttpContext(
+                    method=proxy_context.method,
+                    host=proxy_context.host,
+                    uri=proxy_context.url,
+                    version="1.1",
+                    user_agent=proxy_context.user_agent,
+                    request_body_len=proxy_context.cs_bytes,
+                    response_body_len=proxy_context.sc_bytes,
+                    status_code=proxy_context.status_code,
+                    status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
+                    referrer=proxy_context.referrer,
+                    tags=[],
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type
+                    else [],
+                )
+
+            client_uid = self.generate_connection(
+                src_ip=src_ip,
+                dst_ip=proxy_sys.ip,
+                time=time,
+                dst_port=listener_port,
+                proto="tcp",
+                service="http",
+                duration=min(duration or 0.2, 2.0),
+                orig_bytes=max(1, proxy_context.cs_bytes or orig_bytes or 1),
+                resp_bytes=max(0, proxy_context.sc_bytes or 0),
+                src_port=src_port,
+                emit_dns=False,
+                pid=pid,
+                source_system=source_system,
+                conn_state=conn_state or "SF",
+                http=client_http,
+                proxy=proxy_context,
+                hostname=self._proxy_fqdn(proxy_sys),
+                proxy_bypass=True,
+            )
+
+            egress_http = http if dst_port == 80 and service == "http" else None
+            self.generate_connection(
+                src_ip=proxy_sys.ip,
+                dst_ip=dst_ip,
+                time=time + timedelta(milliseconds=5),
+                dst_port=dst_port,
+                proto=proto,
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                emit_dns=emit_dns,
+                pid=-1,
+                source_system=proxy_sys,
+                conn_state=conn_state,
+                dns=dns,
+                ids=ids,
+                http=egress_http,
+                firewall=firewall,
+                hostname=hostname,
+                proxy_bypass=True,
+            )
+            return client_uid
 
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
@@ -1927,6 +2165,8 @@ class ActivityGenerator:
             event.ids = ids
         if http is not None:
             event.http = http
+        if proxy is not None:
+            event.proxy = proxy
         if firewall is not None:
             event.firewall = firewall
 
@@ -1940,6 +2180,7 @@ class ActivityGenerator:
             not local_only
             and service in ("ssl", "http")
             and dst_port in (80, 443)
+            and event.proxy is None
             and not _is_private_ip(dst_ip)
             and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
         ):
@@ -2194,8 +2435,6 @@ class ActivityGenerator:
             and conn_state == "SF"
             and event.http is None  # Skip auto-generation if caller provided HttpContext
         ):
-            from evidenceforge.events.contexts import HttpContext
-
             _USER_AGENTS_WINDOWS = [
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",

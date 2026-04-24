@@ -1290,6 +1290,32 @@ class NetworkConfig(BaseModel):
         return v
 
 
+class ProxyConfig(BaseModel):
+    """Forward proxy deployment semantics.
+
+    Attributes:
+        mode: transparent preserves direct-looking client→origin network evidence;
+              explicit emits client→proxy and proxy→origin legs.
+        listener_port: Client-visible proxy listener port for explicit mode.
+    """
+
+    mode: Literal["transparent", "explicit"] = Field(
+        default="transparent",
+        description=(
+            "Proxy deployment mode. transparent preserves direct client-to-origin network "
+            "shape; explicit/PAC emits client-to-proxy and proxy-to-origin legs."
+        ),
+    )
+    listener_port: int = Field(
+        default=8080,
+        ge=1,
+        le=65535,
+        description="Client-visible listener port used when mode is explicit.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class StaleAccount(BaseModel):
     """Stale/inactive account that generates background failed logon noise.
 
@@ -1348,6 +1374,10 @@ class Environment(BaseModel):
     groups: list[Group] | None = Field(default_factory=list)
     network: NetworkConfig | None = Field(
         None, description="Optional network topology and sensor config"
+    )
+    proxy: ProxyConfig = Field(
+        default_factory=ProxyConfig,
+        description="Forward proxy deployment semantics for proxy_access generation.",
     )
 
     @field_validator("users")

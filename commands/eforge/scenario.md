@@ -325,9 +325,9 @@ The `os` field on systems determines which native log formats are generated:
 - **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
 - **web_access** → Generated for systems with `roles: [web_server]`
-- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
+- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs outbound HTTP/HTTPS routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
 
-If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a realistic service such as `squid`; otherwise validation warns and no proxy log file will be generated.
+If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a realistic service such as `squid`; otherwise validation warns and no proxy log file will be generated. Also set `environment.proxy.mode`: use `transparent` when Zeek/IDS should show direct-looking client→origin traffic, or `explicit` for PAC/browser-configured proxies where Zeek/IDS should show client→proxy plus proxy→origin legs. For explicit mode, set `listener_port` (default/warning fallback: 8080).
 
 For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
 

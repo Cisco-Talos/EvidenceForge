@@ -35,6 +35,7 @@ from evidenceforge.models import (
     NetworkSensor,
     OutputSpec,
     Persona,
+    ProxyConfig,
     RedHerringEvent,
     Scenario,
     StaleAccount,
@@ -1298,7 +1299,7 @@ class TestProxyOutputTopology:
         assert "roles: [forward_proxy]" in (warnings[0].suggestion or "")
 
     def test_proxy_access_with_forward_proxy_no_topology_warning(self):
-        """proxy_access output with a forward_proxy system should not warn."""
+        """proxy_access output with a forward_proxy system should not warn on missing role."""
         scenario = Scenario(
             version="1.0",
             name="test",
@@ -1330,6 +1331,81 @@ class TestProxyOutputTopology:
             i for i in issues if i.field_path == "output.logs" and "forward_proxy" in i.message
         ]
         assert len(warnings) == 0
+
+    def test_proxy_access_without_proxy_config_warns_transparent_default(self):
+        """proxy_access with no environment.proxy warns that transparent is the default."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning"
+            and i.field_path == "environment.proxy"
+            and "transparent" in i.message
+        ]
+        assert len(warnings) == 1
+
+    def test_explicit_proxy_without_listener_port_warns_8080_default(self):
+        """explicit proxy mode warns when listener_port is omitted."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                    ),
+                ],
+                proxy=ProxyConfig(mode="explicit"),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning"
+            and i.field_path == "environment.proxy.listener_port"
+            and "8080" in i.message
+        ]
+        assert len(warnings) == 1
 
 
 class TestSegmentSensorCoverage:

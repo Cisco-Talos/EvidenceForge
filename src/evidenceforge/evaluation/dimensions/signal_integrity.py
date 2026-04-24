@@ -136,6 +136,12 @@ class SignalIntegrityScorer(DimensionScorer):
 
         # Step 1: Resolve storyline to absolute timeline
         resolved = self._resolve_storyline(storyline, scenario)
+        self._proxy_mode = scenario.environment.proxy.mode
+        self._proxy_ips = {
+            system.ip
+            for system in scenario.environment.systems
+            if "forward_proxy" in (system.roles or [])
+        }
 
         # Step 2: Find traces for each event
         self._find_traces(resolved, records)
@@ -661,7 +667,19 @@ class SignalIntegrityScorer(DimensionScorer):
         if event.system_ip and orig_h == event.system_ip:
             # If dst_ip specified, check responder
             if "dst_ip" in details:
+                if getattr(self, "_proxy_mode", "transparent") == "explicit" and resp_h in getattr(
+                    self, "_proxy_ips", set()
+                ):
+                    return True
                 return resp_h == details["dst_ip"]
+            return True
+
+        if (
+            getattr(self, "_proxy_mode", "transparent") == "explicit"
+            and orig_h in getattr(self, "_proxy_ips", set())
+            and "dst_ip" in details
+            and resp_h == details["dst_ip"]
+        ):
             return True
 
         # Or check if dst_ip from details matches
@@ -805,7 +823,10 @@ class SignalIntegrityScorer(DimensionScorer):
             ip_fields = ["IpAddress", "id.orig_h", "src_ip"]
             for ipf in ip_fields:
                 if ipf in f and f[ipf] and f[ipf] != "-":
-                    checks.append(("source_ip", f[ipf] == details["source_ip"]))
+                    source_ok = f[ipf] == details["source_ip"]
+                    if not source_ok and self._is_explicit_proxy_egress_trace(f, details):
+                        source_ok = True
+                    checks.append(("source_ip", source_ok))
                     break
 
         # Destination IP (if specified in details)
@@ -813,10 +834,29 @@ class SignalIntegrityScorer(DimensionScorer):
             dst_fields = ["id.resp_h", "dst_ip"]
             for df in dst_fields:
                 if df in f and f[df]:
-                    checks.append(("dst_ip", f[df] == details["dst_ip"]))
+                    dst_ok = f[df] == details["dst_ip"]
+                    if not dst_ok and self._is_explicit_proxy_client_trace(f, event):
+                        dst_ok = True
+                    checks.append(("dst_ip", dst_ok))
                     break
 
         return checks
+
+    def _is_explicit_proxy_client_trace(self, fields: dict, event: ResolvedEvent) -> bool:
+        """Return True when a trace is the client→proxy leg for a logical connection."""
+        if getattr(self, "_proxy_mode", "transparent") != "explicit":
+            return False
+        return fields.get("id.orig_h", fields.get("src_ip")) == event.system_ip and fields.get(
+            "id.resp_h", fields.get("dst_ip")
+        ) in getattr(self, "_proxy_ips", set())
+
+    def _is_explicit_proxy_egress_trace(self, fields: dict, details: dict[str, Any]) -> bool:
+        """Return True when a trace is the proxy→origin leg for a logical connection."""
+        if getattr(self, "_proxy_mode", "transparent") != "explicit":
+            return False
+        return fields.get("id.orig_h", fields.get("src_ip")) in getattr(
+            self, "_proxy_ips", set()
+        ) and fields.get("id.resp_h", fields.get("dst_ip")) == details.get("dst_ip")
 
     @staticmethod
     def _best_sub_detail(event: ResolvedEvent, fields: dict) -> dict[str, Any]:
