@@ -112,9 +112,22 @@ issuers:
       - {type: "ecdsa", length: 256, weight: 80}
       - {type: "rsa", length: 2048, weight: 20}
 
+  - name: "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+    weight: 0  # Only used for private/internal domains via domain_ca_overrides
+    validity_days_min: 180
+    validity_days_max: 825
+    not_before_max_days: 730
+    key_types:
+      - {type: "rsa", length: 2048, weight: 65}
+      - {type: "rsa", length: 4096, weight: 25}
+      - {type: "ecdsa", length: 256, weight: 10}
+
 # Domain-to-CA overrides: well-known domains must use their real CA.
 # Patterns use fnmatch glob syntax. First match wins.
 domain_ca_overrides:
+  "*.test": "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+  "*.local": "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+  "*.internal": "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
   "*.google.com": "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
   "*.googleapis.com": "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
   "*.gstatic.com": "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"

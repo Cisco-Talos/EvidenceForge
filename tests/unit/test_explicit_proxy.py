@@ -138,8 +138,20 @@ class TestExplicitProxyVisibility:
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert proxy_event.proxy.method == "CONNECT"
         assert proxy_event.proxy.host == "example.com"
+        assert proxy_event.proxy.cs_bytes > 0
+        assert proxy_event.proxy.sc_bytes > 0
         http_event = emitters["zeek_http"].emit.call_args.args[0]
         assert http_event.http.method == "CONNECT"
+        assert http_event.http.request_body_len == 0
+        assert http_event.http.response_body_len == 0
+        conn_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 8080
+        )
+        assert conn_event.network.orig_bytes >= proxy_event.proxy.cs_bytes
+        assert conn_event.network.resp_bytes >= proxy_event.proxy.sc_bytes
+        assert conn_event.network.resp_pkts > 0
         assert not emitters["zeek_ssl"].emit.called
 
     def test_egress_sensor_sees_proxy_to_origin_only(self):
@@ -383,6 +395,113 @@ class TestExplicitProxyVisibility:
         assert not emitters["snort_alert"].emit.called
         assert not emitters["cisco_asa"].emit.called
 
+    def test_auth_required_connect_stops_before_origin_side_sources(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=407,
+                sc_bytes=700,
+                cs_bytes=320,
+                time_taken=250,
+                user_agent="Mozilla/5.0",
+                content_type="text/html",
+                cache_result="AUTH_REQUIRED",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        assert ("10.0.3.10", "93.184.216.34", 443) not in pairs
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.status_code == 407
+        http_event = emitters["zeek_http"].emit.call_args.args[0]
+        assert http_event.http.method == "CONNECT"
+        assert http_event.http.status_code == 407
+        assert http_event.http.request_body_len == 0
+        assert http_event.http.response_body_len == 0
+        assert not emitters["zeek_ssl"].emit.called
+
+    def test_supplied_denied_proxy_context_stops_before_origin_side_sources(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            proxy=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=403,
+                sc_bytes=700,
+                cs_bytes=320,
+                time_taken=250,
+                user_agent="Mozilla/5.0",
+                content_type="text/html",
+                cache_result="DENIED",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            ),
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        assert ("10.0.3.10", "93.184.216.34", 443) not in pairs
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.status_code == 403
+        assert not emitters["zeek_ssl"].emit.called
+
     def test_port_only_web_connection_resolves_origin_from_proxy(self):
         generator, emitters = _generator(
             [
@@ -499,6 +618,10 @@ class TestExplicitProxyVisibility:
 
         conn_event = emitters["zeek_conn"].emit.call_args.args[0]
         assert conn_event.network.conn_state == "SF"
+        assert conn_event.network.orig_bytes > 0
+        assert conn_event.network.resp_bytes > 0
+        assert conn_event.network.orig_pkts > 0
+        assert conn_event.network.resp_pkts > 0
         assert conn_event.ssl is not None
         assert conn_event.ssl.established is True
         assert conn_event.x509 is not None

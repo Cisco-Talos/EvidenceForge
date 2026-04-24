@@ -599,6 +599,7 @@ class ActivityGenerator:
         self._explicit_proxy_tunnels: dict[
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
+        self._tls_seen_server_names: set[str] = set()
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -714,7 +715,14 @@ class ActivityGenerator:
 
         cache_roll = rng.random()
         if explicit_mode and proxy_method == "CONNECT":
-            cache_result = "NONE"
+            if cache_roll < 0.975:
+                cache_result = "NONE"
+            elif cache_roll < 0.988:
+                cache_result = "DENIED"
+            elif cache_roll < 0.995:
+                cache_result = "AUTH_REQUIRED"
+            else:
+                cache_result = "GATEWAY_ERROR"
         elif cache_roll < 0.30:
             cache_result = "HIT"
         elif cache_roll < 0.95:
@@ -725,23 +733,34 @@ class ActivityGenerator:
         cs_bytes = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
         if cache_result == "DENIED":
             sc_bytes = rng.randint(500, 2000)
+        elif cache_result == "AUTH_REQUIRED":
+            sc_bytes = rng.randint(300, 1200)
+        elif cache_result == "GATEWAY_ERROR":
+            sc_bytes = rng.randint(250, 1800)
         elif cache_result == "HIT":
             response_bytes = max(1, resp_bytes or 0)
             sc_bytes = rng.randint(
                 max(1, int(response_bytes * 0.4)), max(2, int(response_bytes * 1.1))
             )
         elif proxy_method == "CONNECT":
-            sc_bytes = 0
-            cs_bytes = 0
+            host_len = len(proxy_hostname)
+            cs_bytes = rng.randint(180 + host_len, 520 + host_len)
+            sc_bytes = rng.randint(90, 260)
         else:
             sc_bytes = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+
+        status_code = {
+            "DENIED": 403,
+            "AUTH_REQUIRED": 407,
+            "GATEWAY_ERROR": rng.choice([502, 503, 504]),
+        }.get(cache_result, 200)
 
         return ProxyContext(
             client_ip=src_ip,
             method=proxy_method,
             url=url,
             host=proxy_hostname,
-            status_code=200 if cache_result != "DENIED" else 403,
+            status_code=status_code,
             sc_bytes=sc_bytes,
             cs_bytes=cs_bytes,
             time_taken=int((duration or 0) * 1000),
@@ -783,12 +802,63 @@ class ActivityGenerator:
         if server_name == "":
             server_name = None
 
-        _tls_rng = random.Random(_stable_seed(f"tls:{net.src_ip}:{dst_ip}:{net.dst_port}"))
-        tls_version = _tls_rng.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[0]
+        # For suppressed hostnames (raw-IP C2), use the IP as the cert subject.
+        cert_name = server_name or dst_ip
+
+        # Issuer-aware certificate generation from YAML config.
+        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+        cert_rng = random.Random(_stable_seed(f"tls_cert_profile:{cert_name}"))
+        issuer_cfg = pick_issuer(cert_rng, server_name=cert_name)
+        key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
+        is_ecdsa = key_type == "ecdsa"
+
+        modern_tls_domain = bool(server_name) and server_name.endswith(
+            (
+                ".google.com",
+                ".gstatic.com",
+                ".googleapis.com",
+                ".microsoft.com",
+                ".office.com",
+                ".office365.com",
+                ".microsoftonline.com",
+                ".windowsupdate.com",
+                ".cloudfront.net",
+                ".github.com",
+                ".slack.com",
+                ".zoom.us",
+            )
+        )
+        _tls_rng = random.Random(_stable_seed(f"tls:{server_name or dst_ip}:{net.src_ip}"))
+        if modern_tls_domain:
+            tls_version = _tls_rng.choices(("TLSv12", "TLSv13"), weights=(15, 85), k=1)[0]
+        else:
+            tls_version = _tls_rng.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[
+                0
+            ]
         if tls_version == "TLSv13":
             cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+        elif is_ecdsa:
+            cipher = "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+        elif modern_tls_domain:
+            cipher = _tls_rng.choices(
+                (
+                    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                ),
+                weights=(75, 25),
+                k=1,
+            )[0]
         else:
-            cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[0]
+            cipher = _tls_rng.choices(
+                (
+                    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                    "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+                ),
+                weights=(65, 28, 7),
+                k=1,
+            )[0]
 
         ssl_established = (rng.random() > _SSL_FAILURE_RATE) if allow_failure else True
         if ssl_established:
@@ -799,11 +869,16 @@ class ActivityGenerator:
             ssl_hist = rng.choices(
                 _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
             )[0]
+        tls_name_key = server_name or dst_ip
+        first_observed_name = tls_name_key not in self._tls_seen_server_names
+        resumed = (rng.random() < 0.45 and not first_observed_name) if ssl_established else False
+        self._tls_seen_server_names.add(tls_name_key)
+
         event.ssl = SslContext(
             version=tls_version,
             cipher=cipher if ssl_established else "",
             server_name=server_name,
-            resumed=rng.random() < 0.45 if ssl_established else False,
+            resumed=resumed,
             established=ssl_established,
             ssl_history=ssl_hist,
         )
@@ -820,24 +895,21 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import X509Context
 
-        # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
-        cert_name = server_name or dst_ip
+        if resumed and rng.random() < 0.85:
+            return
         cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
-        cert_fuid = f"F{cert_hash[:16]}"
-        # Issuer-aware certificate generation from YAML config
-        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
-
-        issuer_cfg = pick_issuer(rng, server_name=cert_name)
-        key_type, key_length = pick_key_type(rng, issuer_cfg)
-        is_ecdsa = key_type == "ecdsa"
+        cert_fuid_hash = hashlib.sha256(
+            f"cert_fuid_{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}".encode()
+        ).hexdigest()
+        cert_fuid = f"F{cert_fuid_hash[:16]}"
         now_epoch = int(event.timestamp.timestamp())
         # Support validity_days_min/max ranges; fall back to scalar validity_days
         _vd_fallback = issuer_cfg.get("validity_days", 397)
         _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
         _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
-        validity_days = rng.randint(_vd_min, _vd_max)
+        validity_days = cert_rng.randint(_vd_min, _vd_max)
         not_before_max = issuer_cfg.get("not_before_max_days", 300)
-        not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
+        not_before_days = cert_rng.randint(1, min(not_before_max, validity_days - 1))
         remaining_days = validity_days - not_before_days
         # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
         # real hostnames get the domain + wildcard SAN.
@@ -859,7 +931,7 @@ class ActivityGenerator:
             fuid=cert_fuid,
             fingerprint=cert_hash,
             certificate_version=3,
-            certificate_serial=f"{rng.getrandbits(128):032X}",
+            certificate_serial=f"{cert_rng.getrandbits(128):032X}",
             certificate_subject=f"CN={cert_name}",
             certificate_issuer=issuer_cfg["name"],
             certificate_not_valid_before=now_epoch - not_before_days * 86400,
@@ -1940,7 +2012,7 @@ class ActivityGenerator:
         if explicit_proxy:
             proxy_sys = proxy_chain[0]
             listener_port = int(getattr(self, "_proxy_listener_port", 8080))
-            proxy_context = self._build_proxy_context(
+            proxy_context = proxy or self._build_proxy_context(
                 src_ip=src_ip,
                 dst_ip=dst_ip,
                 dst_port=dst_port,
@@ -1968,7 +2040,7 @@ class ActivityGenerator:
                 and ids is None
                 and firewall is None
                 and proxy is None
-                and proxy_context.cache_result != "DENIED"
+                and proxy_context.status_code < 400
             )
             if reuse_safe:
                 active_tunnel = self._explicit_proxy_tunnels.get(tunnel_key)
@@ -1981,15 +2053,29 @@ class ActivityGenerator:
 
             client_http: HttpContext | None = None
             if dst_port == 443:
+                connect_status_messages = {
+                    200: "Connection Established",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
                 client_http = HttpContext(
                     method="CONNECT",
                     host=proxy_context.host,
                     uri=f"{proxy_context.host}:443",
                     version="1.1",
                     user_agent=proxy_context.user_agent,
+                    request_body_len=0,
                     response_body_len=0,
-                    status_code=200,
-                    status_msg="Connection Established",
+                    status_code=proxy_context.status_code,
+                    status_msg=connect_status_messages.get(
+                        proxy_context.status_code,
+                        "Connection Established"
+                        if proxy_context.status_code < 400
+                        else "Proxy Error",
+                    ),
                     tags=[],
                 )
             elif http is not None:
@@ -2047,14 +2133,19 @@ class ActivityGenerator:
                 proxy_bypass=True,
             )
 
-            if proxy_context.cache_result == "DENIED":
+            if proxy_context.status_code >= 400:
                 return client_uid
 
             egress_http = http if dst_port == 80 and service == "http" else None
+            egress_delay = timedelta(
+                milliseconds=random.Random(
+                    _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
+                ).lognormvariate(3.0, 0.65)
+            )
             self.generate_connection(
                 src_ip=proxy_sys.ip,
                 dst_ip=dst_ip,
-                time=time + timedelta(milliseconds=5),
+                time=time + egress_delay,
                 dst_port=dst_port,
                 proto=proto,
                 service=service,
@@ -2259,6 +2350,13 @@ class ActivityGenerator:
                 resp_bytes = rng.randint(0, 200)
                 if duration is not None:
                     duration = rng.uniform(0.001, 0.5)
+
+        if proto == "tcp" and service == "ssl" and conn_state == "SF":
+            # A completed TLS session with ssl.log/SNI evidence must include
+            # at least a ClientHello and server handshake payload at conn.log
+            # accounting level, even when the logical request body is empty.
+            orig_bytes = max(orig_bytes or 0, rng.randint(180, 900))
+            resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
@@ -2691,10 +2789,45 @@ class ActivityGenerator:
             event.network.history = "ShADadfF"
             if event.network.duration is None:
                 event.network.duration = rng.uniform(0.01, 2.0)
-            if event.network.orig_bytes == 0:
+            if not event.network.orig_bytes:
                 event.network.orig_bytes = event.http.request_body_len or rng.randint(200, 2000)
-            if event.network.resp_bytes == 0:
+            if not event.network.resp_bytes:
                 event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
+
+        if event.network.protocol == "tcp" and event.network.conn_state == "SF":
+            if event.http is not None:
+                event.network.orig_bytes = max(
+                    event.network.orig_bytes or 0,
+                    event.http.request_body_len or 0,
+                    rng.randint(180, 520),
+                )
+                event.network.resp_bytes = max(
+                    event.network.resp_bytes or 0,
+                    event.http.response_body_len or 0,
+                    rng.randint(90, 450),
+                )
+            if event.network.service == "ssl":
+                event.network.orig_bytes = max(event.network.orig_bytes or 0, rng.randint(180, 900))
+                event.network.resp_bytes = max(
+                    event.network.resp_bytes or 0, rng.randint(900, 4500)
+                )
+            hist_orig = sum(1 for c in (event.network.history or "") if c.isupper())
+            hist_resp = sum(1 for c in (event.network.history or "") if c.islower())
+            event.network.orig_pkts = max(
+                hist_orig, max(1, ((event.network.orig_bytes or 0) // 1460) + 1)
+            )
+            event.network.resp_pkts = max(
+                hist_resp, max(1, ((event.network.resp_bytes or 0) // 1460) + 1)
+            )
+            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
+            orig_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
+            resp_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
+            event.network.orig_ip_bytes = (
+                (event.network.orig_bytes or 0) + event.network.orig_pkts * overhead + orig_extra
+            )
+            event.network.resp_ip_bytes = (
+                (event.network.resp_bytes or 0) + event.network.resp_pkts * overhead + resp_extra
+            )
 
         if (
             not local_only

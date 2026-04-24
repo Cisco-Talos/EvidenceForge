@@ -1304,16 +1304,70 @@ class StorylineMixin:
             ):
                 self.state_manager.set_current_time(tick_time)
                 if spec.action == "deny":
-                    self.activity_generator.generate_connection(
-                        src_ip=beacon_src_ip,
-                        dst_ip=spec.dst_ip,
-                        time=tick_time,
-                        dst_port=spec.dst_port,
-                        proto=spec.protocol,
-                        conn_state=deny_conn_state,
-                        firewall=fw_ctx,
-                        emit_dns=False,
+                    proxy_chain = getattr(self.activity_generator, "_proxy_routes", {}).get(
+                        beacon_src_ip
                     )
+                    explicit_proxy = (
+                        getattr(self.activity_generator, "_proxy_mode", "transparent") == "explicit"
+                        and proxy_chain
+                        and spec.protocol == "tcp"
+                        and spec.dst_port in (80, 443)
+                    )
+                    if explicit_proxy:
+                        from evidenceforge.events.contexts import ProxyContext
+
+                        proxy_sys = proxy_chain[0]
+                        beacon_host = spec.hostname or spec.dst_ip
+                        proxy_method = "CONNECT" if spec.dst_port == 443 else (spec.method or "GET")
+                        proxy_url = (
+                            f"{beacon_host}:443"
+                            if proxy_method == "CONNECT"
+                            else f"http://{beacon_host}{spec.uri or '/'}"
+                        )
+                        proxy_ctx = ProxyContext(
+                            client_ip=beacon_src_ip,
+                            method=proxy_method,
+                            url=proxy_url,
+                            host=beacon_host,
+                            status_code=403,
+                            sc_bytes=rng.randint(500, 2000),
+                            cs_bytes=rng.randint(180, 520),
+                            time_taken=rng.randint(20, 1500),
+                            user_agent=spec.user_agent or "Mozilla/5.0",
+                            content_type="text/html",
+                            cache_result="DENIED",
+                            referrer=spec.referrer or "",
+                            proxy_fqdn=self.activity_generator._proxy_fqdn(proxy_sys),
+                        )
+                        self.activity_generator.generate_connection(
+                            src_ip=beacon_src_ip,
+                            dst_ip=spec.dst_ip,
+                            time=tick_time,
+                            dst_port=spec.dst_port,
+                            proto=spec.protocol,
+                            service="ssl" if spec.dst_port == 443 else "http",
+                            duration=rng.uniform(0.05, 2.0),
+                            orig_bytes=s_ob,
+                            resp_bytes=s_rb,
+                            conn_state="SF",
+                            emit_dns=emit_dns and attempt_count == 0,
+                            source_system=src_sys,
+                            http=http_ctx,
+                            proxy=proxy_ctx,
+                            hostname=conn_hostname if conn_hostname is not None else spec.hostname,
+                            pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                        )
+                    else:
+                        self.activity_generator.generate_connection(
+                            src_ip=beacon_src_ip,
+                            dst_ip=spec.dst_ip,
+                            time=tick_time,
+                            dst_port=spec.dst_port,
+                            proto=spec.protocol,
+                            conn_state=deny_conn_state,
+                            firewall=fw_ctx,
+                            emit_dns=False,
+                        )
                 else:
                     # Allow DNS only on the first tick; cache handles the rest
                     self.activity_generator.generate_connection(

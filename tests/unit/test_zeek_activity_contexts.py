@@ -124,6 +124,32 @@ class TestSslContextPopulation:
         event = events[-1]
         assert event.ssl is None
 
+    def test_tls12_cipher_matches_certificate_key_type(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="142.250.72.36",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            hostname="www.gstatic.com",
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.ssl is not None
+        assert event.x509 is not None
+        if event.ssl.version == "TLSv12":
+            if "ECDSA" in event.ssl.cipher:
+                assert event.x509.certificate_key_type == "ecdsa"
+            if "RSA" in event.ssl.cipher:
+                assert event.x509.certificate_key_type == "rsa"
+
     def test_ssl_server_name_from_reverse_dns(self, activity_gen):
         """SslContext.server_name should be derived from REVERSE_DNS."""
         gen, events = activity_gen

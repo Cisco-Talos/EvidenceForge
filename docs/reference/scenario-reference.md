@@ -604,7 +604,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download).
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### DNS Query Events
 

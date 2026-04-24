@@ -253,3 +253,30 @@ class TestSslUidCorrelation:
             x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
 
             assert ssl_data["cert_chain_fuids"] == [x509_data["id"]]
+
+    def test_x509_renders_san_dns(self):
+        """x509.san_dns should render as Zeek's san.dns field."""
+        x509_fmt = load_format("zeek_x509")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="abc123",
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                    san_dns=["example.com", "*.example.com"],
+                ),
+            )
+            x509_emitter.emit(event)
+            x509_emitter.close()
+
+            x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
+            assert x509_data["san.dns"] == ["example.com", "*.example.com"]

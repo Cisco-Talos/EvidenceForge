@@ -291,7 +291,7 @@ HTTP access logs for web server systems.
 **File:** `<proxy-hostname.domain>/proxy_access.log`
 **Format:** W3C Extended Log Format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted.
+Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
 

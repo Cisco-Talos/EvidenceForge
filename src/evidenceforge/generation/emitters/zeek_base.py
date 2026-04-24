@@ -228,6 +228,13 @@ class SensorMultiplexEmitter(LogEmitter):
             chars.append(base62[byte % 62])
         return prefix + "".join(chars)
 
+    @classmethod
+    def _derive_sensor_file_id(cls, original_id: str, sensor_hostname: str) -> str:
+        """Derive a deterministic per-sensor Zeek FUID-style identifier."""
+        if not original_id:
+            return original_id
+        return cls._derive_sensor_uid(original_id, sensor_hostname)
+
     def _dispatch(self, event_data: dict[str, Any]) -> None:
         """Render and route to sensor writers.
 
@@ -242,8 +249,8 @@ class SensorMultiplexEmitter(LogEmitter):
         nat_swaps = event_data.pop("_nat_swaps_by_sensor", None)
         targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
 
-        if not targets or (len(targets) <= 1 and not nat_swaps):
-            # Single sensor or no sensors, no NAT — render once
+        if not targets:
+            # No sensor targets: render once to the flat output.
             rendered = self._render_event(event_data)
             if rendered is None:
                 return
@@ -253,11 +260,8 @@ class SensorMultiplexEmitter(LogEmitter):
             # and potentially NAT-swapped IPs
             original_uid = event_data.get("uid")
             for i, hostname in enumerate(targets):
-                # Always copy for secondary sensors (timing jitter + UID derivation)
-                if i > 0:
-                    render_data = dict(event_data)
-                else:
-                    render_data = event_data
+                # Always copy before per-sensor timing and identifier derivation.
+                render_data = dict(event_data)
                 # Apply NAT IP swaps for post-NAT sensors
                 if nat_swaps and hostname in nat_swaps:
                     if render_data is event_data:
@@ -275,13 +279,19 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["local_orig"] = swaps["local_orig"]
                     if "local_resp" in swaps:
                         render_data["local_resp"] = swaps["local_resp"]
-                # Directional propagation delay: farther sensors see packets later
+                # Directional propagation delay: farther sensors see packets later,
+                # but with per-event jitter so independent sensors do not have a
+                # perfectly fixed microsecond offset across every log stream.
                 if i > 0:
                     from datetime import datetime, timedelta
 
                     from evidenceforge.utils.rng import _stable_seed
 
-                    sensor_delay_us = (_stable_seed(f"sensor_delay_{hostname}") % 400) + 100
+                    sensor_delay_us = (
+                        (_stable_seed(f"sensor_delay_{hostname}") % 400)
+                        + 100
+                        + (_stable_seed(f"sensor_delay_jitter_{hostname}_{original_uid}") % 900)
+                    )
                     ts = render_data.get("ts")
                     if ts is not None:
                         if isinstance(ts, datetime):
@@ -294,9 +304,24 @@ class SensorMultiplexEmitter(LogEmitter):
                             (_stable_seed(f"dur_jitter_{hostname}_{original_uid}") % 200) - 100
                         ) / 1_000_000
                         render_data["duration"] = max(0.0, dur + dur_jitter)
-                if i > 0 and original_uid:
+                if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
+                for fuid_field in ("id", "fuid"):
+                    original_fuid = render_data.get(fuid_field)
+                    if isinstance(original_fuid, str) and original_fuid.startswith("F"):
+                        render_data[fuid_field] = self._derive_sensor_file_id(
+                            original_fuid, hostname
+                        )
+                for fuid_list_field in ("cert_chain_fuids", "resp_fuids"):
+                    fuid_values = render_data.get(fuid_list_field)
+                    if isinstance(fuid_values, list):
+                        render_data[fuid_list_field] = [
+                            self._derive_sensor_file_id(fuid, hostname)
+                            if isinstance(fuid, str) and fuid.startswith("F")
+                            else fuid
+                            for fuid in fuid_values
+                        ]
                 rendered = self._render_event(render_data)
                 if rendered is None:
                     return
