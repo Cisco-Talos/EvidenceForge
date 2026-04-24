@@ -3,7 +3,7 @@
 
 """Explicit proxy generation and visibility tests."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 from evidenceforge.events.contexts import FirewallContext, HttpContext, IdsContext, ProxyContext
@@ -205,6 +205,81 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
         assert ("10.0.3.10", "93.184.216.34", 443) in pairs
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
+
+    def test_https_subresources_reuse_active_connect_tunnel(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        first_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+        pairs_after_first = list(_conn_pairs(emitters))
+        proxy_calls_after_first = emitters["proxy_access"].emit.call_count
+        ssl_calls_after_first = emitters["zeek_ssl"].emit.call_count
+        reused_uid = generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=start_time + timedelta(seconds=12),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=0.2,
+            orig_bytes=200,
+            resp_bytes=1200,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            emit_dns=True,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/app.js",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=1200,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        assert reused_uid == first_uid
+        assert _conn_pairs(emitters) == pairs_after_first
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs_after_first
+        assert ("10.0.3.10", "93.184.216.34", 443) in pairs_after_first
+        assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first
+        assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
 
     def test_denied_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(

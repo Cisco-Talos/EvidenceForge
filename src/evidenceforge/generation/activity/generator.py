@@ -464,6 +464,7 @@ _SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
 # Proxy header overhead ranges (bytes)
 _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
+_EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 300
 
 # OS-aware proxy User-Agent pools
 _PROXY_UAS_WINDOWS = (
@@ -595,6 +596,9 @@ class ActivityGenerator:
         self._network_visibility = network_visibility
         self._proxy_mode = "transparent"
         self._proxy_listener_port = 8080
+        self._explicit_proxy_tunnels: dict[
+            tuple[str, str, str, str, int], tuple[datetime, str]
+        ] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -1950,6 +1954,30 @@ class ActivityGenerator:
                 http=http,
                 explicit_mode=True,
             )
+            tunnel_key = (
+                src_ip,
+                proxy_sys.ip,
+                proxy_context.host,
+                dst_ip,
+                dst_port,
+            )
+            reuse_safe = (
+                dst_port == 443
+                and http is not None
+                and dns is None
+                and ids is None
+                and firewall is None
+                and proxy is None
+                and proxy_context.cache_result != "DENIED"
+            )
+            if reuse_safe:
+                active_tunnel = self._explicit_proxy_tunnels.get(tunnel_key)
+                if active_tunnel is not None:
+                    last_activity, cached_uid = active_tunnel
+                    elapsed = (time - last_activity).total_seconds()
+                    if 0 <= elapsed < _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
+                        self._explicit_proxy_tunnels[tunnel_key] = (time, cached_uid)
+                        return cached_uid
 
             client_http: HttpContext | None = None
             if dst_port == 443:
@@ -2044,6 +2072,8 @@ class ActivityGenerator:
                 hostname=hostname,
                 proxy_bypass=True,
             )
+            if dst_port == 443:
+                self._explicit_proxy_tunnels[tunnel_key] = (time, client_uid)
             return client_uid
 
         # Emit DNS lookup before connection via causal expansion.
