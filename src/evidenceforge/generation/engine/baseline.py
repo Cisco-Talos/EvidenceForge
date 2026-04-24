@@ -67,6 +67,18 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
 
+
+def _session_started_by(session: Any, time: datetime) -> bool:
+    """Return whether a session exists at the given activity time."""
+    session_start = session.start_time
+    if session_start.tzinfo is None:
+        session_start = session_start.replace(tzinfo=UTC)
+    else:
+        session_start = session_start.astimezone(UTC)
+    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+    return session_start <= activity_time
+
+
 # Day-of-week intensity multipliers (0=Monday, 6=Sunday).
 # Models weekly rhythm: Monday login storms, Friday early departures,
 # weekend near-zero (only sysadmin/oncall personas active).
@@ -1301,7 +1313,10 @@ class BaselineMixin:
             return session.logon_id
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        session_on_system = next((s for s in sessions if s.system == system.hostname), None)
+        session_on_system = next(
+            (s for s in sessions if s.system == system.hostname and _session_started_by(s, time)),
+            None,
+        )
         if session_on_system:
             return session_on_system.logon_id
 
@@ -2227,7 +2242,9 @@ class BaselineMixin:
                     activities.append(activity_type)
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        has_session_on_system = any(s.system == system.hostname for s in sessions)
+        has_session_on_system = any(
+            s.system == system.hostname and _session_started_by(s, event_time) for s in sessions
+        )
         if not has_session_on_system and activities:
             if hasattr(self, "world_planner"):
                 self.world_planner.ensure_user_session(user, system, event_time, rng)
@@ -2254,8 +2271,15 @@ class BaselineMixin:
             if _pn in ("sysadmin", "security_analyst") and rng.random() < 0.15 and servers:
                 target_server = rng.choice(servers)
                 admin_alias = f"{user.username}-admin"
-                session = next((s for s in sessions if s.system == system.hostname), None)
                 runas_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                session = next(
+                    (
+                        s
+                        for s in sessions
+                        if s.system == system.hostname and _session_started_by(s, runas_t)
+                    ),
+                    None,
+                )
                 self.state_manager.set_current_time(runas_t)
                 self.activity_generator.generate_explicit_credentials(
                     user=user,
@@ -2283,8 +2307,15 @@ class BaselineMixin:
                 ]
                 if non_admins:
                     target_user = rng.choice(non_admins)
-                    session = next((s for s in sessions if s.system == system.hostname), None)
                     hd_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                    session = next(
+                        (
+                            s
+                            for s in sessions
+                            if s.system == system.hostname and _session_started_by(s, hd_t)
+                        ),
+                        None,
+                    )
                     self.state_manager.set_current_time(hd_t)
                     self.activity_generator.generate_explicit_credentials(
                         user=user,
@@ -4741,7 +4772,10 @@ class BaselineMixin:
             logon_id = self._ensure_session_on_system(admin, ws, base_time, rng)
 
             sessions = self.state_manager.get_sessions_for_user(admin.username)
-            ws_session = next((s for s in sessions if s.system == ws.hostname), None)
+            ws_session = next(
+                (s for s in sessions if s.system == ws.hostname and s.logon_id == logon_id),
+                None,
+            )
             parent_pid = ws_session.explorer_pid if ws_session and ws_session.explorer_pid else 4
 
             mmc_time = base_time

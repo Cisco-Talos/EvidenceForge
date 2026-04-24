@@ -711,7 +711,9 @@ class WorldPlanner:
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
-        existing = self._find_user_session(user.username, target_system.hostname, session_kind)
+        existing = self._find_user_session(
+            user.username, target_system.hostname, session_kind, at_time=time
+        )
         if allow_existing and existing is not None:
             # Require exact session_kind match when the caller specifies one.
             # Prevents interactive requests from reusing network/rdp sessions
@@ -928,6 +930,7 @@ class WorldPlanner:
         username: str,
         hostname: str,
         session_kind: str | None = None,
+        at_time: datetime | None = None,
     ) -> ActiveSession | None:
         """Find the newest compatible session for a user on a host.
 
@@ -937,6 +940,11 @@ class WorldPlanner:
         """
         sessions = self.state_manager.get_sessions_for_user(username)
         host_sessions = [s for s in sessions if s.system == hostname]
+        if at_time is not None:
+            cutoff = (
+                at_time.replace(tzinfo=UTC) if at_time.tzinfo is None else at_time.astimezone(UTC)
+            )
+            host_sessions = [s for s in host_sessions if self._session_start_sort_key(s) <= cutoff]
         if not host_sessions:
             return None
         if session_kind:

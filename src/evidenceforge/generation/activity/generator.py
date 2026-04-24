@@ -31,7 +31,7 @@ import logging
 import math
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Optional
 
@@ -72,6 +72,17 @@ from .network import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _session_started_by(session: Any, time: datetime) -> bool:
+    """Return whether a session exists at the given activity time."""
+    session_start = session.start_time
+    if session_start.tzinfo is None:
+        session_start = session_start.replace(tzinfo=UTC)
+    else:
+        session_start = session_start.astimezone(UTC)
+    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+    return session_start <= activity_time
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -3424,7 +3435,14 @@ class ActivityGenerator:
             # Get or create session for this user (with login cooldown)
             sessions = self.state_manager.get_sessions_for_user(user.username)
             active_session = (
-                next((s for s in sessions if s.system == system.hostname), None)
+                next(
+                    (
+                        s
+                        for s in sessions
+                        if s.system == system.hostname and _session_started_by(s, time)
+                    ),
+                    None,
+                )
                 if sessions
                 else None
             )
