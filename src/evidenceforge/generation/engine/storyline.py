@@ -323,7 +323,6 @@ class StorylineMixin:
             event_time = event_time + jitter
             if _prev_event_time and event_time <= _prev_event_time:
                 event_time = _prev_event_time + timedelta(milliseconds=rng.randint(100, 5000))
-            _prev_event_time = event_time
 
             actor = self._find_actor(storyline_event.actor)
             system = self._find_system(storyline_event.system)
@@ -372,6 +371,11 @@ class StorylineMixin:
                 )
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
+
+            if cadence_offsets:
+                _prev_event_time = event_time + timedelta(seconds=cadence_offsets[-1])
+            else:
+                _prev_event_time = event_time
 
             self._barrier_flush_all_emitters()
 
