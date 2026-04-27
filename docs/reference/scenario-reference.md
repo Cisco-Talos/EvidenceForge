@@ -118,7 +118,7 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users
 - `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
 - `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
-- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations
+- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations. File-server roles also increase baseline SMB target selection beyond normal DC SYSVOL/GPO traffic.
 - `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
 - `dns_server` — DNS resolution target

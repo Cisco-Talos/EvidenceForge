@@ -185,6 +185,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Cross-source distribution realism layer — defer until data-source reviews are complete. Independent Sysmon reviews found that field-level realism improved, but per-host event volumes and recipe selection remain too uniform. Design a deterministic host/activity profile layer derived from scenario facts (host type, roles, assigned_user, persona, services, stable seed) and use it to shape Sysmon, Windows Security, Zeek, syslog, firewall, web, proxy, and eCAR/EDR rates. Avoid implementing Sysmon-only profile logic unless needed as a narrow bug fix.
 
 **Zeek:**
+- [x] Zeek DNS / network support log review — fixed DNS/TLS PTR coherence, added realistic TXT lookup variety, prevented CDN-hostname MX artifacts, increased file-server SMB target coverage, and made SSH pivot UIDs respect sensor visibility. Tests, docs, skills, and skill references updated where needed.
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
 - [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
@@ -192,23 +193,23 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] SSL ssl_history limited to 2 values (CsiI, CsijI) — stale audit finding: generator now has 5 success patterns + 2 failure patterns, and `tests/unit/test_network_realism.py` verifies diversity.
 - [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
 - [x] Zeek files not chronologically ordered after multi-source generation — Zeek sensor writers now preserve normal flush behavior and sort the complete NDJSON file by `ts` on close. Focused regression coverage verifies cross-flush ordering for direct and per-sensor outputs.
-- [ ] SMB volume too low for Windows file server environments
+- [x] SMB volume too low for Windows file server environments — Windows file servers now independently drive SMB baseline targets even when no DC is present, and file-server targets are weighted above DC SYSVOL/GPO traffic.
 - [x] ~~DNS UIDs missing from conn.log (~7%)~~ — no longer reproduces (0/6487 orphans on apt-healthcare-breach); prior visibility fixes resolved this
 - [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
 - [x] weird.json TCP-specific types attributed to UDP sources — split into protocol-specific pools; UDP gets DNS/checksum/length anomalies at 0.5% rate vs TCP's 3%
 - [x] Exfiltration connections show 0 bytes transferred — auto-size by technique/description heuristic; added orig_bytes/resp_bytes/conn_state to ConnectionEventSpec; storyline defaults to SF
 - [x] No port 135 (RPC/EPMAP) traffic — stale audit finding: baseline legitimate lateral movement, scan ports, blocked ports, RSAT tooling, and Sysmon port-name mapping all include 135/RPC.
-- [ ] Inconsistent sensor coverage for SSH pivot
+- [x] Inconsistent sensor coverage for SSH pivot — SSH session generation now returns an empty network UID when topology says no sensor can observe the SSH leg, allowing storyline ground truth to mark the network evidence as filtered while preserving host-side syslog/eCAR evidence.
 
 **DNS:**
 - [x] DNS IP pool reuse: 15+ unrelated SaaS domains resolve to same IP — switched to domain-first selection for baseline web/SaaS; FORWARD_DNS maps domain→IP; fixed 93.184.216.34 mapping (was Reuters, now example.com)
 - [x] DNS AAAA records: unrelated services share IPv6 prefix (cross-provider) — stale audit finding: `dns_registry.yaml` now has explicit IPv6 mappings and provider-prefix fallback ranges keyed by IPv4 allocation.
 - [x] CloudFront distributions resolve to Microsoft IP ranges (cross-provider) — stale audit finding: CloudFront/AWS registry entries now resolve to AWS-style 52/54 ranges, not Microsoft-owned ranges.
-- [ ] No TXT queries (SPF/DKIM/DMARC checks)
+- [x] No TXT queries (SPF/DKIM/DMARC checks) — baseline DNS now includes low-rate TXT companion lookups for SPF/DKIM/DMARC-style mail/authentication noise.
 - [x] No Windows telemetry noise in query set — stale audit finding: registry includes Windows/background domains such as `settings-win.data.microsoft.com`, `ctldl.windowsupdate.com`, `crl.microsoft.com`, and `arc.msn.com`.
 - [x] TTL distribution too uniform — Phase 6.0: varied TTLs with cache-aging jitter
 - [x] Queries default to corp.local instead of scenario domain — stale audit finding: generated internal DNS used `vandynefoundation.org` (e.g., `dc01.vandynefoundation.org`, `_kerberos._tcp.vandynefoundation.org`, `wpad.vandynefoundation.org`), not `corp.local`.
-- [ ] MX records for CDN domains that shouldn't have mail exchangers
+- [x] MX records for CDN domains that shouldn't have mail exchangers — MX queries now use registrable domains only when the hostname is plausible for mail ownership; CDN/static hostnames fall back to TXT support lookups instead.
 
 **TLS/SSL:**
 - [x] TLS/x509 correlation gaps — baseline audit found SSL records without `cert_chain_fuids` and x509 issuer/subject pairings that looked implausible. Added deterministic certificate file UIDs, linked ssl.log to x509.log, and tightened domain-to-CA overrides for common CA-owned/Microsoft domains.
@@ -338,7 +339,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Configurable per-host volume variance — deferred to the general host/activity profile layer. Workstation connection counts are suspiciously uniform (808-1068 range); later profiles should widen variance by role, persona, weekday, installed apps, and stable host-specific multipliers.
 - [ ] Configurable per-host/source log coverage — deferred to the general imperfect-observation/profile layer. Uniform log file sets across all hosts can be useful for training, but a later setting should allow host-specific telemetry coverage differences, disabled sensors, partial deployment, and collection gaps.
 - [x] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.) — domain-first selection ensures consistent domain→IP mapping via FORWARD_DNS
-- [ ] AWS region mismatch between DNS PTR and SSL SNI for same IP
+- [x] AWS region mismatch between DNS PTR and SSL SNI for same IP — AWS hostname/PTR generation now derives a stable per-IP region/edge identity and PTR generation respects known forward hostname context.
 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()

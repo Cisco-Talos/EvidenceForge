@@ -514,6 +514,43 @@ def _dns_rtt(rng: random.Random) -> float:
         return rng.uniform(0.080, 0.250)  # Slow/distant: 80-250ms
 
 
+def _dns_registrable_domain(hostname: str) -> str:
+    """Return a practical DNS owner name for mail/TXT companion lookups."""
+    parts = [part for part in hostname.rstrip(".").split(".") if part]
+    if len(parts) <= 2:
+        return hostname.rstrip(".")
+    return ".".join(parts[-2:])
+
+
+def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str]:
+    """Build a plausible TXT lookup for mail/authentication background noise."""
+    domain = _dns_registrable_domain(hostname)
+    roll = rng.random()
+    if roll < 0.45:
+        return domain, f"v=spf1 include:_spf.{domain} ~all"
+    if roll < 0.75:
+        return f"_dmarc.{domain}", f"v=DMARC1; p=none; rua=mailto:dmarc@{domain}"
+    selector = rng.choice(["selector1", "selector2", "google", "k1"])
+    return f"{selector}._domainkey.{domain}", "v=DKIM1; k=rsa; p=MIIBIjANBgkqh"
+
+
+def _dns_hostname_allows_mx(hostname: str) -> bool:
+    """Return whether a hostname is plausible owner context for MX lookups."""
+    lowered = hostname.lower().rstrip(".")
+    cdn_suffixes = (
+        "cloudfront.net",
+        "akamaiedge.net",
+        "akamaitechnologies.com",
+        "fastly.net",
+        "global.ssl.fastly.net",
+        "cdn.cloudflare.net",
+    )
+    if lowered.endswith(cdn_suffixes):
+        return False
+    service_labels = {"cdn", "static", "assets", "media", "img", "js", "css"}
+    return lowered.split(".", 1)[0] not in service_labels
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -2933,6 +2970,14 @@ class ActivityGenerator:
         duration = rng.uniform(30.0, 3600.0)
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
+        visibility = self._network_visibility or (
+            self.dispatcher.visibility_engine if self.dispatcher else None
+        )
+        network_visible = (
+            True
+            if visibility is None
+            else visibility.is_connection_visible(source_ip, target_system.ip)
+        )
 
         src_host_ctx = None
         if source_system is not None:
@@ -3096,7 +3141,7 @@ class ActivityGenerator:
         logger.debug(
             f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})"
         )
-        return uid
+        return uid if network_visible else ""
 
     def generate_bash_command(
         self, user: User, system: System, time: datetime, activity_type_or_command: str = "default"
@@ -3560,7 +3605,7 @@ class ActivityGenerator:
             if _is_private_ip(dst_ip):
                 answers = [hostname]
             else:
-                answers = [_generate_rdns_name(rng, dst_ip)]
+                answers = [_generate_rdns_name(rng, dst_ip, hostname)]
         elif qtype_roll < 0.98:
             # SRV record: AD service discovery — must resolve to DCs only
             qtype, qtype_name = 33, "SRV"
@@ -3578,12 +3623,21 @@ class ActivityGenerator:
             port = _SRV_PORT_MAP.get(svc_prefix, 389)
             answers = [f"0 100 {port} {dc_hostname}"]
             is_internal = True
+        elif qtype_roll < 0.995:
+            # TXT record: SPF/DKIM/DMARC-style mail/authentication lookups.
+            qtype, qtype_name = 16, "TXT"
+            query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
+            answers = [txt_answer]
         else:
             # MX record: domain → mail server
-            qtype, qtype_name = 15, "MX"
-            parts = hostname.split(".", 1)
-            query = parts[1] if len(parts) > 1 else hostname
-            answers = [f"10 mail.{query}"]
+            if _dns_hostname_allows_mx(hostname):
+                qtype, qtype_name = 15, "MX"
+                query = _dns_registrable_domain(hostname)
+                answers = [f"10 mail.{query}"]
+            else:
+                qtype, qtype_name = 16, "TXT"
+                query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
+                answers = [txt_answer]
 
         # Deterministic base TTL per domain (consistent across queries) + cache aging
         domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))

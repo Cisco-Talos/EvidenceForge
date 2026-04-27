@@ -31,6 +31,7 @@ from evidenceforge.events.contexts import HttpContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.scenario import System, User
 
 
 @pytest.fixture
@@ -106,6 +107,32 @@ class TestSslContextPopulation:
             assert event.x509 is not None
             assert event.x509.fuid.startswith("F")
             assert event.ssl.cert_chain_fuids == [event.x509.fuid]
+
+    def test_ssh_session_returns_empty_uid_when_network_not_visible(self, activity_gen):
+        gen, events = activity_gen
+        visibility = MagicMock()
+        visibility.is_connection_visible.return_value = False
+        gen._network_visibility = visibility
+
+        user = User(username="alice", full_name="Alice Admin", email="alice@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        uid = gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        assert uid == ""
+        assert any(event.event_type == "ssh_session" for event in events)
+        visibility.is_connection_visible.assert_any_call("10.0.10.50", "10.0.20.10")
 
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen

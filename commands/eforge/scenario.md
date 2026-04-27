@@ -56,7 +56,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract external HTTPS, while internal `database` hosts only receive queries from other internal systems. The firewall policy determines what gets permitted vs denied — denied inbound attempts produce firewall deny records visible to analysts.
 
-`roles` and `services` drive the compiled world model, which decides what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, always specify both whenever the user can provide them.
+`roles` and `services` drive the compiled world model, which decides what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, always specify both whenever the user can provide them. Use `file_server` on Windows file shares so baseline SMB traffic targets them, not only domain controllers.
 
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 

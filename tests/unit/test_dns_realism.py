@@ -323,3 +323,100 @@ class TestMultiIpDnsAnswers:
 
         ips = get_domain_ips("nonexistent.example.invalid")
         assert ips == []
+
+
+class TestPtrSniCoherence:
+    """PTR records should not contradict known forward/TLS hostname context."""
+
+    def test_aws_compute_ptr_uses_forward_hostname_region(self):
+        from evidenceforge.generation.activity.network import _generate_rdns_name
+
+        ip = "52.84.100.50"
+        hostname = "ec2-52-84-100-50.us-west-2.compute.amazonaws.com"
+
+        for seed in range(20):
+            ptr = _generate_rdns_name(random.Random(seed), ip, hostname)
+            assert ".us-west-2.compute.amazonaws.com" in ptr
+
+    def test_aws_random_hostname_and_ptr_use_stable_identity(self):
+        from evidenceforge.generation.activity.network import (
+            _generate_random_hostname,
+            _generate_rdns_name,
+        )
+
+        ip = "52.84.100.50"
+        hostnames = {
+            _generate_random_hostname(random.Random(seed), ip)
+            for seed in range(50)
+            if ".compute.amazonaws.com" in _generate_random_hostname(random.Random(seed), ip)
+        }
+        ptrs = {_generate_rdns_name(random.Random(seed), ip) for seed in range(50)}
+
+        compute_regions = {
+            hostname.split(".compute.amazonaws.com")[0].rsplit(".", 1)[1] for hostname in hostnames
+        }
+        ptr_regions = {
+            ptr.split(".compute.amazonaws.com")[0].rsplit(".", 1)[1]
+            for ptr in ptrs
+            if ".compute.amazonaws.com" in ptr
+        }
+
+        assert len(compute_regions) <= 1
+        assert len(ptr_regions) <= 1
+        assert ptr_regions.issubset(compute_regions)
+
+
+class TestDnsSupportQueryTypes:
+    """Baseline DNS companion traffic should include realistic support lookups."""
+
+    @staticmethod
+    def _force_dns_random(monkeypatch, values):
+        import evidenceforge.generation.activity.generator as generator_module
+
+        rng = random.Random(42)
+        value_iter = iter(values)
+
+        def _fixed_random() -> float:
+            try:
+                return next(value_iter)
+            except StopIteration:
+                return 0.5
+
+        monkeypatch.setattr(rng, "random", _fixed_random)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+
+    def test_txt_queries_model_mail_authentication_noise(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        self._force_dns_random(monkeypatch, [0.5, 0.99, 0.2])
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="52.84.100.50",
+            time=timestamp,
+            hostname="mail.example.com",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        assert event.dns is not None
+        assert event.dns.query_type == "TXT"
+        assert event.dns.query == "example.com"
+        assert event.dns.answers == ["v=spf1 include:_spf.example.com ~all"]
+
+    def test_mx_roll_on_cdn_hostname_falls_back_to_txt(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        self._force_dns_random(monkeypatch, [0.5, 0.999, 0.2])
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="52.84.100.50",
+            time=timestamp,
+            hostname="d111111abcdef8.cloudfront.net",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        assert event.dns is not None
+        assert event.dns.query_type == "TXT"
+        assert event.dns.query == "cloudfront.net"
+        assert event.dns.answers == ["v=spf1 include:_spf.cloudfront.net ~all"]

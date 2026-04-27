@@ -2684,6 +2684,21 @@ class BaselineMixin:
         )
         return logon_id
 
+    def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
+        """Build weighted SMB targets for Windows client browsing noise."""
+        dc_targets = [ip for ip in dc_ips if ip != system.ip]
+        fs_targets = [
+            s
+            for s in self.scenario.environment.systems
+            if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
+        ]
+
+        targets = list(dc_targets)
+        for fs in fs_targets:
+            weight = 3 if fs.ip not in dc_targets else 2
+            targets.extend([fs.ip] * weight)
+        return targets, fs_targets
+
     def _generate_profile_traffic(
         self,
         current_hour: datetime,
@@ -3406,70 +3421,63 @@ class BaselineMixin:
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
-
-            # Include file servers in SMB targets for workstations
-            fs_targets = [
-                s
-                for s in self.scenario.environment.systems
-                if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
-            ]
-
-            if "smb-client" in services and os_cat == "windows" and dc_targets:
-                # Combine DC + file server IPs as SMB targets
-                smb_targets = list(dc_targets)
-                for fs in fs_targets:
-                    if fs.ip not in smb_targets:
-                        smb_targets.append(fs.ip)
-
-                _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
-                _smb_range = max(1, _smb_hi - _smb_lo)
-                smb_interval = _smb_lo + (_stable_seed(f"smb_iv_{system.hostname}") % _smb_range)
-                smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
-                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
-                t = smb_phase
-                while t < hour_start_sec:
-                    t += smb_interval
-                while t < hour_start_sec + 3600:
-                    offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
-                    offset = max(0, min(3599, offset))
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    smb_dst_ip = rng.choice(smb_targets)
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=smb_dst_ip,
-                        time=ts,
-                        dst_port=445,
-                        proto="tcp",
-                        service="smb",
-                        duration=rng.uniform(0.1, 2.0),
-                        orig_bytes=rng.randint(200, 2000),
-                        resp_bytes=rng.randint(500, 5000),
-                        emit_dns=rng.random() > 0.02,
-                        source_system=system,
-                        pid=4,  # SMB: kernel System process
+            if "smb-client" in services and os_cat == "windows":
+                # Include DC SYSVOL/GPO traffic and weight file servers higher
+                # when present; file-server environments should still produce
+                # SMB even if no DC role has been inferred.
+                smb_targets, fs_targets = self._build_smb_targets(system, dc_ips)
+                if smb_targets:
+                    _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
+                    _smb_range = max(1, _smb_hi - _smb_lo)
+                    smb_interval = _smb_lo + (
+                        _stable_seed(f"smb_iv_{system.hostname}") % _smb_range
                     )
-                    # Emit type 3 logon on file server for SMB access
-                    smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
-                    if smb_dst_sys:
-                        # Find active user on this workstation
-                        ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
-                        for sess in ws_sessions:
-                            if sess.logon_type in (2, 10, 11):
-                                ws_user = next(
-                                    (
-                                        u
-                                        for u in self.scenario.environment.users
-                                        if u.username == sess.username
-                                    ),
-                                    None,
-                                )
-                                if ws_user:
-                                    self._emit_smb_logon_pair(
-                                        ws_user, smb_dst_sys, system.ip, ts, rng
+                    smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
+                    hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+                    t = smb_phase
+                    while t < hour_start_sec:
+                        t += smb_interval
+                    while t < hour_start_sec + 3600:
+                        offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
+                        offset = max(0, min(3599, offset))
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        smb_dst_ip = rng.choice(smb_targets)
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=smb_dst_ip,
+                            time=ts,
+                            dst_port=445,
+                            proto="tcp",
+                            service="smb",
+                            duration=rng.uniform(0.1, 2.0),
+                            orig_bytes=rng.randint(200, 2000),
+                            resp_bytes=rng.randint(500, 5000),
+                            emit_dns=rng.random() > 0.02,
+                            source_system=system,
+                            pid=4,  # SMB: kernel System process
+                        )
+                        # Emit type 3 logon on file server for SMB access
+                        smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                        if smb_dst_sys:
+                            # Find active user on this workstation
+                            ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+                            for sess in ws_sessions:
+                                if sess.logon_type in (2, 10, 11):
+                                    ws_user = next(
+                                        (
+                                            u
+                                            for u in self.scenario.environment.users
+                                            if u.username == sess.username
+                                        ),
+                                        None,
                                     )
-                                    break
-                    t += smb_interval
+                                    if ws_user:
+                                        self._emit_smb_logon_pair(
+                                            ws_user, smb_dst_sys, system.ip, ts, rng
+                                        )
+                                        break
+                        t += smb_interval
 
             # Kerberos
             if "kerberos-client" in services and os_cat == "windows" and dc_targets:
