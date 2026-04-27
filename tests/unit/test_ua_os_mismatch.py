@@ -57,3 +57,18 @@ class TestProxyUriOsFiltering:
         rng = random.Random(42)
         _, _, _, ua_override = pick_proxy_uri(rng, "crl.microsoft.com", [], source_os="linux")
         assert ua_override is None
+
+
+class TestProxyUriTemplateSubstitution:
+    """Verify proxy URI templates don't leak unresolved placeholders."""
+
+    def test_slug_placeholder_is_materialized(self):
+        """The generic /{slug}/ template should render as a concrete path."""
+        from evidenceforge.generation.activity.proxy_uri import _substitute_vars
+
+        rng = random.Random(42)
+        uri = _substitute_vars(rng, "/{slug}/{slug}/{unknown}/", {})
+
+        assert "{" not in uri
+        assert "}" not in uri
+        assert uri.endswith("/item/")

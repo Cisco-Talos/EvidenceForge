@@ -43,7 +43,7 @@ from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
 )
-from evidenceforge.generation.activity.generator import _dns_rtt
+from evidenceforge.generation.activity.generator import _dns_rtt, _linux_uid_for_user
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
 from evidenceforge.generation.activity.process_access_patterns import (
@@ -2699,6 +2699,59 @@ class BaselineMixin:
             targets.extend([fs.ip] * weight)
         return targets, fs_targets
 
+    def _emit_smb_file_operations(
+        self,
+        user: Any,
+        file_server: Any,
+        client_system: Any,
+        time: datetime,
+        rng: Any,
+    ) -> None:
+        """Emit eCAR file operations that make SMB sessions look like file work."""
+        import uuid
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, EdrContext, FileContext
+
+        host_ctx = self.activity_generator._build_host_context(file_server)
+        username = getattr(user, "username", "unknown")
+        client_name = getattr(client_system, "hostname", "client").lower()
+        share = rng.choice(["Departments", "Finance", "Projects", "Shared", "IT"])
+        stems = [
+            "budget-review",
+            "quarterly-report",
+            "vendor-list",
+            "project-plan",
+            "meeting-notes",
+            "policy-update",
+        ]
+        extensions = ["docx", "xlsx", "pdf", "pptx", "txt"]
+        op_count = rng.randint(3, 8)
+        operation_choices = ["file_read", "file_read", "file_read", "file_modify", "file_create"]
+        session_operations = ["file_read", "file_modify"]
+        if rng.random() < 0.18:
+            session_operations.append("file_create")
+        if rng.random() < 0.08:
+            session_operations.append("file_delete")
+        while len(session_operations) < op_count:
+            session_operations.append(rng.choice(operation_choices))
+        rng.shuffle(session_operations)
+
+        for idx, event_type in enumerate(session_operations):
+            stem = rng.choice(stems)
+            ext = rng.choice(extensions)
+            file_path = rf"\\{file_server.hostname}\{share}\{client_name}\{stem}-{rng.randint(1, 99):02d}.{ext}"
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=time + timedelta(milliseconds=idx * rng.randint(200, 1500)),
+                    event_type=event_type,
+                    src_host=host_ctx,
+                    auth=AuthContext(username=username),
+                    file=FileContext(path=file_path, action=event_type.removeprefix("file_")),
+                    edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
+                )
+            )
+
     def _generate_profile_traffic(
         self,
         current_hour: datetime,
@@ -3172,6 +3225,7 @@ class BaselineMixin:
         from evidenceforge.generation.activity.dns_registry import (
             get_domain_tags,
             pick_domain_and_ip,
+            resolve_domain_ip,
         )
 
         domain_tags = get_domain_tags(hostname) if hostname else []
@@ -3234,10 +3288,7 @@ class BaselineMixin:
                     )
                 else:
                     req_hostname = req.hostname
-                    # Resolve CDN domain to an IP
-                    _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
-                    if cdn_ip:
-                        req_dst_ip = cdn_ip
+                    req_dst_ip = resolve_domain_ip(req_hostname, src_host=system.hostname)
 
             http_ctx = HttpContext(
                 method=req.method,
@@ -3265,7 +3316,7 @@ class BaselineMixin:
                 duration=rng.uniform(0.05, 2.0),
                 orig_bytes=req.request_body_len,
                 resp_bytes=req.response_body_len,
-                emit_dns=req.is_page_load,  # DNS only for page loads, not subresources
+                emit_dns=req.is_page_load or req_hostname != hostname,
                 source_system=system,
                 hostname=req_hostname,
                 pid=persona_pid,
@@ -3443,6 +3494,29 @@ class BaselineMixin:
                         ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         smb_dst_ip = rng.choice(smb_targets)
+                        smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                        if smb_dst_sys:
+                            operation_profile = rng.choices(
+                                ["read", "write", "metadata"],
+                                weights=[55, 30, 15],
+                                k=1,
+                            )[0]
+                            if operation_profile == "read":
+                                duration = rng.uniform(2.0, 90.0)
+                                orig_bytes = rng.randint(1_200, 12_000)
+                                resp_bytes = rng.randint(80_000, 5_000_000)
+                            elif operation_profile == "write":
+                                duration = rng.uniform(3.0, 120.0)
+                                orig_bytes = rng.randint(80_000, 4_000_000)
+                                resp_bytes = rng.randint(2_000, 50_000)
+                            else:
+                                duration = rng.uniform(0.2, 5.0)
+                                orig_bytes = rng.randint(800, 8_000)
+                                resp_bytes = rng.randint(1_000, 25_000)
+                        else:
+                            duration = rng.uniform(0.1, 2.0)
+                            orig_bytes = rng.randint(200, 2_000)
+                            resp_bytes = rng.randint(500, 5_000)
                         self.activity_generator.generate_connection(
                             src_ip=system.ip,
                             dst_ip=smb_dst_ip,
@@ -3450,15 +3524,14 @@ class BaselineMixin:
                             dst_port=445,
                             proto="tcp",
                             service="smb",
-                            duration=rng.uniform(0.1, 2.0),
-                            orig_bytes=rng.randint(200, 2000),
-                            resp_bytes=rng.randint(500, 5000),
+                            duration=duration,
+                            orig_bytes=orig_bytes,
+                            resp_bytes=resp_bytes,
                             emit_dns=rng.random() > 0.02,
                             source_system=system,
                             pid=4,  # SMB: kernel System process
                         )
                         # Emit type 3 logon on file server for SMB access
-                        smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
                         if smb_dst_sys:
                             # Find active user on this workstation
                             ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
@@ -3475,6 +3548,9 @@ class BaselineMixin:
                                     if ws_user:
                                         self._emit_smb_logon_pair(
                                             ws_user, smb_dst_sys, system.ip, ts, rng
+                                        )
+                                        self._emit_smb_file_operations(
+                                            ws_user, smb_dst_sys, system, ts, rng
                                         )
                                         break
                         t += smb_interval
@@ -4301,7 +4377,7 @@ class BaselineMixin:
                             (
                                 "sshd",
                                 sshd_pid,
-                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
                             ),
                             (
                                 "systemd-logind",
@@ -4373,9 +4449,11 @@ class BaselineMixin:
                     else:
                         msg = rng.choice(
                             [
-                                f"Initial synchronization to time server {ntp_ip}:123.",
+                                f"Network configuration changed, trying to establish synchronization with {ntp_ip}:123.",
+                                f"System clock synchronized to {ntp_ip}:123.",
+                                f"Time has been changed by {-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d} seconds.",
                                 f"Timed out waiting for reply from {ntp_ip}:123.",
-                                f"Synchronized to time server {ntp_ip}:123.",
+                                f"Selected time server {ntp_ip}:123.",
                             ]
                         )
                     self.activity_generator.generate_syslog_event(

@@ -128,7 +128,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 
 **Known Limitations:**
-- No SMB-specific log (smb_files.log, smb_mapping.log) — SMB traffic appears only in conn.log
+- No SMB-specific Zeek log (smb_files.log, smb_mapping.log) — SMB traffic appears in conn.log; file-server activity can also produce host-side eCAR FILE records
 - No SMTP log — email traffic appears in conn.log only
 - http.log covers unencrypted HTTP on any port; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
@@ -150,7 +150,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
-| FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
+| FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity and baseline SMB file-server access. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes. |

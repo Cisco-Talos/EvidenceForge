@@ -186,6 +186,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 
 **Zeek:**
 - [x] Zeek DNS / network support log review — fixed DNS/TLS PTR coherence, added realistic TXT lookup variety, prevented CDN-hostname MX artifacts, increased file-server SMB target coverage, and made SSH pivot UIDs respect sensor visibility. Tests, docs, skills, and skill references updated where needed.
+- [x] Blind Zeek/network eval high+medium follow-up — fixed high-impact DNS/TLS/IP coherence, unresolved HTTP URI placeholders, Linux SSH UID metadata, SMB session/operation shape, weird.log conditionality, and NTP syslog semantics. TLS volume clustering remains deferred for a separate design discussion.
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
 - [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
@@ -194,9 +195,11 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Zeek conn history too uniform (ShADadfF dominant) — 26 distinct history patterns in TCP_CONN_STATE_DISTRIBUTION including RST-based terminations, retransmissions, partial closes
 - [x] Zeek files not chronologically ordered after multi-source generation — Zeek sensor writers now preserve normal flush behavior and sort the complete NDJSON file by `ts` on close. Focused regression coverage verifies cross-flush ordering for direct and per-sensor outputs.
 - [x] SMB volume too low for Windows file server environments — Windows file servers now independently drive SMB baseline targets even when no DC is present, and file-server targets are weighted above DC SYSVOL/GPO traffic.
+- [x] SMB session shape and operation mix — file-server SMB baseline traffic now uses larger read/write/metadata-sized connection profiles and emits eCAR FILE READ/WRITE plus create/delete operations for the authenticated user.
 - [x] ~~DNS UIDs missing from conn.log (~7%)~~ — no longer reproduces (0/6487 orphans on apt-healthcare-breach); prior visibility fixes resolved this
 - [x] UFW BLOCK entries don't appear in conn.log — UFW BLOCK dispatches via SecurityEvent, emits Zeek conn with conn_state='REJ'
 - [x] weird.json TCP-specific types attributed to UDP sources — split into protocol-specific pools; UDP gets DNS/checksum/length anomalies at 0.5% rate vs TCP's 3%
+- [x] weird.log condition-driven anomaly distribution — weird events now concentrate around partial/reset TCP flows, missed bytes, long bulk sessions, and DNS/UDP-specific oddities instead of uniform random sprinkling.
 - [x] Exfiltration connections show 0 bytes transferred — auto-size by technique/description heuristic; added orig_bytes/resp_bytes/conn_state to ConnectionEventSpec; storyline defaults to SF
 - [x] No port 135 (RPC/EPMAP) traffic — stale audit finding: baseline legitimate lateral movement, scan ports, blocked ports, RSAT tooling, and Sysmon port-name mapping all include 135/RPC.
 - [x] Inconsistent sensor coverage for SSH pivot — SSH session generation now returns an empty network UID when topology says no sensor can observe the SSH leg, allowing storyline ground truth to mark the network evidence as filtered while preserving host-side syslog/eCAR evidence.
@@ -210,6 +213,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] TTL distribution too uniform — Phase 6.0: varied TTLs with cache-aging jitter
 - [x] Queries default to corp.local instead of scenario domain — stale audit finding: generated internal DNS used `vandynefoundation.org` (e.g., `dc01.vandynefoundation.org`, `_kerberos._tcp.vandynefoundation.org`, `wpad.vandynefoundation.org`), not `corp.local`.
 - [x] MX records for CDN domains that shouldn't have mail exchangers — MX queries now use registrable domains only when the hostname is plausible for mail ownership; CDN/static hostnames fall back to TXT support lookups instead.
+- [x] DNS/TLS/IP coherence at scale — hostname-aware connection generation now rewrites mismatched destination IPs to the hostname's registered IP pool, and browsing subresources resolve CDN/resource hostnames through the same DNS registry.
 
 **TLS/SSL:**
 - [x] TLS/x509 correlation gaps — baseline audit found SSL records without `cert_chain_fuids` and x509 issuer/subject pairings that looked implausible. Added deterministic certificate file UIDs, linked ssl.log to x509.log, and tightened domain-to-CA overrides for common CA-owned/Microsoft domains.
@@ -232,6 +236,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] ✓ systemd-logind session IDs random — sequential per-host counter from boot
 - [ ] Session IDs appear out-of-order (assigned in generation order, not chronological)
 - [ ] NTP server mismatch (Zeek shows NIST, syslog shows Ubuntu pool)
+- [x] NTP syslog lifecycle semantics — periodic systemd-timesyncd messages now mix source selection, clock sync, offset adjustments, and timeout messages without repeating initial synchronization after the first host sync.
 - [ ] No SSH protocol negotiation messages
 - [x] Logrotate/cron.daily fire too frequently (should be daily, not multiple times per hour) — stale audit finding: `systemd_schedules.yaml` defines logrotate and cron-daily as daily scheduled jobs with per-host jitter, outside the per-hour probability loop.
 - [x] Centralized syslog timestamps not chronologically sorted — _sort_flat_file = True in syslog.py; sorting in host_base.py
@@ -340,6 +345,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [ ] Configurable per-host/source log coverage — deferred to the general imperfect-observation/profile layer. Uniform log file sets across all hosts can be useful for training, but a later setting should allow host-specific telemetry coverage differences, disabled sensors, partial deployment, and collection gaps.
 - [x] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.) — domain-first selection ensures consistent domain→IP mapping via FORWARD_DNS
 - [x] AWS region mismatch between DNS PTR and SSL SNI for same IP — AWS hostname/PTR generation now derives a stable per-IP region/edge identity and PTR generation respects known forward hostname context.
+- [ ] TLS volume clustering design — deferred for user discussion. Blind review found very high short-window repetition around a few SNI/cert identities; design should balance realistic enterprise app concentration, update/package behavior, per-host browsing preferences, and training-friendly signal coherence before changing generation.
 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()

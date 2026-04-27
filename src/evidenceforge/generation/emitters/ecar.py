@@ -54,6 +54,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "system_process_create",
         "ssh_session",
         "connection",
+        "file_read",
         "file_create",
         "file_modify",
         "file_delete",
@@ -85,6 +86,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
             "connection": self._render_connection,
+            "file_read": self._render_file_event,
             "file_create": self._render_file_event,
             "file_modify": self._render_file_event,
             "file_delete": self._render_file_event,
@@ -207,7 +209,12 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_file_event(self, event: SecurityEvent) -> None:
         """Render eCAR FILE event from canonical FileContext (logged on src_host)."""
         host = event.src_host
-        action_map = {"file_create": "CREATE", "file_modify": "MODIFY", "file_delete": "DELETE"}
+        action_map = {
+            "file_read": "READ",
+            "file_create": "CREATE",
+            "file_modify": "WRITE",
+            "file_delete": "DELETE",
+        }
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),

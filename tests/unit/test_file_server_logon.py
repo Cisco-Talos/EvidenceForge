@@ -3,7 +3,9 @@
 
 """Tests for file server SMB logon event generation."""
 
+import random
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
@@ -48,8 +50,6 @@ class TestEmitSmbLogonPair:
 
     def test_skips_linux_file_servers(self):
         """Linux file servers don't get Windows 4624 logon events."""
-        import random
-
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         obj = MagicMock()
@@ -66,13 +66,45 @@ class TestEmitSmbLogonPair:
         obj.activity_generator.generate_logon.assert_not_called()
 
 
+class TestEmitSmbFileOperations:
+    """Verify SMB file-server sessions produce a realistic operation mix."""
+
+    def test_emits_read_write_and_other_file_operations(self):
+        """Each SMB file-server session should include READ/WRITE plus other file actions."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        obj = MagicMock()
+        obj.activity_generator._build_host_context.return_value = SimpleNamespace(
+            hostname="FS-01",
+            fqdn="fs-01.example.com",
+            os="Windows Server 2022",
+            os_category="windows",
+        )
+        captured = []
+        obj.activity_generator.dispatcher.dispatch.side_effect = captured.append
+        method = BaselineMixin._emit_smb_file_operations.__get__(obj)
+
+        user = SimpleNamespace(username="jdoe")
+        file_server = SimpleNamespace(hostname="FS-01")
+        client = SimpleNamespace(hostname="WS-01")
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+
+        method(user, file_server, client, ts, random.Random(0))
+
+        event_types = {event.event_type for event in captured}
+        assert "file_read" in event_types
+        assert "file_modify" in event_types
+        assert event_types & {"file_create", "file_delete"}
+        assert len(captured) >= 3
+        assert all(event.auth.username == "jdoe" for event in captured)
+        assert all(event.file.path.startswith("\\\\FS-01\\") for event in captured)
+
+
 class TestSmbBrowsingIncludesFileServers:
     """Verify SMB browsing target pool includes file servers."""
 
     def test_file_server_ips_in_smb_targets(self):
         """When file servers exist, SMB target pool includes their IPs alongside DCs."""
-        from types import SimpleNamespace
-
         # Create mock systems
         dc = SimpleNamespace(
             hostname="DC-01",
@@ -120,8 +152,6 @@ class TestSmbBrowsingIncludesFileServers:
 
     def test_file_server_only_environment_still_has_smb_targets(self):
         """File servers should drive SMB noise even when no DC target exists."""
-        from types import SimpleNamespace
-
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         fs = SimpleNamespace(
@@ -153,8 +183,6 @@ class TestSmbBrowsingIncludesFileServers:
 
     def test_file_servers_are_weighted_above_domain_controllers(self):
         """File server targets should be weighted higher than SYSVOL/DC traffic."""
-        from types import SimpleNamespace
-
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         dc = SimpleNamespace(

@@ -551,6 +551,22 @@ def _dns_hostname_allows_mx(hostname: str) -> bool:
     return lowered.split(".", 1)[0] not in service_labels
 
 
+def _linux_uid_for_user(username: str) -> int:
+    """Return a stable plausible Linux UID for a login username."""
+    if username == "root":
+        return 0
+    well_known = {
+        "ubuntu": 1000,
+        "ec2-user": 1000,
+        "admin": 1001,
+        "ansible": 998,
+        "deploy": 1002,
+    }
+    if username in well_known:
+        return well_known[username]
+    return 1000 + (_stable_seed(f"linux_uid_{username}") % 5000)
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -1996,6 +2012,17 @@ class ActivityGenerator:
             else:
                 hostname = _generate_random_hostname(_get_rng(), dst_ip)
 
+        if hostname:
+            from evidenceforge.generation.activity.dns_registry import (
+                get_domain_ips,
+                resolve_domain_ip,
+            )
+
+            domain_ips = get_domain_ips(hostname)
+            if domain_ips and dst_ip not in domain_ips:
+                src_host = source_system.hostname if source_system else src_ip
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         hostname_is_external = (
             bool(hostname)
@@ -2818,32 +2845,63 @@ class ActivityGenerator:
                 xmt_ts=round(ntp_epoch + ntp_jitter + rtt_sec + proc_sec, 6),
             )
 
-        # Zeek weird.log: probabilistic network anomalies
-        # TCP: ~3% of connections; UDP: ~0.5% (much rarer in real Zeek deployments)
-        weird_prob = 0.03 if proto == "tcp" else 0.005 if proto == "udp" else 0
-        if not local_only and weird_prob > 0 and rng.random() < weird_prob:
+        # Zeek weird.log: condition-driven network anomalies. Weird events
+        # should cluster around partial/reset flows, long bulk sessions, and
+        # DNS/UDP oddities rather than being sprinkled uniformly over clean TLS.
+        weird_candidates: list[tuple[str, str, float]] = []
+        if proto == "tcp":
+            if conn_state in ("S0", "S1", "SH", "SHR"):
+                weird_candidates.extend(
+                    [
+                        ("connection_originator_SYN_ack", "TCP", 0.10),
+                        ("truncated_header", "TCP", 0.05),
+                    ]
+                )
+            elif conn_state in ("RSTO", "RSTR"):
+                weird_candidates.extend(
+                    [
+                        ("inappropriate_FIN", "TCP", 0.08),
+                        ("above_hole_data_without_any_acks", "TCP", 0.04),
+                    ]
+                )
+            elif missed_bytes:
+                weird_candidates.append(("above_hole_data_without_any_acks", "TCP", 0.35))
+            elif duration and duration > 30 and (orig_bytes or 0) + (resp_bytes or 0) > 100_000:
+                weird_candidates.append(("window_recision", "TCP", 0.015))
+            elif service == "ssl":
+                weird_candidates.append(("possible_split_routing", "TCP", 0.0015))
+            else:
+                weird_candidates.append(("bad_TCP_checksum", "TCP", 0.004))
+        elif proto == "udp":
+            if service == "dns":
+                weird_candidates.extend(
+                    [
+                        ("DNS_truncated_len_lt_hdr_len", "UDP", 0.006),
+                        ("DNS_RR_unknown_type", "UDP", 0.004),
+                    ]
+                )
+            else:
+                weird_candidates.extend(
+                    [
+                        ("bad_UDP_checksum", "UDP", 0.003),
+                        ("UDP_datagram_length_mismatch", "UDP", 0.002),
+                    ]
+                )
+
+        weird_roll = rng.random()
+        cumulative = 0.0
+        selected_weird: tuple[str, str] | None = None
+        for name, source, probability in weird_candidates:
+            cumulative += probability
+            if weird_roll < cumulative:
+                selected_weird = (name, source)
+                break
+        if not local_only and selected_weird is not None:
             from evidenceforge.events.contexts import WeirdContext
 
-            _TCP_WEIRD_NAMES = [
-                "window_recision",
-                "possible_split_routing",
-                "above_hole_data_without_any_acks",
-                "data_before_established",
-                "connection_originator_SYN_ack",
-                "truncated_header",
-                "inappropriate_FIN",
-                "bad_TCP_checksum",
-            ]
-            _UDP_WEIRD_NAMES = [
-                "DNS_truncated_len_lt_hdr_len",
-                "bad_UDP_checksum",
-                "UDP_datagram_length_mismatch",
-                "DNS_RR_unknown_type",
-            ]
-            weird_pool = _TCP_WEIRD_NAMES if proto == "tcp" else _UDP_WEIRD_NAMES
             event.weird = WeirdContext(
-                name=rng.choice(weird_pool),
-                source="TCP" if proto == "tcp" else "UDP",
+                name=selected_weird[0],
+                source=selected_weird[1],
             )
 
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
@@ -3117,7 +3175,7 @@ class ActivityGenerator:
                     severity=6,
                     message=(
                         f"pam_unix(sshd:session): session opened for user "
-                        f"{user.username} by (uid=0)"
+                        f"{user.username}(uid={_linux_uid_for_user(user.username)}) by (uid=0)"
                     ),
                 ),
             )

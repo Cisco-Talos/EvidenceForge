@@ -35,6 +35,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import AuthContext, FileContext, HostContext
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 
 
@@ -87,6 +89,38 @@ class TestPidAlwaysPresent:
         )
         record = json.loads(rendered)
         assert record["pid"] == -1
+
+
+class TestFileEventActions:
+    def test_file_read_and_modify_render_read_write_actions(self, emitter, ts):
+        """Canonical file_read/file_modify events should render as eCAR READ/WRITE."""
+        host = HostContext(
+            hostname="FS-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            fqdn="fs-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        for event_type in ("file_read", "file_modify"):
+            emitter._render_file_event(
+                SecurityEvent(
+                    timestamp=ts,
+                    event_type=event_type,
+                    src_host=host,
+                    auth=AuthContext(username="jdoe"),
+                    file=FileContext(
+                        path=r"\\FS-01\Shared\budget.xlsx",
+                        action=event_type.removeprefix("file_"),
+                        pid=4,
+                    ),
+                )
+            )
+
+        actions = [call.args[0]["action"] for call in emitter.emit_event.call_args_list]
+        assert actions == ["READ", "WRITE"]
 
 
 class TestTidAlwaysPresent:

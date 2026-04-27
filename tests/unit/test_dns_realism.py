@@ -109,6 +109,31 @@ class TestHostnameConsistency:
                     f"DNS query '{dns_event.dns.query}' != expected domain '{domain}'"
                 )
 
+    def test_hostname_rewrites_mismatched_destination_ip(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Caller-supplied hostname/IP mismatches should resolve to the hostname's IP pool."""
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        state_manager.set_current_time(timestamp)
+        hostname = "www.google.com"
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="208.80.154.224",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert conn_event.network.dst_ip in get_domain_ips(hostname)
+        assert conn_event.ssl is not None
+        assert conn_event.ssl.server_name == hostname
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""

@@ -134,6 +134,34 @@ class TestSslContextPopulation:
         assert any(event.event_type == "ssh_session" for event in events)
         visibility.is_connection_visible.assert_any_call("10.0.10.50", "10.0.20.10")
 
+    def test_ssh_session_pam_message_uses_non_root_user_uid(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        pam_messages = [
+            event.syslog.message
+            for event in events
+            if event.syslog is not None and "pam_unix(sshd:session)" in event.syslog.message
+        ]
+        assert pam_messages
+        assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
+        assert "admin(uid=0)" not in pam_messages[0]
+
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen
 
