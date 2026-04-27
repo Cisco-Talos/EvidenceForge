@@ -490,6 +490,41 @@ _PROXY_UAS_LINUX = (
     "libdnf (Fedora Linux 39; workstation; Linux.x86_64)",
 )
 
+_PROXY_UAS_SERVER = (
+    "curl/7.88.1",
+    "Wget/1.21.3",
+    "python-requests/2.31.0",
+    "Go-http-client/1.1",
+    "Apache-HttpClient/4.5.14 (Java/17.0.9)",
+    "apt-http/2.4.11 (amd64)",
+    "Debian APT-HTTP/1.3 (2.4.11)",
+    "libdnf (Fedora Linux 39; server; Linux.x86_64)",
+)
+
+_SERVER_PROXY_ROLES = {
+    "app_server",
+    "database",
+    "dns_server",
+    "domain_controller",
+    "file_server",
+    "log_server",
+    "mail_server",
+    "monitoring",
+    "web_server",
+}
+
+
+def _pick_proxy_user_agent(rng: random.Random, source_system: Optional["System"]) -> str:
+    """Pick a proxy User-Agent appropriate for the source host role."""
+    if source_system is None:
+        return rng.choice(_PROXY_UAS_WINDOWS)
+    roles = set(source_system.roles or [])
+    if source_system.type == "server" or roles & _SERVER_PROXY_ROLES:
+        return rng.choice(_PROXY_UAS_SERVER)
+    if _get_os_category(source_system.os) == "linux":
+        return rng.choice(_PROXY_UAS_LINUX)
+    return rng.choice(_PROXY_UAS_WINDOWS)
+
 
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
@@ -709,10 +744,8 @@ class ActivityGenerator:
         if not user_agent:
             if proxy_ua_override:
                 user_agent = proxy_ua_override
-            elif source_system and _get_os_category(source_system.os) == "linux":
-                user_agent = rng.choice(_PROXY_UAS_LINUX)
             else:
-                user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+                user_agent = _pick_proxy_user_agent(rng, source_system)
 
         cache_roll = rng.random()
         if explicit_mode and proxy_method == "CONNECT":
@@ -2598,10 +2631,8 @@ class ActivityGenerator:
                 if event.http is None:
                     if proxy_ua_override:
                         user_agent = proxy_ua_override
-                    elif source_system and _get_os_category(source_system.os) == "linux":
-                        user_agent = rng.choice(_PROXY_UAS_LINUX)
                     else:
-                        user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+                        user_agent = _pick_proxy_user_agent(rng, source_system)
                 cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"

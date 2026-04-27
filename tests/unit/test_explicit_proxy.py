@@ -3,6 +3,7 @@
 
 """Explicit proxy generation and visibility tests."""
 
+import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -17,6 +18,74 @@ from evidenceforge.models.scenario import (
     NetworkSensor,
     System,
 )
+
+
+def test_proxy_user_agent_selection_is_role_aware_for_servers():
+    from evidenceforge.generation.activity.generator import _pick_proxy_user_agent
+
+    rng = random.Random(42)
+    web_server = System(
+        hostname="web01",
+        ip="10.0.3.20",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["web_server"],
+    )
+
+    user_agents = {_pick_proxy_user_agent(rng, web_server) for _ in range(50)}
+
+    assert user_agents
+    assert all("Mozilla/" not in ua for ua in user_agents)
+    assert any(token in ua for ua in user_agents for token in ("curl", "apt", "Wget", "requests"))
+
+
+def test_server_ids_http_traffic_keeps_server_proxy_user_agent():
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="dmz-tap",
+                monitoring_segments=["dmz"],
+                direction="bidirectional",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+    web_server = System(
+        hostname="WEB-01",
+        ip="10.0.3.20",
+        os="Ubuntu 24.04",
+        type="server",
+        roles=["web_server"],
+    )
+    generator._ip_to_system[web_server.ip] = web_server
+    generator._proxy_routes[web_server.ip] = [generator._ip_to_system["10.0.3.10"]]
+
+    generator.generate_connection(
+        src_ip=web_server.ip,
+        dst_ip="93.184.216.34",
+        time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=5000,
+        source_system=web_server,
+        hostname="example.com",
+        conn_state="SF",
+        ids=IdsContext(
+            sid=2013028,
+            message="ET POLICY Suspicious HTTP Activity",
+            classification="policy-violation",
+            priority=2,
+        ),
+    )
+
+    proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+    assert proxy_event.proxy.client_ip == web_server.ip
+    assert "Mozilla/" not in proxy_event.proxy.user_agent
+    assert proxy_event.proxy.user_agent
 
 
 def _system(hostname: str, ip: str, roles: list[str] | None = None) -> System:
