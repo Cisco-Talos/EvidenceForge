@@ -1132,7 +1132,7 @@ class ActivityGenerator:
 
         # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses)
         if rng.random() < 0.18:
-            from evidenceforge.events.contexts import OcspContext
+            from evidenceforge.events.contexts import FileTransferContext, OcspContext
             from evidenceforge.generation.activity.tls_realism import ocsp_config
             from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
 
@@ -1179,6 +1179,25 @@ class ActivityGenerator:
                 this_update=this_update,
                 next_update=next_update,
             )
+            if event.file_transfer is None:
+                ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp_id}")).randint(
+                    900, 2500
+                )
+                event.file_transfer = FileTransferContext(
+                    fuid=ocsp_id,
+                    source="HTTP",
+                    depth=0,
+                    analyzers=[],
+                    mime_type="application/ocsp-response",
+                    duration=rng.uniform(0.001, 0.02),
+                    local_orig=_is_private_ip(net.src_ip),
+                    is_orig=False,
+                    seen_bytes=ocsp_size,
+                    total_bytes=ocsp_size,
+                    missing_bytes=0,
+                    overflow_bytes=0,
+                    timedout=False,
+                )
 
     def _build_tls_certificate_chain(
         self,
@@ -3216,7 +3235,7 @@ class ActivityGenerator:
             ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
             event.ntp = NtpContext(
                 version=ntp_rng.choice([3, 4]),
-                mode=3,  # client
+                mode=4,  # server response
                 stratum=stratum,
                 poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
                 precision=float(ntp_rng.randint(-25, -18)),
@@ -4088,6 +4107,14 @@ class ActivityGenerator:
                 query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
                 answers = [txt_answer]
 
+        query_is_internal = qtype_name == "SRV" or _dns_is_internal_name(query, ad_domain)
+        if query_is_internal and not _is_private_ip(dns_server_ip):
+            dns_server_ip = _get_rng().choice(dns_ips)
+            src_port = self._allocate_ephemeral_port(
+                src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
+            )
+        is_internal = query_is_internal
+
         # Internal authoritative names use stable TTLs. External answers may be
         # observed through a resolver cache, so expose realistic countdown TTLs.
         base_ttl = _dns_base_ttl(query, is_internal)
@@ -4157,8 +4184,16 @@ class ActivityGenerator:
             nxdomain_queries = suffix_queries + nxdomain_queries
             nx_query = rng.choice(nxdomain_queries)
             nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
+            nx_is_internal = _dns_is_internal_name(nx_query, ad_domain) or nx_query in {
+                "wpad",
+                "wpad.local",
+                "isatap",
+            }
+            nx_dns_server_ip = dns_server_ip
+            if nx_is_internal and not _is_private_ip(nx_dns_server_ip):
+                nx_dns_server_ip = _get_rng().choice(dns_ips)
             nx_src_port = self._allocate_ephemeral_port(
-                src_ip, dns_server_ip, 53, "udp", nx_time, _src_os
+                src_ip, nx_dns_server_ip, 53, "udp", nx_time, _src_os
             )
             nx_ctx = DnsContext(
                 query=nx_query,
@@ -4167,13 +4202,14 @@ class ActivityGenerator:
                 query_type="A",
                 rcode="NXDOMAIN",
                 rcode_num=3,
-                AA=True,
+                rtt=_dns_rtt(rng, nx_dns_server_ip),
+                AA=nx_is_internal,
                 RD=True,
                 RA=True,
             )
             self.generate_connection(
                 src_ip=src_ip,
-                dst_ip=dns_server_ip,
+                dst_ip=nx_dns_server_ip,
                 time=nx_time,
                 dst_port=53,
                 proto="udp",

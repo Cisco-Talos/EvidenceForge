@@ -50,6 +50,7 @@ def mock_emitters():
         "windows_event_security": Mock(),
         "zeek_conn": Mock(),
         "zeek_http": Mock(),
+        "zeek_ntp": Mock(),
         "ecar": Mock(),
         "syslog": Mock(),
         "snort_alert": Mock(),
@@ -131,6 +132,27 @@ class TestIdsAlertCorrelation:
         assert zeek.emit.called
         event = zeek.emit.call_args[0][0]
         assert event.network.dst_port == 22
+
+    def test_ntp_connection_uses_server_response_mode(self, activity_gen, mock_emitters, timestamp):
+        """NTP records with server timing fields should use server-response mode."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="129.6.15.28",
+            time=timestamp,
+            dst_port=123,
+            proto="udp",
+            service="ntp",
+            duration=0.02,
+            orig_bytes=48,
+            resp_bytes=48,
+        )
+
+        event = mock_emitters["zeek_ntp"].emit.call_args[0][0]
+        assert event.ntp is not None
+        assert event.ntp.mode == 4
+        assert event.ntp.stratum >= 1
+        assert event.ntp.rec_ts > event.ntp.org_ts
+        assert event.ntp.xmt_ts >= event.ntp.rec_ts
 
 
 class TestWebAccessCorrelation:

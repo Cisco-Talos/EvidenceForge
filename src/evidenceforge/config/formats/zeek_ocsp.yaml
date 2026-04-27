@@ -1,7 +1,7 @@
 # zeek_ocsp format definition — Zeek ocsp.log format (JSON output) - OCSP response logging
 #
 # Category: network
-# Standalone: yes (no cross-file dependencies)
+# Cross-file dependency: id is the OCSP response file ID and should join to files.log fuid.
 # Note: Field names may be referenced by evaluation rules in config/evaluation/
 #
 # Full schema: see commands/eforge/references/config-formats.md
@@ -21,33 +21,6 @@ fields:
     type: string
     required: true
     description: "OCSP response file ID"
-
-  - name: uid
-    type: string
-    required: true
-    description: "Connection UID (shared with conn.log)"
-    constraints:
-      pattern: "^[A-Za-z0-9]{17,19}$"
-
-  - name: id.orig_h
-    type: ip_address
-    required: true
-    description: "Originator host for the connection carrying OCSP evidence"
-
-  - name: id.orig_p
-    type: port
-    required: true
-    description: "Originator port"
-
-  - name: id.resp_h
-    type: ip_address
-    required: true
-    description: "Responder host for the connection carrying OCSP evidence"
-
-  - name: id.resp_p
-    type: port
-    required: true
-    description: "Responder port"
 
   - name: hashAlgorithm
     type: string
@@ -92,11 +65,6 @@ output:
     {
       "ts": {{ ts | tojson }},
       "id": {{ id | tojson }},
-      "uid": {{ uid | tojson }},
-      "id.orig_h": {{ data["id.orig_h"] | tojson }},
-      "id.orig_p": {{ data["id.orig_p"] | tojson }},
-      "id.resp_h": {{ data["id.resp_h"] | tojson }},
-      "id.resp_p": {{ data["id.resp_p"] | tojson }},
       "hashAlgorithm": {{ hashAlgorithm | tojson }},
       "issuerNameHash": {{ issuerNameHash | tojson }},
       "issuerKeyHash": {{ issuerKeyHash | tojson }},

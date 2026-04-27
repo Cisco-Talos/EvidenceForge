@@ -367,6 +367,10 @@ class TestSslContextPopulation:
             )
             assert event.ocsp.this_update <= event.timestamp.timestamp()
             assert event.ocsp.next_update > event.timestamp.timestamp()
+            assert event.file_transfer is not None
+            assert event.file_transfer.fuid == event.ocsp.id
+            assert event.file_transfer.source == "HTTP"
+            assert event.file_transfer.mime_type == "application/ocsp-response"
 
         assert all(len(statuses) == 1 for statuses in statuses_by_serial.values())
         assert all(len(windows) <= 2 for windows in windows_by_serial.values())

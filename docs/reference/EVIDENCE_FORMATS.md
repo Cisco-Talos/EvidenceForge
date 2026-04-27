@@ -123,11 +123,11 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for port 443 connections. Certificate-chain depth is driven by `tls_realism.yaml`. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses and substantial SMB transfers. MIME type, seen_bytes, fuid correlation. SMB thresholds and MIME mix are driven by `smb_file_transfers.yaml`. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Sensor-routed via NetworkContext. |
-| ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
+| ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. |
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info, and CA constraints. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
-| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks with connection UID and tuple fields for joining back to conn.log. |
+| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation responses whose `id` joins to `files.log` `fuid`, matching Zeek file-analysis semantics. |
 | packet_filter.log | `packet_filter.json` | BPF filter changes | Zeek packet filter status. |
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 

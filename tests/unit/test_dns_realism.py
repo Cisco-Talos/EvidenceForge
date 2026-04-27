@@ -483,7 +483,7 @@ class TestDnsSupportQueryTypes:
     """Baseline DNS companion traffic should include realistic support lookups."""
 
     @staticmethod
-    def _force_dns_random(monkeypatch, values):
+    def _force_dns_random(monkeypatch, values, default=0.5):
         import evidenceforge.generation.activity.generator as generator_module
 
         rng = random.Random(42)
@@ -493,7 +493,7 @@ class TestDnsSupportQueryTypes:
             try:
                 return next(value_iter)
             except StopIteration:
-                return 0.5
+                return default
 
         monkeypatch.setattr(rng, "random", _fixed_random)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
@@ -533,3 +533,61 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "cloudfront.net"
         assert event.dns.answers == ["v=spf1 include:_spf.cloudfront.net ~all"]
+
+    def test_forward_proxy_srv_queries_use_internal_resolver(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        self._force_dns_random(monkeypatch, [0.5, 0.95, 0.5])
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._ad_domain = "example.com"
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="142.250.72.36",
+            time=timestamp,
+            hostname="www.gstatic.com",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        assert event.dns is not None
+        assert event.dns.query_type == "SRV"
+        assert event.network.dst_ip == "10.0.0.10"
+        assert event.dns.AA is True
+
+    def test_internal_nxdomain_companions_use_internal_resolver_and_rtt(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        self._force_dns_random(monkeypatch, [0.5, 0.5, 0.5], default=0.01)
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._ad_domain = "example.com"
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+        activity_gen.generate_connection = Mock()
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="142.250.72.36",
+            time=timestamp,
+            hostname="www.gstatic.com",
+        )
+
+        nx_call = activity_gen.generate_connection.call_args_list[-1].kwargs
+        nx_dns = nx_call["dns"]
+        assert nx_dns.rcode == "NXDOMAIN"
+        assert nx_call["dst_ip"] == "10.0.0.10"
+        assert nx_dns.AA is True
+        assert nx_dns.rtt is not None

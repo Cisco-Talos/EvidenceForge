@@ -30,8 +30,15 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, OcspContext, SslContext, X509Context
+from evidenceforge.events.contexts import (
+    FileTransferContext,
+    NetworkContext,
+    OcspContext,
+    SslContext,
+    X509Context,
+)
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
@@ -330,6 +337,7 @@ class TestSslUidCorrelation:
         ssl_fmt = load_format("zeek_ssl")
         x509_fmt = load_format("zeek_x509")
         ocsp_fmt = load_format("zeek_ocsp")
+        files_fmt = load_format("zeek_files")
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -337,6 +345,7 @@ class TestSslUidCorrelation:
             ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
             x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
             ocsp_emitter = ZeekOcspEmitter(ocsp_fmt, out_dir / "ocsp.json")
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
 
             event = SecurityEvent(
                 timestamp=base_ts,
@@ -372,24 +381,40 @@ class TestSslUidCorrelation:
                     this_update=1705310000.0,
                     next_update=1705900000.0,
                 ),
+                file_transfer=FileTransferContext(
+                    fuid="Focsp12345678901",
+                    source="HTTP",
+                    mime_type="application/ocsp-response",
+                    duration=0.01,
+                    local_orig=True,
+                    is_orig=False,
+                    seen_bytes=1200,
+                    total_bytes=1200,
+                ),
             )
             ssl_emitter.emit(event)
             x509_emitter.emit(event)
             ocsp_emitter.emit(event)
+            files_emitter.emit(event)
             ssl_emitter.close()
             x509_emitter.close()
             ocsp_emitter.close()
+            files_emitter.close()
 
             ssl_ts = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])["ts"]
             x509_ts = json.loads((out_dir / "x509.json").read_text().splitlines()[0])["ts"]
             ocsp_ts = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])["ts"]
             ocsp_row = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])
+            files_row = json.loads((out_dir / "files.json").read_text().splitlines()[0])
 
         conn_ts = base_ts.timestamp()
         assert conn_ts < ssl_ts < conn_ts + 0.1
         assert ssl_ts < x509_ts < conn_ts + 0.7
         assert x509_ts < ocsp_ts < conn_ts + 6.1
-        assert ocsp_row["uid"] == "CMySpecificUID123"
-        assert ocsp_row["id.orig_h"] == "10.0.0.1"
-        assert ocsp_row["id.resp_h"] == "8.8.8.8"
-        assert ocsp_row["id.resp_p"] == 443
+        assert ocsp_row["id"] == "Focsp12345678901"
+        assert "uid" not in ocsp_row
+        assert "id.orig_h" not in ocsp_row
+        assert "id.resp_h" not in ocsp_row
+        assert files_row["fuid"] == ocsp_row["id"]
+        assert files_row["uid"] == "CMySpecificUID123"
+        assert files_row["mime_type"] == "application/ocsp-response"
