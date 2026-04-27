@@ -187,6 +187,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 **Zeek:**
 - [x] Zeek DNS / network support log review — fixed DNS/TLS PTR coherence, added realistic TXT lookup variety, prevented CDN-hostname MX artifacts, increased file-server SMB target coverage, and made SSH pivot UIDs respect sensor visibility. Tests, docs, skills, and skill references updated where needed.
 - [x] Blind Zeek/network eval high+medium follow-up — fixed high-impact DNS/TLS/IP coherence, unresolved HTTP URI placeholders, Linux SSH UID metadata, SMB session/operation shape, weird.log conditionality, and NTP syslog semantics. TLS volume clustering remains deferred for a separate design discussion.
+- [x] Blind Zeek/network non-TLS follow-up — fixed duplicate exact non-ICMP flows, weird.log overproduction on clean TLS, syslog/eCAR chronological ordering, direct internal DNS cache behavior, DHCP↔conn UID coherence, and ground-truth sensor UID coherence. Blind score improved to 85% synthetic; remaining high-impact findings are TLS/x509/OCSP modeling and SMB Zeek file visibility design items.
 - [x] ✓ Cross-sensor UIDs byte-identical — deterministic per-sensor UID derivation (SHA-256 of uid+sensor) preserving intra-sensor cross-log correlation
 - [x] ✓ x509 certificate serial numbers all 5 bytes — generate 128-bit (16-byte) serials matching real CA practice
 - [x] ✓ NTP Zeek ref_time/org_time/rec_time/xmt_time all 0.0 — populate with realistic values relative to event timestamp
@@ -346,6 +347,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] DNS IP pool reuse causes cross-provider resolution (CloudFront→Microsoft IPs, etc.) — domain-first selection ensures consistent domain→IP mapping via FORWARD_DNS
 - [x] AWS region mismatch between DNS PTR and SSL SNI for same IP — AWS hostname/PTR generation now derives a stable per-IP region/edge identity and PTR generation respects known forward hostname context.
 - [ ] TLS volume clustering design — deferred for user discussion. Blind review found very high short-window repetition around a few SNI/cert identities; design should balance realistic enterprise app concentration, update/package behavior, per-host browsing preferences, and training-friendly signal coherence before changing generation.
+- [ ] TLS/x509/OCSP realism design — blind review still flags IP-derived AWS SNI without DNS evidence, resumed TLS sessions with certificate chains, exact conn/ssl/x509 timestamp alignment, public-suffix wildcard SANs, and flat OCSP status behavior. Treat as a coordinated TLS/cert/session model rather than one-off patches.
+- [ ] Zeek SMB file visibility design — blind review still flags SMB-heavy scenarios with host-side eCAR UNC file actions but no Zeek SMB file observations. Decide whether to synthesize Zeek files.log-style SMB artifacts, add a Zeek SMB log family, or document that current Zeek files support is HTTP-focused.
 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()

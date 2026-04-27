@@ -134,6 +134,101 @@ class TestHostnameConsistency:
         assert conn_event.ssl is not None
         assert conn_event.ssl.server_name == hostname
 
+    def test_ephemeral_ports_do_not_repeat_exact_five_tuple(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """High-volume destination traffic should not reuse exact 5-tuples."""
+        state_manager.set_current_time(timestamp)
+
+        for idx in range(300):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="93.184.216.34",
+                time=timestamp + timedelta(milliseconds=idx),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                hostname="example.com",
+                conn_state="SF",
+                duration=1.0,
+            )
+
+        tuples = [
+            (
+                call.args[0].network.src_ip,
+                call.args[0].network.src_port,
+                call.args[0].network.dst_ip,
+                call.args[0].network.dst_port,
+                call.args[0].network.protocol,
+            )
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+        ]
+        assert len(tuples) == len(set(tuples))
+
+    def test_clean_short_tls_does_not_get_weird(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Clean successful TLS handshakes should not receive partial/reset weird labels."""
+        state_manager.set_current_time(timestamp)
+
+        for idx in range(50):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="93.184.216.34",
+                time=timestamp + timedelta(seconds=idx),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                hostname="example.com",
+                conn_state="SF",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=2000,
+            )
+
+        events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        assert all(event.weird is None for event in events)
+
+    def test_internal_dns_ttl_is_stable_across_resolvers(self):
+        """Internal authoritative DNS names should not get random per-query TTLs."""
+        from evidenceforge.generation.activity.generator import _dns_base_ttl
+
+        first = _dns_base_ttl("dc01.example.org", is_internal=True)
+        second = _dns_base_ttl("dc01.example.org", is_internal=True)
+
+        assert first == second
+        assert first in {300, 600, 1800, 3600, 7200, 86400}
+
+    def test_direct_dns_connection_uses_internal_cache(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Direct DNS connections should honor cache suppression for internal names."""
+        from evidenceforge.generation.activity.generator import _dns_base_ttl
+
+        state_manager.set_current_time(timestamp)
+        activity_gen._ad_domain = "example.org"
+
+        for idx in range(3):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="10.0.0.10",
+                time=timestamp + timedelta(seconds=idx),
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                hostname="dc01.example.org",
+                duration=0.01,
+                orig_bytes=80,
+                resp_bytes=180,
+            )
+
+        ttls = [
+            call.args[0].dns.TTLs[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].dns and call.args[0].dns.query == "dc01.example.org"
+        ]
+        assert ttls == [float(_dns_base_ttl("dc01.example.org", is_internal=True))]
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""

@@ -31,6 +31,31 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
+_ECAR_SORT_PRIORITY = {
+    ("PROCESS", "CREATE"): 0,
+    ("USER_SESSION", "LOGIN"): 1,
+    ("MODULE", "LOAD"): 2,
+    ("REGISTRY", "MODIFY"): 3,
+    ("FILE", "CREATE"): 4,
+    ("FILE", "READ"): 5,
+    ("FILE", "WRITE"): 6,
+    ("FLOW", "CONNECT"): 7,
+    ("THREAD", "REMOTE_CREATE"): 8,
+    ("PROCESS", "OPEN"): 9,
+    ("PROCESS", "TERMINATE"): 10,
+    ("USER_SESSION", "LOGOUT"): 11,
+}
+
+
+def _ecar_sort_key(line: str) -> tuple[int, int, str]:
+    """Extract timestamp_ms for chronological per-host eCAR output sorting."""
+    try:
+        record = json.loads(line)
+        priority = _ECAR_SORT_PRIORITY.get((record.get("object"), record.get("action")), 50)
+        return int(record.get("timestamp_ms", 0)), priority, line
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return 0, 50, line
+
 
 class EcarEmitter(HostMultiplexEmitter):
     """Emitter for eCAR (extended Cyber Analytics Repository) format.
@@ -44,6 +69,9 @@ class EcarEmitter(HostMultiplexEmitter):
 
     _log_filename = "ecar.json"
     _flat_filename = "ecar.json"
+    _sort_flat_file = True
+    _sort_key = staticmethod(_ecar_sort_key)
+    _defer_sorted_flush_until_close = True
 
     _supported_types: set[str] = {
         "logon",

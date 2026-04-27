@@ -557,6 +557,21 @@ class StorylineMixin:
             "type": spec.type,
         }
 
+        def _ground_truth_uid(uid: str, src_ip: str, dst_ip: str) -> str:
+            if not uid:
+                return "(filtered by sensor placement)"
+            visibility = getattr(self.dispatcher, "visibility_engine", None)
+            if visibility is None:
+                return uid
+            from evidenceforge.events.dispatcher import expand_formats
+            from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+
+            for sensor in visibility.get_observing_sensors(src_ip, dst_ip):
+                if "zeek_conn" in expand_formats(sensor.log_formats):
+                    hostname = sensor.hostname or sensor.name
+                    return SensorMultiplexEmitter._derive_sensor_uid(uid, hostname)
+            return "(filtered by sensor placement)"
+
         if spec.type == "logon":
             _attacker_ips = [
                 "45.33.32.156",
@@ -871,7 +886,7 @@ class StorylineMixin:
             )
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port
-            malicious_event["uid"] = uid if uid else "(filtered by sensor placement)"
+            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, effective_dst_ip)
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
@@ -919,8 +934,15 @@ class StorylineMixin:
                 result = SimpleNamespace(network_uid=uid)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
-            malicious_event["uid"] = (
-                result.network_uid if result.network_uid else "(filtered by sensor placement)"
+            result_source_ip = (
+                result.session.source_ip
+                if getattr(result, "session", None) is not None
+                else spec.source_ip or system.ip
+            )
+            malicious_event["uid"] = _ground_truth_uid(
+                result.network_uid or "",
+                result_source_ip,
+                target.ip,
             )
 
         elif spec.type == "rdp_session":
@@ -955,8 +977,15 @@ class StorylineMixin:
                 result = SimpleNamespace(network_uid=uid)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 3389
-            malicious_event["uid"] = (
-                result.network_uid if result.network_uid else "(filtered by sensor placement)"
+            result_source_ip = (
+                result.session.source_ip
+                if getattr(result, "session", None) is not None
+                else spec.source_ip or system.ip
+            )
+            malicious_event["uid"] = _ground_truth_uid(
+                result.network_uid or "",
+                result_source_ip,
+                target.ip,
             )
 
         elif spec.type == "account_created":

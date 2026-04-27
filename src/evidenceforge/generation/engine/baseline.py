@@ -43,7 +43,12 @@ from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
 )
-from evidenceforge.generation.activity.generator import _dns_rtt, _linux_uid_for_user
+from evidenceforge.generation.activity.generator import (
+    _dns_base_ttl,
+    _dns_is_internal_name,
+    _dns_rtt,
+    _linux_uid_for_user,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
 from evidenceforge.generation.activity.process_access_patterns import (
@@ -1442,7 +1447,17 @@ class BaselineMixin:
                         rcode="NOERROR",
                         rcode_num=0,
                         answers=[_generate_random_external_ip(rng)],
-                        TTLs=[float(rng.randint(30, 300))],
+                        TTLs=[
+                            float(
+                                _dns_base_ttl(
+                                    result["hostname"],
+                                    _dns_is_internal_name(
+                                        result["hostname"],
+                                        self.scenario.environment.domain or "corp.local",
+                                    ),
+                                )
+                            )
+                        ],
                         rtt=_dns_rtt(rng),
                     )
                     dns_server_ips = getattr(
@@ -2719,11 +2734,26 @@ class BaselineMixin:
         share = rng.choice(["Departments", "Finance", "Projects", "Shared", "IT"])
         stems = [
             "budget-review",
+            "client-onboarding",
+            "change-request",
+            "expense-export",
+            "incident-summary",
+            "inventory",
+            "maintenance-window",
+            "monthly-close",
+            "oncall-roster",
+            "purchase-order",
             "quarterly-report",
+            "renewal-tracker",
+            "risk-register",
+            "server-build",
             "vendor-list",
             "project-plan",
             "meeting-notes",
             "policy-update",
+            "service-review",
+            "status-update",
+            "team-roadmap",
         ]
         extensions = ["docx", "xlsx", "pdf", "pptx", "txt"]
         op_count = rng.randint(3, 8)
@@ -2747,7 +2777,11 @@ class BaselineMixin:
                     event_type=event_type,
                     src_host=host_ctx,
                     auth=AuthContext(username=username),
-                    file=FileContext(path=file_path, action=event_type.removeprefix("file_")),
+                    file=FileContext(
+                        path=file_path,
+                        action=event_type.removeprefix("file_"),
+                        pid=4,
+                    ),
                     edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
                 )
             )
@@ -4206,6 +4240,7 @@ class BaselineMixin:
                 any(r in (system.roles or []) for r in ("web_server", "forward_proxy"))
                 or "web" in system.hostname.lower()
             )
+            has_ntp_client = "ntp-client" in self._system_service_defaults.get(system.hostname, [])
             num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             scenario_start = self.scenario.time_window.start
@@ -4309,17 +4344,22 @@ class BaselineMixin:
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
-                    action = rng.choice(
-                        [f"New session {sid} of user {user}.", f"Removed session {sid}."]
-                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="systemd-logind",
-                        message=action,
+                        message=f"New session {sid} of user {user}.",
                         pid=sys_pids.get("logind", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.65:
+                    if rng.random() < 0.65:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(seconds=rng.randint(120, 5400)),
+                            app_name="systemd-logind",
+                            message=f"Removed session {sid}.",
+                            pid=sys_pids.get("logind", rng.randint(400, 800)),
+                        )
+                elif source_roll < 0.53:
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -4367,6 +4407,11 @@ class BaselineMixin:
                             auth_msg = (
                                 f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                             )
+                        if not hasattr(self, "_session_counters"):
+                            self._session_counters = {}
+                        self._session_counters.setdefault(system.hostname, 0)
+                        self._session_counters[system.hostname] += 1
+                        ssh_sid = self._session_counters[system.hostname]
                         login_msgs = [
                             (
                                 "sshd",
@@ -4382,7 +4427,7 @@ class BaselineMixin:
                             (
                                 "systemd-logind",
                                 sys_pids.get("logind", 456),
-                                f"New session {rng.randint(50, 9999)} of user {ssh_user}.",
+                                f"New session {ssh_sid} of user {ssh_user}.",
                             ),
                         ]
                         _msg_offset = rng.randint(10, 50)
@@ -4411,7 +4456,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.80:
+                elif source_roll < 0.68:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -4427,7 +4472,9 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.88:
+                elif source_roll < 0.76:
+                    if not has_ntp_client:
+                        continue
                     if is_rhel_like:
                         continue  # RHEL uses chronyd, not systemd-timesyncd
                     # Use the same deterministic NTP source as network-level NTP
@@ -4447,15 +4494,17 @@ class BaselineMixin:
                         msg = f"Synchronized to time server for the first time {ntp_ip}:123."
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
-                        msg = rng.choice(
+                        msg = rng.choices(
                             [
                                 f"Network configuration changed, trying to establish synchronization with {ntp_ip}:123.",
                                 f"System clock synchronized to {ntp_ip}:123.",
                                 f"Time has been changed by {-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d} seconds.",
                                 f"Timed out waiting for reply from {ntp_ip}:123.",
                                 f"Selected time server {ntp_ip}:123.",
-                            ]
-                        )
+                            ],
+                            weights=[8, 45, 8, 4, 35],
+                            k=1,
+                        )[0]
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,

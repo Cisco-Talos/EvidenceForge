@@ -123,6 +123,69 @@ class TestFileEventActions:
         assert actions == ["READ", "WRITE"]
 
 
+class TestChronologicalOutput:
+    def test_close_sorts_per_host_ecar_by_timestamp(self, tmp_path, ts):
+        """Per-host eCAR files should be written chronologically on close."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        for offset in (5, 1, 3):
+            emitter.emit_event(
+                {
+                    "timestamp": ts.replace(second=offset),
+                    "hostname": "ws01",
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "pid": 100,
+                    "_host_fqdn": "ws01.example.org",
+                }
+            )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
+
+    def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
+        """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        for object_name, action in (("REGISTRY", "MODIFY"), ("PROCESS", "CREATE")):
+            emitter.emit_event(
+                {
+                    "timestamp": ts,
+                    "hostname": "ws01",
+                    "object": object_name,
+                    "action": action,
+                    "pid": 5616,
+                    "_host_fqdn": "ws01.example.org",
+                }
+            )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert [(row["object"], row["action"]) for row in rows] == [
+            ("PROCESS", "CREATE"),
+            ("REGISTRY", "MODIFY"),
+        ]
+
+
 class TestTidAlwaysPresent:
     def test_tid_present_default(self, emitter, ts):
         """tid should always be present, defaulting to -1."""

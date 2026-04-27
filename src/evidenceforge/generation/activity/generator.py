@@ -567,6 +567,21 @@ def _linux_uid_for_user(username: str) -> int:
     return 1000 + (_stable_seed(f"linux_uid_{username}") % 5000)
 
 
+def _dns_base_ttl(query: str, is_internal: bool) -> int:
+    """Return a stable authoritative TTL for a DNS query name."""
+    domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
+    if is_internal:
+        return domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
+    return domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
+
+
+def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
+    """Return whether a DNS query belongs to the scenario's internal namespace."""
+    lowered = query.rstrip(".").lower()
+    domain = ad_domain.rstrip(".").lower()
+    return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -628,6 +643,9 @@ class ActivityGenerator:
         self._explicit_proxy_tunnels: dict[
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
+        self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._dns_cache: dict[tuple[str, str, str], float] = {}
+        self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
         self._tls_cert_validity: dict[str, tuple[int, int]] = {}
 
@@ -653,6 +671,90 @@ class ActivityGenerator:
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
             roles=list(system.roles),
         )
+
+    def _remember_connection_tuple(
+        self,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        proto: str,
+        time: datetime,
+    ) -> None:
+        """Track recently allocated 5-tuples to avoid synthetic exact repeats."""
+        if proto == "icmp":
+            return
+        ts_epoch = time.timestamp()
+        if len(self._recent_connection_tuples) > 100_000:
+            cutoff = ts_epoch - 86_400
+            self._recent_connection_tuples = {
+                key: seen_at
+                for key, seen_at in self._recent_connection_tuples.items()
+                if seen_at >= cutoff
+            }
+        self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
+
+    def _allocate_ephemeral_port(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str,
+        time: datetime,
+        os_category: str,
+    ) -> int:
+        """Allocate an ephemeral port while avoiding exact 5-tuple reuse."""
+        rng = _get_rng()
+        ts_epoch = time.timestamp()
+        reuse_window = 86_400.0
+        for _ in range(128):
+            src_port = _ephemeral_port(rng, os_category)
+            key = (src_ip, src_port, dst_ip, dst_port, proto)
+            last_seen = self._recent_connection_tuples.get(key)
+            if last_seen is None or ts_epoch - last_seen > reuse_window:
+                self._recent_connection_tuples[key] = ts_epoch
+                return src_port
+        src_port = _ephemeral_port(rng, os_category)
+        self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
+        return src_port
+
+    def _infer_connection_pid(
+        self,
+        source_system: System | None,
+        service: str | None,
+        dst_port: int,
+        proto: str,
+    ) -> int:
+        """Infer a durable system-service PID for infrastructure connections."""
+        if source_system is None:
+            return -1
+        pids = getattr(self, "_system_pids", {}).get(source_system.hostname, {})
+        if not pids:
+            return -1
+
+        service_name = (service or "").lower()
+        roles = set(getattr(source_system, "roles", []) or [])
+        os_category = _get_os_category(source_system.os)
+
+        candidates: list[str] = []
+        if proto == "udp" and dst_port == 53 or service_name == "dns":
+            candidates = ["systemd_resolved", "svchost_netsvcs", "svchost_net_svc"]
+        elif proto == "udp" and dst_port == 123 or service_name == "ntp":
+            candidates = ["timesyncd", "chronyd", "svchost_netsvcs"]
+        elif service_name in ("kerberos", "ldap") or dst_port in (88, 389):
+            candidates = ["lsass", "svchost_netsvcs"]
+        elif service_name == "smb" or dst_port == 445:
+            return 4 if os_category == "windows" else pids.get("smbd", -1)
+        elif service_name == "ssh" or dst_port == 22:
+            candidates = ["sshd"]
+        elif "forward_proxy" in roles and service_name in ("http", "ssl"):
+            candidates = ["squid", "nginx", "apache2", "httpd"]
+
+        for name in candidates:
+            pid = pids.get(name)
+            if pid and pid > 0:
+                return pid
+        return -1
 
     def _build_dc_host_context(self, dc_hostname: str) -> HostContext:
         """Build a HostContext for a domain controller from raw hostname string.
@@ -1019,7 +1121,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str], float] = {}
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -2290,26 +2392,54 @@ class ActivityGenerator:
                 )
                 return ""
 
+        resolved_source_system = source_system
+        if (
+            resolved_source_system is None
+            and hasattr(self, "_ip_to_system")
+            and src_ip in self._ip_to_system
+        ):
+            resolved_source_system = self._ip_to_system[src_ip]
+
         if proto == "icmp":
             src_port = 0
             dst_port = 0
         elif src_port is None:
             # Determine source OS for correct ephemeral port range
             _src_os = "windows"
-            if source_system:
-                _src_os = _get_os_category(source_system.os)
-            elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-                _src_os = _get_os_category(self._ip_to_system[src_ip].os)
-            src_port = _ephemeral_port(_get_rng(), _src_os)
+            if resolved_source_system:
+                _src_os = _get_os_category(resolved_source_system.os)
+            src_port = self._allocate_ephemeral_port(src_ip, dst_ip, dst_port, proto, time, _src_os)
+        else:
+            self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
 
-        state_source_system = source_system.hostname if source_system else ""
+        if pid <= 0:
+            pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
+
+        if pid > 0 and resolved_source_system:
+            process = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if process and process.start_time and time < process.start_time:
+                time = process.start_time + timedelta(milliseconds=1)
+
+        if (
+            service == "dns"
+            and proto in ("udp", "tcp")
+            and dst_port == 53
+            and dns is None
+            and hostname
+        ):
+            ad_domain = getattr(self, "_ad_domain", "corp.local")
+            dns_cache_key = (src_ip, hostname, "A")
+            ts_epoch = time.timestamp()
+            cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
+            last_query = self._dns_cache.get(dns_cache_key, 0)
+            if last_query and ts_epoch - last_query < cache_ttl:
+                return ""
+            self._dns_cache[dns_cache_key] = ts_epoch
+
+        state_source_system = resolved_source_system.hostname if resolved_source_system else ""
         state_source_hostname = ""
-        if source_system:
-            state_source_hostname = self._build_host_context(source_system).fqdn
-        elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            _src_system = self._ip_to_system[src_ip]
-            state_source_system = _src_system.hostname
-            state_source_hostname = self._build_host_context(_src_system).fqdn
+        if resolved_source_system:
+            state_source_hostname = self._build_host_context(resolved_source_system).fqdn
         close_time = time + timedelta(seconds=duration) if duration is not None else None
 
         # Phase 1: Allocate IDs from StateManager
@@ -2489,10 +2619,8 @@ class ActivityGenerator:
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
         src_host_ctx = None
-        if source_system:
-            src_host_ctx = self._build_host_context(source_system)
-        elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            src_host_ctx = self._build_host_context(self._ip_to_system[src_ip])
+        if resolved_source_system:
+            src_host_ctx = self._build_host_context(resolved_source_system)
 
         # Resolve destination system for dst_host
         dst_host_ctx = None
@@ -2505,8 +2633,10 @@ class ActivityGenerator:
 
         # Resolve eCAR actor_id from initiating process (if pid is known)
         conn_actor_id = ""
-        if pid > 0 and source_system:
-            conn_actor_id = self.state_manager.get_process_object_id(source_system.hostname, pid)
+        if pid > 0 and resolved_source_system:
+            conn_actor_id = self.state_manager.get_process_object_id(
+                resolved_source_system.hostname, pid
+            )
 
         event = SecurityEvent(
             timestamp=time,
@@ -2564,7 +2694,16 @@ class ActivityGenerator:
                 rcode="NOERROR" if resp_bytes else "SERVFAIL",
                 rcode_num=0 if resp_bytes else 2,
                 answers=[dst_ip] if resp_bytes else [],
-                TTLs=[float(rng.randint(30, 900))] if resp_bytes else [],
+                TTLs=[
+                    float(
+                        _dns_base_ttl(
+                            dns_query,
+                            _dns_is_internal_name(dns_query, getattr(self, "_ad_domain", "")),
+                        )
+                    )
+                ]
+                if resp_bytes
+                else [],
                 rtt=_dns_rtt(rng) if resp_bytes else None,
             )
 
@@ -2845,65 +2984,6 @@ class ActivityGenerator:
                 xmt_ts=round(ntp_epoch + ntp_jitter + rtt_sec + proc_sec, 6),
             )
 
-        # Zeek weird.log: condition-driven network anomalies. Weird events
-        # should cluster around partial/reset flows, long bulk sessions, and
-        # DNS/UDP oddities rather than being sprinkled uniformly over clean TLS.
-        weird_candidates: list[tuple[str, str, float]] = []
-        if proto == "tcp":
-            if conn_state in ("S0", "S1", "SH", "SHR"):
-                weird_candidates.extend(
-                    [
-                        ("connection_originator_SYN_ack", "TCP", 0.10),
-                        ("truncated_header", "TCP", 0.05),
-                    ]
-                )
-            elif conn_state in ("RSTO", "RSTR"):
-                weird_candidates.extend(
-                    [
-                        ("inappropriate_FIN", "TCP", 0.08),
-                        ("above_hole_data_without_any_acks", "TCP", 0.04),
-                    ]
-                )
-            elif missed_bytes:
-                weird_candidates.append(("above_hole_data_without_any_acks", "TCP", 0.35))
-            elif duration and duration > 30 and (orig_bytes or 0) + (resp_bytes or 0) > 100_000:
-                weird_candidates.append(("window_recision", "TCP", 0.015))
-            elif service == "ssl":
-                weird_candidates.append(("possible_split_routing", "TCP", 0.0015))
-            else:
-                weird_candidates.append(("bad_TCP_checksum", "TCP", 0.004))
-        elif proto == "udp":
-            if service == "dns":
-                weird_candidates.extend(
-                    [
-                        ("DNS_truncated_len_lt_hdr_len", "UDP", 0.006),
-                        ("DNS_RR_unknown_type", "UDP", 0.004),
-                    ]
-                )
-            else:
-                weird_candidates.extend(
-                    [
-                        ("bad_UDP_checksum", "UDP", 0.003),
-                        ("UDP_datagram_length_mismatch", "UDP", 0.002),
-                    ]
-                )
-
-        weird_roll = rng.random()
-        cumulative = 0.0
-        selected_weird: tuple[str, str] | None = None
-        for name, source, probability in weird_candidates:
-            cumulative += probability
-            if weird_roll < cumulative:
-                selected_weird = (name, source)
-                break
-        if not local_only and selected_weird is not None:
-            from evidenceforge.events.contexts import WeirdContext
-
-            event.weird = WeirdContext(
-                name=selected_weird[0],
-                source=selected_weird[1],
-            )
-
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
         # the connection must have completed successfully (SF). A connection
         # with a handshake-only, reset, or half-close state cannot have served
@@ -2967,6 +3047,67 @@ class ActivityGenerator:
                 rng=rng,
                 allow_failure=False,
             )
+
+        # Zeek weird.log: condition-driven network anomalies. Select after
+        # HTTP/TLS consistency adjustments so partial/reset weirds cannot remain
+        # attached to connections later normalized to clean SF application logs.
+        weird_candidates: list[tuple[str, str, float]] = []
+        final_state = event.network.conn_state
+        final_service = event.network.service
+        if event.network.protocol == "tcp":
+            if final_state in ("S0", "S1", "SH", "SHR"):
+                weird_candidates.extend(
+                    [
+                        ("connection_originator_SYN_ack", "TCP", 0.03),
+                        ("truncated_header", "TCP", 0.015),
+                    ]
+                )
+            elif final_state in ("RSTO", "RSTR"):
+                weird_candidates.extend(
+                    [
+                        ("inappropriate_FIN", "TCP", 0.035),
+                        ("above_hole_data_without_any_acks", "TCP", 0.02),
+                    ]
+                )
+            elif event.network.missed_bytes:
+                weird_candidates.append(("above_hole_data_without_any_acks", "TCP", 0.20))
+            elif (
+                final_state == "SF"
+                and event.network.duration
+                and event.network.duration > 60
+                and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) > 500_000
+            ):
+                weird_candidates.append(("window_recision", "TCP", 0.003))
+            elif final_state != "SF" and final_service != "ssl":
+                weird_candidates.append(("bad_TCP_checksum", "TCP", 0.0015))
+        elif event.network.protocol == "udp":
+            if final_service == "dns":
+                weird_candidates.extend(
+                    [
+                        ("DNS_truncated_len_lt_hdr_len", "UDP", 0.002),
+                        ("DNS_RR_unknown_type", "UDP", 0.0015),
+                    ]
+                )
+            else:
+                weird_candidates.extend(
+                    [
+                        ("bad_UDP_checksum", "UDP", 0.001),
+                        ("UDP_datagram_length_mismatch", "UDP", 0.0008),
+                    ]
+                )
+
+        weird_roll = rng.random()
+        cumulative = 0.0
+        selected_weird: tuple[str, str] | None = None
+        for name, source, probability in weird_candidates:
+            cumulative += probability
+            if weird_roll < cumulative:
+                selected_weird = (name, source)
+                break
+        if not local_only and selected_weird is not None:
+            from evidenceforge.events.contexts import WeirdContext
+
+            event.weird = WeirdContext(name=selected_weird[0], source=selected_weird[1])
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
@@ -3557,7 +3698,7 @@ class ActivityGenerator:
         # Keep the cache bounded: drop entries older than the max TTL horizon,
         # and enforce a hard cap under high-cardinality/adversarial inputs.
         if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
-            max_ttl_window = 600
+            max_ttl_window = 86_400
             cutoff = ts_epoch - max_ttl_window
             self._dns_cache = {
                 key: cached_at for key, cached_at in self._dns_cache.items() if cached_at >= cutoff
@@ -3571,13 +3712,14 @@ class ActivityGenerator:
                 self._dns_cache = dict(sorted_items[:50_000])
             self._dns_cache_last_prune = ts_epoch
 
-        last_query = self._dns_cache.get(cache_key, 0)
-        cache_ttl = rng.choice([60, 120, 300, 600])  # Varied TTLs
-        if ts_epoch - last_query < cache_ttl:
-            return  # Cache hit — skip DNS emission
-
         ad_domain = getattr(self, "_ad_domain", "corp.local")
-        is_internal = hostname.endswith(f".{ad_domain}") or hostname.endswith(".local")
+        is_internal = _dns_is_internal_name(hostname, ad_domain)
+        authoritative_ttl = _dns_base_ttl(hostname, is_internal)
+
+        last_query = self._dns_cache.get(cache_key, 0)
+        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
+        if last_query and ts_epoch - last_query < cache_ttl:
+            return  # Cache hit — skip DNS emission
 
         # Determine DNS server IP from network visibility or use default. Forward
         # proxies often use upstream resolvers for Internet destinations; this
@@ -3593,11 +3735,13 @@ class ActivityGenerator:
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
-        src_port = _ephemeral_port(rng, _src_os)
+        dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
+        src_port = self._allocate_ephemeral_port(
+            src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
+        )
 
         from evidenceforge.events.contexts import DnsContext
 
-        dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
         # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
         if rng.random() < 0.002:
             dns_ctx = DnsContext(
@@ -3697,16 +3841,14 @@ class ActivityGenerator:
                 query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
                 answers = [txt_answer]
 
-        # Deterministic base TTL per domain (consistent across queries) + cache aging
-        domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
+        # Internal authoritative names use stable TTLs. External answers may be
+        # observed through a resolver cache, so expose realistic countdown TTLs.
+        base_ttl = _dns_base_ttl(query, is_internal)
         if is_internal:
-            base_ttl = domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
+            shared_ttl = float(base_ttl)
         else:
-            base_ttl = domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
-
-        # All answers in one response share the same TTL (arrived together)
-        cache_age = rng.randint(0, max(1, base_ttl - 1))
-        shared_ttl = float(max(1, base_ttl - cache_age))
+            cache_age = rng.randint(0, max(1, base_ttl - 1))
+            shared_ttl = float(max(1, base_ttl - cache_age))
         ttls = [shared_ttl] * len(answers)
 
         # Only address lookups for the requested hostname populate the client
@@ -3744,10 +3886,18 @@ class ActivityGenerator:
             dns=dns_ctx,
         )
 
-        # Phase 6.0: ~20% chance of NXDOMAIN companion query
-        if rng.random() < 0.20:
+        # Occasional resolver search-suffix mistakes/background discovery probes.
+        # Keep this low-volume and avoid doubling an already-qualified internal name.
+        if rng.random() < 0.05:
+            suffix_queries: list[str] = []
+            if (
+                hostname
+                and "." in hostname
+                and not hostname.endswith(f".{ad_domain}")
+                and not hostname.endswith(".local")
+            ):
+                suffix_queries.append(f"{hostname}.{ad_domain}")
             nxdomain_queries = [
-                f"{hostname}.{ad_domain}",
                 f"wpad.{ad_domain}",
                 "wpad.local",
                 "wpad",
@@ -3757,9 +3907,12 @@ class ActivityGenerator:
                 f"oldserver.{ad_domain}",
                 f"printer01.{ad_domain}",
             ]
+            nxdomain_queries = suffix_queries + nxdomain_queries
             nx_query = rng.choice(nxdomain_queries)
             nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
-            nx_src_port = _ephemeral_port(rng, _src_os)
+            nx_src_port = self._allocate_ephemeral_port(
+                src_ip, dns_server_ip, 53, "udp", nx_time, _src_os
+            )
             nx_ctx = DnsContext(
                 query=nx_query,
                 trans_id=rng.randint(1, 65535),
@@ -5228,6 +5381,20 @@ class ActivityGenerator:
                 src_port=68,
                 dst_port=67,
                 protocol="udp",
+                service="dhcp",
+                zeek_uid=uid,
+                duration=0.01,
+                orig_bytes=300 if "DISCOVER" in msg_types else 180,
+                resp_bytes=300,
+                orig_pkts=2 if "DISCOVER" in msg_types else 1,
+                resp_pkts=2 if "OFFER" in msg_types else 1,
+                orig_ip_bytes=356 if "DISCOVER" in msg_types else 208,
+                resp_ip_bytes=356,
+                conn_state="SF",
+                history="DdDd" if "DISCOVER" in msg_types else "Dd",
+                local_orig=True,
+                local_resp=True,
+                ip_proto=17,
             ),
             dhcp=DhcpContext(
                 client_addr=system.ip,

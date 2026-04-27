@@ -37,7 +37,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
 
     _log_filename = "conn.json"
     _flat_filename = "zeek_conn.json"
-    _supported_types: set[str] = {"connection", "ssh_session"}
+    _supported_types: set[str] = {"connection", "ssh_session", "dhcp_lease"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Zeek conn emitter handles connection and session events with network context."""

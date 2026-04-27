@@ -97,6 +97,7 @@ class TestEmitSmbFileOperations:
         assert event_types & {"file_create", "file_delete"}
         assert len(captured) >= 3
         assert all(event.auth.username == "jdoe" for event in captured)
+        assert all(event.file.pid == 4 for event in captured)
         assert all(event.file.path.startswith("\\\\FS-01\\") for event in captured)
 
 
