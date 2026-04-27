@@ -351,6 +351,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] OCSP response cache realism — fixed expired `nextUpdate` values, made OCSP status stable per certificate identity, cached `thisUpdate`/`nextUpdate` windows by certificate/time bucket, and stopped using EC2 PTR-shaped hostnames as random AWS forward DNS/SNI defaults.
 - [x] TLS certificate chain depth realism — added data-driven TLS realism config with overlay support for SAN suffixes, OCSP behavior, and chain templates; ssl.log now references leaf/intermediate FUID chains, x509.log emits matching CA/intermediate rows, and per-sensor FUID derivation preserves references.
 - [x] TLS realism validate-config coverage — added `tls_realism.yaml` overlay/schema validation to `eforge validate-config` and removed stale hardcoded validation-count docs.
+- [x] Scenario hostname authoring guidance — clarified that storyline connection/beacon `hostname` values should be the client-facing DNS name actually used for DNS/SNI/proxy evidence, not reverse-DNS/PTR artifacts.
 - [ ] Zeek SMB file visibility design — blind review still flags SMB-heavy scenarios with host-side eCAR UNC file actions but no Zeek SMB file observations. Decide whether to synthesize Zeek files.log-style SMB artifacts, add a Zeek SMB log family, or document that current Zeek files support is HTTP-focused.
 
 **Other:**

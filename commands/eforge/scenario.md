@@ -441,7 +441,7 @@ IMPORTANT: When a process command line references a domain URL (Invoke-WebReques
 
 IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
 
-IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. This ensures the domain appears in DNS, SSL SNI, x509 certificate subject, and proxy logs. Without it, these logs either miss the domain or use a random hostname. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
+IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. Use the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Do not use a reverse-DNS/PTR artifact or provider-generated infrastructure name unless the scenario explicitly says the client connected with that name. This ensures DNS, SSL SNI, x509 certificate subject, and proxy logs carry the same realistic name. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
 
 ```yaml
 events:
