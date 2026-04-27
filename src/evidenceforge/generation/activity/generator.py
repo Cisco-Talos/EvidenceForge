@@ -50,6 +50,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -466,66 +467,6 @@ _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 300
 
-# OS-aware proxy User-Agent pools
-_PROXY_UAS_WINDOWS = (
-    # Browser UAs only — system-level UAs (Microsoft-CryptoAPI, Windows-Update-Agent)
-    # are handled by domain-specific overrides in proxy_uri_templates.yaml.
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-)
-
-_PROXY_UAS_LINUX = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "python-requests/2.31.0",
-    "curl/7.88.1",
-    "Wget/1.21.3",
-    "apt-http/2.4.11 (amd64)",
-    "Debian APT-HTTP/1.3 (2.4.11)",
-    "libdnf (Fedora Linux 39; workstation; Linux.x86_64)",
-)
-
-_PROXY_UAS_SERVER = (
-    "curl/7.88.1",
-    "Wget/1.21.3",
-    "python-requests/2.31.0",
-    "Go-http-client/1.1",
-    "Apache-HttpClient/4.5.14 (Java/17.0.9)",
-    "apt-http/2.4.11 (amd64)",
-    "Debian APT-HTTP/1.3 (2.4.11)",
-    "libdnf (Fedora Linux 39; server; Linux.x86_64)",
-)
-
-_SERVER_PROXY_ROLES = {
-    "app_server",
-    "database",
-    "dns_server",
-    "domain_controller",
-    "file_server",
-    "log_server",
-    "mail_server",
-    "monitoring",
-    "web_server",
-}
-
-
-def _pick_proxy_user_agent(rng: random.Random, source_system: Optional["System"]) -> str:
-    """Pick a proxy User-Agent appropriate for the source host role."""
-    if source_system is None:
-        return rng.choice(_PROXY_UAS_WINDOWS)
-    roles = set(source_system.roles or [])
-    if source_system.type == "server" or roles & _SERVER_PROXY_ROLES:
-        return rng.choice(_PROXY_UAS_SERVER)
-    if _get_os_category(source_system.os) == "linux":
-        return rng.choice(_PROXY_UAS_LINUX)
-    return rng.choice(_PROXY_UAS_WINDOWS)
-
-
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
     ("cifs/{hostname}", 45),  # file share access dominates
@@ -716,6 +657,7 @@ class ActivityGenerator:
         from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
         from evidenceforge.generation.activity.referrer import pick_referrer
 
+        domain_tags = get_domain_tags(proxy_hostname)
         proxy_ua_override = None
         if explicit_mode and dst_port == 443:
             proxy_method = "CONNECT"
@@ -731,7 +673,6 @@ class ActivityGenerator:
             user_agent = http.user_agent
             proxy_referrer = http.referrer
         else:
-            domain_tags = get_domain_tags(proxy_hostname)
             source_os = _get_os_category(source_system.os) if source_system else None
             path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                 rng, proxy_hostname, domain_tags, source_os=source_os
@@ -745,7 +686,12 @@ class ActivityGenerator:
             if proxy_ua_override:
                 user_agent = proxy_ua_override
             else:
-                user_agent = _pick_proxy_user_agent(rng, source_system)
+                user_agent = pick_proxy_user_agent(
+                    rng,
+                    source_system,
+                    hostname=proxy_hostname,
+                    domain_tags=domain_tags,
+                )
 
         cache_roll = rng.random()
         if explicit_mode and proxy_method == "CONNECT":
@@ -2593,6 +2539,8 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
+                domain_tags = get_domain_tags(proxy_hostname)
+
                 # When a pre-built HttpContext exists (from browsing session
                 # generator), derive proxy fields from it.  The proxy emitter
                 # handles CONNECT tunnel deduplication automatically.
@@ -2608,7 +2556,6 @@ class ActivityGenerator:
                     proxy_referrer = event.http.referrer
                 elif dst_port == 443:
                     # Legacy single-connection HTTPS path
-                    domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
                     path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
@@ -2618,7 +2565,6 @@ class ActivityGenerator:
 
                     proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=443)
                 else:
-                    domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
                     path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
@@ -2632,7 +2578,12 @@ class ActivityGenerator:
                     if proxy_ua_override:
                         user_agent = proxy_ua_override
                     else:
-                        user_agent = _pick_proxy_user_agent(rng, source_system)
+                        user_agent = pick_proxy_user_agent(
+                            rng,
+                            source_system,
+                            hostname=proxy_hostname,
+                            domain_tags=domain_tags,
+                        )
                 cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
