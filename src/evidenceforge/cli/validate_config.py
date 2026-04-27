@@ -169,7 +169,7 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"domain_ca_overrides"},
         },
         "activity/tls_realism.yaml": {
-            "dict_fields": {"san", "ocsp", "certificate_chains"},
+            "dict_fields": {"san", "ocsp", "certificate_chains", "destinations"},
         },
         "activity/smb_file_transfers.yaml": {
             "list_fields": {"mime_types": None, "analyzer_sets": None},
@@ -414,6 +414,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
 
     dns_data = load_dns_registry()
@@ -426,6 +427,7 @@ def validate_config() -> ValidationResult:
     proxy_data = load_proxy_uri_templates()
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
+    tls_realism_data = load_tls_realism()
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
@@ -569,6 +571,18 @@ def validate_config() -> ValidationResult:
                     Issue(
                         "WARNING",
                         "process_network_map.yaml",
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+    tls_destination_profiles = tls_realism_data.get("destinations", {}).get("profiles", [])
+    for profile in tls_destination_profiles:
+        for tag in profile.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "tls_realism.yaml",
+                        f'tls destination profile "{profile.get("name", "")}" references '
                         f'dns_tag "{tag}" not used by any domain in dns_registry',
                     )
                 )

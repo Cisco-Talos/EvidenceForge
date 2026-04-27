@@ -83,3 +83,123 @@ certificate_chains:
       intermediates:
         - "CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE"
         - "CN=Sectigo Public Server Authentication Root R46, O=Sectigo Limited, C=GB"
+
+destinations:
+  enabled: true
+  host_preferred_domain_count: 6
+  host_preferred_probability: 0.68
+  profiles:
+    - name: enterprise_heavy_hitters
+      weight: 34
+      dns_tags: [saas, outlook, teams, onedrive]
+      domains:
+        - login.microsoftonline.com
+        - graph.microsoft.com
+        - outlook.office365.com
+        - www.office.com
+        - teams.microsoft.com
+        - sharepoint.com
+        - onedrive.live.com
+        - portal.azure.com
+        - accounts.google.com
+        - drive.google.com
+        - docs.google.com
+        - calendar.google.com
+        - slack.com
+        - zoom.us
+        - login.salesforce.com
+        - na139.salesforce.com
+    - name: certificate_infra
+      weight: 14
+      dns_tags: [background]
+      domains:
+        - ocsp.digicert.com
+        - crl.microsoft.com
+        - ctldl.windowsupdate.com
+        - crl3.digicert.com
+        - crl4.digicert.com
+        - ocsp.sectigo.com
+        - ocsp.globalsign.com
+        - ocsp.pki.goog
+        - crls.pki.goog
+        - ocsp.int-x3.letsencrypt.org
+        - r3.o.lencr.org
+        - x1.c.lencr.org
+    - name: package_update
+      weight: 18
+      dns_tags: [background]
+      domains:
+        - download.windowsupdate.com
+        - settings-win.data.microsoft.com
+        - security.ubuntu.com
+        - archive.ubuntu.com
+        - changelogs.ubuntu.com
+        - pypi.org
+        - registry.npmjs.org
+        - packages.microsoft.com
+        - api.snapcraft.io
+        - dl.google.com
+        - update.googleapis.com
+        - github-releases.githubusercontent.com
+      os_overrides:
+        windows:
+          domains:
+            - download.windowsupdate.com
+            - settings-win.data.microsoft.com
+            - ctldl.windowsupdate.com
+            - crl.microsoft.com
+            - packages.microsoft.com
+            - dl.google.com
+            - update.googleapis.com
+        linux:
+          domains:
+            - security.ubuntu.com
+            - archive.ubuntu.com
+            - changelogs.ubuntu.com
+            - pypi.org
+            - registry.npmjs.org
+            - api.snapcraft.io
+            - packages.microsoft.com
+    - name: developer_tools
+      weight: 12
+      personas: [developer, sysadmin, security_analyst, analyst]
+      dns_tags: [git, dev]
+      domains:
+        - github.com
+        - api.github.com
+        - gist.github.com
+        - pages.github.io
+        - gitlab.com
+        - registry.gitlab.com
+        - api.gitlab.com
+        - bitbucket.org
+        - api.bitbucket.org
+        - registry.npmjs.org
+        - pypi.org
+        - files.pythonhosted.org
+        - deb.nodesource.com
+        - objects.githubusercontent.com
+    - name: browsing_long_tail
+      weight: 22
+      dns_tags: [web, cdn, social]
+      domains:
+        - www.google.com
+        - www.cloudflare.com
+        - blog.cloudflare.com
+        - www.reddit.com
+        - i.redd.it
+        - www.linkedin.com
+        - static.licdn.com
+        - media.licdn.com
+        - aws.amazon.com
+        - console.aws.amazon.com
+        - www.bing.com
+        - www.facebook.com
+        - stackoverflow.com
+        - en.wikipedia.org
+        - upload.wikimedia.org
+        - news.ycombinator.com
+        - cdn.sstatic.net
+        - cdn.jsdelivr.net
+        - static.akamai.net
+        - media.akamai.net

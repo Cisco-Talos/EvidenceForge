@@ -18,6 +18,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `bash_commands.yaml` | `bash_commands.py` | Per-role bash command pools (sysadmin, dba, developer, generic) with `{placeholder}` templates. |
 | `system_processes.yaml` | `system_processes.py` | Baseline Windows scheduled tasks and system services (svchost, MpCmdRun, etc.). |
 | `tls_issuers.yaml` | `tls_issuers.py` | Certificate issuer configs (Let's Encrypt, DigiCert, etc.) with validity periods and key types. |
+| `tls_realism.yaml` | `tls_realism.py` | TLS SAN, OCSP, certificate-chain, and destination-profile settings with overlay support. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `engine/emitter_setup.py` | MAC address OUI prefixes (Dell, HP, VMware, etc.) for realistic MAC generation. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |

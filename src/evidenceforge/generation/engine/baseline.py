@@ -2573,7 +2573,17 @@ class BaselineMixin:
                 tags = self._SERVICE_DNS_DEFAULTS[service]
             else:
                 tags = ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
+            if service == "ssl":
+                from evidenceforge.generation.activity.tls_realism import pick_tls_destination
+
+                domain, ip = pick_tls_destination(
+                    rng,
+                    src_host=src_host,
+                    source_os=os_cat,
+                    purpose_tags=tuple(tags),
+                )
+            else:
+                domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
             return ip, domain
 
         if hasattr(self, "world_model"):

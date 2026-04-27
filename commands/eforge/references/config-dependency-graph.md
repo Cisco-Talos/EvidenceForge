@@ -138,8 +138,8 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### tls_realism.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | tls_issuers.yaml | Chain templates match issuer names/patterns selected from issuer config |
-| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, and OCSP cache/status behavior |
+| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates match issuer names/patterns selected from issuer config; destination profiles can pull domains by DNS tag |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
 
 ### smb_file_transfers.yaml
 | Direction | File | Relationship |

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 # --- DNS Registry ---
 
@@ -238,12 +238,77 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
         return v
 
 
+class TlsDestinationOsOverride(BaseModel, extra="forbid"):
+    """OS-specific TLS destination additions."""
+
+    domains: list[str] = Field(default_factory=list)
+
+
+class TlsDestinationProfile(BaseModel, extra="forbid"):
+    """A weighted TLS destination profile in tls_realism.yaml."""
+
+    name: str
+    weight: int
+    domains: list[str] = Field(default_factory=list)
+    dns_tags: list[str] = Field(default_factory=list)
+    os: list[str] = Field(default_factory=list)
+    personas: list[str] = Field(default_factory=list)
+    system_types: list[str] = Field(default_factory=list)
+    purpose_tags: list[str] = Field(default_factory=list)
+    os_overrides: dict[str, TlsDestinationOsOverride] = Field(default_factory=dict)
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+    @field_validator("domains", "dns_tags")
+    @classmethod
+    def has_destination_source(cls, v: list[str], info) -> list[str]:
+        if any(not item for item in v):
+            raise ValueError(f"{info.field_name} entries must be non-empty")
+        return v
+
+
+class TlsDestinationsConfig(BaseModel, extra="forbid"):
+    """TLS destination profile settings in tls_realism.yaml."""
+
+    enabled: bool = True
+    host_preferred_domain_count: int = 6
+    host_preferred_probability: float = 0.68
+    profiles: list[TlsDestinationProfile]
+
+    @field_validator("host_preferred_domain_count")
+    @classmethod
+    def preferred_count_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("host_preferred_domain_count must be positive")
+        return v
+
+    @field_validator("host_preferred_probability")
+    @classmethod
+    def probability_range(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("host_preferred_probability must be between 0 and 1")
+        return v
+
+    @field_validator("profiles")
+    @classmethod
+    def profiles_non_empty(cls, v: list[TlsDestinationProfile]) -> list[TlsDestinationProfile]:
+        if not v:
+            raise ValueError("profiles must not be empty")
+        return v
+
+
 class TlsRealismConfig(BaseModel, extra="forbid"):
     """Root schema for tls_realism.yaml."""
 
     san: TlsSanConfig
     ocsp: TlsOcspConfig
     certificate_chains: TlsCertificateChainConfig
+    destinations: TlsDestinationsConfig
 
 
 # --- SMB File Transfers ---

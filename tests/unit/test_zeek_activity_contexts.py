@@ -280,6 +280,48 @@ class TestSslContextPopulation:
         assert event.x509.san_dns == ["www.gstatic.com", "*.gstatic.com"]
         assert event.x509_chain[0] is event.x509
 
+    def test_auto_tls_uses_profiled_destination_for_sni_and_dns(self, activity_gen):
+        """Auto-generated external TLS should use profiled destinations, not tiny random pools."""
+        gen, events = activity_gen
+        system = System(
+            hostname="WKS-01",
+            ip="10.0.10.50",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="jsmith",
+        )
+        user = User(
+            username="jsmith",
+            full_name="Jane Smith",
+            email="j.smith@example.com",
+            persona="developer",
+            primary_system="WKS-01",
+        )
+        gen._ip_to_system = {system.ip: system}
+        gen._users_by_username = {user.username: user}
+
+        gen.generate_connection(
+            src_ip=system.ip,
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            emit_dns=True,
+            conn_state="SF",
+        )
+
+        tls_event = next(event for event in reversed(events) if event.ssl is not None)
+        dns_event = next(event for event in events if event.dns is not None)
+        assert tls_event.ssl.server_name
+        assert tls_event.ssl.server_name == dns_event.dns.query
+        assert tls_event.x509 is not None
+        assert tls_event.x509.certificate_subject == f"CN={tls_event.ssl.server_name}"
+        assert not tls_event.ssl.server_name.startswith("host-")
+
     def test_tls_certificate_chains_include_intermediates_across_sample(self, activity_gen):
         """Configured TLS chain generation should produce CA/intermediate x509 rows."""
         gen, events = activity_gen

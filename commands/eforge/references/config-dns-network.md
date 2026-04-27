@@ -356,7 +356,7 @@ issuers:
 
 ## tls_realism.yaml
 
-TLS SAN, OCSP, and certificate-chain realism settings. Standalone — used by the generation engine when building Zeek `ssl.log`, `x509.log`, and `ocsp.log`.
+TLS SAN, OCSP, certificate-chain, and destination-profile realism settings. Used by the generation engine when building Zeek `ssl.log`, `x509.log`, and `ocsp.log`, and when selecting auto-generated external TLS SNI/certificate identities.
 
 **Location:** `src/evidenceforge/config/activity/tls_realism.yaml`  
 **Overlay:** `.eforge/config/activity/tls_realism.yaml`
@@ -377,7 +377,18 @@ certificate_chains:
       issuer_patterns: ["*Let's Encrypt*"]
       intermediates:
         - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+destinations:
+  enabled: true
+  host_preferred_domain_count: 6
+  host_preferred_probability: 0.68
+  profiles:
+    - name: enterprise_heavy_hitters
+      weight: 34
+      dns_tags: [saas, outlook, teams, onedrive]
+      domains: [login.microsoftonline.com, graph.microsoft.com]
 ```
+
+`destinations.profiles` keeps TLS volume heavy-tailed without collapsing all hosts onto the same few SNI values. Profiles can list explicit `domains`, pull from `dns_registry.yaml` through `dns_tags`, limit by `os`, `personas`, `system_types`, or `purpose_tags`, and add `os_overrides` for OS-specific update/package endpoints. Overlays merge nested dicts and extend lists, so project-local profiles can add domains without replacing the default pool.
 
 ## smb_file_transfers.yaml
 

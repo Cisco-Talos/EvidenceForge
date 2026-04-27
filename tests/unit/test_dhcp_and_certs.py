@@ -17,7 +17,9 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     multi_label_public_suffixes,
     ocsp_config,
+    pick_tls_destination,
     reset_tls_realism_cache,
+    tls_destination_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -138,6 +140,16 @@ class TestTlsIssuers:
                             }
                         ]
                     },
+                    "destinations": {
+                        "host_preferred_probability": 0.25,
+                        "profiles": [
+                            {
+                                "name": "custom_tls",
+                                "weight": 10,
+                                "domains": ["updates.example.test"],
+                            }
+                        ],
+                    },
                 },
                 sort_keys=False,
             )
@@ -152,8 +164,42 @@ class TestTlsIssuers:
                 template.get("name") == "custom"
                 for template in certificate_chain_config()["templates"]
             )
+            assert tls_destination_config()["host_preferred_probability"] == 0.25
+            assert any(
+                profile.get("name") == "custom_tls"
+                for profile in tls_destination_config()["profiles"]
+            )
         finally:
             reset_tls_realism_cache()
+
+    def test_tls_destination_profiles_expand_domain_diversity(self):
+        """TLS destination profiles should provide a broad SNI/certificate pool."""
+        profiles = tls_destination_config()["profiles"]
+        domains = {
+            domain
+            for profile in profiles
+            for domain in profile.get("domains", [])
+            if isinstance(domain, str)
+        }
+
+        assert len(profiles) >= 5
+        assert len(domains) >= 50
+        assert {"login.microsoftonline.com", "github.com", "security.ubuntu.com"} <= domains
+
+    def test_tls_destination_picker_is_host_stable_but_not_globally_flat(self):
+        """Different hosts should draw from overlapping but distinct TLS preferences."""
+        host_a = [
+            pick_tls_destination(random.Random(seed), src_host="WKS-01", source_os="windows")[0]
+            for seed in range(80)
+        ]
+        host_b = [
+            pick_tls_destination(random.Random(seed), src_host="WKS-02", source_os="windows")[0]
+            for seed in range(80)
+        ]
+
+        assert len(set(host_a)) >= 12
+        assert len(set(host_b)) >= 12
+        assert set(host_a) != set(host_b)
 
 
 class TestDnsRtt:

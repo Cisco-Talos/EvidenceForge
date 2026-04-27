@@ -1199,6 +1199,40 @@ class ActivityGenerator:
                     timedout=False,
                 )
 
+    def _pick_profiled_tls_destination(
+        self,
+        rng: random.Random,
+        *,
+        src_ip: str,
+        source_system: Optional["System"] = None,
+        purpose_tags: tuple[str, ...] = (),
+    ) -> tuple[str, str]:
+        """Pick a profile-aware TLS hostname/IP for baseline external TLS."""
+        from evidenceforge.generation.activity.tls_realism import pick_tls_destination
+
+        resolved_source = source_system
+        if (
+            resolved_source is None
+            and hasattr(self, "_ip_to_system")
+            and src_ip in self._ip_to_system
+        ):
+            resolved_source = self._ip_to_system[src_ip]
+
+        source_os = _get_os_category(resolved_source.os) if resolved_source else None
+        persona = None
+        if resolved_source is not None and getattr(resolved_source, "assigned_user", None):
+            user = getattr(self, "_users_by_username", {}).get(resolved_source.assigned_user)
+            persona = getattr(user, "persona", None) if user is not None else None
+
+        return pick_tls_destination(
+            rng,
+            src_host=resolved_source.hostname if resolved_source else src_ip,
+            source_os=source_os,
+            persona=persona,
+            system_type=getattr(resolved_source, "type", None) if resolved_source else None,
+            purpose_tags=purpose_tags,
+        )
+
     def _build_tls_certificate_chain(
         self,
         *,
@@ -2345,6 +2379,24 @@ class ActivityGenerator:
         # client-side origin DNS lookup is emitted.
         if proto == "tcp" and dst_port in (80, 443) and service not in ("http", "ssl"):
             service = "http" if dst_port == 80 else "ssl"
+
+        if (
+            proto == "tcp"
+            and service == "ssl"
+            and dst_port == 443
+            and emit_dns
+            and dns is None
+            and http is None
+            and not hostname_was_explicit
+            and _is_private_ip(src_ip)
+            and not _is_private_ip(dst_ip)
+        ):
+            hostname, dst_ip = self._pick_profiled_tls_destination(
+                rng=_get_rng(),
+                src_ip=src_ip,
+                source_system=source_system,
+                purpose_tags=("web", "saas", "background"),
+            )
 
         tls_hostname = hostname
         if hostname_from_reverse_dns and not emit_dns and dns is None and http is None:
@@ -4339,7 +4391,14 @@ class ActivityGenerator:
             )
 
             dns_tags = conn_info.get("dns_tags") or []
-            if dns_tags:
+            if conn_info["service"] == "ssl":
+                ext_hostname, dst_ip = self._pick_profiled_tls_destination(
+                    rng,
+                    src_ip=system.ip,
+                    source_system=system,
+                    purpose_tags=tuple(dns_tags) if dns_tags else ("web", "saas"),
+                )
+            elif dns_tags:
                 tag = rng.choice(dns_tags)
                 ext_hostname, dst_ip = _pick_domain_and_ip(
                     rng,
@@ -4668,6 +4727,13 @@ class ActivityGenerator:
             if activity_type in ("connection_web", "connection_saas"):
                 service = rng.choice(["http", "ssl"])
                 dst_port = 443 if service == "ssl" else 80
+                if service == "ssl":
+                    conn_hostname, dst_ip = self._pick_profiled_tls_destination(
+                        rng,
+                        src_ip=system.ip,
+                        source_system=system,
+                        purpose_tags=(tag,),
+                    )
             elif activity_type == "connection_email":
                 service = "smtp"
                 # Route through internal Exchange if detected (P1-15)
