@@ -94,6 +94,7 @@ class TestSslContextPopulation:
             duration=2.0,
             orig_bytes=1024,
             resp_bytes=4096,
+            conn_state="SF",
         )
 
         assert len(events) > 0
@@ -227,8 +228,8 @@ class TestSslContextPopulation:
             if "RSA" in event.ssl.cipher:
                 assert event.x509.certificate_key_type == "rsa"
 
-    def test_ssl_server_name_from_reverse_dns(self, activity_gen):
-        """SslContext.server_name should be derived from REVERSE_DNS."""
+    def test_raw_ip_ssl_does_not_invent_sni_from_reverse_dns(self, activity_gen):
+        """Raw-IP SSL without DNS evidence should not invent SNI from PTR data."""
         gen, events = activity_gen
 
         gen.generate_connection(
@@ -241,12 +242,103 @@ class TestSslContextPopulation:
             duration=2.0,
             orig_bytes=1024,
             resp_bytes=4096,
+            conn_state="SF",
         )
 
         event = events[-1]
-        if event.ssl is not None:
-            # server_name should be set (either from REVERSE_DNS or fallback to IP)
-            assert event.ssl.server_name != ""
+        assert event.ssl is not None
+        assert event.ssl.server_name in (None, "")
+        assert event.x509 is not None
+        assert event.x509.certificate_subject == "CN=93.184.216.34"
+        assert event.x509.san_dns == []
+
+    def test_explicit_hostname_ssl_uses_hostname_for_sni_and_cert(self, activity_gen):
+        """Explicit hostnames remain the shared SNI/certificate identity."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="142.250.72.36",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            hostname="www.gstatic.com",
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.ssl is not None
+        assert event.x509 is not None
+        assert event.ssl.server_name == "www.gstatic.com"
+        assert event.x509.certificate_subject == "CN=www.gstatic.com"
+        assert event.x509.san_dns == ["www.gstatic.com", "*.gstatic.com"]
+
+    def test_resumed_ssl_sessions_omit_fresh_certificate_chain(self, activity_gen):
+        """Resumed handshakes should not repeatedly emit full x509 chains."""
+        gen, events = activity_gen
+
+        for offset in range(40):
+            gen.generate_connection(
+                src_ip="10.0.10.50",
+                dst_ip="142.250.72.36",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(minutes=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="www.gstatic.com",
+                conn_state="SF",
+            )
+
+        resumed_events = [
+            event for event in events if event.ssl is not None and event.ssl.resumed is True
+        ]
+        assert resumed_events
+        for event in resumed_events:
+            assert event.x509 is None
+            assert event.ssl.cert_chain_fuids == []
+
+    def test_ocsp_status_and_update_window_are_cached_per_certificate(self, activity_gen):
+        """OCSP responses should not expire at observation time or flip status per serial."""
+        gen, events = activity_gen
+
+        for offset in range(100):
+            gen.generate_connection(
+                src_ip="10.0.10.50",
+                dst_ip="142.250.72.36",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(minutes=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="www.gstatic.com",
+                conn_state="SF",
+            )
+            gen._tls_seen_server_names.clear()
+
+        ocsp_events = [event for event in events if event.ocsp is not None]
+        assert ocsp_events
+        statuses_by_serial: dict[str, set[str]] = {}
+        windows_by_serial: dict[str, set[tuple[float, float]]] = {}
+        for event in ocsp_events:
+            serial = event.ocsp.serial_number
+            statuses_by_serial.setdefault(serial, set()).add(event.ocsp.cert_status)
+            windows_by_serial.setdefault(serial, set()).add(
+                (event.ocsp.this_update, event.ocsp.next_update)
+            )
+            assert event.ocsp.this_update <= event.timestamp.timestamp()
+            assert event.ocsp.next_update > event.timestamp.timestamp()
+
+        assert all(len(statuses) == 1 for statuses in statuses_by_serial.values())
+        assert all(len(windows) <= 2 for windows in windows_by_serial.values())
 
     def test_same_certificate_identity_has_stable_validity_window(self, activity_gen):
         gen, events = activity_gen

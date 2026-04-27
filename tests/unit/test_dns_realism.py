@@ -458,32 +458,25 @@ class TestPtrSniCoherence:
             ptr = _generate_rdns_name(random.Random(seed), ip, hostname)
             assert ".us-west-2.compute.amazonaws.com" in ptr
 
-    def test_aws_random_hostname_and_ptr_use_stable_identity(self):
+    def test_aws_random_forward_hostname_avoids_ec2_ptr_shape(self):
         from evidenceforge.generation.activity.network import (
             _generate_random_hostname,
             _generate_rdns_name,
         )
 
         ip = "52.84.100.50"
-        hostnames = {
-            _generate_random_hostname(random.Random(seed), ip)
-            for seed in range(50)
-            if ".compute.amazonaws.com" in _generate_random_hostname(random.Random(seed), ip)
-        }
+        hostnames = {_generate_random_hostname(random.Random(seed), ip) for seed in range(20)}
         ptrs = {_generate_rdns_name(random.Random(seed), ip) for seed in range(50)}
 
-        compute_regions = {
-            hostname.split(".compute.amazonaws.com")[0].rsplit(".", 1)[1] for hostname in hostnames
-        }
         ptr_regions = {
             ptr.split(".compute.amazonaws.com")[0].rsplit(".", 1)[1]
             for ptr in ptrs
             if ".compute.amazonaws.com" in ptr
         }
 
-        assert len(compute_regions) <= 1
+        assert hostnames
+        assert all(".compute.amazonaws.com" not in hostname for hostname in hostnames)
         assert len(ptr_regions) <= 1
-        assert ptr_regions.issubset(compute_regions)
 
 
 class TestDnsSupportQueryTypes:

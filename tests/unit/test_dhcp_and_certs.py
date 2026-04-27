@@ -5,6 +5,10 @@
 
 import random
 
+from evidenceforge.generation.activity.generator import (
+    _ocsp_status_for_certificate,
+    _tls_san_dns_names,
+)
 from evidenceforge.generation.activity.tls_issuers import load_tls_issuers, pick_issuer
 
 # ---------------------------------------------------------------------------
@@ -84,3 +88,25 @@ class TestTlsIssuers:
             assert ca_name in issuer_names, (
                 f"Override '{pattern}' references '{ca_name}' which is not in issuers list"
             )
+
+    def test_san_dns_never_wildcards_public_suffix(self):
+        """Generated SAN lists should not contain impossible public-suffix wildcards."""
+        assert _tls_san_dns_names("stackoverflow.com") == [
+            "stackoverflow.com",
+            "*.stackoverflow.com",
+        ]
+        assert _tls_san_dns_names("gcr.io") == ["gcr.io", "*.gcr.io"]
+        assert _tls_san_dns_names("www.gstatic.com") == ["www.gstatic.com", "*.gstatic.com"]
+        assert _tls_san_dns_names("example.co.uk") == ["example.co.uk", "*.example.co.uk"]
+        assert _tls_san_dns_names("203.0.113.45") == []
+
+    def test_ocsp_status_is_stable_by_certificate_but_not_globally_flat(self):
+        """OCSP status should be stable per cert while still varying across certs."""
+        assert _ocsp_status_for_certificate(
+            "www.example.com", "01"
+        ) == _ocsp_status_for_certificate("www.example.com", "01")
+        statuses = {
+            _ocsp_status_for_certificate(f"host{i}.example.com", f"{i:02X}") for i in range(1000)
+        }
+        assert "good" in statuses
+        assert statuses & {"unknown", "revoked"}

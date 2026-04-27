@@ -233,7 +233,6 @@ def _generate_random_hostname(rng, ip: str) -> str:
         cf_chars = "abcdefghijklmnopqrstuvwxyz0123456789"
         return rng.choice(
             [
-                f"ec2-{'-'.join(octets)}.{region}.compute.amazonaws.com",
                 f"d{''.join(rng.choices(cf_chars, k=13))}.cloudfront.net",
                 f"server-{'-'.join(octets)}.{edge_pop}.r.cloudfront.net",
             ]

@@ -13,8 +13,6 @@ from collections import Counter
 
 from evidenceforge.generation.activity.generator import (
     _NTP_STRATUM_TIMING,
-    _PROXY_UAS_LINUX,
-    _PROXY_UAS_WINDOWS,
     _SSL_FAILURE_RATE,
     _SSL_HIST_FAILURE_VALUES,
     _SSL_HIST_SUCCESS_VALUES,
@@ -28,6 +26,14 @@ from evidenceforge.generation.activity.generator import (
     _UDP_OVERHEAD_VALUES,
     _UDP_OVERHEAD_WEIGHTS,
 )
+from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
+
+
+def _proxy_ua_pool(*path: str) -> list[str]:
+    value = load_proxy_user_agents()
+    for key in path:
+        value = value[key]
+    return value
 
 
 class TestProtocolOverhead:
@@ -148,15 +154,17 @@ class TestProxyUaOsMatch:
     """Bug #19: Proxy UAs match source OS."""
 
     def test_linux_ua_pool_has_package_managers(self):
-        linux_uas = " ".join(_PROXY_UAS_LINUX)
+        linux_uas = " ".join(_proxy_ua_pool("workstation", "linux"))
         assert "apt-http" in linux_uas
         assert "python-requests" in linux_uas
         assert "curl" in linux_uas
 
     def test_windows_ua_pool_has_browsers(self):
-        windows_uas = " ".join(_PROXY_UAS_WINDOWS)
+        windows_uas = " ".join(_proxy_ua_pool("workstation", "windows"))
         assert "Windows NT" in windows_uas
         assert "Chrome" in windows_uas
 
     def test_linux_pool_differs_from_windows(self):
-        assert set(_PROXY_UAS_LINUX) != set(_PROXY_UAS_WINDOWS)
+        assert set(_proxy_ua_pool("workstation", "linux")) != set(
+            _proxy_ua_pool("workstation", "windows")
+        )

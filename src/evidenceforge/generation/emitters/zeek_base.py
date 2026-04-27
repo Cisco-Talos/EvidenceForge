@@ -39,7 +39,7 @@ When no sensors are configured (backward compat), writes directly to:
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -203,6 +203,13 @@ class SensorMultiplexEmitter(LogEmitter):
             self._emit_threaded(event_data)
         else:
             self._dispatch(event_data)
+
+    @staticmethod
+    def _offset_timestamp(ts: datetime | int | float, milliseconds: int) -> datetime | float:
+        """Return a Zeek timestamp shifted by a small analyzer-stage delay."""
+        if isinstance(ts, datetime):
+            return ts + timedelta(milliseconds=milliseconds)
+        return float(ts) + milliseconds / 1000
 
     @staticmethod
     def _derive_sensor_uid(original_uid: str, sensor_hostname: str) -> str:

@@ -30,8 +30,9 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, SslContext, X509Context
+from evidenceforge.events.contexts import NetworkContext, OcspContext, SslContext, X509Context
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
 
@@ -280,3 +281,67 @@ class TestSslUidCorrelation:
 
             x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
             assert x509_data["san.dns"] == ["example.com", "*.example.com"]
+
+    def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):
+        """SSL, x509, and OCSP analyzer records should not share the conn timestamp."""
+        ssl_fmt = load_format("zeek_ssl")
+        x509_fmt = load_format("zeek_x509")
+        ocsp_fmt = load_format("zeek_ocsp")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            ocsp_emitter = ZeekOcspEmitter(ocsp_fmt, out_dir / "ocsp.json")
+
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                ),
+                ssl=SslContext(
+                    version="TLSv13",
+                    cipher="TLS_AES_128_GCM_SHA256",
+                    cert_chain_fuids=["Fabcdef1234567890"],
+                ),
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="abc123",
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="good",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                ),
+            )
+            ssl_emitter.emit(event)
+            x509_emitter.emit(event)
+            ocsp_emitter.emit(event)
+            ssl_emitter.close()
+            x509_emitter.close()
+            ocsp_emitter.close()
+
+            ssl_ts = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])["ts"]
+            x509_ts = json.loads((out_dir / "x509.json").read_text().splitlines()[0])["ts"]
+            ocsp_ts = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])["ts"]
+
+        conn_ts = base_ts.timestamp()
+        assert conn_ts < ssl_ts < conn_ts + 0.1
+        assert ssl_ts < x509_ts < conn_ts + 0.7
+        assert x509_ts < ocsp_ts < conn_ts + 6.1

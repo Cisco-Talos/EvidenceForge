@@ -582,6 +582,53 @@ def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
 
 
+_MULTI_LABEL_PUBLIC_SUFFIXES = {
+    "ac.uk",
+    "co.jp",
+    "co.nz",
+    "co.uk",
+    "com.au",
+    "com.br",
+    "com.mx",
+    "com.sg",
+    "gov.uk",
+    "net.au",
+    "org.au",
+    "org.uk",
+}
+
+
+def _tls_san_dns_names(cert_name: str) -> list[str]:
+    """Build DNS SANs without wildcarding public suffixes."""
+    try:
+        import ipaddress as _ipa
+
+        _ipa.ip_address(cert_name)
+        return []
+    except ValueError:
+        pass
+
+    labels = [part for part in cert_name.rstrip(".").split(".") if part]
+    if len(labels) < 2:
+        return [cert_name]
+    parent = ".".join(labels[1:])
+    if len(labels) == 2 or parent in _MULTI_LABEL_PUBLIC_SUFFIXES:
+        wildcard_base = cert_name
+    else:
+        wildcard_base = parent
+    return [cert_name, f"*.{wildcard_base}"]
+
+
+def _ocsp_status_for_certificate(cert_name: str, serial_number: str) -> str:
+    """Pick a stable mostly-good OCSP status per certificate identity."""
+    bucket = _stable_seed(f"ocsp_status:{cert_name}:{serial_number}") % 100
+    if bucket < 90:
+        return "good"
+    if bucket < 97:
+        return "unknown"
+    return "revoked"
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -648,6 +695,7 @@ class ActivityGenerator:
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
         self._tls_cert_validity: dict[str, tuple[int, int]] = {}
+        self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -923,16 +971,12 @@ class ActivityGenerator:
         if net is None or event.ssl is not None:
             return
 
-        # Hostname was resolved once at the top of generate_connection().
-        # Fall back to DnsContext query or IP-based generation only for
-        # connections that skipped early resolution (no emit_dns, internal).
+        # Hostname is the SNI source of truth.  Do not invent SNI from a bare
+        # destination IP or PTR; raw-IP TLS should either have no SNI or an
+        # explicit/DNS-backed hostname.
         server_name = hostname
         if server_name is None and dns is not None and dns.query:
             server_name = dns.query
-        if server_name is None:
-            server_name = REVERSE_DNS.get(dst_ip)
-        if server_name is None:
-            server_name = _generate_random_hostname(rng, dst_ip)
         # Suppressed hostname -> no SNI (raw-IP C2, etc.)
         if server_name == "":
             server_name = None
@@ -1030,7 +1074,7 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import X509Context
 
-        if resumed and rng.random() < 0.85:
+        if resumed:
             return
         cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
         cert_fuid_hash = hashlib.sha256(
@@ -1051,29 +1095,15 @@ class ActivityGenerator:
             not_valid_after = not_valid_before + validity_days * 86400
             validity = (not_valid_before, not_valid_after)
             self._tls_cert_validity[cert_name] = validity
-        # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
-        # real hostnames get the domain + wildcard SAN.
-        _is_ip = False
-        try:
-            import ipaddress as _ipa
-
-            _ipa.ip_address(cert_name)
-            _is_ip = True
-        except ValueError:
-            pass
-        if _is_ip:
-            san_dns_list: list[str] = []
-        elif "." in cert_name:
-            san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
-        else:
-            san_dns_list = [cert_name]
+        san_dns_list = _tls_san_dns_names(cert_name)
+        serial_number = (
+            f"{random.Random(_stable_seed(f'tls_cert_serial:{cert_name}')).getrandbits(128):032X}"
+        )
         event.x509 = X509Context(
             fuid=cert_fuid,
             fingerprint=cert_hash,
             certificate_version=3,
-            certificate_serial=(
-                f"{random.Random(_stable_seed(f'tls_cert_serial:{cert_name}')).getrandbits(128):032X}"
-            ),
+            certificate_serial=serial_number,
             certificate_subject=f"CN={cert_name}",
             certificate_issuer=issuer_cfg["name"],
             certificate_not_valid_before=validity[0],
@@ -1090,13 +1120,36 @@ class ActivityGenerator:
         )
         event.ssl.cert_chain_fuids = [cert_fuid]
 
-        # OCSP response (~30% of SSL connections)
-        if rng.random() < 0.30:
+        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses)
+        if rng.random() < 0.18:
             from evidenceforge.events.contexts import OcspContext
             from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
 
+            ocsp_bucket_seconds = 4 * 60 * 60
+            event_epoch = int(event.timestamp.timestamp())
+            bucket_start = event_epoch - (event_epoch % ocsp_bucket_seconds)
+            ocsp_window_key = (
+                cert_name,
+                event.x509.certificate_serial,
+                bucket_start,
+            )
+            ocsp_window = self._tls_ocsp_windows.get(ocsp_window_key)
+            if ocsp_window is None:
+                ocsp_rng = random.Random(
+                    _stable_seed(
+                        f"ocsp_window:{cert_name}:{event.x509.certificate_serial}:{bucket_start}"
+                    )
+                )
+                this_update = bucket_start - ocsp_rng.randint(0, 3600)
+                next_update = (
+                    bucket_start + ocsp_bucket_seconds + ocsp_rng.randint(8 * 3600, 7 * 86400)
+                )
+                ocsp_window = (this_update, next_update)
+                self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
+            this_update, next_update = ocsp_window
+            ocsp_id = _gen_uid("F")
             event.ocsp = OcspContext(
-                id=_gen_uid("F"),
+                id=ocsp_id,
                 hash_algorithm="sha256",
                 issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[
                     :40
@@ -1105,9 +1158,9 @@ class ActivityGenerator:
                     f"key_{event.x509.certificate_issuer}".encode()
                 ).hexdigest()[:40],
                 serial_number=event.x509.certificate_serial,
-                cert_status="good",
-                this_update=int(event.timestamp.timestamp()) - rng.randint(0, 86400),
-                next_update=int(event.timestamp.timestamp()) + rng.randint(86400, 86400 * 7),
+                cert_status=_ocsp_status_for_certificate(cert_name, event.x509.certificate_serial),
+                this_update=this_update,
+                next_update=next_update,
             )
 
     def _build_expansion_context(
@@ -2096,25 +2149,29 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
-        # Resolve hostname ONCE for DNS/SNI/proxy consistency.
-        # All downstream uses (causal DNS expansion, SSL SNI, proxy hostname)
+        # Resolve hostname ONCE for DNS/proxy consistency.
+        # All downstream uses (causal DNS expansion, proxy hostname)
         # share this single resolved value instead of doing independent lookups.
         #
         # hostname semantics (preserved through all downstream builders):
         #   None  → auto-resolve from REVERSE_DNS or generate random
         #   ""    → suppress resolution (raw-IP C2, exposed hosts w/o public_hostnames)
         #   "x.y" → use this hostname explicitly
+        hostname_was_explicit = hostname not in (None, "")
+        hostname_from_reverse_dns = False
         if hostname is None:
-            hostname = REVERSE_DNS.get(dst_ip)
-        if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
-            if _is_private_ip(dst_ip):
+            if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
                     _get_rng(), dst_ip, getattr(self, "_ad_domain", "corp.local")
                 )
             else:
+                hostname = REVERSE_DNS.get(dst_ip)
+                hostname_from_reverse_dns = hostname is not None
+        if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
+            if not _is_private_ip(dst_ip):
                 hostname = _generate_random_hostname(_get_rng(), dst_ip)
 
-        if hostname:
+        if hostname and hostname_was_explicit:
             from evidenceforge.generation.activity.dns_registry import (
                 get_domain_ips,
                 resolve_domain_ip,
@@ -2151,6 +2208,13 @@ class ActivityGenerator:
         # client-side origin DNS lookup is emitted.
         if proto == "tcp" and dst_port in (80, 443) and service not in ("http", "ssl"):
             service = "http" if dst_port == 80 else "ssl"
+
+        tls_hostname = hostname
+        if hostname_from_reverse_dns and not emit_dns and dns is None and http is None:
+            # A PTR/reverse-DNS-style fallback is useful for proxy URL rendering
+            # but should not become TLS SNI unless the client actually resolved
+            # or was explicitly configured to use that hostname.
+            tls_hostname = ""
 
         proxy_routes = getattr(self, "_proxy_routes", {})
         proxy_chain = proxy_routes.get(src_ip)
@@ -2826,7 +2890,7 @@ class ActivityGenerator:
         if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
             self._attach_ssl_context(
                 event,
-                hostname=hostname,
+                hostname=tls_hostname,
                 dns=dns,
                 dst_ip=dst_ip,
                 rng=rng,
@@ -3041,7 +3105,7 @@ class ActivityGenerator:
         ):
             self._attach_ssl_context(
                 event,
-                hostname=hostname,
+                hostname=tls_hostname,
                 dns=dns,
                 dst_ip=dst_ip,
                 rng=rng,
@@ -4404,6 +4468,7 @@ class ActivityGenerator:
                     dst_ip = db["ip"]
                     service = db["service"]
                     dst_port = db["port"]
+                    conn_hostname = None
                 else:
                     # No DB servers detected from scenario; skip DB connection
                     return
