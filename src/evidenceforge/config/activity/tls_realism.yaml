@@ -1,0 +1,85 @@
+# TLS realism knobs for SAN generation, OCSP behavior, and certificate chains.
+#
+# User customizations go in:
+#   .eforge/config/activity/tls_realism.yaml
+#
+# Overlay behavior: nested dicts merge and lists extend.
+
+san:
+  multi_label_public_suffixes:
+    - ac.uk
+    - co.jp
+    - co.nz
+    - co.uk
+    - com.au
+    - com.br
+    - com.mx
+    - com.sg
+    - gov.uk
+    - net.au
+    - org.au
+    - org.uk
+
+ocsp:
+  cache_bucket_seconds: 14400
+  this_update_max_skew_seconds: 3600
+  next_update_min_seconds: 28800
+  next_update_max_seconds: 604800
+  status_weights:
+    good: 90
+    unknown: 7
+    revoked: 3
+
+certificate_chains:
+  include_intermediate_probability: 0.86
+  include_second_intermediate_probability: 0.08
+  intermediate_validity_days_min: 1825
+  intermediate_validity_days_max: 3650
+  intermediate_not_before_max_days: 1460
+  key_types:
+    - {type: "rsa", length: 2048, weight: 55}
+    - {type: "rsa", length: 4096, weight: 20}
+    - {type: "ecdsa", length: 256, weight: 25}
+  templates:
+    - name: lets_encrypt
+      issuer_patterns: ["*Let's Encrypt*"]
+      intermediates:
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+        - "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
+    - name: digicert
+      issuer_patterns: ["*DigiCert*"]
+      intermediates:
+        - "CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US"
+        - "CN=DigiCert Global Root CA, OU=www.digicert.com, O=DigiCert Inc, C=US"
+    - name: google
+      issuer_patterns: ["*Google Trust Services*"]
+      intermediates:
+        - "CN=GTS Root R1, O=Google Trust Services LLC, C=US"
+        - "CN=GTS Root R4, O=Google Trust Services LLC, C=US"
+    - name: amazon
+      issuer_patterns: ["*Amazon*"]
+      intermediates:
+        - "CN=Amazon Root CA 1, O=Amazon, C=US"
+        - "CN=Amazon Root CA 3, O=Amazon, C=US"
+    - name: microsoft
+      issuer_patterns: ["*Microsoft*"]
+      intermediates:
+        - "CN=Microsoft RSA Root Certificate Authority 2017, O=Microsoft Corporation, C=US"
+        - "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE"
+    - name: cloudflare
+      issuer_patterns: ["*Cloudflare*"]
+      intermediates:
+        - "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US"
+    - name: apple
+      issuer_patterns: ["*Apple*"]
+      intermediates:
+        - "CN=Apple Root CA - G3, O=Apple Inc., C=US"
+    - name: enterprise
+      issuer_patterns: ["*Enterprise*"]
+      intermediates:
+        - "CN=Acme Enterprise Root CA, O=Acme Corp, C=US"
+    - name: default
+      issuer_patterns: ["*"]
+      intermediates:
+        - "CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE"
+        - "CN=Sectigo Public Server Authentication Root R46, O=Sectigo Limited, C=GB"

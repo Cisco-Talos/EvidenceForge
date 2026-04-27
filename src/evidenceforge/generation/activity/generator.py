@@ -582,24 +582,10 @@ def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
 
 
-_MULTI_LABEL_PUBLIC_SUFFIXES = {
-    "ac.uk",
-    "co.jp",
-    "co.nz",
-    "co.uk",
-    "com.au",
-    "com.br",
-    "com.mx",
-    "com.sg",
-    "gov.uk",
-    "net.au",
-    "org.au",
-    "org.uk",
-}
-
-
 def _tls_san_dns_names(cert_name: str) -> list[str]:
     """Build DNS SANs without wildcarding public suffixes."""
+    from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
+
     try:
         import ipaddress as _ipa
 
@@ -612,7 +598,7 @@ def _tls_san_dns_names(cert_name: str) -> list[str]:
     if len(labels) < 2:
         return [cert_name]
     parent = ".".join(labels[1:])
-    if len(labels) == 2 or parent in _MULTI_LABEL_PUBLIC_SUFFIXES:
+    if len(labels) == 2 or parent in multi_label_public_suffixes():
         wildcard_base = cert_name
     else:
         wildcard_base = parent
@@ -621,12 +607,20 @@ def _tls_san_dns_names(cert_name: str) -> list[str]:
 
 def _ocsp_status_for_certificate(cert_name: str, serial_number: str) -> str:
     """Pick a stable mostly-good OCSP status per certificate identity."""
-    bucket = _stable_seed(f"ocsp_status:{cert_name}:{serial_number}") % 100
-    if bucket < 90:
+    from evidenceforge.generation.activity.tls_realism import ocsp_config
+
+    weights = ocsp_config().get("status_weights", {"good": 90, "unknown": 7, "revoked": 3})
+    ordered = ("good", "unknown", "revoked")
+    total = sum(max(0, int(weights.get(status, 0))) for status in ordered)
+    if total <= 0:
         return "good"
-    if bucket < 97:
-        return "unknown"
-    return "revoked"
+    bucket = _stable_seed(f"ocsp_status:{cert_name}:{serial_number}") % total
+    cumulative = 0
+    for status in ordered:
+        cumulative += max(0, int(weights.get(status, 0)))
+        if bucket < cumulative:
+            return status
+    return "good"
 
 
 class ActivityGenerator:
@@ -1118,14 +1112,27 @@ class ActivityGenerator:
             host_cert=True,
             client_cert=False,
         )
-        event.ssl.cert_chain_fuids = [cert_fuid]
+        event.x509_chain = self._build_tls_certificate_chain(
+            leaf=event.x509,
+            cert_name=cert_name,
+            issuer_name=issuer_cfg["name"],
+            event_time=event.timestamp,
+            connection_uid=net.zeek_uid,
+            rng=rng,
+        )
+        event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
 
         # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses)
         if rng.random() < 0.18:
             from evidenceforge.events.contexts import OcspContext
+            from evidenceforge.generation.activity.tls_realism import ocsp_config
             from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
 
-            ocsp_bucket_seconds = 4 * 60 * 60
+            ocsp_settings = ocsp_config()
+            ocsp_bucket_seconds = int(ocsp_settings.get("cache_bucket_seconds", 4 * 60 * 60))
+            this_update_max_skew = int(ocsp_settings.get("this_update_max_skew_seconds", 3600))
+            next_update_min = int(ocsp_settings.get("next_update_min_seconds", 8 * 3600))
+            next_update_max = int(ocsp_settings.get("next_update_max_seconds", 7 * 86400))
             event_epoch = int(event.timestamp.timestamp())
             bucket_start = event_epoch - (event_epoch % ocsp_bucket_seconds)
             ocsp_window_key = (
@@ -1140,9 +1147,11 @@ class ActivityGenerator:
                         f"ocsp_window:{cert_name}:{event.x509.certificate_serial}:{bucket_start}"
                     )
                 )
-                this_update = bucket_start - ocsp_rng.randint(0, 3600)
+                this_update = bucket_start - ocsp_rng.randint(0, max(0, this_update_max_skew))
                 next_update = (
-                    bucket_start + ocsp_bucket_seconds + ocsp_rng.randint(8 * 3600, 7 * 86400)
+                    bucket_start
+                    + ocsp_bucket_seconds
+                    + ocsp_rng.randint(next_update_min, max(next_update_min, next_update_max))
                 )
                 ocsp_window = (this_update, next_update)
                 self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
@@ -1162,6 +1171,107 @@ class ActivityGenerator:
                 this_update=this_update,
                 next_update=next_update,
             )
+
+    def _build_tls_certificate_chain(
+        self,
+        *,
+        leaf: Any,
+        cert_name: str,
+        issuer_name: str,
+        event_time: datetime,
+        connection_uid: str,
+        rng: random.Random,
+    ) -> list[Any]:
+        """Build a configured leaf/intermediate certificate chain."""
+        import hashlib
+
+        from evidenceforge.events.contexts import X509Context
+        from evidenceforge.generation.activity.tls_realism import (
+            certificate_chain_config,
+            chain_template_for_issuer,
+        )
+
+        chain = [leaf]
+        config = certificate_chain_config()
+        include_probability = float(config.get("include_intermediate_probability", 0.86))
+        if rng.random() >= include_probability:
+            return chain
+
+        template = chain_template_for_issuer(issuer_name)
+        intermediate_subjects = [
+            str(subject) for subject in template.get("intermediates", []) if subject
+        ]
+        if not intermediate_subjects:
+            return chain
+
+        chain_rng = random.Random(_stable_seed(f"tls_chain:{cert_name}:{issuer_name}"))
+        selected_subjects = [chain_rng.choice(intermediate_subjects)]
+        second_probability = float(config.get("include_second_intermediate_probability", 0.08))
+        remaining_subjects = [
+            subject for subject in intermediate_subjects if subject != selected_subjects[0]
+        ]
+        if remaining_subjects and chain_rng.random() < second_probability:
+            selected_subjects.append(chain_rng.choice(remaining_subjects))
+
+        parent_issuer = selected_subjects[1] if len(selected_subjects) > 1 else selected_subjects[0]
+        for idx, subject in enumerate(selected_subjects):
+            certificate_issuer = (
+                selected_subjects[idx + 1] if idx + 1 < len(selected_subjects) else subject
+            )
+            if idx == 0:
+                subject = issuer_name
+            serial_rng = random.Random(_stable_seed(f"tls_chain_serial:{subject}"))
+            serial = f"{serial_rng.getrandbits(128):032X}"
+            fuid_hash = hashlib.sha256(
+                f"cert_chain_fuid:{subject}:{connection_uid}:{event_time.timestamp()}".encode()
+            ).hexdigest()
+            cert_hash = hashlib.sha256(f"cert_chain:{subject}:{serial}".encode()).hexdigest()
+            validity = self._tls_cert_validity.get(subject)
+            if validity is None:
+                now_epoch = int(event_time.timestamp())
+                min_days = int(config.get("intermediate_validity_days_min", 1825))
+                max_days = int(config.get("intermediate_validity_days_max", 3650))
+                max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
+                validity_days = chain_rng.randint(min_days, max(max_days, min_days))
+                not_before_days = chain_rng.randint(30, min(max_not_before, validity_days - 1))
+                not_valid_before = now_epoch - not_before_days * 86400
+                not_valid_after = not_valid_before + validity_days * 86400
+                validity = (not_valid_before, not_valid_after)
+                self._tls_cert_validity[subject] = validity
+
+            key_types = config.get(
+                "key_types",
+                [{"type": "rsa", "length": 2048, "weight": 100}],
+            )
+            weights = [int(entry.get("weight", 0)) for entry in key_types]
+            selected_key = chain_rng.choices(key_types, weights=weights, k=1)[0]
+            key_type = str(selected_key.get("type", "rsa"))
+            key_length = int(selected_key.get("length", 2048))
+            is_ecdsa = key_type == "ecdsa"
+            chain.append(
+                X509Context(
+                    fuid=f"F{fuid_hash[:16]}",
+                    fingerprint=cert_hash,
+                    certificate_version=3,
+                    certificate_serial=serial,
+                    certificate_subject=subject,
+                    certificate_issuer=certificate_issuer or parent_issuer,
+                    certificate_not_valid_before=validity[0],
+                    certificate_not_valid_after=validity[1],
+                    certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+                    certificate_sig_alg="ecdsa-with-SHA256"
+                    if is_ecdsa
+                    else "sha256WithRSAEncryption",
+                    certificate_key_type=key_type,
+                    certificate_key_length=key_length,
+                    certificate_exponent="65537" if not is_ecdsa else "",
+                    san_dns=[],
+                    basic_constraints_ca=True,
+                    host_cert=False,
+                    client_cert=False,
+                )
+            )
+        return chain
 
     def _build_expansion_context(
         self,

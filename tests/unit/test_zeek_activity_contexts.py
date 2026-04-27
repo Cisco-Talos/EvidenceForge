@@ -107,7 +107,9 @@ class TestSslContextPopulation:
             assert event.ssl.established is True
             assert event.x509 is not None
             assert event.x509.fuid.startswith("F")
-            assert event.ssl.cert_chain_fuids == [event.x509.fuid]
+            assert event.x509_chain
+            assert event.x509_chain[0] is event.x509
+            assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
     def test_ssh_session_returns_empty_uid_when_network_not_visible(self, activity_gen):
         gen, events = activity_gen
@@ -276,6 +278,35 @@ class TestSslContextPopulation:
         assert event.ssl.server_name == "www.gstatic.com"
         assert event.x509.certificate_subject == "CN=www.gstatic.com"
         assert event.x509.san_dns == ["www.gstatic.com", "*.gstatic.com"]
+        assert event.x509_chain[0] is event.x509
+
+    def test_tls_certificate_chains_include_intermediates_across_sample(self, activity_gen):
+        """Configured TLS chain generation should produce CA/intermediate x509 rows."""
+        gen, events = activity_gen
+
+        for idx in range(12):
+            gen.generate_connection(
+                src_ip="10.0.10.50",
+                dst_ip="142.250.72.36",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(minutes=idx),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname=f"asset{idx}.gstatic.com",
+                conn_state="SF",
+            )
+
+        chains = [event.x509_chain for event in events if event.x509_chain]
+        assert chains
+        assert any(any(cert.basic_constraints_ca for cert in chain[1:]) for chain in chains)
+        for chain in chains:
+            assert chain[0].basic_constraints_ca is False
+            assert [cert.fuid for cert in chain] == next(
+                event.ssl.cert_chain_fuids for event in events if event.x509_chain is chain
+            )
 
     def test_resumed_ssl_sessions_omit_fresh_certificate_chain(self, activity_gen):
         """Resumed handshakes should not repeatedly emit full x509 chains."""

@@ -14,6 +14,7 @@ Schema documentation for the network-related config files. User customizations g
 4. [site_maps.yaml](#site_mapsyaml)
 5. [network_params.yaml](#network_paramsyaml)
 6. [tls_issuers.yaml](#tls_issuersyaml)
+7. [tls_realism.yaml](#tls_realismyaml)
 
 ---
 
@@ -350,6 +351,31 @@ issuers:
     key_types:
       - {type: "ecdsa", length: 256, weight: 70}
       - {type: "rsa", length: 2048, weight: 30}
+```
+
+## tls_realism.yaml
+
+TLS SAN, OCSP, and certificate-chain realism settings. Standalone — used by the generation engine when building Zeek `ssl.log`, `x509.log`, and `ocsp.log`.
+
+**Location:** `src/evidenceforge/config/activity/tls_realism.yaml`  
+**Overlay:** `.eforge/config/activity/tls_realism.yaml`
+
+### Structure
+
+```yaml
+san:
+  multi_label_public_suffixes: ["co.uk", "com.au"]
+ocsp:
+  cache_bucket_seconds: 14400
+  status_weights: {good: 90, unknown: 7, revoked: 3}
+certificate_chains:
+  include_intermediate_probability: 0.86
+  include_second_intermediate_probability: 0.08
+  templates:
+    - name: lets_encrypt
+      issuer_patterns: ["*Let's Encrypt*"]
+      intermediates:
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
 ```
 
 ## traffic_rates.yaml

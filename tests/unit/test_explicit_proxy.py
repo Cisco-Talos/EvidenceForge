@@ -899,4 +899,5 @@ class TestExplicitProxyVisibility:
         assert conn_event.ssl is not None
         assert conn_event.ssl.established is True
         assert conn_event.x509 is not None
-        assert conn_event.ssl.cert_chain_fuids == [conn_event.x509.fuid]
+        assert conn_event.x509_chain[0] is conn_event.x509
+        assert conn_event.ssl.cert_chain_fuids == [cert.fuid for cert in conn_event.x509_chain]

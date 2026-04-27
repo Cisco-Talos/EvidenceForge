@@ -135,6 +135,12 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone certificate authority data |
 | **depended on by** | Engine (runtime) | Drives Zeek x509/SSL certificate generation |
 
+### tls_realism.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | tls_issuers.yaml | Chain templates match issuer names/patterns selected from issuer config |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, and OCSP cache/status behavior |
+
 ### sysmon_filters.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

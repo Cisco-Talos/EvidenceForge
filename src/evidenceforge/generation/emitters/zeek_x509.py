@@ -41,10 +41,16 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        return event.event_type in self._supported_types and event.x509 is not None
+        return event.event_type in self._supported_types and (
+            event.x509 is not None or bool(event.x509_chain)
+        )
 
     def emit(self, event: SecurityEvent) -> None:
-        x509 = event.x509
+        certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        for x509 in certificates:
+            self._emit_certificate(event, x509)
+
+    def _emit_certificate(self, event: SecurityEvent, x509: Any) -> None:
         x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
             self.format_def.name if self.format_def else "zeek_x509", []
         )

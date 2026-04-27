@@ -5,11 +5,19 @@
 
 import random
 
+import yaml
+
 from evidenceforge.generation.activity.generator import (
     _ocsp_status_for_certificate,
     _tls_san_dns_names,
 )
 from evidenceforge.generation.activity.tls_issuers import load_tls_issuers, pick_issuer
+from evidenceforge.generation.activity.tls_realism import (
+    certificate_chain_config,
+    multi_label_public_suffixes,
+    ocsp_config,
+    reset_tls_realism_cache,
+)
 
 # ---------------------------------------------------------------------------
 # Theme 4: Certificate realism tests
@@ -110,3 +118,38 @@ class TestTlsIssuers:
         }
         assert "good" in statuses
         assert statuses & {"unknown", "revoked"}
+
+    def test_tls_realism_overlay_extends_lists_and_replaces_scalars(self, tmp_path, monkeypatch):
+        """TLS realism config should support project-local overlays."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "san": {"multi_label_public_suffixes": ["example.test"]},
+                    "ocsp": {"cache_bucket_seconds": 7200},
+                    "certificate_chains": {
+                        "templates": [
+                            {
+                                "name": "custom",
+                                "issuer_patterns": ["*Custom*"],
+                                "intermediates": ["CN=Custom Root, O=Example, C=US"],
+                            }
+                        ]
+                    },
+                },
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            assert "example.test" in multi_label_public_suffixes()
+            assert ocsp_config()["cache_bucket_seconds"] == 7200
+            assert any(
+                template.get("name") == "custom"
+                for template in certificate_chain_config()["templates"]
+            )
+        finally:
+            reset_tls_realism_cache()

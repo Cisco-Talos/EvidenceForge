@@ -116,11 +116,11 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, and MX query types. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Generated for unencrypted HTTP connections (any port); excludes TLS/SSL traffic. |
-| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for any connection carrying TLS context, not restricted to port 443. |
+| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for any connection carrying TLS context, not restricted to port 443. Certificate-chain depth is driven by `tls_realism.yaml`. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate `id`/fingerprint, subject/issuer, validity, key info. |
+| x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity, key info, and CA constraints. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
 | ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |

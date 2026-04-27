@@ -282,6 +282,49 @@ class TestSslUidCorrelation:
             x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
             assert x509_data["san.dns"] == ["example.com", "*.example.com"]
 
+    def test_x509_emitter_renders_full_certificate_chain(self):
+        """x509.log should include each certificate referenced by ssl.cert_chain_fuids."""
+        x509_fmt = load_format("zeek_x509")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            leaf = X509Context(
+                fuid="Fleaf12345678901",
+                fingerprint="leaf",
+                certificate_serial="01",
+                certificate_subject="CN=www.example.com",
+                certificate_issuer="CN=Example Intermediate CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+                san_dns=["www.example.com", "*.example.com"],
+            )
+            intermediate = X509Context(
+                fuid="Fintermediate123",
+                fingerprint="intermediate",
+                certificate_serial="02",
+                certificate_subject="CN=Example Intermediate CA",
+                certificate_issuer="CN=Example Root CA",
+                certificate_not_valid_before=1600000000.0,
+                certificate_not_valid_after=1900000000.0,
+                basic_constraints_ca=True,
+                host_cert=False,
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                x509=leaf,
+                x509_chain=[leaf, intermediate],
+            )
+
+            x509_emitter.emit(event)
+            x509_emitter.close()
+
+            rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
+            rows_by_id = {row["id"]: row for row in rows}
+            assert set(rows_by_id) == {"Fleaf12345678901", "Fintermediate123"}
+            assert rows_by_id["Fleaf12345678901"]["basic_constraints.ca"] is False
+            assert rows_by_id["Fintermediate123"]["basic_constraints.ca"] is True
+
     def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):
         """SSL, x509, and OCSP analyzer records should not share the conn timestamp."""
         ssl_fmt = load_format("zeek_ssl")
