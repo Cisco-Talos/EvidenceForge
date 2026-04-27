@@ -353,6 +353,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] TLS realism validate-config coverage — added `tls_realism.yaml` overlay/schema validation to `eforge validate-config` and removed stale hardcoded validation-count docs.
 - [x] Scenario hostname authoring guidance — clarified that storyline connection/beacon `hostname` values should be the client-facing DNS name actually used for DNS/SNI/proxy evidence, not reverse-DNS/PTR artifacts.
 - [x] Zeek SMB file visibility design — successful SMB data transfers now emit data-driven Zeek files.log observations with SMB source, MIME/analyzer mix, threshold, missing-byte, and timeout behavior from `smb_file_transfers.yaml`. Dedicated Zeek SMB logs remain out of scope; docs and skill references clarify conn.log/files.log/eCAR coverage.
+- [x] Blind eval non-clustering follow-up — fixed concrete OCSP joinability, SMB session attribution, and DNS RTT realism findings while leaving cross-source “too perfect” and TLS clustering design deferred. OCSP rows now carry conn UID/tuple fields, Windows network logons use the source workstation name, and public resolver DNS RTTs no longer use sub-ms cache-hit timing.
 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()

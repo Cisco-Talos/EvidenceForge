@@ -8,6 +8,7 @@ import random
 import yaml
 
 from evidenceforge.generation.activity.generator import (
+    _dns_rtt,
     _ocsp_status_for_certificate,
     _tls_san_dns_names,
 )
@@ -153,3 +154,20 @@ class TestTlsIssuers:
             )
         finally:
             reset_tls_realism_cache()
+
+
+class TestDnsRtt:
+    """Tests for resolver-aware DNS timing realism."""
+
+    def test_public_resolver_rtts_are_not_submillisecond(self):
+        rng = random.Random(42)
+        samples = [_dns_rtt(rng, "8.8.8.8") for _ in range(500)]
+
+        assert min(samples) >= 0.002
+        assert sum(1 for sample in samples if sample < 0.001) == 0
+
+    def test_internal_resolver_can_return_cache_hit_rtts(self):
+        rng = random.Random(42)
+        samples = [_dns_rtt(rng, "10.0.0.10") for _ in range(500)]
+
+        assert any(sample < 0.001 for sample in samples)

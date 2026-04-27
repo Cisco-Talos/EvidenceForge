@@ -45,10 +45,16 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         ocsp = event.ocsp
+        net = event.network
         analyzer_delay_ms = 1000 + (_stable_seed(f"zeek_ocsp_ts:{ocsp.id}") % 5001)
         event_data: dict[str, Any] = {
             "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
             "id": ocsp.id,
+            "uid": net.zeek_uid if net else "",
+            "id.orig_h": net.src_ip if net else "",
+            "id.orig_p": net.src_port if net else 0,
+            "id.resp_h": net.dst_ip if net else "",
+            "id.resp_p": net.dst_port if net else 0,
             "hashAlgorithm": ocsp.hash_algorithm,
             "issuerNameHash": ocsp.issuer_name_hash,
             "issuerKeyHash": ocsp.issuer_key_hash,

@@ -1439,6 +1439,10 @@ class BaselineMixin:
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
 
+                    dns_server_ips = getattr(
+                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                    )
+                    dns_server_ip = rng.choice(dns_server_ips)
                     dns_ctx = DnsContext(
                         query=result["hostname"],
                         trans_id=rng.randint(1, 65535),
@@ -1458,15 +1462,12 @@ class BaselineMixin:
                                 )
                             )
                         ],
-                        rtt=_dns_rtt(rng),
-                    )
-                    dns_server_ips = getattr(
-                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                        rtt=_dns_rtt(rng, dns_server_ip),
                     )
                     self.state_manager.set_current_time(result["time"])
                     self.activity_generator.generate_connection(
                         src_ip=result["system"].ip,
-                        dst_ip=rng.choice(dns_server_ips),
+                        dst_ip=dns_server_ip,
                         time=result["time"],
                         dst_port=53,
                         proto="udp",

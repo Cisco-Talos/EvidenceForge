@@ -491,18 +491,26 @@ def _ephemeral_port(rng: random.Random, os_category: str = "windows") -> int:
     return rng.randint(49152, 65535)
 
 
-def _dns_rtt(rng: random.Random) -> float:
+def _dns_rtt(rng: random.Random, resolver_ip: str | None = None) -> float:
     """Generate a realistic DNS round-trip time using a mixture model.
 
     Models real DNS traffic distribution:
-    - ~60% cache hits (sub-1ms)
-    - ~25% local resolver responses (1-10ms)
-    - ~12% recursive lookups (10-80ms)
-    - ~3% slow/distant servers (80-250ms)
+    - Internal resolvers: cache/local responses can be sub-ms
+    - Public resolvers: LAN-to-resolver RTT should rarely be sub-ms
 
     Returns:
         RTT in seconds.
     """
+    if resolver_ip and not _is_private_ip(resolver_ip):
+        roll = rng.random()
+        if roll < 0.08:
+            return rng.uniform(0.002, 0.008)  # Very close public resolver / warmed path
+        if roll < 0.70:
+            return rng.uniform(0.008, 0.035)  # Common enterprise egress latency
+        if roll < 0.95:
+            return rng.uniform(0.035, 0.120)  # Recursive/cache miss or distance
+        return rng.uniform(0.120, 0.350)  # Slow/distant resolver response
+
     roll = rng.random()
     if roll < 0.60:
         return rng.uniform(0.0001, 0.001)  # Cache hit: 0.1-1ms
@@ -2878,7 +2886,7 @@ class ActivityGenerator:
                 ]
                 if resp_bytes
                 else [],
-                rtt=_dns_rtt(rng) if resp_bytes else None,
+                rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
             )
 
         # Proxy context: attach only for established outbound internet traffic.
@@ -4106,7 +4114,7 @@ class ActivityGenerator:
             rcode_num=0,
             answers=answers,
             TTLs=ttls,
-            rtt=_dns_rtt(rng),
+            rtt=_dns_rtt(rng, dns_server_ip),
             AA=is_internal,
             RD=True,
             RA=True,

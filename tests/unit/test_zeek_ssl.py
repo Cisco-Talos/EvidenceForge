@@ -383,8 +383,13 @@ class TestSslUidCorrelation:
             ssl_ts = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])["ts"]
             x509_ts = json.loads((out_dir / "x509.json").read_text().splitlines()[0])["ts"]
             ocsp_ts = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])["ts"]
+            ocsp_row = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])
 
         conn_ts = base_ts.timestamp()
         assert conn_ts < ssl_ts < conn_ts + 0.1
         assert ssl_ts < x509_ts < conn_ts + 0.7
         assert x509_ts < ocsp_ts < conn_ts + 6.1
+        assert ocsp_row["uid"] == "CMySpecificUID123"
+        assert ocsp_row["id.orig_h"] == "10.0.0.1"
+        assert ocsp_row["id.resp_h"] == "8.8.8.8"
+        assert ocsp_row["id.resp_p"] == 443

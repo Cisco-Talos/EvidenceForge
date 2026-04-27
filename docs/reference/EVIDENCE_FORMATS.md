@@ -127,7 +127,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info, and CA constraints. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
-| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
+| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks with connection UID and tuple fields for joining back to conn.log. |
 | packet_filter.log | `packet_filter.json` | BPF filter changes | Zeek packet filter status. |
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 
