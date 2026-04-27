@@ -151,6 +151,101 @@ class TlsIssuerEntry(BaseModel, extra="forbid"):
     key_types: list[TlsKeyType]
 
 
+class TlsSanConfig(BaseModel, extra="forbid"):
+    """SAN generation settings in tls_realism.yaml."""
+
+    multi_label_public_suffixes: list[str]
+
+
+class TlsOcspConfig(BaseModel, extra="forbid"):
+    """OCSP behavior settings in tls_realism.yaml."""
+
+    cache_bucket_seconds: int
+    this_update_max_skew_seconds: int
+    next_update_min_seconds: int
+    next_update_max_seconds: int
+    status_weights: dict[Literal["good", "unknown", "revoked"], int]
+
+    @field_validator(
+        "cache_bucket_seconds",
+        "this_update_max_skew_seconds",
+        "next_update_min_seconds",
+        "next_update_max_seconds",
+    )
+    @classmethod
+    def seconds_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("seconds values must be non-negative")
+        return v
+
+    @field_validator("status_weights")
+    @classmethod
+    def status_weights_valid(cls, v: dict[str, int]) -> dict[str, int]:
+        if set(v) != {"good", "unknown", "revoked"}:
+            raise ValueError("status_weights must contain good, unknown, and revoked")
+        if any(weight < 0 for weight in v.values()):
+            raise ValueError("status_weights must be non-negative")
+        if sum(v.values()) <= 0:
+            raise ValueError("status_weights must have a positive total")
+        return v
+
+
+class TlsChainTemplate(BaseModel, extra="forbid"):
+    """A certificate-chain template in tls_realism.yaml."""
+
+    name: str
+    issuer_patterns: list[str]
+    intermediates: list[str]
+
+    @field_validator("issuer_patterns", "intermediates")
+    @classmethod
+    def non_empty_list(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("list must not be empty")
+        return v
+
+
+class TlsCertificateChainConfig(BaseModel, extra="forbid"):
+    """Certificate-chain behavior settings in tls_realism.yaml."""
+
+    include_intermediate_probability: float
+    include_second_intermediate_probability: float
+    intermediate_validity_days_min: int
+    intermediate_validity_days_max: int
+    intermediate_not_before_max_days: int
+    key_types: list[TlsKeyType]
+    templates: list[TlsChainTemplate]
+
+    @field_validator(
+        "include_intermediate_probability",
+        "include_second_intermediate_probability",
+    )
+    @classmethod
+    def probability_range(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("probability must be between 0 and 1")
+        return v
+
+    @field_validator(
+        "intermediate_validity_days_min",
+        "intermediate_validity_days_max",
+        "intermediate_not_before_max_days",
+    )
+    @classmethod
+    def days_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("day values must be positive")
+        return v
+
+
+class TlsRealismConfig(BaseModel, extra="forbid"):
+    """Root schema for tls_realism.yaml."""
+
+    san: TlsSanConfig
+    ocsp: TlsOcspConfig
+    certificate_chains: TlsCertificateChainConfig
+
+
 # --- Network Params ---
 
 

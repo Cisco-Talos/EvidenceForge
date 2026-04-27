@@ -168,6 +168,9 @@ def validate_config() -> ValidationResult:
             "list_fields": {"issuers": "name"},
             "dict_fields": {"domain_ca_overrides"},
         },
+        "activity/tls_realism.yaml": {
+            "dict_fields": {"san", "ocsp", "certificate_chains"},
+        },
         "activity/network_params.yaml": {
             "list_fields": {"oui_prefixes": None},
         },
@@ -941,6 +944,7 @@ def validate_config() -> ValidationResult:
         SystemdScheduleEntry,
         SystemServiceEntry,
         TlsIssuerEntry,
+        TlsRealismConfig,
         validate_entry,
     )
 
@@ -1026,6 +1030,13 @@ def validate_config() -> ValidationResult:
     tls_data = load_tls_issuers()
     if tls_data:
         _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
+
+    # tls_realism.yaml
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
+
+    tls_realism_data = load_tls_realism()
+    if tls_realism_data:
+        _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
 
     # extra_syslog_messages.yaml
     from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
