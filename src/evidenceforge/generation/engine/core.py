@@ -392,6 +392,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._proxy_routes: dict[str, list] = {}
         self._build_proxy_routes()
         self.activity_generator._proxy_routes = self._proxy_routes
+        self.activity_generator._proxy_mode = self.scenario.environment.proxy.mode
+        self.activity_generator._proxy_listener_port = self.scenario.environment.proxy.listener_port
         self.world_planner = WorldPlanner(
             world_model=self.world_model,
             state_manager=self.state_manager,

@@ -108,6 +108,8 @@ class TestSysmonEventEmitter:
             "TargetImage": r"C:\Windows\explorer.exe",
             "NewThreadId": 840,
             "StartAddress": "0x02060000",
+            "StartModule": r"C:\Windows\System32\kernel32.dll",
+            "StartFunction": "BaseThreadInitThunk",
         }
 
         emitter.emit_event(event_data)
@@ -122,6 +124,8 @@ class TestSysmonEventEmitter:
         assert '<Data Name="SourceImage">C:\\Temp\\inject.exe</Data>' in content
         assert '<Data Name="TargetImage">C:\\Windows\\explorer.exe</Data>' in content
         assert '<Data Name="StartAddress">0x02060000</Data>' in content
+        assert '<Data Name="StartModule">C:\\Windows\\System32\\kernel32.dll</Data>' in content
+        assert '<Data Name="StartFunction">BaseThreadInitThunk</Data>' in content
 
     def test_emit_sysmon_process_terminate(self, format_def, temp_output):
         """Test emitting Sysmon Event 5 (ProcessTerminate)."""

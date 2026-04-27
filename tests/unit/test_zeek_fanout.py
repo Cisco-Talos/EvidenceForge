@@ -108,7 +108,9 @@ class TestSslFanOut:
             with open(base / "s1" / "ssl.json") as f:
                 ssl_data = json.loads(f.readline())
 
-            assert conn_data["uid"] == ssl_data["uid"] == "CTestFanout12345"
+            assert conn_data["uid"] == ssl_data["uid"]
+            assert conn_data["uid"] != "CTestFanout12345"
+            assert conn_data["uid"].startswith("C")
 
 
 class TestHttpFilesFanOut:
@@ -198,11 +200,14 @@ class TestHttpFilesFanOut:
                 files_data = json.loads(f.readline())
 
             # UID consistency
-            assert conn_data["uid"] == http_data["uid"] == files_data["uid"] == "CTestHttpFiles01"
+            assert conn_data["uid"] == http_data["uid"] == files_data["uid"]
+            assert conn_data["uid"] != "CTestHttpFiles01"
+            assert conn_data["uid"].startswith("C")
 
             # File cross-reference: files fuid appears in http resp_fuids
-            assert files_data["fuid"] == "FTestFile01234567"
-            assert "FTestFile01234567" in http_data["resp_fuids"]
+            assert files_data["fuid"] != "FTestFile01234567"
+            assert files_data["fuid"].startswith("F")
+            assert files_data["fuid"] in http_data["resp_fuids"]
 
 
 class TestNoFanOutWithoutContext:
@@ -278,12 +283,20 @@ class TestMultiSensorFanOut:
                 assert (base / sensor / "conn.json").exists()
                 assert (base / sensor / "ssl.json").exists()
 
-            # First sensor gets original UID, second sensor gets a unique UID
-            # (real Zeek sensors generate UIDs independently)
+            # Each real Zeek sensor generates its own UID namespace, while
+            # preserving correlation within that sensor's Zeek log family.
             with open(base / "fw01" / "conn.json") as f:
                 uid1 = json.loads(f.readline())["uid"]
+            with open(base / "fw01" / "ssl.json") as f:
+                ssl_uid1 = json.loads(f.readline())["uid"]
             with open(base / "fw02" / "conn.json") as f:
                 uid2 = json.loads(f.readline())["uid"]
-            assert uid1 == "CMultiSensor1234"  # First sensor keeps original
-            assert uid2 != uid1  # Second sensor gets a unique UID
-            assert uid2.startswith("C")  # Same prefix
+            with open(base / "fw02" / "ssl.json") as f:
+                ssl_uid2 = json.loads(f.readline())["uid"]
+            assert uid1 == ssl_uid1
+            assert uid2 == ssl_uid2
+            assert uid1 != "CMultiSensor1234"
+            assert uid2 != "CMultiSensor1234"
+            assert uid2 != uid1
+            assert uid1.startswith("C")
+            assert uid2.startswith("C")

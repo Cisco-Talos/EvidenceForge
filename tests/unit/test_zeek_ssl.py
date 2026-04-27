@@ -30,9 +30,10 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, SslContext
+from evidenceforge.events.contexts import NetworkContext, SslContext, X509Context
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
+from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
 
 SAMPLE_DATA_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
 
@@ -80,6 +81,7 @@ class TestSslFormatAccuracy:
                     "resumed": False,
                     "established": True,
                     "ssl_history": "CsiI",
+                    "cert_chain_fuids": ["Fabcdef1234567890"],
                 }
             )
             emitter.close()
@@ -97,6 +99,7 @@ class TestSslFormatAccuracy:
             assert data["resumed"] is False
             assert data["established"] is True
             assert data["ssl_history"] == "CsiI"
+            assert data["cert_chain_fuids"] == ["Fabcdef1234567890"]
 
     def test_compact_ndjson(self):
         """Output is compact NDJSON (no whitespace after separators)."""
@@ -205,3 +208,75 @@ class TestSslUidCorrelation:
             with open(output) as f:
                 data = json.loads(f.readline())
             assert data["uid"] == "CMySpecificUID123"
+
+    def test_ssl_cert_chain_fuids_link_to_x509_id(self):
+        """ssl.cert_chain_fuids should reference the x509 certificate id."""
+        ssl_fmt = load_format("zeek_ssl")
+        x509_fmt = load_format("zeek_x509")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                ),
+                ssl=SslContext(
+                    version="TLSv12",
+                    cipher="TLS_AES_128_GCM_SHA256",
+                    cert_chain_fuids=["Fabcdef1234567890"],
+                ),
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="abc123",
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+            )
+            ssl_emitter.emit(event)
+            x509_emitter.emit(event)
+            ssl_emitter.close()
+            x509_emitter.close()
+
+            ssl_data = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])
+            x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
+
+            assert ssl_data["cert_chain_fuids"] == [x509_data["id"]]
+
+    def test_x509_renders_san_dns(self):
+        """x509.san_dns should render as Zeek's san.dns field."""
+        x509_fmt = load_format("zeek_x509")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="abc123",
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                    san_dns=["example.com", "*.example.com"],
+                ),
+            )
+            x509_emitter.emit(event)
+            x509_emitter.close()
+
+            x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
+            assert x509_data["san.dns"] == ["example.com", "*.example.com"]

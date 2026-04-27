@@ -116,11 +116,11 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, MX query types. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Generated for unencrypted HTTP connections (any port); excludes TLS/SSL traffic. |
-| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for any connection carrying TLS context, not restricted to port 443. |
+| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for any connection carrying TLS context, not restricted to port 443. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity, key info. |
+| x509.log | `x509.json` | X.509 certificates | Certificate `id`/fingerprint, subject/issuer, validity, key info. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
 | ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
@@ -237,7 +237,7 @@ HTTP access logs for web server systems.
 **File:** `<proxy-hostname.domain>/proxy_access.log`
 **Format:** W3C Extended Log Format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. HTTPS connections emit a CONNECT entry followed by the actual request. Includes cache hit/miss status and full destination URLs.
+Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline beacons from proxied hosts use the same explicit proxy path, including proxy-denied evidence for `action: deny`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
 
@@ -247,5 +247,6 @@ Forward proxy access logs for systems with the `forward_proxy` role. Outbound HT
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
+- SSL inspection / SSL bump is not yet modeled
 - Cache hit/miss status is probabilistic, not based on actual content caching logic
 - Limited to HTTP and HTTPS traffic

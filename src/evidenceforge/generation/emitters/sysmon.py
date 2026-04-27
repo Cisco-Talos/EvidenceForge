@@ -83,6 +83,31 @@ _DNS_STATUS_MAP: dict[str, str] = {
     "REFUSED": "9005",
 }
 
+_REMOTE_THREAD_STARTS: dict[str, list[tuple[str, str]]] = {
+    "msmpeng.exe": [
+        (
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpClient.dll",
+            "MpCreateRemoteThread",
+        ),
+        (r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpOav.dll", "AmsiScanBuffer"),
+        (r"C:\Windows\System32\ntdll.dll", "TppWorkerThread"),
+    ],
+    "csrss.exe": [
+        (r"C:\Windows\System32\winsrv.dll", "SrvCreateSystemThreads"),
+        (r"C:\Windows\System32\csrsrv.dll", "CsrApiRequestThread"),
+        (r"C:\Windows\System32\ntdll.dll", "RtlUserThreadStart"),
+    ],
+    "svchost.exe": [
+        (r"C:\Windows\System32\sechost.dll", "ScServiceMain"),
+        (r"C:\Windows\System32\rpcrt4.dll", "LRPC_ADDRESS::ReceiveLotsaCalls"),
+        (r"C:\Windows\System32\ntdll.dll", "TppWorkerThread"),
+    ],
+    "default": [
+        (r"C:\Windows\System32\kernel32.dll", "BaseThreadInitThunk"),
+        (r"C:\Windows\System32\ntdll.dll", "RtlUserThreadStart"),
+    ],
+}
+
 
 class SysmonEventEmitter(LogEmitter):
     """Emitter for Windows Sysmon Event Log format (XML).
@@ -807,7 +832,11 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
-        rng = random.Random()
+        rng = random.Random(
+            _stable_seed(
+                f"sysmon8_{event.src_host.hostname}_{event.process.pid}_{event.timestamp.isoformat()}"
+            )
+        )
         host = event.src_host
         proc = event.process  # Source process
         # Target info passed via network context fields or extra context
@@ -825,6 +854,7 @@ class SysmonEventEmitter(LogEmitter):
             username=target_username,
         )
         target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
+        start_module, start_function = self._pick_remote_thread_start(proc.image, target_image, rng)
 
         event_data = {
             "EventID": 8,
@@ -843,8 +873,29 @@ class SysmonEventEmitter(LogEmitter):
             "TargetImage": target_image,
             "NewThreadId": rng.randint(100, 9999),
             "StartAddress": f"0x{rng.randint(0x01000000, 0x7FFFFFFF):08X}",
+            "StartModule": start_module,
+            "StartFunction": start_function,
         }
         self.emit_event(event_data)
+
+    def _pick_remote_thread_start(
+        self,
+        source_image: str,
+        target_image: str,
+        rng: random.Random,
+    ) -> tuple[str, str]:
+        """Pick realistic Event 8 StartModule/StartFunction values."""
+        source_exe = source_image.rsplit("\\", 1)[-1].lower()
+        target_exe = target_image.rsplit("\\", 1)[-1].lower()
+        candidates = list(_REMOTE_THREAD_STARTS.get(source_exe, _REMOTE_THREAD_STARTS["default"]))
+        if target_exe == "lsass.exe":
+            candidates.extend(
+                [
+                    (r"C:\Windows\System32\sechost.dll", "LsaICLookupNamesWithCreds"),
+                    (r"C:\Windows\System32\ntdll.dll", "NtCreateThreadEx"),
+                ]
+            )
+        return rng.choice(candidates)
 
     def _render_sysmon_process_access(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 10 (ProcessAccess).
@@ -950,7 +1001,8 @@ class SysmonEventEmitter(LogEmitter):
         # Use stable seed for deterministic sampling (same connection → same decision)
         hostname = event.src_host.hostname if event.src_host else ""
         _net = event.network
-        _seed_key = f"sysmon3_{hostname}_{image}_{_net.dst_ip}_{_net.dst_port}"
+        _uid = _net.zeek_uid or _net.conn_id or event.timestamp.isoformat()
+        _seed_key = f"sysmon3_{hostname}_{image}_{_net.dst_ip}_{_net.dst_port}_{_uid}"
         _sample_float = (_stable_seed(_seed_key) & 0xFFFFFFFF) / 0xFFFFFFFF
 
         baseline_images = [img.lower() for img in cfg.get("include_baseline_images", [])]

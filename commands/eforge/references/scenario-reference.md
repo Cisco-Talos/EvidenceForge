@@ -86,6 +86,16 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `dns_server` — DNS resolution target
 - `mail_server` — mail relay/server
 
+### Proxy Deployment
+
+```yaml
+proxy:
+  mode: transparent              # Optional: transparent|explicit (default: transparent)
+  listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+```
+
+Use `transparent` when Zeek/IDS should look like clients connected directly to origins while proxy logs are present. Use `explicit` for PAC/browser-configured proxies; the generator emits client-to-proxy and proxy-to-origin network legs, and each Zeek/IDS/firewall sensor sees only the leg its placement can observe. Denied proxy requests stop at the proxy and do not emit proxy-to-origin evidence. HTTP/S storyline beacons from proxied hosts use the same explicit proxy path, including proxy-denied evidence for `action: deny`.
+
 ### Network Segment Exposure
 
 **`exposure` is required on every segment** — there is no default. Choose the right value for each segment's role:
@@ -316,9 +326,12 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `log_cleared` | 1102 | | |
 | `create_remote_thread` | Sysmon 8 | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
+| `web_scan` | web_access + Zeek HTTP + Zeek conn | `dst_ip`, `rate`, one of `duration`/`end_time`/`count` | `preset`, `paths`, `hostname`, `user_agent`, `jitter` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
+
+For `web_scan`, `rate` is average requests/second. Duration/end-time scans apply deterministic per-campaign throughput drift; explicit `count` remains exact.
 
 ### DHCP Lease Events
 
@@ -519,6 +532,8 @@ output:
 ```
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy_access`.
+
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, set `environment.proxy.mode` explicitly; omitted config defaults to `transparent` with a warning.
 
 ## Backward Compatibility
 

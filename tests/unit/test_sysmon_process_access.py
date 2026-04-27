@@ -22,12 +22,21 @@
 
 """Tests for Sysmon Event 10 (ProcessAccess) credential dumping detection."""
 
+import random
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.create_remote_thread_patterns import (
+    load_create_remote_thread_patterns,
+    pick_create_remote_thread_pattern,
+)
+from evidenceforge.generation.activity.process_access_patterns import (
+    load_process_access_patterns,
+    pick_granted_access,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -146,3 +155,72 @@ class TestSysmonProcessAccess:
         if emitter.emit.call_count > 0:
             event = emitter.emit.call_args[0][0]
             assert event.src_host.os_category == "linux"  # Emitter's can_handle would reject this
+
+
+class TestProcessAccessPatterns:
+    """Data-driven ProcessAccess baseline patterns."""
+
+    def test_process_access_patterns_provide_diverse_masks(self):
+        """Baseline ProcessAccess config should provide more than the old three masks."""
+        patterns = load_process_access_patterns()
+
+        masks = {access["mask"] for pattern in patterns for access in pattern["access_masks"]}
+
+        assert len(masks) >= 5
+        assert {"0x1000", "0x1010", "0x1400", "0x1410"}.issubset(masks)
+
+    def test_pick_granted_access_uses_weighted_alternatives(self):
+        """Weighted mask selection should vary for a pattern with multiple masks."""
+        pattern = {
+            "access_masks": [
+                {"mask": "0x1000", "weight": 1},
+                {"mask": "0x1010", "weight": 1},
+                {"mask": "0x1400", "weight": 1},
+                {"mask": "0x1410", "weight": 1},
+            ]
+        }
+        rng = random.Random(1234)
+
+        masks = {pick_granted_access(pattern, rng) for _ in range(40)}
+
+        assert masks == {"0x1000", "0x1010", "0x1400", "0x1410"}
+
+
+class TestCreateRemoteThreadPatterns:
+    """Data-driven CreateRemoteThread baseline patterns."""
+
+    def test_create_remote_thread_patterns_provide_diverse_pairs(self):
+        patterns = load_create_remote_thread_patterns()
+
+        pairs = {(pattern["source_pid_key"], pattern["target_pid_key"]) for pattern in patterns}
+
+        assert len(pairs) >= 8
+        assert ("wmiprvse", "svchost_local_system") in pairs
+        assert ("search_indexer", "search_protocol_host") in pairs
+
+    def test_pick_create_remote_thread_pattern_uses_weighted_alternatives(self):
+        patterns = [
+            {
+                "source_pid_key": "a",
+                "source_image": "a.exe",
+                "target_pid_key": "b",
+                "target_image": "b.exe",
+                "weight": 1,
+            },
+            {
+                "source_pid_key": "c",
+                "source_image": "c.exe",
+                "target_pid_key": "d",
+                "target_image": "d.exe",
+                "weight": 1,
+            },
+        ]
+        import random
+
+        rng = random.Random(42)
+
+        picked = {
+            pick_create_remote_thread_pattern(patterns, rng)["source_pid_key"] for _ in range(20)
+        }
+
+        assert picked == {"a", "c"}

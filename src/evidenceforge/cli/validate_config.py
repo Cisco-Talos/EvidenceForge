@@ -22,8 +22,8 @@
 
 """Validate EvidenceForge config files for integrity and cross-references.
 
-Runs 27 checks across all config YAML files (activity, personas, formats,
-evaluation) and reports errors, warnings, and info items.
+Runs integrity checks across all config YAML files (activity, personas,
+formats, evaluation) and reports errors, warnings, and info items.
 """
 
 from dataclasses import dataclass, field
@@ -142,6 +142,12 @@ def validate_config() -> ValidationResult:
         },
         "activity/process_network_map.yaml": {
             "list_fields": {"mappings": None},
+        },
+        "activity/process_access_patterns.yaml": {
+            "list_fields": {"baseline_pairs": None},
+        },
+        "activity/create_remote_thread_patterns.yaml": {
+            "list_fields": {"baseline_pairs": None},
         },
         "activity/system_processes.yaml": {
             "dict_fields": {
@@ -390,7 +396,13 @@ def validate_config() -> ValidationResult:
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
     from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.generation.activity.create_remote_thread_patterns import (
+        load_create_remote_thread_patterns,
+    )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.process_access_patterns import (
+        load_process_access_patterns,
+    )
     from evidenceforge.generation.activity.process_network import load_process_network_map
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.site_maps import load_site_maps
@@ -403,6 +415,8 @@ def validate_config() -> ValidationResult:
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
+    process_access_data = load_process_access_patterns()
+    create_remote_thread_data = load_create_remote_thread_patterns()
     proxy_data = load_proxy_uri_templates()
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
@@ -539,6 +553,16 @@ def validate_config() -> ValidationResult:
                     Issue(
                         "WARNING",
                         "traffic_profiles.yaml",
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+    for entry in process_net_data:
+        for tag in entry.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "process_network_map.yaml",
                         f'dns_tag "{tag}" not used by any domain in dns_registry',
                     )
                 )
@@ -768,12 +792,16 @@ def validate_config() -> ValidationResult:
 
     # --- Checks 28-30: Defined But Unreachable ---
 
-    # Collect all dns_tags referenced by traffic profiles
+    # Collect all dns_tags referenced by generation config. Traffic profiles
+    # drive role/persona baseline traffic; process_network_map drives
+    # process-correlated external app traffic (for example Teams→M365).
     all_traffic_dns_tags: set[str] = set()
     for entry in all_traffic_entries:
         all_traffic_dns_tags.update(entry.get("dns_tags", []))
+    for entry in process_net_data:
+        all_traffic_dns_tags.update(entry.get("dns_tags", []))
 
-    # Check 28: DNS tags on domains that no traffic profile references
+    # Check 28: DNS tags on domains that no generation config references
     # Tags that reach domains through other mechanisms (not dns_tags):
     #   cdn — loaded as subresources via site_maps
     #   internal — reached via role-based connections (database, file_server, etc.)
@@ -788,7 +816,7 @@ def validate_config() -> ValidationResult:
                     Issue(
                         "INFO",
                         "dns_registry.yaml",
-                        f'Tag "{tag}" used by {count} domain(s) (e.g., "{example}") but no traffic profile references it via dns_tags — these domains will never receive traffic',
+                        f'Tag "{tag}" used by {count} domain(s) (e.g., "{example}") but no generation config references it via dns_tags — these domains will never receive traffic',
                     )
                 )
 
@@ -900,9 +928,11 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         ConnectionEntry,
+        CreateRemoteThreadPatternEntry,
         DnsEntry,
         OuiEntry,
         PersonaEntry,
+        ProcessAccessPatternEntry,
         ProcessNetworkEntry,
         ScheduledTaskEntry,
         SpawnRuleEntry,
@@ -951,6 +981,20 @@ def validate_config() -> ValidationResult:
     # process_network_map.yaml
     if isinstance(process_net_data, list):
         _SCHEMA_CHECKS.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
+
+    # process_access_patterns.yaml
+    if isinstance(process_access_data, list):
+        _SCHEMA_CHECKS.append(
+            (process_access_data, ProcessAccessPatternEntry, "process_access_patterns.yaml")
+        )
+    if isinstance(create_remote_thread_data, list):
+        _SCHEMA_CHECKS.append(
+            (
+                create_remote_thread_data,
+                CreateRemoteThreadPatternEntry,
+                "create_remote_thread_patterns.yaml",
+            )
+        )
 
     # traffic_profiles.yaml: connection entries
     all_traffic_connection_entries = []

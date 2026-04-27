@@ -62,6 +62,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "resumed": ssl.resumed,
             "established": ssl.established,
             "ssl_history": ssl.ssl_history or None,
+            "cert_chain_fuids": ssl.cert_chain_fuids or None,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:
@@ -76,6 +77,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "resumed",
             "established",
             "ssl_history",
+            "cert_chain_fuids",
         ]
         for f in optional_fields:
             if f not in event_data:

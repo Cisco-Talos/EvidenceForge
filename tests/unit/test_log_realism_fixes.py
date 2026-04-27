@@ -19,6 +19,7 @@ from evidenceforge.events.contexts import (
     NetworkContext,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.generator import _TLS_VERSION_VALUES, _TLS_VERSION_WEIGHTS
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.utils.rng import _stable_seed
 
@@ -192,12 +193,17 @@ class TestIdsSignaturesRevField:
 class TestTlsCipherStability:
     def test_same_endpoint_pair_produces_same_cipher(self):
         _tls_rng_1 = random.Random(_stable_seed("tls:10.10.1.10:45.33.32.30:443"))
-        version_1 = _tls_rng_1.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
+        version_1 = _tls_rng_1.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[0]
 
         _tls_rng_2 = random.Random(_stable_seed("tls:10.10.1.10:45.33.32.30:443"))
-        version_2 = _tls_rng_2.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
+        version_2 = _tls_rng_2.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[0]
 
         assert version_1 == version_2
+
+    def test_tls13_is_modern_default_majority(self):
+        total = sum(_TLS_VERSION_WEIGHTS)
+        tls13_ratio = _TLS_VERSION_WEIGHTS[_TLS_VERSION_VALUES.index("TLSv13")] / total
+        assert tls13_ratio > 0.5
 
     def test_different_endpoints_produce_different_seeds(self):
         seed_a = _stable_seed("tls:10.10.1.10:45.33.32.30:443")

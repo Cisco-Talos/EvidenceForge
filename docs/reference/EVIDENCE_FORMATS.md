@@ -97,14 +97,14 @@ output/
 |----------|------|----------|-------|
 | 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. ParentCommandLine is populated from the parent process's actual command line in StateManager (e.g., `powershell.exe`, `cmd.exe /k`, `Code.exe --folder-uri ...`). ParentImage reflects realistic parent-child relationships driven by `spawn_rules.yaml` — CLI tools parent from shells, GUI apps from explorer.exe, system services from services.exe/svchost.exe. |
 | 5 | ProcessTerminate | Execution | Version 3. Emitted alongside Security 4689 and eCAR PROCESS/TERMINATE for the same process exit. Storyline processes terminate with realistic delays based on command type (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination). Fields: ProcessGuid, ProcessId, Image, User. |
-| 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. Baseline generates benign noise (1-3/hr) from Defender, CSRSS, svchost. Correlated with eCAR THREAD/REMOTE_CREATE. |
+| 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address, StartModule, and StartFunction. Baseline generates benign noise (1-3/hr) from Defender, CSRSS, svchost. Correlated with eCAR THREAD/REMOTE_CREATE. |
 | 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz accessing lsass.exe). Includes GrantedAccess mask, CallTrace. Baseline generates benign noise (3-8/hr) from Defender, CSRSS, Services.exe. Correlated with eCAR PROCESS/OPEN. |
 
 **Known Limitations:**
 - ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
-- Only events 1, 5, 8, and 10 are implemented; real Sysmon has 29 event types (network connections, registry, file create, etc.)
+- Implemented events focus on the project evidence model: 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22.
 
 ---
 
@@ -120,11 +120,11 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, MX query types. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
-| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for port 443 connections. |
+| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for port 443 connections. |
 | files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Sensor-routed via NetworkContext. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info. Whole-second timestamps. |
+| x509.log | `x509.json` | X.509 certificates | Certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info. Whole-second timestamps. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
 | ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
@@ -251,9 +251,9 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 
 **Example records:**
 ```
-<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to outside:203.0.113.50/443 (203.0.113.50/443)
-<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection 100042 for inside:10.0.10.50/54321 to outside:203.0.113.50/443 duration 0:01:23 bytes 5120 TCP FINs
-<164>Jun 15 14:23:10 fw01 %ASA-4-106023: Deny tcp src outside:198.51.100.1/44231 dst inside:10.0.10.50/445 by access-group "outside_access_in" [0x0, 0x0]
+<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 100042 for inside:10.0.10.50/54321 (10.0.10.50/54321) to outside:45.83.221.50/443 (45.83.221.50/443)
+<166>Jun 15 14:24:28 fw01 %ASA-6-302014: Teardown TCP connection 100042 for inside:10.0.10.50/54321 to outside:45.83.221.50/443 duration 0:01:23 bytes 5120 TCP FINs
+<164>Jun 15 14:23:10 fw01 %ASA-4-106023: Deny tcp src outside:104.248.71.33/44231 dst inside:10.0.10.50/445 by access-group "outside_access_in" [0x0, 0x0]
 <164>Jun 15 14:23:15 fw01 %ASA-4-733100: [Scanning] drop rate-1 exceeded. Current burst rate is 87 per second, max configured rate is 10; Current average rate is 45 per second, max configured rate is 5; Cumulative total count is 2340
 ```
 
@@ -291,7 +291,7 @@ HTTP access logs for web server systems.
 **File:** `<proxy-hostname.domain>/proxy_access.log`
 **Format:** W3C Extended Log Format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. HTTPS connections emit a CONNECT entry followed by the actual request. Includes cache hit/miss status and full destination URLs.
+Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
 
@@ -301,5 +301,6 @@ Forward proxy access logs for systems with the `forward_proxy` role. Outbound HT
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
+- SSL inspection / SSL bump is not yet modeled
 - Cache hit/miss status is probabilistic, not based on actual content caching logic
 - Limited to HTTP and HTTPS traffic

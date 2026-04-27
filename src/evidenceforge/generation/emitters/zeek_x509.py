@@ -39,22 +39,22 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_x509.json"
     _supported_types: set[str] = {"connection"}
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._seen_fingerprints: set[str] = set()
-
     def can_handle(self, event: SecurityEvent) -> bool:
         return event.event_type in self._supported_types and event.x509 is not None
 
     def emit(self, event: SecurityEvent) -> None:
         x509 = event.x509
-        # Deduplicate: real Zeek logs each unique cert once
-        if x509.fingerprint in self._seen_fingerprints:
-            return
-        self._seen_fingerprints.add(x509.fingerprint)
+        x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
+            self.format_def.name if self.format_def else "zeek_x509", []
+        )
+        ssl_sensor_hostnames = event._sensor_hostnames_by_format.get("zeek_ssl", [])
+        sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
+        targets = sensor_hostnames or self._sensor_hostnames
+        new_targets = targets
 
         event_data: dict[str, Any] = {
             "ts": event.timestamp,
+            "id": x509.fuid,
             "fingerprint": x509.fingerprint,
             "certificate.version": x509.certificate_version,
             "certificate.serial": x509.certificate_serial,
@@ -67,13 +67,11 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
             "certificate.key_type": x509.certificate_key_type,
             "certificate.key_length": x509.certificate_key_length,
             "certificate.exponent": x509.certificate_exponent,
-            "san.dns": x509.san_dns,
-            "basic_constraints.ca": x509.basic_constraints_ca,
+            "san_dns": x509.san_dns,
+            "basic_constraints_ca": x509.basic_constraints_ca,
             "host_cert": x509.host_cert,
             "client_cert": x509.client_cert,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(
-                self.format_def.name if self.format_def else "zeek_x509", []
-            ),
+            "_sensor_hostnames": new_targets,
         }
         if event._nat_swaps_by_sensor:
             event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor

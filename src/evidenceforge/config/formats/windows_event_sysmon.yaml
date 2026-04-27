@@ -169,6 +169,12 @@ variants:
       - name: StartAddress
         type: string
         required: true
+      - name: StartModule
+        type: string
+        required: false
+      - name: StartFunction
+        type: string
+        required: false
 
   # Sysmon EventID 10: ProcessAccess
   - name: sysmon_process_access

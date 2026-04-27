@@ -59,6 +59,7 @@ def _build_canonical_exe_index() -> dict[str, dict[str, Any]]:
             "dst_port": entry.get("port", 0),
             "service": entry.get("service", ""),
             "external": entry.get("external", True),
+            "dns_tags": entry.get("dns_tags", []),
         }
         for exe in entry.get("exe", []):
             result[exe] = info  # last wins

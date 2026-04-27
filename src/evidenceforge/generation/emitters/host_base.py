@@ -31,6 +31,7 @@ host's FQDN. Each host gets its own subdirectory:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -50,7 +51,14 @@ sanitize_host_routing_key = sanitize_path_component
 class _SingleHostWriter:
     """Writes log output for one host. Thread-safe via lock."""
 
-    def __init__(self, output_path: Path, buffer_size: int = 10000, sort_on_flush: bool = False):
+    def __init__(
+        self,
+        output_path: Path,
+        buffer_size: int = 10000,
+        sort_on_flush: bool = False,
+        sort_key: Callable[[str], Any] | None = None,
+        defer_sorted_flush_until_close: bool = False,
+    ):
         self.output_path = output_path
         self.buffer: list[str] = []
         self.buffer_size = buffer_size
@@ -58,12 +66,14 @@ class _SingleHostWriter:
         self._lock = Lock()
         self._header_written = False
         self._sort_on_flush = sort_on_flush
+        self._sort_key = sort_key or (lambda line: line[:15])
+        self._defer_sorted_flush_until_close = defer_sorted_flush_until_close
 
     def write(self, rendered: str) -> None:
         with self._lock:
             self.buffer.append(rendered)
             self.event_count += 1
-            if len(self.buffer) >= self.buffer_size:
+            if not self._sort_on_flush and len(self.buffer) >= self.buffer_size:
                 self._flush_unlocked()
 
     def write_header(self, header: str) -> None:
@@ -77,15 +87,17 @@ class _SingleHostWriter:
                         f.write("\n")
                 self._header_written = True
 
-    def flush(self) -> None:
+    def flush(self, force: bool = False) -> None:
         with self._lock:
+            if self._sort_on_flush and self._defer_sorted_flush_until_close and not force:
+                return
             self._flush_unlocked()
 
     def _flush_unlocked(self) -> None:
         if not self.buffer:
             return
         if self._sort_on_flush:
-            self.buffer.sort(key=lambda line: line[:15])
+            self.buffer.sort(key=self._sort_key)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for entry in self.buffer:
@@ -96,7 +108,7 @@ class _SingleHostWriter:
 
     def write_footer(self, footer: str) -> None:
         """Write a footer (e.g., XML root closing tag) after all events."""
-        self.flush()
+        self.flush(force=True)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             f.write(footer)
@@ -117,6 +129,8 @@ class HostMultiplexEmitter(LogEmitter):
     _flat_filename: str = ""
     _supported_types: set[str] = set()
     _sort_flat_file: bool = False
+    _sort_key: Callable[[str], Any] | None = None
+    _defer_sorted_flush_until_close: bool = False
 
     def __init__(
         self,
@@ -151,7 +165,13 @@ class HostMultiplexEmitter(LogEmitter):
                 flat_name = self._flat_filename or self._log_filename
                 path = self._base_dir / flat_name
             sort = self._sort_flat_file
-            writer = _SingleHostWriter(path, self._buffer_size, sort_on_flush=sort)
+            writer = _SingleHostWriter(
+                path,
+                self._buffer_size,
+                sort_on_flush=sort,
+                sort_key=self._sort_key,
+                defer_sorted_flush_until_close=self._defer_sorted_flush_until_close,
+            )
             self._writers[safe_host_fqdn] = writer
             logger.debug(f"Created host writer: {path}")
             return writer
@@ -189,10 +209,10 @@ class HostMultiplexEmitter(LogEmitter):
         """Override base class to route through default writer."""
         self._get_writer("").write(rendered)
 
-    def flush(self) -> None:
+    def flush(self, force: bool = False) -> None:
         with self._writers_lock:
             for writer in self._writers.values():
-                writer.flush()
+                writer.flush(force=force)
 
     def _flush_unlocked(self) -> None:
         pass
@@ -200,7 +220,7 @@ class HostMultiplexEmitter(LogEmitter):
     def close(self) -> None:
         if self.threaded:
             self.stop_thread()
-        self.flush()
+        self.flush(force=True)
 
     @property
     def event_count(self) -> int:

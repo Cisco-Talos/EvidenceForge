@@ -69,6 +69,7 @@ def _make_connection_event(
     duration=83.5,
     orig_bytes=1024,
     resp_bytes=4096,
+    conn_state="SF",
     firewall=None,
     nat=None,
     timestamp=None,
@@ -86,6 +87,7 @@ def _make_connection_event(
             duration=duration,
             orig_bytes=orig_bytes,
             resp_bytes=resp_bytes,
+            conn_state=conn_state,
         ),
         firewall=firewall,
         nat=nat,
@@ -144,6 +146,13 @@ class TestConnectionIdCounter:
         # Different sensors get different sequence bits
         assert id_fw01 != id_fw02
 
+    def test_no_duplicates_for_same_timestamp_burst(self, asa_emitter):
+        from datetime import datetime
+
+        ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ids = [asa_emitter._next_conn_id("fw01", ts) for _ in range(5000)]
+        assert len(ids) == len(set(ids))
+
 
 class TestPermitRecords:
     def test_tcp_produces_built_and_teardown(self, asa_emitter, tmp_path):
@@ -167,6 +176,24 @@ class TestPermitRecords:
         assert "Teardown TCP connection" in lines[1]
         assert "duration 0:01:23" in lines[1]
         assert "bytes 5120" in lines[1]
+        assert "SYN Timeout" not in lines[1]
+
+    def test_syn_timeout_requires_handshake_only_connection(self, asa_emitter, tmp_path):
+        """SYN Timeout should not be used for connections with payload bytes."""
+        event = _make_connection_event(
+            protocol="tcp",
+            duration=0.1,
+            orig_bytes=0,
+            resp_bytes=0,
+        )
+        event.network.conn_state = "S0"
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        teardown = [line for line in output.splitlines() if "%ASA-6-302014:" in line][0]
+        assert "SYN Timeout" in teardown
+        assert "bytes 0" in teardown
 
     def test_udp_produces_built_and_teardown(self, asa_emitter, tmp_path):
         """A permitted UDP connection should use 302015/302016."""
@@ -654,8 +681,8 @@ class TestNatRecords:
         nat_built = [line for line in lines if "305011" in line]
         assert len(nat_built) >= 1
         # Should show the destination translation: VIP -> real server
-        assert "172.16.0.5" in nat_built[0]
-        assert "203.0.113.5" in nat_built[0]
+        assert "outside:203.0.113.5/443 to dmz:172.16.0.5/443" in nat_built[0]
+        assert "outside:172.16.0.5/443 to dmz:203.0.113.5/443" not in nat_built[0]
         # Should NOT show the untranslated source as the translation target
         assert "203.0.113.99/54321 to" not in nat_built[0]
 
@@ -688,5 +715,29 @@ class TestNatRecords:
         lines = self._get_output_lines(tmp_path)
         nat_teardown = [line for line in lines if "305012" in line]
         assert len(nat_teardown) >= 1
-        assert "172.16.0.5" in nat_teardown[0]
+        assert "outside:203.0.113.5/443 to dmz:172.16.0.5/443" in nat_teardown[0]
+        assert "outside:172.16.0.5/443 to dmz:203.0.113.5/443" not in nat_teardown[0]
         assert "Teardown static" in nat_teardown[0]
+
+    def test_syn_timeout_teardown_duration_is_realistic(self, asa_emitter, tmp_path):
+        """SYN Timeout teardown rows should not all render as zero-second waits."""
+        event = _make_connection_event(
+            conn_state="S0",
+            duration=0.0,
+            orig_bytes=0,
+            resp_bytes=0,
+            firewall=FirewallContext(
+                action="permit",
+                msg_id=302013,
+                connection_id=100,
+                src_interface="outside",
+                dst_interface="inside",
+            ),
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        lines = self._get_output_lines(tmp_path)
+        teardown = next(line for line in lines if "302014" in line)
+        assert "SYN Timeout" in teardown
+        assert "duration 0:00:00" not in teardown

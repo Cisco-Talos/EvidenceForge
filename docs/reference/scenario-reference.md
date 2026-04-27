@@ -96,6 +96,21 @@ systems:
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
 
+### Proxy Deployment
+
+```yaml
+proxy:
+  mode: transparent              # Optional: transparent|explicit (default: transparent)
+  listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+```
+
+`environment.proxy` controls how systems with `roles: [forward_proxy]` appear in network evidence:
+
+- `transparent` preserves direct-looking client-to-origin Zeek/IDS traffic while still generating proxy access logs.
+- `explicit` models PAC/browser-configured proxy behavior by replacing the logical client-to-origin connection with two concrete legs: client-to-proxy on `listener_port`, then proxy-to-origin on the destination port. Sensor placement determines which leg each Zeek/IDS/firewall source sees. Denied proxy requests stop at the proxy and do not emit a proxy-to-origin leg.
+
+If `proxy_access` is requested and `environment.proxy` is omitted, validation warns and defaults to `transparent`. If `mode: explicit` is set without `listener_port`, validation warns and defaults to `8080`.
+
 ### System Roles
 
 The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
@@ -167,10 +182,10 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
       nat_rules:
         - type: dynamic_pat
           src: [workstations, servers]
-          mapped_ip: 198.51.100.1
+          mapped_ip: 45.83.220.1
         - type: static
           real_ip: 172.16.0.5
-          mapped_ip: 203.0.113.5
+          mapped_ip: 45.83.220.5
       policy:                   # Ordered rules — first match wins
         - {src: external, dst: dmz, ports: [80, 443]}
         - {src: workstations, dst: any}
@@ -189,12 +204,12 @@ The `public_cidrs` field on `NetworkConfig` declares the org's public IP address
 
 ```yaml
 network:
-  public_cidrs: ["203.0.113.0/28"]  # Optional — auto-derived from VIPs if omitted
+  public_cidrs: ["45.83.220.0/28"]  # Optional — auto-derived from VIPs if omitted
   segments: [...]
   sensors: [...]
 ```
 
-**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `203.0.113.10` and `203.0.113.14` produce `["203.0.113.0/24"]`.
+**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `45.83.220.10` and `45.83.220.14` produce `["45.83.220.0/24"]`.
 
 **Inbound traffic flow:** External clients connect to VIPs (public IPs). The NAT engine translates to real (internal) IPs per sensor — outside Zeek sees VIPs, inside Zeek sees real IPs, ASA shows both in Built/Teardown records.
 - Rules are evaluated in order; first match wins (like real ACLs)
@@ -357,6 +372,11 @@ internal state (DNS cache, process trees, active sessions, Kerberos tickets, Haw
 Events generated during warm-up update state but are **not** written to output files. This makes
 the first minutes of output look like a running system rather than a cold start. Minimum 1 hour;
 default 8 hours covers a full day/night transition for maximum realism.
+
+All `storyline` and `red_herrings` times should fall inside the configured `time_window`. For
+example, if the final storyline step is scheduled at `+36h`, set `duration` longer than 36 hours
+so baseline logs, proxy/firewall evidence, and attack traces cover the same collection horizon.
+`eforge validate` warns when a storyline step falls outside the window.
 
 ## Baseline Activity
 
@@ -564,7 +584,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
   activity: "C2 beacon to attacker infrastructure"
   events:
     - type: beacon
-      dst_ip: "198.51.100.30"
+      dst_ip: "45.83.221.30"
       dst_port: 443
       hostname: "cdn-analytics.example.com"
       interval: "5m"
@@ -580,7 +600,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
   activity: "Blocked C2 beaconing — firewall denies outbound from DC"
   events:
     - type: beacon
-      dst_ip: "198.51.100.30"
+      dst_ip: "45.83.221.30"
       dst_port: 443
       interval: "30m"
       duration: "12h"
@@ -589,7 +609,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download).
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### DNS Query Events
 
@@ -631,7 +651,7 @@ Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, S
       dst_ip: "10.10.20.10"
       dst_port: 80
       hostname: "portal.example.com"
-      source_ip: "203.0.113.45"
+      source_ip: "104.248.71.33"
       preset: nikto
       rate: 10                        # 10 requests/second
       duration: "15m"
@@ -647,7 +667,7 @@ Fields:
 - `paths` (optional): Custom URI path list — `[{uri: "/admin", method: "GET", status: 403}]`
 - `user_agent` (optional): Override the preset's default user agent
 - `status_codes` (optional): Override status code distribution (e.g., `{"404": 0.7, "200": 0.2, "403": 0.1}`)
-- `rate` (required): Requests per second
+- `rate` (required): Average requests per second. With `duration`/`end_time`, the engine applies deterministic per-campaign throughput drift so repeated scans with the same nominal rate do not produce identical request totals. With explicit `count`, the count remains exact.
 - `duration` / `count` / `end_time`: Termination condition (exactly one required)
 - `jitter` (default: **0.4**): Timing variation — wide variance reflects real-world latency jitter from target server response times
 
@@ -706,7 +726,7 @@ Use `dga_queries` for domain generation algorithm (DGA) traffic — algorithmica
       rcode_distribution:
         NXDOMAIN: 0.95
         NOERROR: 0.05
-      answer_ip: "198.51.100.99"
+      answer_ip: "45.83.221.99"
       technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
 ```
 
@@ -770,7 +790,7 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       dst_ip: "10.10.20.10"
       dst_port: 80
       service: http
-      source_ip: "203.0.113.45"
+      source_ip: "104.248.71.33"
       method: "GET"
       uri: "/ehr/login.php?id=1%27%20OR%201=1--"
       status_code: 200
@@ -915,7 +935,9 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear.
 
 #### Format Filtering
 

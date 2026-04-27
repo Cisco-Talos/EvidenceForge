@@ -52,14 +52,24 @@ class WebAccessParser(LogParser):
         return path.name == "web_access.log"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        hostname = self._source_host_from_path(path)
         with path.open(encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                yield self._parse_line(line, line_num)
+                yield self._parse_line(line, line_num, hostname=hostname)
 
-    def _parse_line(self, raw: str, line_num: int) -> ParsedRecord:
+    @staticmethod
+    def _source_host_from_path(path: Path) -> str | None:
+        parent = path.parent
+        if (parent / "GROUND_TRUTH.md").exists():
+            return None
+        if parent.name in {"data", "logs", "output"}:
+            return None
+        return parent.name
+
+    def _parse_line(self, raw: str, line_num: int, hostname: str | None = None) -> ParsedRecord:
         fields: dict = {}
         errors: list[str] = []
         timestamp = None
@@ -125,4 +135,5 @@ class WebAccessParser(LogParser):
             timestamp=timestamp,
             parse_errors=errors,
             line_number=line_num,
+            source_host=hostname,
         )

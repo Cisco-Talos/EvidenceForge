@@ -467,8 +467,8 @@ Format:
 YYYY-MM-DDTHH:MM:SS.ssssssZ [RecordID: 12345] - Description with IOCs
 
 Example:
-2024-01-15T10:23:45.123456Z [EventRecordID: 12345] - Initial access: Threat actor logged in to WIN-TEST-01 as CORP\jdoe from source IP 203.0.113.50
-2024-01-15T10:24:12.789012Z - C2 communication: Outbound connection from 192.168.1.100 to C2 server 198.51.100.45:443
+2024-01-15T10:23:45.123456Z [EventRecordID: 12345] - Initial access: Threat actor logged in to WIN-TEST-01 as CORP\jdoe from source IP 104.248.71.33
+2024-01-15T10:24:12.789012Z - C2 communication: Outbound connection from 192.168.1.100 to C2 server 45.83.221.45:443
 2024-01-15T10:25:03.456789Z [EventRecordID: 12389] - Credential dumping: Process mimikatz.exe (PID 4532) executed by CORP\jdoe
 
 ## Indicators of Compromise (IOCs)
@@ -477,9 +477,9 @@ Atomic indicators that can be searched for in the logs to identify malicious act
 Grouped by type for easy reference.
 
 ### Network Indicators
-- Attacker IP addresses: 203.0.113.50, 198.51.100.45
+- Attacker IP addresses: 104.248.71.33, 45.83.221.45
 - C2 domains: evil-c2.example.com, malware-download.net
-- C2 IP:Port combinations: 198.51.100.45:443, 198.51.100.45:8080
+- C2 IP:Port combinations: 45.83.221.45:443, 45.83.221.45:8080
 
 ### User Accounts
 - Compromised accounts: CORP\jdoe, CORP\admin-backup

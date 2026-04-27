@@ -35,6 +35,7 @@ from evidenceforge.models import (
     NetworkSensor,
     OutputSpec,
     Persona,
+    ProxyConfig,
     RedHerringEvent,
     Scenario,
     StaleAccount,
@@ -110,6 +111,56 @@ class TestScenarioValidator:
         assert "nonexistent_persona" in issues[0].message
         assert "developer" in issues[0].suggestion
         assert validator.has_errors()
+
+    def test_storyline_event_outside_time_window_warns(self):
+        """Storyline events outside the generation window should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test scenario",
+            environment=Environment(
+                description="Test env",
+                users=[
+                    User(
+                        username="testuser",
+                        full_name="Test User",
+                        email="test@example.com",
+                        primary_system="TEST-01",
+                    )
+                ],
+                systems=[
+                    System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-001",
+                    time="+2h",
+                    actor="testuser",
+                    system="TEST-01",
+                    activity="malicious activity",
+                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                )
+            ],
+            output=OutputSpec(
+                logs=[{"format": "windows_event_security"}],
+                destination="./output",
+                compression=False,
+            ),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "warning"
+            and issue.field_path == "storyline.0.time"
+            and "outside the configured time_window" in issue.message
+            for issue in issues
+        )
 
     def test_invalid_system_assigned_user(self):
         """System assigned_user referencing non-existent user should error."""
@@ -1254,6 +1305,157 @@ class TestFormatOsCompatibility:
             if "output.logs" == i.field_path and ("requires" in i.message or "no" in i.message)
         ]
         assert len(os_issues) == 0
+
+
+class TestProxyOutputTopology:
+    """Tests for _validate_proxy_output_topology."""
+
+    def test_proxy_access_without_forward_proxy_warns(self):
+        """proxy_access output with no forward_proxy system should warn."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="LNX-01",
+                        ip="10.0.0.1",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["web_server"],
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning"
+            and i.field_path == "output.logs"
+            and "forward_proxy" in i.message
+        ]
+        assert len(warnings) == 1
+        assert "roles: [forward_proxy]" in (warnings[0].suggestion or "")
+
+    def test_proxy_access_with_forward_proxy_no_topology_warning(self):
+        """proxy_access output with a forward_proxy system should not warn on missing role."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                        services=["squid"],
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i for i in issues if i.field_path == "output.logs" and "forward_proxy" in i.message
+        ]
+        assert len(warnings) == 0
+
+    def test_proxy_access_without_proxy_config_warns_transparent_default(self):
+        """proxy_access with no environment.proxy warns that transparent is the default."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                    ),
+                ],
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning"
+            and i.field_path == "environment.proxy"
+            and "transparent" in i.message
+        ]
+        assert len(warnings) == 1
+
+    def test_explicit_proxy_without_listener_port_warns_8080_default(self):
+        """explicit proxy mode warns when listener_port is omitted."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="u1", full_name="U", email="u@test.com")],
+                systems=[
+                    System(
+                        hostname="PROXY-01",
+                        ip="10.0.0.10",
+                        os="Linux Ubuntu 22.04",
+                        type="server",
+                        roles=["forward_proxy"],
+                    ),
+                ],
+                proxy=ProxyConfig(mode="explicit"),
+            ),
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "proxy_access"}], destination="./output"),
+        )
+        validator = ScenarioValidator(scenario)
+        issues = validator.validate()
+
+        warnings = [
+            i
+            for i in issues
+            if i.severity == "warning"
+            and i.field_path == "environment.proxy.listener_port"
+            and "8080" in i.message
+        ]
+        assert len(warnings) == 1
 
 
 class TestSegmentSensorCoverage:

@@ -60,13 +60,14 @@ class TestPerSensorDirectoryRouting:
             assert (base / "fw01" / "conn.json").exists()
             assert (base / "fw02" / "conn.json").exists()
 
-            # First sensor gets original UID, second gets a unique per-sensor UID
+            # Each independent sensor gets its own deterministic UID space.
             with open(base / "fw01" / "conn.json") as f:
                 line1 = json.loads(f.readline())
             with open(base / "fw02" / "conn.json") as f:
                 line2 = json.loads(f.readline())
-            assert line1["uid"] == "CTest123456789ab"
+            assert line1["uid"] != "CTest123456789ab"
             assert line2["uid"] != line1["uid"]  # Independent sensors have unique UIDs
+            assert line1["uid"].startswith("C")
             assert line2["uid"].startswith("C")
 
     def test_single_sensor_single_subdir(self):
@@ -194,6 +195,62 @@ class TestWriterBuffering:
             with open(output_file) as f:
                 lines = [line for line in f if line.strip()]
             assert len(lines) == 10
+
+    def test_close_sorts_by_zeek_timestamp_across_flushes(self):
+        """Out-of-order Zeek events should be written chronologically on close."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "test.json"
+            emitter = ZeekEmitter(fmt, output_file, buffer_size=1)
+            for second in (30, 10, 20):
+                emitter.emit_event(
+                    {
+                        "ts": datetime(2024, 1, 15, 10, 0, second, tzinfo=UTC),
+                        "uid": f"CTest{second:013d}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 50000 + second,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "conn_state": "SF",
+                    }
+                )
+
+            emitter.close()
+
+            records = [json.loads(line) for line in output_file.read_text().splitlines()]
+            assert [record["id.orig_p"] for record in records] == [50010, 50020, 50030]
+
+    def test_close_sorts_each_sensor_by_zeek_timestamp(self):
+        """Per-sensor Zeek outputs sort independently by rendered ts."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, buffer_size=1, sensor_hostnames=["s1", "s2"])
+            for second in (30, 10, 20):
+                emitter.emit_event(
+                    {
+                        "ts": datetime(2024, 1, 15, 10, 0, second, tzinfo=UTC),
+                        "uid": f"CTest{second:013d}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 50000 + second,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "conn_state": "SF",
+                        "_sensor_hostnames": ["s1", "s2"],
+                    }
+                )
+
+            emitter.close()
+
+            for sensor in ("s1", "s2"):
+                records = [
+                    json.loads(line)
+                    for line in (base / sensor / "conn.json").read_text().splitlines()
+                ]
+                timestamps = [record["ts"] for record in records]
+                assert timestamps == sorted(timestamps)
 
     def test_flush_empty_no_file(self):
         """Flushing with empty buffer doesn't create file."""

@@ -62,6 +62,8 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify Sysmon event filtering | `sysmon_filters.yaml` | (standalone — affects which Events 3/7/11/12/13/22 are emitted) |
 | Modify EDR diversity pools | `edr_pools.yaml` | (standalone — file paths, registry keys, DLL pool for background events) |
 | Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
+| Modify ProcessAccess masks | `process_access_patterns.yaml` | (standalone — Event 10 baseline source/target pairs and GrantedAccess masks) |
+| Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
 
@@ -79,7 +81,7 @@ Also read the relevant reference doc for field schemas and conventions:
 |-------|---------------|
 | DNS, traffic, proxy, site maps, network | `references/config-dns-network.md` |
 | Applications, spawn rules, processes | `references/config-apps-processes.md` |
-| Sysmon filters, EDR pools, CallTrace | `references/config-apps-processes.md` (Sysmon Filtering section) |
+| Sysmon filters, EDR pools, CallTrace, ProcessAccess masks, CreateRemoteThread pairs | `references/config-apps-processes.md` (Sysmon sections) |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog) | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |

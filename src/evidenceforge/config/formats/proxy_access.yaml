@@ -39,8 +39,8 @@ fields:
 
   - name: protocol
     type: string
-    required: true
-    description: "HTTP protocol version"
+    required: false
+    description: "HTTP protocol version when present in the source proxy format"
 
   - name: status_code
     type: integer

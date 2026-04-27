@@ -234,9 +234,8 @@ def _generate_random_hostname(rng, ip: str) -> str:
     elif provider == "microsoft":
         return f"{'-'.join(octets)}.microsoft.com"
     else:
-        # Generate plausible domain names for unknown IPs (including RFC 5737
-        # documentation ranges used for attacker C2/exfiltration in storylines).
-        # Realistic mix of SaaS, CDN, analytics, and cloud storage domains.
+        # Generate plausible domain names for unknown IPs instead of revealing
+        # synthetic host-x-x-x-x patterns.
         _PLAUSIBLE_DOMAINS = [
             "api.segment-analytics.io",
             "cdn.jsdelivr.net",

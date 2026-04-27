@@ -22,6 +22,13 @@ fields:
     required: true
     description: "Certificate SHA256 fingerprint"
 
+  - name: id
+    type: string
+    required: true
+    description: "Zeek file UID for this certificate"
+    constraints:
+      pattern: "^F[A-Za-z0-9]{16,18}$"
+
   - name: certificate.version
     type: integer
     required: true
@@ -77,6 +84,16 @@ fields:
     required: false
     description: "RSA exponent"
 
+  - name: san.dns
+    type: list
+    required: false
+    description: "DNS subject alternative names"
+
+  - name: basic_constraints.ca
+    type: boolean
+    required: false
+    description: "Whether the certificate is a CA certificate"
+
   - name: host_cert
     type: boolean
     required: true
@@ -94,6 +111,7 @@ output:
   template: |
     {
       "ts": {{ ts | tojson }},
+      "id": {{ id | tojson }},
       "fingerprint": {{ fingerprint | tojson }},
       "certificate.version": {{ data['certificate.version'] | tojson }},
       "certificate.serial": {{ data['certificate.serial'] | tojson }},

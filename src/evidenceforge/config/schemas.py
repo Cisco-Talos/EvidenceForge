@@ -172,6 +172,71 @@ class ProcessNetworkEntry(BaseModel, extra="forbid"):
     service: str
     port: int
     external: bool
+    dns_tags: list[str] | None = None
+
+
+# --- ProcessAccess Patterns ---
+
+
+class ProcessAccessMaskEntry(BaseModel, extra="forbid"):
+    """A weighted GrantedAccess mask in process_access_patterns.yaml."""
+
+    mask: str
+    weight: int
+
+    @field_validator("mask")
+    @classmethod
+    def mask_is_hex(cls, v: str) -> str:
+        if not v.startswith("0x"):
+            raise ValueError("mask must be a hex string such as 0x1010")
+        int(v, 16)
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class ProcessAccessPatternEntry(BaseModel, extra="forbid"):
+    """A baseline ProcessAccess source/target pair in process_access_patterns.yaml."""
+
+    source_pid_key: str
+    source_image: str
+    target_pid_key: str
+    target_image: str
+    access_masks: list[ProcessAccessMaskEntry]
+
+    @field_validator("access_masks")
+    @classmethod
+    def access_masks_non_empty(
+        cls, v: list[ProcessAccessMaskEntry]
+    ) -> list[ProcessAccessMaskEntry]:
+        if not v:
+            raise ValueError("access_masks must not be empty")
+        return v
+
+
+# --- CreateRemoteThread Patterns ---
+
+
+class CreateRemoteThreadPatternEntry(BaseModel, extra="forbid"):
+    """A benign CreateRemoteThread source/target pair."""
+
+    source_pid_key: str
+    source_image: str
+    target_pid_key: str
+    target_image: str
+    weight: int = 1
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
 
 
 # --- Traffic Profile Connection ---

@@ -40,6 +40,11 @@ class TestTlsIssuers:
         issuer = pick_issuer(rng, "www.linkedin.com")
         assert "DigiCert SHA2 Extended Validation" in issuer["name"]
 
+    def test_internal_test_domain_uses_enterprise_ca(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "WKS-02.acme.test")
+        assert "Enterprise Issuing CA" in issuer["name"]
+
     def test_validity_range_produces_varied_periods(self):
         """100 certificates should span more than 2 distinct validity values."""
         rng = random.Random(42)
