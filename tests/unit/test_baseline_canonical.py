@@ -245,6 +245,55 @@ class TestWebAccessCorrelation:
         assert event.http.status_code == 204
 
 
+class TestSmbFileTransferCorrelation:
+    """SMB data transfers should produce Zeek files.log context when substantial."""
+
+    def test_large_smb_read_adds_file_transfer_context(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Large successful SMB downloads should be observable in files.log."""
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.5",
+            time=timestamp,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=12.0,
+            orig_bytes=8000,
+            resp_bytes=250000,
+            conn_state="SF",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.file_transfer is not None
+        assert event.file_transfer.source == "SMB"
+        assert event.file_transfer.fuid.startswith("F")
+        assert event.file_transfer.is_orig is False
+        assert event.file_transfer.seen_bytes <= 250000
+        assert event.file_transfer.total_bytes == 250000
+
+    def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Small SMB metadata exchanges should stay in conn.log only."""
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.5",
+            time=timestamp,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=0.5,
+            orig_bytes=1200,
+            resp_bytes=3000,
+            conn_state="SF",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.file_transfer is None
+
+
 class TestSystemProcessCanonical:
     """System process events dispatch to both syslog and eCAR."""
 

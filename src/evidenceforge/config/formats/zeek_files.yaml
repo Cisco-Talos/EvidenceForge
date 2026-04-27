@@ -54,7 +54,7 @@ fields:
   - name: source
     type: string
     required: true
-    description: "Protocol source (HTTP, SSL, SMTP)"
+    description: "Protocol source (HTTP, SMB, SSL, SMTP)"
 
   - name: depth
     type: integer

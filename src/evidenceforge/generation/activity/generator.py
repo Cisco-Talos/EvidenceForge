@@ -3128,6 +3128,71 @@ class ActivityGenerator:
                         has_debug_data=rng.random() < 0.4,
                     )
 
+        if (
+            event.file_transfer is None
+            and service == "smb"
+            and proto == "tcp"
+            and dst_port == 445
+            and event.network.conn_state == "SF"
+        ):
+            from evidenceforge.events.contexts import FileTransferContext
+            from evidenceforge.generation.activity.smb_file_transfers import (
+                load_smb_file_transfers,
+            )
+            from evidenceforge.utils.ids import generate_zeek_uid
+
+            smb_config = load_smb_file_transfers()
+            min_transfer_bytes = int(smb_config.get("min_transfer_bytes", 32768))
+            transfer_bytes = max(event.network.orig_bytes or 0, event.network.resp_bytes or 0)
+            if transfer_bytes >= min_transfer_bytes:
+                mime_entries = smb_config.get("mime_types", [])
+                analyzer_entries = smb_config.get("analyzer_sets", [])
+                mime_type = "application/octet-stream"
+                if mime_entries:
+                    mime_values = [
+                        str(entry.get("mime_type", "application/octet-stream"))
+                        for entry in mime_entries
+                    ]
+                    mime_weights = [int(entry.get("weight", 1)) for entry in mime_entries]
+                    mime_type = rng.choices(
+                        mime_values,
+                        weights=mime_weights,
+                        k=1,
+                    )[0]
+                analyzers: list[str] = []
+                if analyzer_entries:
+                    analyzer_values = [entry.get("analyzers", []) for entry in analyzer_entries]
+                    analyzer_weights = [int(entry.get("weight", 1)) for entry in analyzer_entries]
+                    analyzers = list(
+                        rng.choices(
+                            analyzer_values,
+                            weights=analyzer_weights,
+                            k=1,
+                        )[0]
+                    )
+                missing_probability = float(smb_config.get("missing_bytes_probability", 0.0))
+                timeout_probability = float(smb_config.get("timeout_probability", 0.0))
+                missing_bytes = (
+                    rng.randint(1, max(1, min(65536, transfer_bytes // 20)))
+                    if rng.random() < missing_probability
+                    else 0
+                )
+                event.file_transfer = FileTransferContext(
+                    fuid=generate_zeek_uid("F"),
+                    source="SMB",
+                    depth=0,
+                    analyzers=analyzers,
+                    mime_type=mime_type,
+                    duration=max(0.0, (event.network.duration or 0.0) * rng.uniform(0.6, 0.98)),
+                    local_orig=_is_private_ip(event.network.src_ip),
+                    is_orig=(event.network.orig_bytes or 0) >= (event.network.resp_bytes or 0),
+                    seen_bytes=max(0, transfer_bytes - missing_bytes),
+                    total_bytes=transfer_bytes,
+                    missing_bytes=missing_bytes,
+                    overflow_bytes=0,
+                    timedout=rng.random() < timeout_probability,
+                )
+
         # NTP context for Zeek ntp.log fan-out
         if not local_only and service == "ntp" and proto == "udp":
             from evidenceforge.events.contexts import NtpContext

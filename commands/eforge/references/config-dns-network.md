@@ -15,6 +15,7 @@ Schema documentation for the network-related config files. User customizations g
 5. [network_params.yaml](#network_paramsyaml)
 6. [tls_issuers.yaml](#tls_issuersyaml)
 7. [tls_realism.yaml](#tls_realismyaml)
+8. [smb_file_transfers.yaml](#smb_file_transfersyaml)
 
 ---
 
@@ -377,6 +378,34 @@ certificate_chains:
       intermediates:
         - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
 ```
+
+## smb_file_transfers.yaml
+
+Controls when successful SMB connections also produce Zeek `files.log` observations. This does not create dedicated Zeek SMB logs such as `smb_files.log`; it only tunes the generic file-analysis rows linked to SMB `conn.log` UIDs.
+
+**Location:** `src/evidenceforge/config/activity/smb_file_transfers.yaml`
+**Overlay:** `.eforge/config/activity/smb_file_transfers.yaml`
+
+### Structure
+
+```yaml
+min_transfer_bytes: 32768
+missing_bytes_probability: 0.02
+timeout_probability: 0.005
+mime_types:
+  - {mime_type: application/pdf, weight: 18}
+analyzer_sets:
+  - {analyzers: [], weight: 75}
+  - {analyzers: [MD5], weight: 15}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `min_transfer_bytes` | integer | Minimum originator or responder payload bytes before an SMB connection is treated as a file transfer |
+| `missing_bytes_probability` | float | Probability that a transfer has non-zero Zeek `missing_bytes` |
+| `timeout_probability` | float | Probability that the Zeek file-analysis row has `timedout: true` |
+| `mime_types` | weighted list | MIME type mix for SMB file observations |
+| `analyzer_sets` | weighted list | Zeek file analyzers attached to the observation, such as `MD5` or `SHA1` |
 
 ## traffic_rates.yaml
 

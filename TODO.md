@@ -352,7 +352,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] TLS certificate chain depth realism — added data-driven TLS realism config with overlay support for SAN suffixes, OCSP behavior, and chain templates; ssl.log now references leaf/intermediate FUID chains, x509.log emits matching CA/intermediate rows, and per-sensor FUID derivation preserves references.
 - [x] TLS realism validate-config coverage — added `tls_realism.yaml` overlay/schema validation to `eforge validate-config` and removed stale hardcoded validation-count docs.
 - [x] Scenario hostname authoring guidance — clarified that storyline connection/beacon `hostname` values should be the client-facing DNS name actually used for DNS/SNI/proxy evidence, not reverse-DNS/PTR artifacts.
-- [ ] Zeek SMB file visibility design — blind review still flags SMB-heavy scenarios with host-side eCAR UNC file actions but no Zeek SMB file observations. Decide whether to synthesize Zeek files.log-style SMB artifacts, add a Zeek SMB log family, or document that current Zeek files support is HTTP-focused.
+- [x] Zeek SMB file visibility design — successful SMB data transfers now emit data-driven Zeek files.log observations with SMB source, MIME/analyzer mix, threshold, missing-byte, and timeout behavior from `smb_file_transfers.yaml`. Dedicated Zeek SMB logs remain out of scope; docs and skill references clarify conn.log/files.log/eCAR coverage.
 
 **Other:**
 - [x] ✓³ Bash history only for root on compromised hosts — baseline SSH sessions now generate per-user bash history for admins on all Linux servers (34 files vs 3); organic noise commands interleaved via generate_bash_command_with_noise()

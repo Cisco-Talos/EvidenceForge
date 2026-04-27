@@ -141,6 +141,12 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | tls_issuers.yaml | Chain templates match issuer names/patterns selected from issuer config |
 | **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, and OCSP cache/status behavior |
 
+### smb_file_transfers.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone SMB file-analysis tuning |
+| **depended on by** | Engine (runtime) | Controls when SMB connections generate Zeek files.log rows and their MIME/analyzer mix |
+
 ### sysmon_filters.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

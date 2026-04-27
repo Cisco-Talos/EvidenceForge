@@ -1,0 +1,34 @@
+# SMB file-transfer observations for Zeek files.log.
+#
+# Zeek's file analysis framework can observe SMB file content transfers when
+# the SMB analyzer and file analysis are enabled. This config controls when a
+# successful SMB connection gets a files.log companion row and what that row
+# looks like.
+
+min_transfer_bytes: 32768
+missing_bytes_probability: 0.02
+timeout_probability: 0.005
+
+mime_types:
+  - mime_type: application/vnd.openxmlformats-officedocument.wordprocessingml.document
+    weight: 22
+  - mime_type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+    weight: 22
+  - mime_type: application/pdf
+    weight: 18
+  - mime_type: application/vnd.openxmlformats-officedocument.presentationml.presentation
+    weight: 10
+  - mime_type: text/plain
+    weight: 12
+  - mime_type: application/octet-stream
+    weight: 16
+
+analyzer_sets:
+  - analyzers: []
+    weight: 75
+  - analyzers: [MD5]
+    weight: 15
+  - analyzers: [SHA1]
+    weight: 7
+  - analyzers: [MD5, SHA1]
+    weight: 3

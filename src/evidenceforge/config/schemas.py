@@ -246,6 +246,68 @@ class TlsRealismConfig(BaseModel, extra="forbid"):
     certificate_chains: TlsCertificateChainConfig
 
 
+# --- SMB File Transfers ---
+
+
+class SmbMimeTypeEntry(BaseModel, extra="forbid"):
+    """A weighted MIME type in smb_file_transfers.yaml."""
+
+    mime_type: str
+    weight: int
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class SmbAnalyzerSetEntry(BaseModel, extra="forbid"):
+    """A weighted Zeek file analyzer set in smb_file_transfers.yaml."""
+
+    analyzers: list[str]
+    weight: int
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class SmbFileTransferConfig(BaseModel, extra="forbid"):
+    """Root schema for smb_file_transfers.yaml."""
+
+    min_transfer_bytes: int
+    missing_bytes_probability: float
+    timeout_probability: float
+    mime_types: list[SmbMimeTypeEntry]
+    analyzer_sets: list[SmbAnalyzerSetEntry]
+
+    @field_validator("min_transfer_bytes")
+    @classmethod
+    def min_transfer_bytes_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("min_transfer_bytes must be positive")
+        return v
+
+    @field_validator("missing_bytes_probability", "timeout_probability")
+    @classmethod
+    def probability_range(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("probability must be between 0 and 1")
+        return v
+
+    @field_validator("mime_types", "analyzer_sets")
+    @classmethod
+    def non_empty_weighted_lists(cls, v: list[Any]) -> list[Any]:
+        if not v:
+            raise ValueError("weighted lists must not be empty")
+        return v
+
+
 # --- Network Params ---
 
 

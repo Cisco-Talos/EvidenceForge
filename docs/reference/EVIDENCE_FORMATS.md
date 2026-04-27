@@ -121,7 +121,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, and MX query types. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for port 443 connections. Certificate-chain depth is driven by `tls_realism.yaml`. |
-| files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
+| files.log | `files.json` | File transfers | Extracted from HTTP responses and substantial SMB transfers. MIME type, seen_bytes, fuid correlation. SMB thresholds and MIME mix are driven by `smb_file_transfers.yaml`. |
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Sensor-routed via NetworkContext. |
 | ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info, and CA constraints. |
@@ -132,7 +132,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 
 **Known Limitations:**
-- No SMB-specific Zeek log (smb_files.log, smb_mapping.log) — SMB traffic appears in conn.log; file-server activity can also produce host-side eCAR FILE records
+- No SMB-specific Zeek log (smb_files.log, smb_mapping.log) — SMB traffic appears in conn.log, substantial transfers can appear in files.log, and file-server activity can also produce host-side eCAR FILE records
 - No SMTP log — email traffic appears in conn.log only
 - http.log only for port 80; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture

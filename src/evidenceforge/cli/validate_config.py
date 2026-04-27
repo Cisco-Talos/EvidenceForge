@@ -171,6 +171,9 @@ def validate_config() -> ValidationResult:
         "activity/tls_realism.yaml": {
             "dict_fields": {"san", "ocsp", "certificate_chains"},
         },
+        "activity/smb_file_transfers.yaml": {
+            "list_fields": {"mime_types": None, "analyzer_sets": None},
+        },
         "activity/network_params.yaml": {
             "list_fields": {"oui_prefixes": None},
         },
@@ -938,6 +941,7 @@ def validate_config() -> ValidationResult:
         ProcessAccessPatternEntry,
         ProcessNetworkEntry,
         ScheduledTaskEntry,
+        SmbFileTransferConfig,
         SpawnRuleEntry,
         SyslogProgramEntry,
         SystemBinaryEntry,
@@ -1037,6 +1041,15 @@ def validate_config() -> ValidationResult:
     tls_realism_data = load_tls_realism()
     if tls_realism_data:
         _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
+
+    # smb_file_transfers.yaml
+    from evidenceforge.generation.activity.smb_file_transfers import load_smb_file_transfers
+
+    smb_file_transfer_data = load_smb_file_transfers()
+    if smb_file_transfer_data:
+        _SCHEMA_CHECKS.append(
+            ([smb_file_transfer_data], SmbFileTransferConfig, "smb_file_transfers.yaml")
+        )
 
     # extra_syslog_messages.yaml
     from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
