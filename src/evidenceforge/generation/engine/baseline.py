@@ -3087,7 +3087,21 @@ class BaselineMixin:
                 # For HTTP/HTTPS: generate browsing session with subresources,
                 # referrer chains, and cross-domain CDN fan-out.
                 svc = conn.get("service", "")
-                if svc in ("ssl", "http") and hostname:
+                is_server_source = system.type == "server" or bool(
+                    set(system.roles or [])
+                    & {
+                        "app_server",
+                        "database",
+                        "dns_server",
+                        "domain_controller",
+                        "file_server",
+                        "log_server",
+                        "mail_server",
+                        "monitoring",
+                        "web_server",
+                    }
+                )
+                if svc in ("ssl", "http") and hostname and not is_server_source:
                     self._emit_browsing_session(
                         system=system,
                         user_obj=user_obj,
@@ -4506,6 +4520,9 @@ class BaselineMixin:
             for sensor in self.scenario.environment.network.sensors:
                 if "snort_alert" not in expand_formats(sensor.log_formats):
                     continue
+                inbound_vips = {}
+                if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                    inbound_vips = self.dispatcher.visibility_engine._real_ip_to_vip
                 monitored_systems = []
                 for seg_name in sensor.monitoring_segments:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
@@ -4565,9 +4582,11 @@ class BaselineMixin:
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         dst_ip = ext_ip
+                        source_system = local_sys
                     else:
                         src_ip = ext_ip
-                        dst_ip = local_sys.ip
+                        dst_ip = inbound_vips.get(local_sys.ip, local_sys.ip)
+                        source_system = None
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
@@ -4580,6 +4599,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.001, 5.0),
                         orig_bytes=rng.randint(40, 2000),
                         resp_bytes=rng.randint(0, 1000),
+                        source_system=source_system,
                         ids=IdsContext(
                             sid=sig["sid"],
                             rev=sig.get("rev", 1),

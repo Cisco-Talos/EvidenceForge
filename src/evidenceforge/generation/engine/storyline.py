@@ -36,6 +36,7 @@ import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import parse_duration, parse_iso8601
@@ -765,6 +766,15 @@ class StorylineMixin:
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]
             source_ip = spec.source_ip or system.ip
             dst_ip = spec.dst_ip
+            effective_dst_ip = dst_ip
+            if (
+                not _is_private_ip(source_ip)
+                and hasattr(self, "dispatcher")
+                and self.dispatcher.visibility_engine
+            ):
+                effective_dst_ip = self.dispatcher.visibility_engine._real_ip_to_vip.get(
+                    dst_ip, dst_ip
+                )
             dst_port = spec.dst_port
             service = spec.service or (
                 "ssl" if dst_port == 443 else "http" if dst_port == 80 else "ssl"
@@ -845,7 +855,7 @@ class StorylineMixin:
             s_conn_state = spec.conn_state or "SF"
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
-                dst_ip=dst_ip,
+                dst_ip=effective_dst_ip,
                 time=time,
                 dst_port=dst_port,
                 service=service,
@@ -1502,6 +1512,15 @@ class StorylineMixin:
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip
             service = "http" if spec.dst_port == 80 else "ssl"
+            scan_dst_ip = spec.dst_ip
+            if (
+                not _is_private_ip(scan_src_ip)
+                and hasattr(self, "dispatcher")
+                and self.dispatcher.visibility_engine
+            ):
+                scan_dst_ip = self.dispatcher.visibility_engine._real_ip_to_vip.get(
+                    spec.dst_ip, spec.dst_ip
+                )
 
             # Resolve source system
             src_sys = None
@@ -1606,7 +1625,7 @@ class StorylineMixin:
 
                 self.activity_generator.generate_connection(
                     src_ip=scan_src_ip,
-                    dst_ip=spec.dst_ip,
+                    dst_ip=scan_dst_ip,
                     time=tick_time,
                     dst_port=spec.dst_port,
                     service=service,

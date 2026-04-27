@@ -234,6 +234,38 @@ When the skill auto-generates a proxy_uri_templates entry for a new domain, use 
 
 ---
 
+## proxy_user_agents.yaml
+
+Proxy User-Agent pools for `proxy_access.log` generation. This file is overlay-safe: lists extend by default, so project overlays can add workstation browser UAs, server API clients, package-manager hosts, or custom OS families without copying package defaults.
+
+### Structure
+
+```yaml
+workstation:
+  windows:
+    - "Mozilla/5.0 ..."
+  linux:
+    - "curl/7.88.1"
+
+server:
+  roles: [web_server, app_server]
+  generic:
+    - "python-requests/2.31.0"
+  package_managers:
+    debian:
+      os_keywords: ["ubuntu", "debian"]
+      hosts: ["archive.ubuntu.com"]
+      user_agents: ["apt-http/2.4.11 (amd64)"]
+```
+
+### Rules
+
+- Keep package-manager UAs bound to package/update repository hostnames.
+- Keep OS-specific package UAs matched to `os_keywords`; do not use Fedora `libdnf` for Ubuntu hosts.
+- Use `server.generic` for SaaS/API/CDN destinations from servers.
+
+---
+
 ## site_maps.yaml
 
 Site map definitions for realistic browsing session generation. Three tiers of resolution.

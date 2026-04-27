@@ -55,6 +55,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Create/modify persona | `personas/{name}.yaml` | `application_catalog.yaml` (persona lists), `traffic_profiles.yaml` (persona_traffic) |
 | Modify spawn rules | `spawn_rules.yaml` | `application_catalog.yaml` (validate exe exists) |
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists) |
+| Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names |
 | Modify traffic rate defaults | `traffic_rates.yaml` | (standalone — intensity-based rate table for all system traffic) |

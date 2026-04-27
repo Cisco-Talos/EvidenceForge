@@ -55,6 +55,12 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | `dns_registry.yaml` | Domain keys should exist in dns_registry |
 | **depended on by** | Engine (runtime) | Provides realistic URI paths for proxy log generation |
 
+### proxy_user_agents.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | `dns_registry.yaml` | Package-manager hostnames should exist in dns_registry when used as generated destinations |
+| **depended on by** | Engine (runtime) | Selects workstation/server proxy User-Agent values for proxy log generation |
+
 ### site_maps.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
