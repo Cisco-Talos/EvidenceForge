@@ -35,9 +35,19 @@ class TestTlsIssuers:
         issuer = pick_issuer(rng, "download.windowsupdate.com")
         assert "Microsoft" in issuer["name"]
 
+    def test_office_cdn_uses_digicert_ca(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "res.cdn.office.net")
+        assert "DigiCert" in issuer["name"]
+
     def test_aws_uses_amazon_ca(self):
         rng = random.Random(42)
         issuer = pick_issuer(rng, "aws.amazon.com")
+        assert "Amazon" in issuer["name"]
+
+    def test_awsstatic_uses_amazon_ca(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "a.b.cdn.console.awsstatic.com")
         assert "Amazon" in issuer["name"]
 
     def test_apple_uses_apple_ca(self):
