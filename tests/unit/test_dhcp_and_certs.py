@@ -17,7 +17,11 @@ from evidenceforge.generation.activity.generator import (
     _ocsp_status_for_certificate,
     _tls_san_dns_names,
 )
-from evidenceforge.generation.activity.tls_issuers import load_tls_issuers, pick_issuer
+from evidenceforge.generation.activity.tls_issuers import (
+    load_tls_issuers,
+    pick_issuer,
+    pick_key_type,
+)
 from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     multi_label_public_suffixes,
@@ -126,6 +130,13 @@ class TestTlsIssuers:
             assert ca_name in issuer_names, (
                 f"Override '{pattern}' references '{ca_name}' which is not in issuers list"
             )
+
+    def test_lets_encrypt_r3_is_rsa_intermediate(self):
+        """Let's Encrypt R3 should not emit ECDSA certificate metadata."""
+        data = load_tls_issuers()
+        issuer = next(i for i in data["issuers"] if i["name"] == "CN=R3, O=Let's Encrypt, C=US")
+        observed = {pick_key_type(random.Random(seed), issuer) for seed in range(20)}
+        assert observed == {("rsa", 2048)}
 
     def test_san_dns_never_wildcards_public_suffix(self):
         """Generated SAN lists should not contain impossible public-suffix wildcards."""

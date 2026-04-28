@@ -22,7 +22,8 @@
 
 """Unit tests for Cisco ASA firewall emitter."""
 
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -152,6 +153,38 @@ class TestConnectionIdCounter:
         ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
         ids = [asa_emitter._next_conn_id("fw01", ts) for _ in range(5000)]
         assert len(ids) == len(set(ids))
+
+    def test_connection_ids_are_not_epoch_shaped(self, asa_emitter):
+        conn_id = asa_emitter._next_conn_id("fw01", T0)
+        assert conn_id < 1_000_000_000
+        assert not str(conn_id).endswith("000")
+
+    def test_sorted_built_ids_follow_timestamp_order(self, asa_emitter, tmp_path):
+        late_event = _make_connection_event(
+            timestamp=T0 + timedelta(seconds=30),
+            src_port=50001,
+            duration=1.0,
+        )
+        early_event = _make_connection_event(
+            timestamp=T0,
+            src_port=50000,
+            duration=1.0,
+        )
+
+        asa_emitter.emit(late_event)
+        asa_emitter.emit(early_event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        built_ids = [
+            int(match.group(1))
+            for line in output.splitlines()
+            if "Built outbound TCP connection" in line
+            for match in [re.search(r"connection (\d+) for", line)]
+            if match is not None
+        ]
+
+        assert built_ids == sorted(built_ids)
 
 
 class TestPermitRecords:
@@ -741,3 +774,10 @@ class TestNatRecords:
         teardown = next(line for line in lines if "302014" in line)
         assert "SYN Timeout" in teardown
         assert "duration 0:00:00" not in teardown
+
+        built = next(line for line in lines if "302013" in line)
+        built_ts = datetime.strptime(built[5:20], "%b %d %H:%M:%S").replace(year=2024)
+        teardown_ts = datetime.strptime(teardown[5:20], "%b %d %H:%M:%S").replace(year=2024)
+        match = re.search(r"duration 0:00:(\d{2})", teardown)
+        assert match is not None
+        assert int((teardown_ts - built_ts).total_seconds()) == int(match.group(1))

@@ -121,7 +121,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
 | ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. Version, poll, precision, root delay, and root dispersion are stable per client/server association. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity, key info, and CA constraints. Intermediate CA certificate profiles are reused by subject/issuer so the same CA does not appear as many different certificates in one dataset. |
-| weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
+| weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. Automatic weird generation is currently disabled pending a data-driven Zeek weird compatibility model; explicitly supplied `WeirdContext` events still render. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
 | ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation responses whose `id` joins to `files.log` `fuid`, matching Zeek file-analysis semantics. |
 | packet_filter.log | `packet_filter.json` | BPF filter changes | Zeek packet filter status. |

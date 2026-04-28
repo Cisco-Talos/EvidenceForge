@@ -368,7 +368,7 @@ class TestExplicitProxyVisibility:
             service="http",
             duration=1.0,
             orig_bytes=500,
-            resp_bytes=5000,
+            resp_bytes=3000,
             source_system=generator._ip_to_system["10.0.1.10"],
             hostname="dynsync-update.net",
             http=HttpContext(
@@ -491,6 +491,139 @@ class TestExplicitProxyVisibility:
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
         assert ("10.0.3.10", "93.184.216.34", 443) in pairs
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
+
+    def test_https_miss_propagates_http_size_to_origin_tls_leg(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="GET",
+                url="https://example.com/jquery.js",
+                host="example.com",
+                status_code=200,
+                sc_bytes=107_200,
+                cs_bytes=620,
+                time_taken=400,
+                user_agent="Mozilla/5.0",
+                content_type="application/javascript",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5_000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/jquery.js",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=107_000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/javascript"],
+            ),
+        )
+
+        egress_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.3.10"
+            and call.args[0].network.dst_ip == "93.184.216.34"
+            and call.args[0].network.dst_port == 443
+        ]
+        assert egress_events
+        assert egress_events[0].network.resp_bytes >= 107_000
+
+    def test_allowed_proxy_miss_origin_leg_is_established_when_state_is_implicit(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="egress-tap",
+                    monitoring_segments=["dmz"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=200,
+                sc_bytes=107_200,
+                cs_bytes=620,
+                time_taken=400,
+                user_agent="Mozilla/5.0",
+                content_type="application/javascript",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5_000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/jquery.js",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=107_000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/javascript"],
+            ),
+        )
+
+        egress_events = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.3.10"
+            and call.args[0].network.dst_ip == "93.184.216.34"
+            and call.args[0].network.dst_port == 443
+        ]
+        assert egress_events
+        assert egress_events[0].network.conn_state == "SF"
+        assert egress_events[0].ssl is not None
+        assert egress_events[0].ssl.established is True
 
     def test_https_subresources_reuse_active_connect_tunnel(self):
         generator, emitters = _generator(
@@ -668,6 +801,138 @@ class TestExplicitProxyVisibility:
         assert not emitters["zeek_ssl"].emit.called
         assert not emitters["snort_alert"].emit.called
         assert not emitters["cisco_asa"].emit.called
+
+    def test_cache_hit_request_stops_before_origin_side_sources(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="egress-tap",
+                    monitoring_segments=["dmz"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                ),
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="GET",
+                url="http://example.com/status.gif",
+                host="example.com",
+                status_code=200,
+                sc_bytes=5200,
+                cs_bytes=420,
+                time_taken=80,
+                user_agent="Mozilla/5.0",
+                content_type="image/gif",
+                cache_result="HIT",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/status.gif",
+                version="1.1",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["image/gif"],
+            ),
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert pairs
+        assert all(pair == ("10.0.1.10", "10.0.3.10", 8080) for pair in pairs)
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.cache_result == "HIT"
+        assert proxy_event.proxy.status_code == 200
+        assert emitters["zeek_http"].emit.called
+        assert all(
+            call.args[0].network.dst_ip == "10.0.3.10"
+            for call in emitters["zeek_http"].emit.call_args_list
+        )
+
+    def test_cache_hit_proxy_sc_bytes_match_response_plus_overhead(self, monkeypatch):
+        import evidenceforge.generation.activity.generator as generator_module
+
+        generator, _ = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy_system = generator._ip_to_system["10.0.3.10"]
+
+        class FixedRng:
+            def random(self) -> float:
+                return 0.1
+
+            def randint(self, low: int, high: int) -> int:
+                return low
+
+            def choice(self, values):
+                return values[0]
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: FixedRng())
+        monkeypatch.setattr(generator_module, "pick_proxy_domain_user_agent", lambda *a, **k: None)
+
+        proxy_context = generator._build_proxy_context(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            dst_port=80,
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            hostname="example.com",
+            source_system=generator._ip_to_system["10.0.1.10"],
+            proxy_sys=proxy_system,
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/status.gif",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["image/gif"],
+            ),
+            explicit_mode=True,
+        )
+
+        assert proxy_context.cache_result == "HIT"
+        assert proxy_context.sc_bytes == 5050
+        assert proxy_context.cs_bytes == 580
 
     def test_auth_required_connect_stops_before_origin_side_sources(self):
         generator, emitters = _generator(

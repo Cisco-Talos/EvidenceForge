@@ -366,8 +366,7 @@ issuers:
     validity_days_max: 90                     # Maximum cert validity (days)
     not_before_max_days: 60                   # Max days before scenario start for cert issuance
     key_types:
-      - {type: "ecdsa", length: 256, weight: 70}
-      - {type: "rsa", length: 2048, weight: 30}
+      - {type: "rsa", length: 2048, weight: 100}
 ```
 
 ## tls_realism.yaml

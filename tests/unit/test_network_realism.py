@@ -141,13 +141,14 @@ class TestProxyRealism:
         cs = orig_bytes + rng.randint(*_PROXY_CS_OVERHEAD)
         assert cs > orig_bytes
 
-    def test_proxy_cache_hit_varies_bytes(self):
-        """Cache HIT response size should differ from wire resp_bytes."""
+    def test_proxy_cache_hit_sc_bytes_include_response_overhead(self):
+        """Cache HIT sc-bytes should be response payload plus proxy overhead."""
         rng = random.Random(42)
         resp_bytes = 10000
-        _sc = rng.randint(max(1, int(resp_bytes * 0.4)), max(2, int(resp_bytes * 1.1)))
-        # Should be in the 40%-110% range, not exactly resp_bytes
-        assert 3000 < _sc < 12000
+        from evidenceforge.generation.activity.generator import _PROXY_SC_OVERHEAD
+
+        _sc = resp_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+        assert resp_bytes < _sc <= resp_bytes + _PROXY_SC_OVERHEAD[1]
 
 
 class TestProxyUaOsMatch:

@@ -443,6 +443,8 @@ IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, 
 
 IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. Use the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Do not use a reverse-DNS/PTR artifact or provider-generated infrastructure name unless the scenario explicitly says the client connected with that name. This ensures DNS, SSL SNI, x509 certificate subject, and proxy logs carry the same realistic name. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
 
+For realism-bound generated datasets, do not use reserved documentation domains (`example.com`, `example.net`, `example.org`) as if they were live public infrastructure. They are fine in documentation snippets, but successful public DNS/TLS/proxy evidence for those domains is an obvious synthetic tell. Use a scenario-owned lab domain or a realistic non-reserved domain when the logs should show public resolver answers and certificates.
+
 ```yaml
 events:
   - type: connection

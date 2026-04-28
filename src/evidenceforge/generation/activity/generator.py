@@ -468,6 +468,7 @@ _SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
 # Proxy header overhead ranges (bytes)
 _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
+_AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 300
 
 # Kerberos TGS service name distribution (weighted)
@@ -1015,6 +1016,7 @@ class ActivityGenerator:
         else:
             cache_result = "DENIED"
 
+        response_bytes = http.response_body_len if http is not None else (resp_bytes or 0)
         cs_bytes = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
         if cache_result == "DENIED":
             sc_bytes = rng.randint(500, 2000)
@@ -1023,16 +1025,13 @@ class ActivityGenerator:
         elif cache_result == "GATEWAY_ERROR":
             sc_bytes = rng.randint(250, 1800)
         elif cache_result == "HIT":
-            response_bytes = max(1, resp_bytes or 0)
-            sc_bytes = rng.randint(
-                max(1, int(response_bytes * 0.4)), max(2, int(response_bytes * 1.1))
-            )
+            sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
         elif proxy_method == "CONNECT":
             host_len = len(proxy_hostname)
             cs_bytes = rng.randint(180 + host_len, 520 + host_len)
             sc_bytes = rng.randint(90, 260)
         else:
-            sc_bytes = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+            sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
 
         status_code = {
             "DENIED": 403,
@@ -1278,7 +1277,7 @@ class ActivityGenerator:
 
         # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses)
         if rng.random() < 0.18:
-            from evidenceforge.events.contexts import FileTransferContext, OcspContext
+            from evidenceforge.events.contexts import OcspContext
             from evidenceforge.generation.activity.tls_realism import ocsp_config
             from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
 
@@ -1325,25 +1324,6 @@ class ActivityGenerator:
                 this_update=this_update,
                 next_update=next_update,
             )
-            if event.file_transfer is None:
-                ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp_id}")).randint(
-                    900, 2500
-                )
-                event.file_transfer = FileTransferContext(
-                    fuid=ocsp_id,
-                    source="HTTP",
-                    depth=0,
-                    analyzers=[],
-                    mime_type="application/ocsp-response",
-                    duration=rng.uniform(0.001, 0.02),
-                    local_orig=_is_private_ip(net.dst_ip) if net.src_ip != net.dst_ip else False,
-                    is_orig=False,
-                    seen_bytes=ocsp_size,
-                    total_bytes=ocsp_size,
-                    missing_bytes=0,
-                    overflow_bytes=0,
-                    timedout=False,
-                )
 
     def _pick_profiled_tls_destination(
         self,
@@ -2511,6 +2491,8 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
+        caller_provided_conn_state = conn_state is not None
+
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
         # share this single resolved value instead of doing independent lookups.
@@ -2746,20 +2728,28 @@ class ActivityGenerator:
 
             if proxy_context.status_code >= 400:
                 return client_uid
+            if proxy_context.cache_result == "HIT":
+                return client_uid
 
             egress_http = http if dst_port == 80 and service == "http" else None
+            egress_resp_bytes = resp_bytes
+            if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
+                egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
             egress_delay = timedelta(
                 milliseconds=random.Random(
                     _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
                 ).lognormvariate(3.0, 0.65)
             )
-            if hostname:
+            if proxy_context.host:
                 self._emit_dns_lookup(
                     proxy_sys.ip,
                     dst_ip,
                     time + egress_delay,
-                    hostname=hostname,
+                    hostname=proxy_context.host,
                 )
+            egress_conn_state = conn_state
+            if not caller_provided_conn_state and proxy_context.status_code < 400:
+                egress_conn_state = "SF"
             self.generate_connection(
                 src_ip=proxy_sys.ip,
                 dst_ip=dst_ip,
@@ -2769,11 +2759,11 @@ class ActivityGenerator:
                 service=service,
                 duration=duration,
                 orig_bytes=orig_bytes,
-                resp_bytes=resp_bytes,
+                resp_bytes=egress_resp_bytes,
                 emit_dns=False,
                 pid=-1,
                 source_system=proxy_sys,
-                conn_state=conn_state,
+                conn_state=egress_conn_state,
                 dns=dns,
                 ids=ids,
                 http=egress_http,
@@ -3021,10 +3011,6 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
-            # Enforce consistency: resp_pkts > 0 requires resp_bytes > 0
-            # (orig always has at least the SYN, so orig_pkts stays from history)
-            if resp_pkts > 0 and resp_bytes == 0:
-                resp_pkts = 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -3059,6 +3045,13 @@ class ActivityGenerator:
         }
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
             service = _PORT_SERVICE[dst_port]
+        if (
+            proto == "tcp"
+            and conn_state in {"S0", "REJ", "SH", "SHR"}
+            and service in {"http", "ssl"}
+            and http is None
+        ):
+            service = ""
 
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
@@ -3245,16 +3238,19 @@ class ActivityGenerator:
                     cache_result = "MISS"
                 else:
                     cache_result = "DENIED"
-                # Proxy byte counts differ from wire bytes: header overhead,
-                # cache effects, and proxy error pages.
+                # W3C sc-bytes/cs-bytes are proxy-side accounting fields:
+                # payload plus HTTP/proxy headers for allowed responses,
+                # or proxy-generated error pages for failures.
                 _cs = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+                _response_bytes = (
+                    event.http.response_body_len if event.http is not None else (resp_bytes or 0)
+                )
                 if cache_result == "DENIED":
                     _sc = rng.randint(500, 2000)  # proxy error page
                 elif cache_result == "HIT":
-                    _rb = max(1, resp_bytes or 0)
-                    _sc = rng.randint(max(1, int(_rb * 0.4)), max(2, int(_rb * 1.1)))
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 else:
-                    _sc = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
                     method=proxy_method,
@@ -3283,6 +3279,14 @@ class ActivityGenerator:
                 rng=rng,
                 allow_failure=True,
             )
+        if (
+            proto == "tcp"
+            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
+            and event.network.service in {"http", "ssl"}
+            and event.http is None
+            and event.ssl is None
+        ):
+            event.network.service = ""
 
         elif (
             not local_only
@@ -3591,66 +3595,13 @@ class ActivityGenerator:
                 allow_failure=False,
             )
 
-        # Zeek weird.log: condition-driven network anomalies. Select after
-        # HTTP/TLS consistency adjustments so partial/reset weirds cannot remain
-        # attached to connections later normalized to clean SF application logs.
-        weird_candidates: list[tuple[str, str, float]] = []
-        final_state = event.network.conn_state
-        final_service = event.network.service
-        if event.network.protocol == "tcp":
-            if final_state in ("S0", "S1", "SH", "SHR"):
-                weird_candidates.extend(
-                    [
-                        ("connection_originator_SYN_ack", "TCP", 0.03),
-                        ("truncated_header", "TCP", 0.015),
-                    ]
-                )
-            elif final_state in ("RSTO", "RSTR"):
-                weird_candidates.extend(
-                    [
-                        ("inappropriate_FIN", "TCP", 0.035),
-                        ("above_hole_data_without_any_acks", "TCP", 0.02),
-                    ]
-                )
-            elif event.network.missed_bytes:
-                weird_candidates.append(("above_hole_data_without_any_acks", "TCP", 0.20))
-            elif (
-                final_state == "SF"
-                and event.network.duration
-                and event.network.duration > 60
-                and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) > 500_000
-            ):
-                weird_candidates.append(("window_recision", "TCP", 0.003))
-            elif final_state != "SF" and final_service != "ssl":
-                weird_candidates.append(("bad_TCP_checksum", "TCP", 0.0015))
-        elif event.network.protocol == "udp":
-            if final_service == "dns":
-                weird_candidates.extend(
-                    [
-                        ("DNS_truncated_len_lt_hdr_len", "UDP", 0.002),
-                        ("DNS_RR_unknown_type", "UDP", 0.0015),
-                    ]
-                )
-            else:
-                weird_candidates.extend(
-                    [
-                        ("bad_UDP_checksum", "UDP", 0.001),
-                        ("UDP_datagram_length_mismatch", "UDP", 0.0008),
-                    ]
-                )
-
-        weird_roll = rng.random()
-        cumulative = 0.0
-        selected_weird: tuple[str, str] | None = None
-        for name, source, probability in weird_candidates:
-            cumulative += probability
-            if weird_roll < cumulative:
-                selected_weird = (name, source)
-                break
-        if not local_only and selected_weird is not None:
-            from evidenceforge.events.contexts import WeirdContext
-
-            event.weird = WeirdContext(name=selected_weird[0], source=selected_weird[1])
+        # Automatic weird.log synthesis is intentionally disabled for now. The
+        # Zeek weird type space is broad and state-sensitive; poorly matched
+        # weird rows are more damaging than sparse weird.log output. Explicit
+        # WeirdContext events still render through ZeekWeirdEmitter. Keep one
+        # RNG draw to avoid reshaping unrelated deterministic traffic choices.
+        if not _AUTO_WEIRD_ENABLED:
+            rng.random()
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
@@ -4278,7 +4229,7 @@ class ActivityGenerator:
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
-        dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
+        dns_time = time - timedelta(milliseconds=rng.randint(900, 1400))
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
         )
