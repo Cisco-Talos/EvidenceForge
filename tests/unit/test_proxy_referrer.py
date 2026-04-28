@@ -226,11 +226,100 @@ class TestConnectTunnelBehavior:
         inspected_fields = rendered_lines[1].split()
         assert connect_fields[4] == "CONNECT"
         assert inspected_fields[4] == "GET"
-        assert connect_fields[0:2] < inspected_fields[0:2]
+        assert connect_fields[0:2] <= inspected_fields[0:2]
         assert connect_fields[7:10] != inspected_fields[7:10]
         assert connect_fields[7] == "200"
         assert int(connect_fields[8]) < int(inspected_fields[8])
         assert int(connect_fields[9]) < int(inspected_fields[9])
+
+    def test_inspected_https_denial_has_successful_connect_setup(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.20.10",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="GET",
+                url="https://example.com/blocked.js",
+                host="example.com",
+                status_code=403,
+                sc_bytes=1200,
+                cs_bytes=700,
+                time_taken=900,
+                content_type="text/html",
+                cache_result="DENIED",
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 2
+        connect_fields = rendered_lines[0].split()
+        denied_fields = rendered_lines[1].split()
+        assert connect_fields[4] == "CONNECT"
+        assert connect_fields[7] == "200"
+        assert denied_fields[4] == "GET"
+        assert denied_fields[7] == "403"
+
+    def test_denied_connect_does_not_emit_inspected_request(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.20.10",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=403,
+                sc_bytes=1200,
+                cs_bytes=700,
+                time_taken=900,
+                content_type="text/html",
+                cache_result="DENIED",
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 1
+        denied_fields = rendered_lines[0].split()
+        assert denied_fields[4] == "CONNECT"
+        assert denied_fields[7] == "403"
 
     def test_tunnel_reuse_within_timeout(self):
         """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""

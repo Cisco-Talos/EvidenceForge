@@ -23,7 +23,7 @@
 """HTTP/HTTPS forward proxy access log emitter (W3C Extended format)."""
 
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -58,7 +58,7 @@ def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | da
     rng = random.Random(seed)
     host_len = len(str(px.host or ""))
     return {
-        "timestamp": request_time - timedelta(milliseconds=rng.randint(1200, 3500)),
+        "timestamp": request_time,
         "sc_bytes": rng.randint(90, 260),
         "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
         "time_taken": rng.randint(20, 450),
@@ -130,7 +130,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                     "method": "CONNECT",
                     "url": f"{px.host}:443",
                     "protocol": "HTTP/1.1",
-                    "status_code": px.status_code,
+                    "status_code": 200,
                     "sc_bytes": setup["sc_bytes"],
                     "cs_bytes": setup["cs_bytes"],
                     "time_taken": setup["time_taken"],

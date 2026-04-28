@@ -25,6 +25,19 @@ ocsp:
   this_update_max_skew_seconds: 3600
   next_update_min_seconds: 28800
   next_update_max_seconds: 604800
+  responders:
+    - issuer_patterns: ["*Let's Encrypt*"]
+      domains: ["r3.o.lencr.org", "ocsp.int-x3.letsencrypt.org"]
+    - issuer_patterns: ["*DigiCert*"]
+      domains: ["ocsp.digicert.com"]
+    - issuer_patterns: ["*Google Trust Services*", "*Google Trust*"]
+      domains: ["ocsp.pki.goog"]
+    - issuer_patterns: ["*GlobalSign*"]
+      domains: ["ocsp.globalsign.com"]
+    - issuer_patterns: ["*Sectigo*"]
+      domains: ["ocsp.sectigo.com"]
+    - issuer_patterns: ["*"]
+      domains: ["ocsp.digicert.com", "ocsp.sectigo.com", "ocsp.globalsign.com"]
   status_weights:
     good: 90
     unknown: 7

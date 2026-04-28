@@ -41,11 +41,13 @@ from evidenceforge.events.contexts import (
     DnsContext,
     EdrContext,
     FileContext,
+    FileTransferContext,
     FirewallContext,
     HostContext,
     HttpContext,
     IdsContext,
     KerberosContext,
+    OcspContext,
     ProxyContext,
     RegistryContext,
 )
@@ -1275,9 +1277,10 @@ class ActivityGenerator:
         )
         event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
 
-        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses)
+        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses).
+        # Zeek ocsp.log joins through a separate OCSP HTTP response file
+        # (`ocsp.id == files.fuid`), not through the encrypted TLS connection UID.
         if rng.random() < 0.18:
-            from evidenceforge.events.contexts import OcspContext
             from evidenceforge.generation.activity.tls_realism import ocsp_config
             from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
 
@@ -1310,7 +1313,7 @@ class ActivityGenerator:
                 self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
             this_update, next_update = ocsp_window
             ocsp_id = _gen_uid("F")
-            event.ocsp = OcspContext(
+            ocsp_ctx = OcspContext(
                 id=ocsp_id,
                 hash_algorithm="sha256",
                 issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[
@@ -1324,6 +1327,87 @@ class ActivityGenerator:
                 this_update=this_update,
                 next_update=next_update,
             )
+            self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
+
+    def _emit_ocsp_http_response(
+        self,
+        tls_event: SecurityEvent,
+        *,
+        cert_name: str,
+        ocsp: OcspContext,
+        rng: random.Random,
+    ) -> None:
+        """Emit Zeek-native OCSP HTTP/file evidence for an OCSP response."""
+        net = tls_event.network
+        if net is None:
+            return
+        import hashlib
+
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+        from evidenceforge.generation.activity.tls_realism import pick_ocsp_responder
+
+        issuer_name = tls_event.x509.certificate_issuer if tls_event.x509 else ""
+        responder = pick_ocsp_responder(issuer_name, rng)
+        responder_ip = resolve_domain_ip(responder, src_host=net.src_ip)
+        ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp.id}")).randint(900, 2500)
+        ocsp_time = tls_event.timestamp + timedelta(
+            milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
+        )
+        uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
+        http_ctx = HttpContext(
+            method="GET",
+            host=responder,
+            uri=f"/{uri_seed}",
+            version="1.1",
+            user_agent="Microsoft-CryptoAPI/10.0",
+            request_body_len=0,
+            response_body_len=ocsp_size,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/ocsp-response"],
+            resp_fuids=[ocsp.id],
+            tags=["ocsp"],
+        )
+        file_ctx = FileTransferContext(
+            fuid=ocsp.id,
+            source="HTTP",
+            depth=0,
+            analyzers=[],
+            mime_type="application/ocsp-response",
+            duration=random.Random(_stable_seed(f"ocsp_file_duration:{ocsp.id}")).uniform(
+                0.001, 0.02
+            ),
+            local_orig=_is_private_ip(responder_ip),
+            is_orig=False,
+            seen_bytes=ocsp_size,
+            total_bytes=ocsp_size,
+            missing_bytes=0,
+            overflow_bytes=0,
+            timedout=False,
+        )
+        source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
+        self.generate_connection(
+            src_ip=net.src_ip,
+            dst_ip=responder_ip,
+            time=ocsp_time,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=random.Random(_stable_seed(f"ocsp_conn_duration:{ocsp.id}")).uniform(
+                0.02, 0.35
+            ),
+            orig_bytes=320,
+            resp_bytes=ocsp_size,
+            emit_dns=True,
+            pid=net.initiating_pid,
+            source_system=source_system,
+            conn_state="SF",
+            http=http_ctx,
+            file_transfer=file_ctx,
+            ocsp=ocsp,
+            hostname=responder,
+            proxy_bypass=True,
+        )
 
     def _pick_profiled_tls_destination(
         self,
@@ -2456,6 +2540,8 @@ class ActivityGenerator:
         dns: Optional["DnsContext"] = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
+        file_transfer: FileTransferContext | None = None,
+        ocsp: OcspContext | None = None,
         proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
@@ -2767,6 +2853,8 @@ class ActivityGenerator:
                 dns=dns,
                 ids=ids,
                 http=egress_http,
+                file_transfer=file_transfer,
+                ocsp=ocsp,
                 firewall=firewall,
                 hostname=hostname,
                 proxy_bypass=True,
@@ -3113,6 +3201,10 @@ class ActivityGenerator:
             event.ids = ids
         if http is not None:
             event.http = http
+        if file_transfer is not None:
+            event.file_transfer = file_transfer
+        if ocsp is not None:
+            event.ocsp = ocsp
         if proxy is not None:
             event.proxy = proxy
         if firewall is not None:

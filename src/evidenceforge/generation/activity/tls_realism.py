@@ -52,6 +52,27 @@ def ocsp_config() -> dict[str, Any]:
     return load_tls_realism().get("ocsp", {})
 
 
+def pick_ocsp_responder(issuer_name: str, rng: random.Random) -> str:
+    """Pick an OCSP responder hostname for a certificate issuer."""
+    responders = ocsp_config().get("responders", [])
+    fallback_domains: list[str] = []
+    for responder in responders:
+        if not isinstance(responder, dict):
+            continue
+        domains = [str(domain) for domain in responder.get("domains", []) if domain]
+        if not domains:
+            continue
+        patterns = [str(pattern) for pattern in responder.get("issuer_patterns", [])]
+        if patterns == ["*"] or "*" in patterns:
+            fallback_domains = domains
+            continue
+        if any(fnmatch.fnmatch(issuer_name, pattern) for pattern in patterns):
+            return rng.choice(domains)
+    if fallback_domains:
+        return rng.choice(fallback_domains)
+    return "ocsp.digicert.com"
+
+
 def certificate_chain_config() -> dict[str, Any]:
     """Return TLS certificate chain behavior config."""
     return load_tls_realism().get("certificate_chains", {})

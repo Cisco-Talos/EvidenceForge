@@ -26,6 +26,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     multi_label_public_suffixes,
     ocsp_config,
+    pick_ocsp_responder,
     pick_tls_destination,
     reset_tls_realism_cache,
     tls_destination_config,
@@ -167,6 +168,20 @@ class TestTlsIssuers:
             statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
             assert "revoked" not in statuses
 
+    def test_ocsp_responder_selection_is_issuer_aware(self):
+        """OCSP responders should come from issuer-specific config."""
+        assert pick_ocsp_responder("CN=R3, O=Let's Encrypt, C=US", random.Random(1)) in {
+            "r3.o.lencr.org",
+            "ocsp.int-x3.letsencrypt.org",
+        }
+        assert (
+            pick_ocsp_responder(
+                "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+                random.Random(1),
+            )
+            == "ocsp.globalsign.com"
+        )
+
     def test_tls_realism_overlay_extends_lists_and_replaces_scalars(self, tmp_path, monkeypatch):
         """TLS realism config should support project-local overlays."""
         overlay_dir = tmp_path / ".eforge" / "config" / "activity"
@@ -175,7 +190,15 @@ class TestTlsIssuers:
             yaml.safe_dump(
                 {
                     "san": {"multi_label_public_suffixes": ["example.test"]},
-                    "ocsp": {"cache_bucket_seconds": 7200},
+                    "ocsp": {
+                        "cache_bucket_seconds": 7200,
+                        "responders": [
+                            {
+                                "issuer_patterns": ["*Custom*"],
+                                "domains": ["ocsp.custom.example.test"],
+                            }
+                        ],
+                    },
                     "certificate_chains": {
                         "templates": [
                             {
@@ -205,6 +228,10 @@ class TestTlsIssuers:
         try:
             assert "example.test" in multi_label_public_suffixes()
             assert ocsp_config()["cache_bucket_seconds"] == 7200
+            assert (
+                pick_ocsp_responder("CN=Custom TLS CA", random.Random(1))
+                == "ocsp.custom.example.test"
+            )
             assert any(
                 template.get("name") == "custom"
                 for template in certificate_chain_config()["templates"]

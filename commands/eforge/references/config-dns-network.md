@@ -383,6 +383,9 @@ san:
   multi_label_public_suffixes: ["co.uk", "com.au"]
 ocsp:
   cache_bucket_seconds: 14400
+  responders:
+    - issuer_patterns: ["*Let's Encrypt*"]
+      domains: ["r3.o.lencr.org", "ocsp.int-x3.letsencrypt.org"]
   status_weights: {good: 90, unknown: 7, revoked: 3}
   suppress_revoked_suffixes: [.microsoft.com, .google.com, .zoom.us]
 certificate_chains:
@@ -404,6 +407,10 @@ destinations:
       dns_tags: [saas, outlook, teams, onedrive]
       domains: [login.microsoftonline.com, graph.microsoft.com]
 ```
+
+`ocsp.responders` maps certificate issuer DN patterns to OCSP responder hostnames.
+When Zeek OCSP evidence is generated, the engine emits a supporting HTTP/file-analysis
+transaction to one of these responders so `ocsp.id` joins to `files.fuid`.
 
 `ocsp.suppress_revoked_suffixes` prevents routine mainstream browsing certificates from being marked revoked while still allowing rare revoked statuses for uncategorized or intentionally suspicious certificate identities.
 
