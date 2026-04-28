@@ -242,6 +242,17 @@ class TestResponseSizes:
         for f in favicons:
             assert f.response_body_len <= 5_000
 
+    def test_extension_drives_content_type(self):
+        rng = random.Random(42)
+        requests = generate_browsing_session(rng, "github.com", [])
+        for request in requests:
+            if request.path.endswith(".gif"):
+                assert request.content_type == "image/gif"
+                assert 500 <= request.response_body_len <= 50_000
+            if request.path.endswith(".ico"):
+                assert request.content_type == "image/x-icon"
+                assert 500 <= request.response_body_len <= 5_000
+
 
 class TestDeterminism:
     """Same seed produces identical sessions."""

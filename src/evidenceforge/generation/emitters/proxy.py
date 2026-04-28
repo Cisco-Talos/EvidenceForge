@@ -22,11 +22,13 @@
 
 """HTTP/HTTPS forward proxy access log emitter (W3C Extended format)."""
 
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 # CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
 # only when no tunnel exists for this (client_ip, host) pair, or the
@@ -48,6 +50,19 @@ def _is_https_request(px: Any, net: Any) -> bool:
     """Return True when a proxy request represents inspected HTTPS traffic."""
     url = str(getattr(px, "url", "") or "")
     return url.lower().startswith("https://") or (net is not None and net.dst_port == 443)
+
+
+def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | datetime]:
+    """Derive CONNECT setup timing and byte fields distinct from inspected requests."""
+    seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
+    rng = random.Random(seed)
+    host_len = len(str(px.host or ""))
+    return {
+        "timestamp": request_time - timedelta(milliseconds=rng.randint(80, 850)),
+        "sc_bytes": rng.randint(90, 260),
+        "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
+        "time_taken": rng.randint(20, 450),
+    }
 
 
 class ProxyEmitter(HostMultiplexEmitter):
@@ -107,17 +122,18 @@ class ProxyEmitter(HostMultiplexEmitter):
                     needs_connect = False
 
             if needs_connect:
+                setup = _connect_setup_fields(px, event.timestamp)
                 connect_data = {
-                    "timestamp": event.timestamp,
+                    "timestamp": setup["timestamp"],
                     "client_ip": px.client_ip,
                     "username": px.username,
                     "method": "CONNECT",
                     "url": f"{px.host}:443",
                     "protocol": "HTTP/1.1",
                     "status_code": px.status_code,
-                    "sc_bytes": px.sc_bytes,
-                    "cs_bytes": px.cs_bytes,
-                    "time_taken": px.time_taken,
+                    "sc_bytes": setup["sc_bytes"],
+                    "cs_bytes": setup["cs_bytes"],
+                    "time_taken": setup["time_taken"],
                     "user_agent": px.user_agent,
                     "host": px.host,
                     "content_type": None,

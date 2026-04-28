@@ -186,6 +186,52 @@ class TestConnectTunnelBehavior:
         assert inspected_fields[4] == "GET"
         assert inspected_fields[5] == "https://example.com/page"
 
+    def test_connect_setup_row_differs_from_inspected_request_accounting(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.20.10",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="GET",
+                url="https://example.com/status.gif",
+                host="example.com",
+                sc_bytes=4096,
+                cs_bytes=700,
+                time_taken=900,
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 2
+        connect_fields = rendered_lines[0].split()
+        inspected_fields = rendered_lines[1].split()
+        assert connect_fields[4] == "CONNECT"
+        assert inspected_fields[4] == "GET"
+        assert connect_fields[0:2] < inspected_fields[0:2]
+        assert connect_fields[7:10] != inspected_fields[7:10]
+        assert connect_fields[7] == "200"
+        assert int(connect_fields[8]) < int(inspected_fields[8])
+        assert int(connect_fields[9]) < int(inspected_fields[9])
+
     def test_tunnel_reuse_within_timeout(self):
         """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""
         from pathlib import Path
