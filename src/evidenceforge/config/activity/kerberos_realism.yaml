@@ -1,0 +1,62 @@
+# Kerberos realism knobs for Windows Security authentication events.
+#
+# User customizations go in:
+#   .eforge/config/activity/kerberos_realism.yaml
+#
+# Overlay behavior: nested dicts merge and lists extend. Prefer overriding
+# weights by profile key instead of adding duplicate profile values.
+
+tgt_success:
+  pre_auth_types:
+    encrypted_timestamp:
+      value: 2
+      weight: 96
+      certificate_required: false
+      description: "Encrypted timestamp pre-auth; common for password and machine TGT requests."
+    pkinit:
+      value: 15
+      weight: 3
+      certificate_required: true
+      certificate_profile: enterprise_user
+      description: "PKINIT/smart-card or certificate-based pre-auth."
+    none_or_legacy:
+      value: 0
+      weight: 1
+      certificate_required: false
+      description: "No pre-auth/legacy edge cases; intentionally rare."
+
+  ticket_options:
+    forwardable_renewable_canonicalize:
+      value: "0x40810010"
+      weight: 60
+    forwardable_renewable:
+      value: "0x40810000"
+      weight: 20
+    renewable_canonicalize:
+      value: "0x40000010"
+      weight: 10
+    renewable_ok_as_delegate:
+      value: "0x50800000"
+      weight: 5
+    canonicalize_only:
+      value: "0x10"
+      weight: 5
+
+  encryption_types:
+    aes256:
+      value: "0x12"
+      weight: 70
+    aes128:
+      value: "0x11"
+      weight: 20
+    rc4_hmac:
+      value: "0x17"
+      weight: 10
+
+certificate_profiles:
+  enterprise_user:
+    issuer_names:
+      - "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+      - "CN=Acme Enterprise Smartcard CA, O=Acme Corp, C=US"
+    serial_hex_bytes: 16
+    thumbprint_hex_chars: 40

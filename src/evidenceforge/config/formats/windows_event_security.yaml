@@ -1286,7 +1286,7 @@ output:
         <Data Name="TicketOptions">{{ TicketOptions }}</Data>
         <Data Name="Status">{{ Status }}</Data>
         <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
-        <Data Name="PreAuthType">{{ PreAuthType | default(15) }}</Data>
+        <Data Name="PreAuthType">{{ PreAuthType | default(2) }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
         <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
         <Data Name="CertIssuerName">{{ CertIssuerName | default('') }}</Data>

@@ -291,6 +291,15 @@ class TestKerberosEvents:
         event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
         assert event.event_type == "kerberos_tgt"
         assert event.kerberos.service_name == "krbtgt"
+        assert event.kerberos.pre_auth_type in {0, 2, 15}
+        if event.kerberos.pre_auth_type == 15:
+            assert event.kerberos.cert_issuer_name
+            assert event.kerberos.cert_serial_number
+            assert event.kerberos.cert_thumbprint
+        else:
+            assert event.kerberos.cert_issuer_name == ""
+            assert event.kerberos.cert_serial_number == ""
+            assert event.kerberos.cert_thumbprint == ""
         assert event.dst_host.fqdn.startswith("DC-01.")
 
     def test_service_ticket_emits_4769(self, activity_gen, mock_emitters):

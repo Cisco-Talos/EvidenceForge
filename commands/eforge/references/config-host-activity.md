@@ -11,7 +11,8 @@ Schema documentation for host-level activity config files. User customizations g
 1. [bash_commands.yaml](#bash_commandsyaml)
 2. [systemd_schedules.yaml](#systemd_schedulesyaml)
 3. [extra_syslog_messages.yaml](#extra_syslog_messagesyaml)
-4. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
+4. [kerberos_realism.yaml](#kerberos_realismyaml)
+5. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -160,6 +161,55 @@ programs:
 | `distro` | string | no | Restrict to `ubuntu` (excluded on RHEL-like) |
 | `roles` | list[string] | no | Required host roles (any match includes the entry) |
 | `transient` | bool | no | If `true`, uses random PID per invocation |
+
+---
+
+## kerberos_realism.yaml
+
+Data-driven Kerberos field distributions for Windows Security authentication events. The generator uses this file for successful 4768 TGT requests.
+
+### Structure
+
+```yaml
+tgt_success:
+  pre_auth_types:
+    encrypted_timestamp:
+      value: 2
+      weight: 96
+      certificate_required: false
+    pkinit:
+      value: 15
+      weight: 3
+      certificate_required: true
+      certificate_profile: enterprise_user
+    none_or_legacy:
+      value: 0
+      weight: 1
+      certificate_required: false
+  ticket_options:
+    forwardable_renewable_canonicalize:
+      value: "0x40810010"
+      weight: 60
+  encryption_types:
+    aes256:
+      value: "0x12"
+      weight: 70
+
+certificate_profiles:
+  enterprise_user:
+    issuer_names:
+      - "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+    serial_hex_bytes: 16
+    thumbprint_hex_chars: 40
+```
+
+### Conventions
+
+- `PreAuthType: 2` is the normal encrypted timestamp case and should dominate default profiles.
+- `PreAuthType: 15` models PKINIT/certificate pre-auth and must reference a certificate profile so 4768 cert fields are populated.
+- `PreAuthType: 0` is rare legacy/no-preauth behavior.
+- Supported encryption types are `0x12` (AES-256), `0x11` (AES-128), and `0x17` (RC4-HMAC).
+- Run `eforge validate-config` after changes; it rejects invalid PKINIT/certificate combinations and excessively high no-preauth, PKINIT, or RC4 weights.
 
 ---
 
