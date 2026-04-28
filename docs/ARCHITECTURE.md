@@ -402,7 +402,7 @@ ActivityGenerator.generate_connection()
 | Rule | Trigger | Emits | Timing |
 |------|---------|-------|--------|
 | `DnsBeforeConnection` | TCP connection (not port 53) | DNS query (UDP/53) | 5-80ms before |
-| `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) + optional 4672 | TGT 50-200ms before, TGS 20-100ms after TGT |
+| `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) | TGT 50-200ms before, TGS 20-100ms after TGT; elevated-session 4672 remains tied to the target-host 4624 |
 | `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) | 1-50ms after |
 | `SupplementaryAuditEvents` | Process creation with admin commands | 4720/4726/4728/4697/4698/1102 | 100-500ms after |
 
