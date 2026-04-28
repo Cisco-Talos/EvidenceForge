@@ -50,3 +50,72 @@ class TestValidateConfig:
             in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_pkinit_without_certificate_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            return {
+                "tgt_success": {
+                    "pre_auth_types": {
+                        "pkinit": {
+                            "value": 15,
+                            "weight": 1,
+                            "certificate_required": True,
+                        }
+                    },
+                    "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                    "encryption_types": {"aes256": {"value": "0x12", "weight": 1}},
+                },
+                "certificate_profiles": {},
+            }
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "PreAuthType 15 must reference a certificate_profile" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_improbable_preauth_distribution(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            return {
+                "tgt_success": {
+                    "pre_auth_types": {
+                        "encrypted_timestamp": {
+                            "value": 2,
+                            "weight": 1,
+                            "certificate_required": False,
+                        },
+                        "none_or_legacy": {
+                            "value": 0,
+                            "weight": 1,
+                            "certificate_required": False,
+                        },
+                    },
+                    "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                    "encryption_types": {"aes256": {"value": "0x12", "weight": 1}},
+                },
+                "certificate_profiles": {},
+            }
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "PreAuthType 0/no-preauth weight must not exceed 5%" in issue.message
+            for issue in result.issues
+        )

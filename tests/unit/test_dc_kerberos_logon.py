@@ -242,8 +242,10 @@ class TestDCKerberosOnLogon:
         assert "kerberos_tgt" not in event_types
         assert "kerberos_service" not in event_types
 
-    def test_dc_4672_for_elevated_user(self, activity_gen, mock_emitters, windows_system):
-        """Elevated users should get 4672 (Special Privileges) on the DC during Kerberos auth."""
+    def test_elevated_user_4672_stays_on_logon_target(
+        self, activity_gen, mock_emitters, windows_system
+    ):
+        """Elevated users get 4672 on the host where the logon session is created."""
         # Use a sysadmin persona which has ~80% elevation rate
         from evidenceforge.models.scenario import User
 
@@ -254,7 +256,7 @@ class TestDCKerberosOnLogon:
             persona="sysadmin",
         )
 
-        special_priv_count = 0
+        elevated_logon_count = 0
         total_kerberos_count = 0
 
         for i in range(30):
@@ -275,22 +277,26 @@ class TestDCKerberosOnLogon:
 
             if "kerberos_tgt" in event_types:
                 total_kerberos_count += 1
-                if "special_privileges" in event_types:
-                    special_priv_count += 1
-                    # Verify 4672 is on the DC
-                    priv_event = next(e for e in events if e.event_type == "special_privileges")
-                    assert priv_event.dst_host.hostname == "DC-01"
-                    assert priv_event.auth.username == "admin.user"
+                logon_event = next(e for e in events if e.event_type == "logon")
+                if logon_event.auth.elevated:
+                    elevated_logon_count += 1
+                    assert logon_event.dst_host.hostname == "WKS-01"
+                    assert logon_event.auth.username == "admin.user"
+                    assert logon_event.auth.logon_id not in {"", "0x0", "0x3e7"}
+                assert not any(
+                    e.event_type == "special_privileges" and e.dst_host.hostname == "DC-01"
+                    for e in events
+                )
 
-        # Should have at least some Kerberos logons with 4672
+        # Should have at least some Kerberos logons with elevated target-host sessions.
         assert total_kerberos_count > 0, "No Kerberos logons in 30 attempts"
-        assert special_priv_count > 0, "No DC 4672 events for admin in Kerberos logons"
+        assert elevated_logon_count > 0, "No elevated target-host logons for admin"
 
     def test_no_dc_4672_for_regular_user(
         self, activity_gen, mock_emitters, windows_system, test_user
     ):
-        """Regular users should rarely get 4672 on DC (only ~5% elevation rate)."""
-        special_priv_count = 0
+        """Regular users should rarely get 4672 (only ~5% elevation rate)."""
+        elevated_logon_count = 0
 
         for i in range(30):
             mock_emitters["windows_event_security"].emit.reset_mock()
@@ -306,14 +312,50 @@ class TestDCKerberosOnLogon:
             events = [
                 call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
             ]
-            if any(e.event_type == "special_privileges" for e in events):
-                special_priv_count += 1
+            logon_event = next(e for e in events if e.event_type == "logon")
+            if logon_event.auth.elevated:
+                elevated_logon_count += 1
+            assert not any(e.event_type == "special_privileges" for e in events)
 
         # Regular users have ~5% elevation rate, so most runs should have very few
         # With 30 attempts * 70% Kerberos * 5% elevation = ~1 expected
-        assert special_priv_count < 15, (
-            f"Too many DC 4672 events for regular user: {special_priv_count}"
+        assert elevated_logon_count < 15, (
+            f"Too many elevated logons for regular user: {elevated_logon_count}"
         )
+
+    def test_dc_kerberos_expansion_does_not_emit_standalone_4672(
+        self, activity_gen, mock_emitters, windows_system
+    ):
+        """DC Kerberos expansion emits 4768/4769 but not a separate DC-side 4672."""
+        admin_user = User(
+            username="admin.user",
+            full_name="Admin User",
+            email="admin.user@corp.com",
+            persona="sysadmin",
+        )
+
+        for i in range(30):
+            mock_emitters["windows_event_security"].emit.reset_mock()
+            ts = datetime(2024, 3, 15, 11, i, 0, tzinfo=UTC)
+            activity_gen.state_manager.set_current_time(ts)
+            activity_gen.generate_logon(
+                user=admin_user,
+                system=windows_system,
+                time=ts,
+                logon_type=3,
+                source_ip="10.10.10.50",
+            )
+            events = [
+                call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            ]
+            if any(e.event_type == "kerberos_tgt" for e in events):
+                assert not any(
+                    e.event_type == "special_privileges" and e.dst_host.hostname == "DC-01"
+                    for e in events
+                )
+                return
+
+        pytest.fail("No Kerberos logons generated in 30 attempts")
 
     def test_no_dc_kerberos_when_no_dc_configured(
         self, state_manager, mock_emitters, windows_system, test_user

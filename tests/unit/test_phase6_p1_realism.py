@@ -291,6 +291,15 @@ class TestKerberosEvents:
         event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
         assert event.event_type == "kerberos_tgt"
         assert event.kerberos.service_name == "krbtgt"
+        assert event.kerberos.pre_auth_type in {0, 2, 15}
+        if event.kerberos.pre_auth_type == 15:
+            assert event.kerberos.cert_issuer_name
+            assert event.kerberos.cert_serial_number
+            assert event.kerberos.cert_thumbprint
+        else:
+            assert event.kerberos.cert_issuer_name == ""
+            assert event.kerberos.cert_serial_number == ""
+            assert event.kerberos.cert_thumbprint == ""
         assert event.dst_host.fqdn.startswith("DC-01.")
 
     def test_service_ticket_emits_4769(self, activity_gen, mock_emitters):
@@ -318,6 +327,20 @@ class TestKerberosEvents:
         assert event.event_type == "ntlm_validation"
         assert event.auth.username == "WKS-01$"
         assert event.auth.source_ip == "WKS-01"  # workstation stored in source_ip
+        assert event.auth.failure_status == "0x0"
+
+    def test_failed_ntlm_validation_carries_status(self, activity_gen, mock_emitters):
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen.generate_ntlm_validation(
+            username="jsmith",
+            workstation="WKS-01",
+            dc_hostname="DC-01",
+            time=ts,
+            status="0xc000006a",
+        )
+        event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
+        assert event.event_type == "ntlm_validation"
+        assert event.auth.failure_status == "0xc000006a"
 
 
 class TestInfrastructureDetection:

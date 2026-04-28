@@ -1824,8 +1824,9 @@ class ActivityGenerator:
             )
 
         # Emit DC-side Kerberos events for domain logons via causal expansion.
-        # The KerberosBeforeLogon rule handles TGT (4768), TGS (4769), and
-        # optional 4672 for elevated users.
+        # The target-host 4624 renderer owns 4672 for elevated sessions because
+        # that privilege assignment belongs to the host where the logon session
+        # is created, not to the DC ticket request itself.
         auth_package_name = auth_pkg.get("AuthenticationPackageName", "Negotiate")
         self._expand_and_emit(
             "logon",
@@ -1979,22 +1980,6 @@ class ActivityGenerator:
             time=tgs_time,
         )
 
-        # 4672 Special Privileges on DC for elevated users (domain admins)
-        if self._should_elevate(user):
-            priv_time = tgt_time + timedelta(milliseconds=rng.randint(1, 10))
-            priv_event = SecurityEvent(
-                timestamp=priv_time,
-                event_type="special_privileges",
-                dst_host=self._build_dc_host_context(dc_hostname),
-                auth=AuthContext(
-                    username=user.username,
-                    user_sid=self._get_sid(user.username),
-                    logon_id=self._get_user_logon_id(user.username, dc_hostname),
-                    reporting_pid=self._get_system_pid(dc_hostname, "lsass", 0x2E0),
-                ),
-            )
-            self.dispatcher.dispatch(priv_event)
-
     def generate_failed_logon(
         self,
         user: User,
@@ -2118,6 +2103,7 @@ class ActivityGenerator:
                 workstation=system.hostname,
                 dc_hostname=dc_system.hostname,
                 time=time,
+                status=substatus,
             )
 
             # 4771 Kerberos pre-authentication failure on DC
@@ -5168,6 +5154,9 @@ class ActivityGenerator:
         # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
+        from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
+
+        tgt_fields = pick_tgt_success_fields(rng)
 
         event = SecurityEvent(
             timestamp=time,
@@ -5179,13 +5168,12 @@ class ActivityGenerator:
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
-                ticket_options=rng.choices(
-                    ["0x40810010", "0x40810000", "0x40000010", "0x50800000", "0x10"],
-                    weights=[60, 20, 10, 5, 5],
-                    k=1,
-                )[0],
-                encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
-                pre_auth_type=15,
+                ticket_options=tgt_fields["ticket_options"],
+                encryption_type=tgt_fields["encryption_type"],
+                pre_auth_type=tgt_fields["pre_auth_type"],
+                cert_issuer_name=tgt_fields["cert_issuer_name"],
+                cert_serial_number=tgt_fields["cert_serial_number"],
+                cert_thumbprint=tgt_fields["cert_thumbprint"],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
             ),
@@ -5271,6 +5259,7 @@ class ActivityGenerator:
         workstation: str,
         dc_hostname: str,
         time: datetime,
+        status: str = "0x0",
     ) -> None:
         """Generate NTLM credential validation event (4776) on the DC."""
         event = SecurityEvent(
@@ -5280,6 +5269,7 @@ class ActivityGenerator:
             auth=AuthContext(
                 username=username,
                 source_ip=workstation,  # SourceWorkstation stored in source_ip
+                failure_status=status,
             ),
         )
 
@@ -5563,14 +5553,24 @@ class ActivityGenerator:
     def _get_user_logon_id(self, username: str, hostname: str) -> str:
         """Look up the user's active session LogonID on the given host.
 
-        Returns the session LogonID if found, or '0x3e7' (SYSTEM) as fallback.
+        Returns the session LogonID if found. Well-known service identities use
+        their canonical logon IDs. Human/domain accounts without an active
+        session fall back to 0x0 rather than SYSTEM's 0x3e7.
         """
+        canonical_logon_ids = {
+            "SYSTEM": "0x3e7",
+            "LOCAL SERVICE": "0x3e5",
+            "NETWORK SERVICE": "0x3e4",
+        }
+        if username in canonical_logon_ids:
+            return canonical_logon_ids[username]
+
         sessions = self.state_manager.get_sessions_for_user(username)
         if sessions:
             active = next((s for s in sessions if s.system == hostname), None)
             if active:
                 return active.logon_id
-        return "0x3e7"
+        return "0x0"
 
     def generate_log_cleared(
         self,

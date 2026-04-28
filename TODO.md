@@ -47,6 +47,8 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Recently Resolved
 
+- [ ] **IN PROGRESS** Windows Security/authentication source review — focused baseline eval is complete; fixing high-signal Windows auth realism findings first (4672/session semantics and sparse 4800/4801 rendering), then rerunning focused generation/eval before moving deeper.
+
 - [x] TODO.md reality audit — verified high-signal open realism/code-cleanup findings against the current codebase, marked stale items, and identified the generated-output validation pass needed before deeper realism work.
   Targeted verification: `uv run pytest tests/unit/test_network_realism.py tests/unit/test_activity_helpers.py tests/unit/test_dc_kerberos_logon.py -q --no-cov` passed (25 tests).
 
@@ -127,7 +129,7 @@ Data is structurally correct but the hunt doesn't work — key attack steps are 
 - [x] **RDP lateral movement invisible + zero RDP noise** — added background IT admin RDP connections (1-3/hour) to Windows servers/DCs in baseline. Storyline RDP sessions already produce Zeek conn records via generate_rdp_session().
 - [x] **No DC Kerberos events for compromised user** — generate_logon() now emits 4768 (TGT) + 4769 (service ticket) on the DC for Kerberos-authenticated domain logons, with realistic timing offsets.
 - [x] **No LSASS access events (Sysmon 10)** — added Sysmon Event 10 (ProcessAccess) emitter, format template, and generate_process_access() method. Auto-emits alongside create_remote_thread when target is lsass.exe.
-- [x] **No 4672 (Special Privileges) on Domain Controller** — new `special_privileges` event type emits standalone 4672 on DC during Kerberos authentication for elevated users.
+- [x] **4672 (Special Privileges) target-host semantics** — elevated-session 4672 is auto-emitted alongside the target-host 4624; Kerberos causal expansion emits DC 4768/4769 only.
 - [x] **Storyline events too perfect** — /eforge scenario skill now interviews about attacker sophistication and generates fumbles (mistakes) and dead ends (abandoned paths) appropriate to the chosen level.
 - [x] **C2/exfiltration SNI values are auto-generated CDN names** — replaced `host-x-x-x-x.cdn-provider.net` fallback with 30 plausible SaaS/analytics/CDN domains.
 - [x] **Proxy log issues** — CONNECT entries now use domain names from REVERSE_DNS or plausible random hostnames instead of raw IPs.
@@ -150,6 +152,16 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Blind HTTP/proxy/network telemetry realism evaluation of `/private/tmp/eforge-http-proxy-review-output/data` — scored highly synthetic due to concrete ASA/Zeek DNS and proxy/client-tap contradictions, with ASA connection-ID artifacts and DNS consistency issues as supporting tells.
 - [x] Fresh blind HTTP/proxy/network telemetry realism evaluation of regenerated `/private/tmp/eforge-http-proxy-review-output/data` — TLS-intercept proxy pattern accepted; remaining high-signal findings were plain HTTP proxy/client status contradiction, OCSP responder/issuer mismatch, and generated-looking Zeek certificate FUID artifact.
 - [x] Fresh blind HTTP/proxy/network telemetry realism evaluation after latest fixes for `/private/tmp/eforge-http-proxy-review-output/data` — prior critical proxy/client and OCSP/public-responder issues were fixed; remaining evidence is medium/high realism polish around Zeek HTTP body length semantics, Let's Encrypt OCSP responder choice, and ASA connection-ID spacing artifacts.
+- [x] Fresh blind Windows authentication/security telemetry realism evaluation of `/private/tmp/eforge-windows-auth-baseline-output/data` completed; assessed high synthetic likelihood from impossible 4672 logon semantics, documentation IP usage, and malformed sparse Windows events.
+- [x] Fresh blind Windows authentication/security telemetry realism evaluation of regenerated `/private/tmp/eforge-windows-auth-baseline-output/data` completed; TEST-NET artifact no longer present, with remaining synthetic evidence centered on 4672 logon semantics and empty EventData for 1102/4800/4801.
+- [x] Windows 4672 session semantics — removed duplicate DC-side standalone 4672 from Kerberos causal expansion; elevated 4672 now stays tied to the target-host 4624 logon session, and non-service audit fallback logon IDs no longer use SYSTEM's `0x3e7`.
+- [x] Windows 4800/4801 rendering — populated workstation lock/unlock EventData fields in the Windows Security XML template.
+- [x] Blind Windows authentication/security realism evaluation of current `/private/tmp/eforge-windows-auth-baseline-output/data` completed; prior 4672 issues are fixed, 4800/4801 fields are populated, with remaining synthetic indicators in DC 4625/4776 status contradictions and lock/unlock SessionId mismatches.
+- [x] Windows failed-auth DC consistency — failed NTLM validation 4776 now carries the matching failure status instead of success.
+- [x] Windows lock/unlock session consistency — 4800/4801 derive a stable SessionId from TargetLogonId so lock/unlock pairs do not change terminal sessions.
+- [x] Blind Windows authentication/security realism evaluation of latest regenerated `/private/tmp/eforge-windows-auth-baseline-output/data` completed; prior 4672, 4625/4776, and 4800/4801 findings are fixed, with remaining realism concerns around Kerberos 4768 PreAuthType distribution and missing Zeek visibility for external failed-auth source.
+- [x] Windows Kerberos 4768 pre-auth realism — moved TGT PreAuthType/ticket/encryption distributions into `kerberos_realism.yaml`, added overlay-aware loader and `eforge validate-config` schema/coherence checks, and verified generation now produces mostly encrypted timestamp pre-auth with rare populated PKINIT certificate fields.
+- [x] Blind Windows authentication/security realism evaluation of latest regenerated `/private/tmp/eforge-windows-auth-baseline-output/data` completed; Kerberos PreAuthType=15 empty-cert issue is fixed, with remaining lower-confidence tells in one repeated 4672 on unlock and absent Zeek visibility for external failed auth.
 
 **Snort/IDS:**
 - [x] ✓ Snort protocol field randomly assigned (no binding to SID/rule) — restructured `_FP_SIGS` to protocol-keyed dict with per-signature port and direction
@@ -263,7 +275,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Only 2 unique TicketOptions values; zero 4771 pre-auth failures — randomized TicketOptions per event type; boosted stale 4771 probability to 15%; added active-user typo 4771 at 2%/hour
 - [x] File server has no domain user logon events — type 3 logon+logoff pairs for SMB access in baseline traffic profiles and storyline causal expansion
 - [x] NETWORK SERVICE TargetDomainName shows domain instead of "NT AUTHORITY" — _subject_domain() helper in windows.py returns "NT AUTHORITY" for SYSTEM/NETWORK SERVICE/LOCAL SERVICE
-- [x] Event 4672 LogonId 0x3e7 for domain users — stale audit finding: DC-side special privileges now use `_get_user_logon_id(user.username, dc_hostname)` and targeted Kerberos/DC tests pass.
+- [x] Event 4672 LogonId 0x3e7 for domain users — target-host 4672 now shares the 4624 LogonID, and Kerberos causal expansion no longer emits duplicate standalone DC 4672 records.
 
 **Process Trees:**
 - [x] ✓³ explorer.exe parent for everything — spawn_rules.yaml now defines valid parent-child relationships; _resolve_parent() auto-creates intermediate chains (shells for CLI tools, services.exe for system processes, sshd→bash for Linux)

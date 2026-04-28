@@ -1286,7 +1286,7 @@ output:
         <Data Name="TicketOptions">{{ TicketOptions }}</Data>
         <Data Name="Status">{{ Status }}</Data>
         <Data Name="TicketEncryptionType">{{ TicketEncryptionType }}</Data>
-        <Data Name="PreAuthType">{{ PreAuthType | default(15) }}</Data>
+        <Data Name="PreAuthType">{{ PreAuthType | default(2) }}</Data>
         <Data Name="IpAddress">{{ IpAddress }}</Data>
         <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
         <Data Name="CertIssuerName">{{ CertIssuerName | default('') }}</Data>
@@ -1400,6 +1400,12 @@ output:
         {% if EventID in [4723, 4726] %}
         <Data Name="PrivilegeList">{{ PrivilegeList | default('-') }}</Data>
         {% endif %}
+        {% elif EventID in [4800, 4801] %}
+        <Data Name="TargetUserSid">{{ TargetUserSid }}</Data>
+        <Data Name="TargetUserName">{{ TargetUserName }}</Data>
+        <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
+        <Data Name="TargetLogonId">{{ TargetLogonId }}</Data>
+        <Data Name="SessionId">{{ SessionId }}</Data>
         {% elif EventID == 5156 %}
         <Data Name="ProcessID">{{ ProcessID }}</Data>
         <Data Name="Application">{{ Application }}</Data>

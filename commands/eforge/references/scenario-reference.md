@@ -312,7 +312,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
 | `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `supplementary` (auto/none) |
-| `logon` | 4624, 4672, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
+| `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |

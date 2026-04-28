@@ -43,7 +43,7 @@ output/
 | 4625 | Failed Logon | Authentication | Version 0. Keywords=0x8010 (Audit Failure). Includes Status/SubStatus failure codes. |
 | 4634 | Logoff | Authentication | Paired with 4624 via matching TargetLogonId. |
 | 4648 | Explicit Credentials | Lateral Movement | Fires when RunAs, PsExec, WMIC, or scheduled tasks use alternate credentials. Emitted on the source system. |
-| 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside 4624 for elevated accounts. Admin accounts get full privilege set; regular users get limited set. |
+| 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside the target-host 4624 for elevated accounts. Admin accounts get full privilege set; regular users get limited set. |
 | 4688 | Process Created | Execution | Version 2. Includes CommandLine, ParentProcessName, MandatoryLabel. TokenElevationType indicates UAC status. |
 | 4689 | Process Exited | Execution | Paired with 4688. Status always 0x0. |
 | 4697 | Service Installed | Persistence | ServiceFileName can contain full command lines. ServiceType 0x10=Own Process. |
@@ -62,11 +62,11 @@ output/
 | 4738 | User Account Changed | Account Management | Has unique leading `Dummy` field (always "-"). Full account property fields. |
 | 4756 | Member Added to Universal Group | Privilege Escalation | e.g., Enterprise Admins. |
 | 4757 | Member Removed from Universal Group | Privilege Escalation | No sample data verification (identical structure to 4756). |
-| 4768 | Kerberos TGT Request | Authentication | Keywords reflect success/failure based on Status field. CertIssuerName/CertSerialNumber/CertThumbprint always empty. |
+| 4768 | Kerberos TGT Request | Authentication | Keywords reflect success/failure based on Status field. Successful TGTs use data-driven PreAuthType/TicketOptions/encryption distributions; PKINIT (`PreAuthType=15`) populates CertIssuerName/CertSerialNumber/CertThumbprint. |
 | 4769 | Kerberos Service Ticket | Authentication | TargetUserName includes @DOMAIN suffix. Keywords reflect success/failure. |
 | 4770 | Kerberos TGT Renewal | Authentication | Always success. |
 | 4771 | Kerberos Pre-Auth Failed | Credential Access | Keywords always 0x8010 (Audit Failure). Key indicator for password spraying. |
-| 4776 | NTLM Credential Validation | Authentication | Field names: TargetUserName (not LogonAccount), Workstation (not SourceWorkstation). |
+| 4776 | NTLM Credential Validation | Authentication | Field names: TargetUserName (not LogonAccount), Workstation (not SourceWorkstation). Status reflects validation success or failure. |
 | 5156 | WFP Connection Permitted | Network | Application path uses device format (`\device\harddiskvolume1\...`). Direction: %%14592=Inbound, %%14593=Outbound. |
 
 **Known Limitations:**

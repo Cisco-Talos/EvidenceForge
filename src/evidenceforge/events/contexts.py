@@ -230,6 +230,9 @@ class KerberosContext:
     ticket_status: str = "0x0"
     encryption_type: str = ""  # e.g., "0x12" (AES-256)
     pre_auth_type: int = 0  # 4768 only
+    cert_issuer_name: str = ""  # 4768 PKINIT only
+    cert_serial_number: str = ""  # 4768 PKINIT only
+    cert_thumbprint: str = ""  # 4768 PKINIT only
     source_ip: str = ""  # IPv6-mapped: "::ffff:x.x.x.x"
     source_port: int = 0
     reporting_pid: int = 0  # PID of lsass.exe that wrote this event

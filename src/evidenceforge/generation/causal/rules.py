@@ -64,8 +64,9 @@ class KerberosBeforeLogon(ExpansionRule):
 
     Reproduces the logic from ActivityGenerator._emit_dc_kerberos_for_logon().
     Fires when auth_package is "Kerberos", target is Windows, and the target
-    system is not a DC. Delegates to the existing method which handles TGT,
-    TGS, and optional 4672 Special Privileges emission.
+    system is not a DC. Delegates to the existing method which handles TGT
+    and TGS emission. Elevated-session 4672 events are emitted with the
+    target-host 4624, where the logon session is created.
     """
 
     name: str = field(default="kerberos_before_logon")

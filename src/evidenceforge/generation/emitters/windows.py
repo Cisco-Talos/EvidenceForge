@@ -41,6 +41,7 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.utils.paths import sanitize_path_component
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 win_logger = logging.getLogger(__name__)
@@ -290,8 +291,9 @@ class WindowsEventEmitter(LogEmitter):
     def _render_special_privileges(self, event: SecurityEvent) -> None:
         """Render standalone Windows 4672 (Special Privileges Assigned).
 
-        Used for DC-side privilege assignment during Kerberos authentication,
-        where the DC logs 4672 independently of the target host's logon event.
+        Used for explicit standalone 4672 events. Normal elevated logons render
+        4672 from _render_logon() so the privilege event shares the target
+        host and LogonID with its 4624.
         """
         rng = random.Random()
         auth = event.auth
@@ -341,6 +343,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
+        session_id = self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4800,
             "TimeCreated": event.timestamp,
@@ -353,7 +356,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetUserName": auth.username,
             "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
             "TargetLogonId": auth.logon_id or "0x0",
-            "SessionId": rng.randint(1, 5),
+            "SessionId": session_id,
         }
         self.emit_event(event_data)
 
@@ -362,6 +365,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
+        session_id = self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4801,
             "TimeCreated": event.timestamp,
@@ -374,7 +378,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetUserName": auth.username,
             "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
             "TargetLogonId": auth.logon_id or "0x0",
-            "SessionId": rng.randint(1, 5),
+            "SessionId": session_id,
         }
         self.emit_event(event_data)
 
@@ -619,6 +623,9 @@ class WindowsEventEmitter(LogEmitter):
             "PreAuthType": krb.pre_auth_type,
             "IpAddress": krb.source_ip,
             "IpPort": krb.source_port,
+            "CertIssuerName": krb.cert_issuer_name,
+            "CertSerialNumber": krb.cert_serial_number,
+            "CertThumbprint": krb.cert_thumbprint,
         }
         self.emit_event(event_data)
 
@@ -695,7 +702,7 @@ class WindowsEventEmitter(LogEmitter):
             "PackageName": "MICROSOFT_AUTHENTICATION_PACKAGE_V1_0",
             "TargetUserName": auth.username,
             "Workstation": auth.source_ip,  # workstation stored in source_ip
-            "Status": "0x0",
+            "Status": auth.failure_status or "0x0",
         }
         self.emit_event(event_data)
 
@@ -770,6 +777,11 @@ class WindowsEventEmitter(LogEmitter):
         if path and len(path) > 2 and path[1] == ":":
             return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
         return path.lower()
+
+    @staticmethod
+    def _session_id_for_logon(logon_id: str) -> int:
+        """Return a stable Terminal Services session ID for a LogonID."""
+        return 1 + (_stable_seed(f"windows_session_id_{logon_id or '0x0'}") % 5)
 
     # --- Phase 1: Kerberos Pre-Auth Failed (4771) ---
 

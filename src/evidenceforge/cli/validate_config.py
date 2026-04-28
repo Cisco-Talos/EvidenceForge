@@ -1018,6 +1018,7 @@ def validate_config() -> ValidationResult:
         ConnectionEntry,
         CreateRemoteThreadPatternEntry,
         DnsEntry,
+        KerberosRealismConfig,
         OuiEntry,
         PersonaEntry,
         ProcessAccessPatternEntry,
@@ -1125,6 +1126,15 @@ def validate_config() -> ValidationResult:
     tls_realism_data = load_tls_realism()
     if tls_realism_data:
         _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
+
+    # kerberos_realism.yaml
+    from evidenceforge.generation.activity.kerberos_realism import load_kerberos_realism
+
+    kerberos_realism_data = load_kerberos_realism()
+    if kerberos_realism_data:
+        _SCHEMA_CHECKS.append(
+            ([kerberos_realism_data], KerberosRealismConfig, "kerberos_realism.yaml")
+        )
 
     # smb_file_transfers.yaml
     from evidenceforge.generation.activity.smb_file_transfers import load_smb_file_transfers
