@@ -419,6 +419,44 @@ class TestCanHandleDefault:
                 emitter.emit_raw(data)
                 mock_emit.assert_called_once_with(data)
 
+    def test_syslog_sorts_full_file_on_close(self, tmp_path):
+        """Syslog should be chronologically sorted across buffered flush boundaries."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=1)
+        emitter.emit_raw(
+            {
+                "timestamp": datetime(2024, 10, 14, 20, 1, 25, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 500,
+                "facility": 10,
+                "severity": 6,
+                "message": "Removed session 170.",
+            }
+        )
+        emitter.emit_raw(
+            {
+                "timestamp": datetime(2024, 10, 14, 19, 0, 53, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 500,
+                "facility": 10,
+                "severity": 6,
+                "message": "New session 176 of user jsmith.",
+            }
+        )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert "19:00:53" in lines[0]
+        assert "20:01:25" in lines[1]
+
 
 class TestBuildHostContext:
     """Tests for ActivityGenerator._build_host_context()."""

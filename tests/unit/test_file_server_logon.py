@@ -3,7 +3,9 @@
 
 """Tests for file server SMB logon event generation."""
 
+import random
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 
@@ -48,8 +50,6 @@ class TestEmitSmbLogonPair:
 
     def test_skips_linux_file_servers(self):
         """Linux file servers don't get Windows 4624 logon events."""
-        import random
-
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         obj = MagicMock()
@@ -66,13 +66,46 @@ class TestEmitSmbLogonPair:
         obj.activity_generator.generate_logon.assert_not_called()
 
 
+class TestEmitSmbFileOperations:
+    """Verify SMB file-server sessions produce a realistic operation mix."""
+
+    def test_emits_read_write_and_other_file_operations(self):
+        """Each SMB file-server session should include READ/WRITE plus other file actions."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        obj = MagicMock()
+        obj.activity_generator._build_host_context.return_value = SimpleNamespace(
+            hostname="FS-01",
+            fqdn="fs-01.example.com",
+            os="Windows Server 2022",
+            os_category="windows",
+        )
+        captured = []
+        obj.activity_generator.dispatcher.dispatch.side_effect = captured.append
+        method = BaselineMixin._emit_smb_file_operations.__get__(obj)
+
+        user = SimpleNamespace(username="jdoe")
+        file_server = SimpleNamespace(hostname="FS-01")
+        client = SimpleNamespace(hostname="WS-01")
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+
+        method(user, file_server, client, ts, random.Random(0))
+
+        event_types = {event.event_type for event in captured}
+        assert "file_read" in event_types
+        assert "file_modify" in event_types
+        assert event_types & {"file_create", "file_delete"}
+        assert len(captured) >= 3
+        assert all(event.auth.username == "jdoe" for event in captured)
+        assert all(event.file.pid == 4 for event in captured)
+        assert all(event.file.path.startswith("\\\\FS-01\\") for event in captured)
+
+
 class TestSmbBrowsingIncludesFileServers:
     """Verify SMB browsing target pool includes file servers."""
 
     def test_file_server_ips_in_smb_targets(self):
         """When file servers exist, SMB target pool includes their IPs alongside DCs."""
-        from types import SimpleNamespace
-
         # Create mock systems
         dc = SimpleNamespace(
             hostname="DC-01",
@@ -117,3 +150,74 @@ class TestSmbBrowsingIncludesFileServers:
         assert dc.ip in smb_targets
         assert fs.ip in smb_targets
         assert len(smb_targets) == 2
+
+    def test_file_server_only_environment_still_has_smb_targets(self):
+        """File servers should drive SMB noise even when no DC target exists."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        fs = SimpleNamespace(
+            hostname="FS-01",
+            ip="10.10.10.5",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+            public_hostnames=[],
+            services=[],
+        )
+        ws = SimpleNamespace(
+            hostname="WS-01",
+            ip="10.10.20.10",
+            os="Windows 11",
+            type="workstation",
+            roles=["workstation"],
+            public_hostnames=[],
+            services=[],
+        )
+        obj = MagicMock()
+        obj.scenario.environment.systems = [fs, ws]
+        method = BaselineMixin._build_smb_targets.__get__(obj)
+
+        targets, fs_targets = method(ws, [])
+
+        assert targets == [fs.ip, fs.ip, fs.ip]
+        assert fs_targets == [fs]
+
+    def test_file_servers_are_weighted_above_domain_controllers(self):
+        """File server targets should be weighted higher than SYSVOL/DC traffic."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        dc = SimpleNamespace(
+            hostname="DC-01",
+            ip="10.10.10.1",
+            os="Windows Server 2019",
+            type="domain_controller",
+            roles=["domain_controller"],
+            public_hostnames=[],
+            services=[],
+        )
+        fs = SimpleNamespace(
+            hostname="FS-01",
+            ip="10.10.10.5",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+            public_hostnames=[],
+            services=[],
+        )
+        ws = SimpleNamespace(
+            hostname="WS-01",
+            ip="10.10.20.10",
+            os="Windows 11",
+            type="workstation",
+            roles=["workstation"],
+            public_hostnames=[],
+            services=[],
+        )
+        obj = MagicMock()
+        obj.scenario.environment.systems = [dc, fs, ws]
+        method = BaselineMixin._build_smb_targets.__get__(obj)
+
+        targets, _ = method(ws, [dc.ip])
+
+        assert targets.count(dc.ip) == 1
+        assert targets.count(fs.ip) == 3

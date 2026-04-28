@@ -27,11 +27,41 @@ All syslog message construction is done by ActivityGenerator — the emitter
 just formats the context fields into the syslog template.
 """
 
+import re
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+
+_SYSLOG_MONTHS = {
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
+}
+_SYSLOG_TS_RE = re.compile(r"^(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<hms>\d\d:\d\d:\d\d)")
+
+
+def _syslog_sort_key(line: str) -> tuple[int, int, str, str]:
+    """Sort traditional syslog lines by their rendered month/day/time prefix."""
+    match = _SYSLOG_TS_RE.match(line)
+    if match is None:
+        return (13, 32, "99:99:99", line)
+    return (
+        _SYSLOG_MONTHS.get(match.group("mon"), 13),
+        int(match.group("day")),
+        match.group("hms"),
+        line,
+    )
 
 
 class SyslogEmitter(HostMultiplexEmitter):
@@ -44,6 +74,8 @@ class SyslogEmitter(HostMultiplexEmitter):
     _log_filename = "syslog.log"
     _flat_filename = "syslog.log"
     _sort_flat_file = True
+    _sort_key = staticmethod(_syslog_sort_key)
+    _defer_sorted_flush_until_close = True
 
     # Context-driven: handles any event type that carries SyslogContext
     _supported_types: set[str] = set()

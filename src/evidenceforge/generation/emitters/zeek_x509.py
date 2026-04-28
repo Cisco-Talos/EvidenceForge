@@ -26,6 +26,7 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekX509Emitter(SensorMultiplexEmitter):
@@ -40,10 +41,16 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
     _supported_types: set[str] = {"connection"}
 
     def can_handle(self, event: SecurityEvent) -> bool:
-        return event.event_type in self._supported_types and event.x509 is not None
+        return event.event_type in self._supported_types and (
+            event.x509 is not None or bool(event.x509_chain)
+        )
 
     def emit(self, event: SecurityEvent) -> None:
-        x509 = event.x509
+        certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        for x509 in certificates:
+            self._emit_certificate(event, x509)
+
+    def _emit_certificate(self, event: SecurityEvent, x509: Any) -> None:
         x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
             self.format_def.name if self.format_def else "zeek_x509", []
         )
@@ -51,9 +58,10 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
         targets = sensor_hostnames or self._sensor_hostnames
         new_targets = targets
+        analyzer_delay_ms = 120 + (_stable_seed(f"zeek_x509_ts:{x509.fuid}") % 531)
 
         event_data: dict[str, Any] = {
-            "ts": event.timestamp,
+            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
             "id": x509.fuid,
             "fingerprint": x509.fingerprint,
             "certificate.version": x509.certificate_version,

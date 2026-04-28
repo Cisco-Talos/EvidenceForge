@@ -26,6 +26,7 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekOcspEmitter(SensorMultiplexEmitter):
@@ -44,8 +45,9 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         ocsp = event.ocsp
+        analyzer_delay_ms = 1000 + (_stable_seed(f"zeek_ocsp_ts:{ocsp.id}") % 5001)
         event_data: dict[str, Any] = {
-            "ts": event.timestamp,
+            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
             "id": ocsp.id,
             "hashAlgorithm": ocsp.hash_algorithm,
             "issuerNameHash": ocsp.issuer_name_hash,

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 # --- DNS Registry ---
 
@@ -151,6 +151,253 @@ class TlsIssuerEntry(BaseModel, extra="forbid"):
     key_types: list[TlsKeyType]
 
 
+class TlsSanConfig(BaseModel, extra="forbid"):
+    """SAN generation settings in tls_realism.yaml."""
+
+    multi_label_public_suffixes: list[str]
+
+
+class TlsOcspConfig(BaseModel, extra="forbid"):
+    """OCSP behavior settings in tls_realism.yaml."""
+
+    cache_bucket_seconds: int
+    this_update_max_skew_seconds: int
+    next_update_min_seconds: int
+    next_update_max_seconds: int
+    status_weights: dict[Literal["good", "unknown", "revoked"], int]
+    suppress_revoked_suffixes: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "cache_bucket_seconds",
+        "this_update_max_skew_seconds",
+        "next_update_min_seconds",
+        "next_update_max_seconds",
+    )
+    @classmethod
+    def seconds_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("seconds values must be non-negative")
+        return v
+
+    @field_validator("status_weights")
+    @classmethod
+    def status_weights_valid(cls, v: dict[str, int]) -> dict[str, int]:
+        if set(v) != {"good", "unknown", "revoked"}:
+            raise ValueError("status_weights must contain good, unknown, and revoked")
+        if any(weight < 0 for weight in v.values()):
+            raise ValueError("status_weights must be non-negative")
+        if sum(v.values()) <= 0:
+            raise ValueError("status_weights must have a positive total")
+        return v
+
+
+class TlsChainTemplate(BaseModel, extra="forbid"):
+    """A certificate-chain template in tls_realism.yaml."""
+
+    name: str
+    issuer_patterns: list[str]
+    intermediates: list[str]
+
+    @field_validator("issuer_patterns", "intermediates")
+    @classmethod
+    def non_empty_list(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("list must not be empty")
+        return v
+
+
+class TlsCertificateChainConfig(BaseModel, extra="forbid"):
+    """Certificate-chain behavior settings in tls_realism.yaml."""
+
+    include_intermediate_probability: float
+    include_second_intermediate_probability: float
+    intermediate_validity_days_min: int
+    intermediate_validity_days_max: int
+    intermediate_not_before_max_days: int
+    key_types: list[TlsKeyType]
+    templates: list[TlsChainTemplate]
+
+    @field_validator(
+        "include_intermediate_probability",
+        "include_second_intermediate_probability",
+    )
+    @classmethod
+    def probability_range(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("probability must be between 0 and 1")
+        return v
+
+    @field_validator(
+        "intermediate_validity_days_min",
+        "intermediate_validity_days_max",
+        "intermediate_not_before_max_days",
+    )
+    @classmethod
+    def days_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("day values must be positive")
+        return v
+
+
+class TlsDestinationOsOverride(BaseModel, extra="forbid"):
+    """OS-specific TLS destination pool override."""
+
+    domains: list[str] = Field(default_factory=list)
+    dns_tags: list[str] = Field(default_factory=list)
+
+
+class TlsDestinationProfile(BaseModel, extra="forbid"):
+    """A weighted TLS destination profile in tls_realism.yaml."""
+
+    name: str
+    weight: int
+    domains: list[str] = Field(default_factory=list)
+    dns_tags: list[str] = Field(default_factory=list)
+    os: list[str] = Field(default_factory=list)
+    personas: list[str] = Field(default_factory=list)
+    system_types: list[str] = Field(default_factory=list)
+    purpose_tags: list[str] = Field(default_factory=list)
+    os_overrides: dict[str, TlsDestinationOsOverride] = Field(default_factory=dict)
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+    @field_validator("domains", "dns_tags")
+    @classmethod
+    def has_destination_source(cls, v: list[str], info) -> list[str]:
+        if any(not item for item in v):
+            raise ValueError(f"{info.field_name} entries must be non-empty")
+        return v
+
+
+class TlsDestinationsConfig(BaseModel, extra="forbid"):
+    """TLS destination profile settings in tls_realism.yaml."""
+
+    enabled: bool = True
+    host_preferred_domain_count: int = 6
+    host_preferred_probability: float = 0.68
+    profiles: list[TlsDestinationProfile]
+
+    @field_validator("host_preferred_domain_count")
+    @classmethod
+    def preferred_count_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("host_preferred_domain_count must be positive")
+        return v
+
+    @field_validator("host_preferred_probability")
+    @classmethod
+    def probability_range(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("host_preferred_probability must be between 0 and 1")
+        return v
+
+    @field_validator("profiles")
+    @classmethod
+    def profiles_non_empty(cls, v: list[TlsDestinationProfile]) -> list[TlsDestinationProfile]:
+        if not v:
+            raise ValueError("profiles must not be empty")
+        return v
+
+
+class TlsRealismConfig(BaseModel, extra="forbid"):
+    """Root schema for tls_realism.yaml."""
+
+    san: TlsSanConfig
+    ocsp: TlsOcspConfig
+    certificate_chains: TlsCertificateChainConfig
+    destinations: TlsDestinationsConfig
+
+
+# --- SMB File Transfers ---
+
+
+class SmbMimeTypeEntry(BaseModel, extra="forbid"):
+    """A weighted MIME type in smb_file_transfers.yaml."""
+
+    mime_type: str
+    weight: int
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class SmbAnalyzerSetEntry(BaseModel, extra="forbid"):
+    """A weighted Zeek file analyzer set in smb_file_transfers.yaml."""
+
+    analyzers: list[str]
+    weight: int
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class SmbFilenameTemplateEntry(BaseModel, extra="forbid"):
+    """A weighted SMB filename template set in smb_file_transfers.yaml."""
+
+    mime_types: list[str] = Field(default_factory=list)
+    templates: list[str]
+    weight: int
+
+    @field_validator("templates")
+    @classmethod
+    def templates_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("templates must not be empty")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class SmbFileTransferConfig(BaseModel, extra="forbid"):
+    """Root schema for smb_file_transfers.yaml."""
+
+    min_transfer_bytes: int
+    missing_bytes_probability: float
+    timeout_probability: float
+    mime_types: list[SmbMimeTypeEntry]
+    analyzer_sets: list[SmbAnalyzerSetEntry]
+    filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
+
+    @field_validator("min_transfer_bytes")
+    @classmethod
+    def min_transfer_bytes_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("min_transfer_bytes must be positive")
+        return v
+
+    @field_validator("missing_bytes_probability", "timeout_probability")
+    @classmethod
+    def probability_range(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("probability must be between 0 and 1")
+        return v
+
+    @field_validator("mime_types", "analyzer_sets")
+    @classmethod
+    def non_empty_weighted_lists(cls, v: list[Any]) -> list[Any]:
+        if not v:
+            raise ValueError("weighted lists must not be empty")
+        return v
+
+
 # --- Network Params ---
 
 
@@ -160,6 +407,32 @@ class OuiEntry(BaseModel, extra="forbid"):
     prefix: str
     vendor: str
     weight: int
+
+
+class PublicNtpServerEntry(BaseModel, extra="forbid"):
+    """A public NTP server profile in network_params.yaml."""
+
+    name: str
+    ip: str
+    operator: str
+    stratum: int = Field(ge=1, le=4)
+    ref_id: str
+    weight: int = Field(gt=0)
+
+
+class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
+    """A domain-specific proxy User-Agent profile."""
+
+    os_keywords: list[str]
+    hosts: list[str]
+    user_agents: list[str]
+
+    @field_validator("os_keywords", "hosts", "user_agents")
+    @classmethod
+    def non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("list must not be empty")
+        return v
 
 
 # --- Process Network Map ---

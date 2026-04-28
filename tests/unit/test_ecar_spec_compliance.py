@@ -35,6 +35,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import AuthContext, FileContext, HostContext
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 
 
@@ -87,6 +89,101 @@ class TestPidAlwaysPresent:
         )
         record = json.loads(rendered)
         assert record["pid"] == -1
+
+
+class TestFileEventActions:
+    def test_file_read_and_modify_render_read_write_actions(self, emitter, ts):
+        """Canonical file_read/file_modify events should render as eCAR READ/WRITE."""
+        host = HostContext(
+            hostname="FS-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            fqdn="fs-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        for event_type in ("file_read", "file_modify"):
+            emitter._render_file_event(
+                SecurityEvent(
+                    timestamp=ts,
+                    event_type=event_type,
+                    src_host=host,
+                    auth=AuthContext(username="jdoe"),
+                    file=FileContext(
+                        path=r"\\FS-01\Shared\budget.xlsx",
+                        action=event_type.removeprefix("file_"),
+                        pid=4,
+                    ),
+                )
+            )
+
+        actions = [call.args[0]["action"] for call in emitter.emit_event.call_args_list]
+        assert actions == ["READ", "WRITE"]
+
+
+class TestChronologicalOutput:
+    def test_close_sorts_per_host_ecar_by_timestamp(self, tmp_path, ts):
+        """Per-host eCAR files should be written chronologically on close."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        for offset in (5, 1, 3):
+            emitter.emit_event(
+                {
+                    "timestamp": ts.replace(second=offset),
+                    "hostname": "ws01",
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "pid": 100,
+                    "_host_fqdn": "ws01.example.org",
+                }
+            )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
+
+    def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
+        """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        for object_name, action in (("REGISTRY", "MODIFY"), ("PROCESS", "CREATE")):
+            emitter.emit_event(
+                {
+                    "timestamp": ts,
+                    "hostname": "ws01",
+                    "object": object_name,
+                    "action": action,
+                    "pid": 5616,
+                    "_host_fqdn": "ws01.example.org",
+                }
+            )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert [(row["object"], row["action"]) for row in rows] == [
+            ("PROCESS", "CREATE"),
+            ("REGISTRY", "MODIFY"),
+        ]
 
 
 class TestTidAlwaysPresent:

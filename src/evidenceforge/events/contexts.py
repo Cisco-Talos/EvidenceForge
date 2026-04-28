@@ -121,6 +121,7 @@ class NetworkContext:
     ip_proto: int = 6  # TCP=6, UDP=17, ICMP=1
     missed_bytes: int = 0
     initiating_pid: int = -1  # PID of process that opened this connection (-1 = unknown)
+    link_local: bool = False  # True for same-broadcast-domain traffic such as DHCP
 
 
 @dataclass(slots=True)
@@ -336,6 +337,7 @@ class FileTransferContext:
     fuid: str = ""  # F-prefix Zeek file UID
     source: str = ""  # "HTTP", "SSL", "SMTP"
     depth: int = 0
+    filename: str = ""
     analyzers: list[str] = field(default_factory=list)
     mime_type: str = ""
     duration: float = 0.0
@@ -346,6 +348,9 @@ class FileTransferContext:
     missing_bytes: int = 0
     overflow_bytes: int = 0
     timedout: bool = False
+    md5: str = ""
+    sha1: str = ""
+    sha256: str = ""
 
 
 @dataclass(slots=True)

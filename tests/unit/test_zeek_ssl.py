@@ -30,8 +30,16 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, SslContext, X509Context
+from evidenceforge.events.contexts import (
+    FileTransferContext,
+    NetworkContext,
+    OcspContext,
+    SslContext,
+    X509Context,
+)
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
 
@@ -280,3 +288,137 @@ class TestSslUidCorrelation:
 
             x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
             assert x509_data["san.dns"] == ["example.com", "*.example.com"]
+
+    def test_x509_emitter_renders_full_certificate_chain(self):
+        """x509.log should include each certificate referenced by ssl.cert_chain_fuids."""
+        x509_fmt = load_format("zeek_x509")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            leaf = X509Context(
+                fuid="Fleaf12345678901",
+                fingerprint="leaf",
+                certificate_serial="01",
+                certificate_subject="CN=www.example.com",
+                certificate_issuer="CN=Example Intermediate CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+                san_dns=["www.example.com", "*.example.com"],
+            )
+            intermediate = X509Context(
+                fuid="Fintermediate123",
+                fingerprint="intermediate",
+                certificate_serial="02",
+                certificate_subject="CN=Example Intermediate CA",
+                certificate_issuer="CN=Example Root CA",
+                certificate_not_valid_before=1600000000.0,
+                certificate_not_valid_after=1900000000.0,
+                basic_constraints_ca=True,
+                host_cert=False,
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                x509=leaf,
+                x509_chain=[leaf, intermediate],
+            )
+
+            x509_emitter.emit(event)
+            x509_emitter.close()
+
+            rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
+            rows_by_id = {row["id"]: row for row in rows}
+            assert set(rows_by_id) == {"Fleaf12345678901", "Fintermediate123"}
+            assert rows_by_id["Fleaf12345678901"]["basic_constraints.ca"] is False
+            assert rows_by_id["Fintermediate123"]["basic_constraints.ca"] is True
+
+    def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):
+        """SSL, x509, and OCSP analyzer records should not share the conn timestamp."""
+        ssl_fmt = load_format("zeek_ssl")
+        x509_fmt = load_format("zeek_x509")
+        ocsp_fmt = load_format("zeek_ocsp")
+        files_fmt = load_format("zeek_files")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            ocsp_emitter = ZeekOcspEmitter(ocsp_fmt, out_dir / "ocsp.json")
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                ),
+                ssl=SslContext(
+                    version="TLSv13",
+                    cipher="TLS_AES_128_GCM_SHA256",
+                    cert_chain_fuids=["Fabcdef1234567890"],
+                ),
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="abc123",
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="good",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Focsp12345678901",
+                    source="HTTP",
+                    mime_type="application/ocsp-response",
+                    duration=0.01,
+                    local_orig=True,
+                    is_orig=False,
+                    seen_bytes=1200,
+                    total_bytes=1200,
+                ),
+            )
+            ssl_emitter.emit(event)
+            x509_emitter.emit(event)
+            ocsp_emitter.emit(event)
+            files_emitter.emit(event)
+            ssl_emitter.close()
+            x509_emitter.close()
+            ocsp_emitter.close()
+            files_emitter.close()
+
+            ssl_ts = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])["ts"]
+            x509_ts = json.loads((out_dir / "x509.json").read_text().splitlines()[0])["ts"]
+            ocsp_ts = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])["ts"]
+            ocsp_row = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])
+            files_row = json.loads((out_dir / "files.json").read_text().splitlines()[0])
+
+        conn_ts = base_ts.timestamp()
+        assert conn_ts < ssl_ts < conn_ts + 0.1
+        assert ssl_ts < x509_ts < conn_ts + 0.7
+        assert x509_ts < ocsp_ts < conn_ts + 6.1
+        assert ocsp_row["id"] == "Focsp12345678901"
+        assert "uid" not in ocsp_row
+        assert "id.orig_h" not in ocsp_row
+        assert "id.resp_h" not in ocsp_row
+        assert files_row["fuid"] == ocsp_row["id"]
+        assert files_row["conn_uids"] == ["CMySpecificUID123"]
+        assert files_row["tx_hosts"] == ["8.8.8.8"]
+        assert files_row["rx_hosts"] == ["10.0.0.1"]
+        assert "uid" not in files_row
+        assert "id.orig_h" not in files_row
+        assert files_row["mime_type"] == "application/ocsp-response"

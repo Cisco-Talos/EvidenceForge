@@ -39,7 +39,7 @@ When no sensors are configured (backward compat), writes directly to:
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -205,6 +205,13 @@ class SensorMultiplexEmitter(LogEmitter):
             self._dispatch(event_data)
 
     @staticmethod
+    def _offset_timestamp(ts: datetime | int | float, milliseconds: int) -> datetime | float:
+        """Return a Zeek timestamp shifted by a small analyzer-stage delay."""
+        if isinstance(ts, datetime):
+            return ts + timedelta(milliseconds=milliseconds)
+        return float(ts) + milliseconds / 1000
+
+    @staticmethod
     def _derive_sensor_uid(original_uid: str, sensor_hostname: str) -> str:
         """Derive a deterministic per-sensor UID from the original UID.
 
@@ -307,6 +314,16 @@ class SensorMultiplexEmitter(LogEmitter):
                 if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
+                for uid_list_field in ("uids", "conn_uids"):
+                    uid_values = render_data.get(uid_list_field)
+                    if not isinstance(uid_values, list):
+                        continue
+                    render_data[uid_list_field] = [
+                        self._derive_sensor_uid(uid, hostname)
+                        if isinstance(uid, str) and uid.startswith("C")
+                        else uid
+                        for uid in uid_values
+                    ]
                 for fuid_field in ("id", "fuid"):
                     original_fuid = render_data.get(fuid_field)
                     if isinstance(original_fuid, str) and original_fuid.startswith("F"):

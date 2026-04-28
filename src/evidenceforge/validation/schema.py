@@ -731,8 +731,16 @@ class ScenarioValidator:
             return
 
         monitored_segments: set[str] = set()
+        link_local_span_segments: set[str] = set()
         for sensor in self.scenario.environment.network.sensors:
             monitored_segments.update(sensor.monitoring_segments)
+            if (
+                sensor.type != "firewall"
+                and sensor.placement == "span"
+                and sensor.direction in {"bidirectional", "outbound"}
+                and "zeek" in sensor.log_formats
+            ):
+                link_local_span_segments.update(sensor.monitoring_segments)
 
         for idx, segment in enumerate(self.scenario.environment.network.segments):
             if segment.systems and segment.name not in monitored_segments:
@@ -744,6 +752,21 @@ class ScenarioValidator:
                             f"Segment '{segment.name}' has systems but no sensor monitoring it"
                         ),
                         suggestion="Add a sensor with this segment in monitoring_segments",
+                    )
+                )
+            if segment.systems and segment.name not in link_local_span_segments:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"environment.network.segments.{idx}",
+                        message=(
+                            f"Segment '{segment.name}' has no SPAN-style Zeek sensor for "
+                            "link-local traffic such as DHCP broadcast"
+                        ),
+                        suggestion=(
+                            "Use placement: span on a Zeek sensor monitoring this segment if "
+                            "you expect DHCP lease evidence from hosts there"
+                        ),
                     )
                 )
 

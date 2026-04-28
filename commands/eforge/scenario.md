@@ -56,7 +56,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract external HTTPS, while internal `database` hosts only receive queries from other internal systems. The firewall policy determines what gets permitted vs denied — denied inbound attempts produce firewall deny records visible to analysts.
 
-`roles` and `services` drive the compiled world model, which decides what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, always specify both whenever the user can provide them.
+`roles` and `services` drive the compiled world model, which decides what a host is for, which infrastructure systems exist, and whether remote activity should look like SSH, RDP, or generic network execution. For server and infrastructure hosts, always specify both whenever the user can provide them. Use `file_server` on Windows file shares so baseline SMB traffic targets them, not only domain controllers.
 
 **Difficulty** — How hard should the attack be to find? This affects baseline noise intensity, how spread out the attack events are, and whether the attacker uses obvious or subtle techniques.
 
@@ -218,7 +218,7 @@ environment:
         name: core-tap
         monitoring_segments: [corporate_lan]
         direction: bidirectional  # bidirectional | inbound | outbound
-        placement: span           # span (sees intra-segment) | tap (cross-segment only)
+        placement: span           # span mirrors segment traffic | tap observes uplink/boundary traffic
         log_formats: [zeek]
       - type: firewall            # Cisco ASA firewall sensor
         name: fw01
@@ -441,7 +441,7 @@ IMPORTANT: When a process command line references a domain URL (Invoke-WebReques
 
 IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
 
-IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. This ensures the domain appears in DNS, SSL SNI, x509 certificate subject, and proxy logs. Without it, these logs either miss the domain or use a random hostname. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
+IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. Use the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Do not use a reverse-DNS/PTR artifact or provider-generated infrastructure name unless the scenario explicitly says the client connected with that name. This ensures DNS, SSL SNI, x509 certificate subject, and proxy logs carry the same realistic name. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
 
 ```yaml
 events:
@@ -662,6 +662,7 @@ After the interview, generate both files:
    - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
    - **Engine-aware realism**:
      - Do NOT specify explicit `mac_address` in `dhcp_lease` events — the engine auto-generates diverse OUI prefixes from `network_params.yaml`
+     - DHCP broadcast evidence is link-local. If the scenario expects `dhcp.log`, include a SPAN-style Zeek sensor on the client segment; TAP/firewall sensors on other segments will not see it.
      - Storyline `connection` events to raw C2 IPs will skip DNS emission (realistic for direct-IP beaconing, but means no DNS trail for hunters). If you want DNS evidence, use a domain name as the C2 destination and add it to the scenario narrative
      - Assign role-appropriate `services` to Linux servers (e.g., `mysql` on DB servers, `apache`/`nginx` on web servers) — this drives per-server bash history RBAC (sysadmins on all servers, DBAs only on DB servers, etc.)
      - Ensure each server has a distinct role to avoid identical bash history content across all servers
@@ -681,7 +682,7 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 2. **Network sensor coverage** — If the storyline event involves a network connection (lateral movement, C2 communication, exfiltration, scanning):
    - At least one network sensor must monitor the segment where the source or destination system resides
    - Check `network.sensors[].monitoring_segments` against the segments containing the storyline systems
-   - A TAP sensor only sees cross-segment traffic; a SPAN sensor sees intra-segment traffic too
+   - A TAP sensor does not see same-segment traffic. For multi-segment TAPs, internal cross-segment traffic is visible only when both endpoint segments are monitored; SPAN sensors can mirror traffic where either endpoint is monitored.
    - If no network sensors cover the relevant segments, add one or warn the user about the visibility gap
 
 3. **Format enablement** — Verify the formats listed in each sensor's `log_formats` are also listed in `output.logs`. A sensor configured to generate `snort_alert` won't produce output if `snort_alert` isn't in the output logs list.

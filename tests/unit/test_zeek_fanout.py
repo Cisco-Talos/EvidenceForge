@@ -29,6 +29,7 @@ from pathlib import Path
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
+    DhcpContext,
     FileTransferContext,
     HttpContext,
     NetworkContext,
@@ -36,6 +37,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_dhcp import ZeekDhcpEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
@@ -111,6 +113,67 @@ class TestSslFanOut:
             assert conn_data["uid"] == ssl_data["uid"]
             assert conn_data["uid"] != "CTestFanout12345"
             assert conn_data["uid"].startswith("C")
+
+
+class TestDhcpFanOut:
+    """DHCP transactions produce correlated conn + dhcp entries."""
+
+    def test_dhcp_uids_match_conn_uid_for_sensor(self):
+        """Sensor UID derivation should keep dhcp.uids aligned with conn.uid."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            conn_emitter = ZeekEmitter(
+                load_format("zeek_conn"), base, sensor_hostnames=["core-tap"]
+            )
+            dhcp_emitter = ZeekDhcpEmitter(
+                load_format("zeek_dhcp"), base, sensor_hostnames=["core-tap"]
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="dhcp_lease",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=68,
+                    dst_ip="10.0.0.1",
+                    dst_port=67,
+                    protocol="udp",
+                    service="dhcp",
+                    zeek_uid="CDhcpFanout1234",
+                    conn_state="SF",
+                    history="DdDd",
+                    duration=0.05,
+                    orig_bytes=300,
+                    resp_bytes=300,
+                    orig_pkts=2,
+                    resp_pkts=2,
+                    orig_ip_bytes=356,
+                    resp_ip_bytes=356,
+                    ip_proto=17,
+                ),
+                dhcp=DhcpContext(
+                    client_addr="10.0.10.50",
+                    server_addr="10.0.0.1",
+                    mac="00:50:56:ab:cd:ef",
+                    host_name="ws01",
+                    assigned_addr="10.0.10.50",
+                    uids=["CDhcpFanout1234"],
+                    msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+                    lease_time=3600.0,
+                ),
+                _sensor_hostnames_by_format={
+                    "zeek_conn": ["core-tap"],
+                    "zeek_dhcp": ["core-tap"],
+                },
+            )
+
+            conn_emitter.emit(event)
+            dhcp_emitter.emit(event)
+            conn_emitter.close()
+            dhcp_emitter.close()
+
+            conn_row = json.loads((base / "core-tap" / "conn.json").read_text())
+            dhcp_row = json.loads((base / "core-tap" / "dhcp.json").read_text())
+            assert dhcp_row["uids"] == [conn_row["uid"]]
 
 
 class TestHttpFilesFanOut:
@@ -200,7 +263,7 @@ class TestHttpFilesFanOut:
                 files_data = json.loads(f.readline())
 
             # UID consistency
-            assert conn_data["uid"] == http_data["uid"] == files_data["uid"]
+            assert conn_data["uid"] == http_data["uid"] == files_data["conn_uids"][0]
             assert conn_data["uid"] != "CTestHttpFiles01"
             assert conn_data["uid"].startswith("C")
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from evidenceforge.generation.activity.generator import _ephemeral_port
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.network_params import public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
 from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.rng import _stable_seed
@@ -332,7 +333,7 @@ class WorldModel:
         # AD environments: workstations sync NTP from the DC (W32Time service)
         if self.domain_controllers:
             return [dc.ip for dc in self.domain_controllers]
-        return ["129.6.15.28", "132.163.97.1"]
+        return public_ntp_ips() or ["129.6.15.28", "132.163.97.1"]
 
     def to_infrastructure_ips(self) -> dict[str, str | list[Any]]:
         return {

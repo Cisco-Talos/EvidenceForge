@@ -114,21 +114,21 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | Log Type | File | Description | Notes |
 |----------|------|-------------|-------|
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
-| dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, MX query types. NXDOMAIN for suffix search. AA flag for internal zones. |
+| dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, and MX query types. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
 | http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Generated for unencrypted HTTP connections (any port); excludes TLS/SSL traffic. |
-| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for any connection carrying TLS context, not restricted to port 443. |
-| files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
-| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
-| ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate `id`/fingerprint, subject/issuer, validity, key info. |
+| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for any connection carrying TLS context, not restricted to port 443. Certificate-chain depth is driven by `tls_realism.yaml`. |
+| files.log | `files.json` | File transfers | Extracted from HTTP responses, OCSP responses, and substantial SMB transfers. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional `filename` for SMB, MIME type, byte counts, and `md5`/`sha1`/`sha256` when the matching analyzer ran. SMB thresholds, filename templates, and MIME/analyzer mix are driven by `smb_file_transfers.yaml`. |
+| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
+| ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. Version, poll, precision, root delay, and root dispersion are stable per client/server association. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
+| x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity, key info, and CA constraints. Intermediate CA certificate profiles are reused by subject/issuer so the same CA does not appear as many different certificates in one dataset. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
-| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
+| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation responses whose `id` joins to `files.log` `fuid`, matching Zeek file-analysis semantics. |
 | packet_filter.log | `packet_filter.json` | BPF filter changes | Zeek packet filter status. |
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 
 **Known Limitations:**
-- No SMB-specific log (smb_files.log, smb_mapping.log) — SMB traffic appears only in conn.log
+- No SMB-specific Zeek log (smb_files.log, smb_mapping.log) — SMB traffic appears in conn.log, substantial transfers can appear in files.log, and file-server activity can also produce host-side eCAR FILE records
 - No SMTP log — email traffic appears in conn.log only
 - http.log covers unencrypted HTTP on any port; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
@@ -150,7 +150,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
-| FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
+| FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity and baseline SMB file-server access. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes. |

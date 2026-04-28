@@ -50,6 +50,7 @@ def mock_emitters():
         "windows_event_security": Mock(),
         "zeek_conn": Mock(),
         "zeek_http": Mock(),
+        "zeek_ntp": Mock(),
         "ecar": Mock(),
         "syslog": Mock(),
         "snort_alert": Mock(),
@@ -131,6 +132,51 @@ class TestIdsAlertCorrelation:
         assert zeek.emit.called
         event = zeek.emit.call_args[0][0]
         assert event.network.dst_port == 22
+
+    def test_ntp_connection_uses_server_response_mode(self, activity_gen, mock_emitters, timestamp):
+        """NTP records with server timing fields should use server-response mode."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="129.6.15.28",
+            time=timestamp,
+            dst_port=123,
+            proto="udp",
+            service="ntp",
+            duration=0.02,
+            orig_bytes=48,
+            resp_bytes=48,
+        )
+
+        event = mock_emitters["zeek_ntp"].emit.call_args[0][0]
+        assert event.ntp is not None
+        assert event.ntp.mode == 4
+        assert event.ntp.stratum >= 1
+        assert event.ntp.rec_ts > event.ntp.org_ts
+        assert event.ntp.xmt_ts >= event.ntp.rec_ts
+
+    def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
+        """NTP version and poll behavior should be stable per client/server pair."""
+        for minute in (0, 10):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="129.6.15.28",
+                time=timestamp.replace(minute=minute),
+                dst_port=123,
+                proto="udp",
+                service="ntp",
+                duration=0.02,
+                orig_bytes=48,
+                resp_bytes=48,
+            )
+
+        first = mock_emitters["zeek_ntp"].emit.call_args_list[-2][0][0].ntp
+        second = mock_emitters["zeek_ntp"].emit.call_args_list[-1][0][0].ntp
+
+        assert first.version == second.version
+        assert first.poll == second.poll
+        assert first.precision == second.precision
+        assert first.root_delay == second.root_delay
+        assert first.root_disp == second.root_disp
 
 
 class TestWebAccessCorrelation:
@@ -243,6 +289,55 @@ class TestWebAccessCorrelation:
         assert event.http.method == "DELETE"
         assert event.http.uri == "/api/v1/resource/42"
         assert event.http.status_code == 204
+
+
+class TestSmbFileTransferCorrelation:
+    """SMB data transfers should produce Zeek files.log context when substantial."""
+
+    def test_large_smb_read_adds_file_transfer_context(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Large successful SMB downloads should be observable in files.log."""
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.5",
+            time=timestamp,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=12.0,
+            orig_bytes=8000,
+            resp_bytes=250000,
+            conn_state="SF",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.file_transfer is not None
+        assert event.file_transfer.source == "SMB"
+        assert event.file_transfer.fuid.startswith("F")
+        assert event.file_transfer.is_orig is False
+        assert event.file_transfer.seen_bytes <= 250000
+        assert event.file_transfer.total_bytes == 250000
+
+    def test_small_smb_metadata_connection_does_not_add_file_transfer_context(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Small SMB metadata exchanges should stay in conn.log only."""
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.5",
+            time=timestamp,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=0.5,
+            orig_bytes=1200,
+            resp_bytes=3000,
+            conn_state="SF",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.file_transfer is None
 
 
 class TestSystemProcessCanonical:

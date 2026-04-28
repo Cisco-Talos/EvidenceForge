@@ -52,13 +52,12 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         event_data: dict[str, Any] = {
             "ts": event.timestamp,
             "fuid": ft.fuid,
-            "uid": net.zeek_uid,
-            "id.orig_h": net.src_ip,
-            "id.orig_p": net.src_port,
-            "id.resp_h": net.dst_ip,
-            "id.resp_p": net.dst_port,
+            "tx_hosts": [net.src_ip] if ft.is_orig else [net.dst_ip],
+            "rx_hosts": [net.dst_ip] if ft.is_orig else [net.src_ip],
+            "conn_uids": [net.zeek_uid] if net.zeek_uid else [],
             "source": ft.source,
             "depth": ft.depth,
+            "filename": ft.filename or None,
             "analyzers": ft.analyzers if ft.analyzers else None,
             "mime_type": ft.mime_type or None,
             "duration": ft.duration,
@@ -69,19 +68,24 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             "missing_bytes": ft.missing_bytes,
             "overflow_bytes": ft.overflow_bytes,
             "timedout": ft.timedout,
+            "md5": ft.md5 or None,
+            "sha1": ft.sha1 or None,
+            "sha256": ft.sha256 or None,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
-        if event._nat_swaps_by_sensor:
-            event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = [
             "analyzers",
             "mime_type",
+            "filename",
             "duration",
             "local_orig",
             "total_bytes",
+            "md5",
+            "sha1",
+            "sha256",
         ]
         for f in optional_fields:
             if f not in event_data:

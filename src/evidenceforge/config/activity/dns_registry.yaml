@@ -49,6 +49,30 @@ domains:
   - domain: docs.google.com
     ips: ["142.250.185.206", "142.250.80.110"]
     tags: [saas]
+  - domain: dl.google.com
+    ips: ["142.250.72.110", "172.217.14.206"]
+    tags: [background, windows]
+  - domain: update.googleapis.com
+    ips: ["142.250.190.74", "172.217.164.138"]
+    tags: [background, windows]
+  - domain: fonts.googleapis.com
+    ips: ["142.250.190.74", "142.250.191.10"]
+    tags: [cdn]
+  - domain: fonts.gstatic.com
+    ips: ["142.250.191.35", "172.217.12.195"]
+    tags: [cdn]
+  - domain: ssl.gstatic.com
+    ips: ["142.250.190.67", "172.217.164.99"]
+    tags: [cdn]
+  - domain: www.gstatic.com
+    ips: ["142.250.191.3", "172.217.164.131"]
+    tags: [cdn]
+  - domain: encrypted-tbn0.gstatic.com
+    ips: ["142.250.190.78", "172.217.12.206"]
+    tags: [cdn]
+  - domain: lh3.googleusercontent.com
+    ips: ["142.250.190.97", "172.217.164.129"]
+    tags: [cdn]
 
   # === Cloudflare ===
   - domain: www.cloudflare.com
@@ -71,6 +95,12 @@ domains:
   - domain: i.redd.it
     ips: ["151.101.65.140", "151.101.129.140"]
     tags: [cdn]
+  - domain: preview.redd.it
+    ips: ["151.101.1.140", "151.101.65.140"]
+    tags: [cdn, social]
+  - domain: www.redditstatic.com
+    ips: ["151.101.1.140", "151.101.65.140"]
+    tags: [cdn, social]
   - domain: old.reddit.com
     ips: ["151.101.129.140", "151.101.193.140"]
     tags: [cdn]
@@ -102,7 +132,7 @@ domains:
 
   # === AWS CloudFront ===
   - domain: cdn.jsdelivr.net
-    ips: ["54.230.129.180", "54.230.130.180"]
+    ips: ["151.101.1.229", "151.101.65.229"]
     tags: [cdn]
   - domain: aws.amazon.com
     ips: ["52.85.83.55", "52.85.84.55"]
@@ -112,6 +142,12 @@ domains:
     tags: [saas]
   - domain: a.b.cdn.console.awsstatic.com
     ips: ["54.230.129.180", "54.230.130.56"]
+    tags: [cdn]
+  - domain: a0.awsstatic.com
+    ips: ["54.230.129.181", "54.230.130.181"]
+    tags: [cdn]
+  - domain: d1.awsstatic.com
+    ips: ["54.230.129.182", "54.230.130.182"]
     tags: [cdn]
 
   # === Microsoft / Azure ===
@@ -148,6 +184,39 @@ domains:
   - domain: login.microsoftonline.com
     ips: ["40.126.28.17", "40.126.28.19", "20.190.159.64"]
     tags: [saas, background, outlook, teams, onedrive]
+  - domain: packages.microsoft.com
+    ips: ["13.107.246.52", "13.107.246.53"]
+    tags: [background, windows, linux]
+  - domain: res.cdn.office.net
+    ips: ["13.107.6.171", "13.107.9.171"]
+    tags: [cdn, outlook, teams, onedrive]
+  - domain: r1.res.office365.com
+    ips: ["13.107.6.172", "13.107.9.172"]
+    tags: [cdn, outlook]
+  - domain: aadcdn.msftauth.net
+    ips: ["13.107.246.40", "13.107.213.40"]
+    tags: [cdn]
+  - domain: aadcdn.msauth.net
+    ips: ["13.107.246.41", "13.107.213.41"]
+    tags: [cdn]
+  - domain: c.s-microsoft.com
+    ips: ["13.107.6.160", "13.107.9.160"]
+    tags: [cdn]
+  - domain: statics.teams.cdn.office.net
+    ips: ["13.107.6.170", "13.107.9.170"]
+    tags: [cdn, teams]
+  - domain: static.sharepointonline.com
+    ips: ["13.107.136.9", "13.107.138.9"]
+    tags: [cdn, onedrive]
+  - domain: c1-onenote-15.cdn.office.net
+    ips: ["13.107.6.173", "13.107.9.173"]
+    tags: [cdn, onedrive]
+  - domain: r.bing.com
+    ips: ["204.79.197.201", "13.107.21.201"]
+    tags: [cdn, windows]
+  - domain: th.bing.com
+    ips: ["204.79.197.202", "13.107.21.202"]
+    tags: [cdn, windows]
 
   # === Other popular sites ===
   - domain: www.example.com
@@ -156,6 +225,12 @@ domains:
   - domain: www.facebook.com
     ips: ["31.13.65.36", "31.13.65.37"]
     tags: [web, social]
+  - domain: static.xx.fbcdn.net
+    ips: ["31.13.65.38", "31.13.65.39"]
+    tags: [cdn, social]
+  - domain: scontent.xx.fbcdn.net
+    ips: ["31.13.66.38", "31.13.66.39"]
+    tags: [cdn, social]
   - domain: stackoverflow.com
     ips: ["44.238.149.75", "44.238.150.75"]
     tags: [web]
@@ -217,6 +292,18 @@ domains:
   - domain: api.github.com
     ips: ["140.82.121.4", "140.82.121.3"]
     tags: [git]
+  - domain: avatars.githubusercontent.com
+    ips: ["185.199.108.133", "185.199.109.133"]
+    tags: [cdn, git]
+  - domain: github.githubassets.com
+    ips: ["185.199.108.154", "185.199.109.154"]
+    tags: [cdn, git]
+  - domain: github-releases.githubusercontent.com
+    ips: ["185.199.108.133", "185.199.110.133"]
+    tags: [background, git]
+  - domain: objects.githubusercontent.com
+    ips: ["185.199.108.133", "185.199.111.133"]
+    tags: [dev, git]
   - domain: ssh.github.com
     ips: ["140.82.112.22"]
     tags: [git]
@@ -261,6 +348,12 @@ domains:
   - domain: slack.com
     ips: ["34.237.161.42", "34.237.162.42"]
     tags: [saas]
+  - domain: a.slack-edge.com
+    ips: ["34.237.160.42", "34.237.160.43"]
+    tags: [cdn]
+  - domain: ca.slack-edge.com
+    ips: ["34.237.160.44", "34.237.160.45"]
+    tags: [cdn]
   - domain: api.slack.com
     ips: ["52.26.132.56", "52.26.133.56"]
     tags: [dev]
@@ -276,12 +369,50 @@ domains:
   - domain: us06web.zoom.us
     ips: ["18.205.93.88", "18.205.94.88"]
     tags: [saas]
+  - domain: st1.zoom.us
+    ips: ["3.235.69.7", "3.235.70.7"]
+    tags: [cdn]
+  - domain: st2.zoom.us
+    ips: ["3.235.69.8", "3.235.70.8"]
+    tags: [cdn]
   - domain: login.salesforce.com
     ips: ["13.108.0.20", "13.108.0.21"]
     tags: [saas]
   - domain: na139.salesforce.com
     ips: ["13.110.54.8", "13.110.54.9"]
     tags: [saas]
+  - domain: static.lightning.force.com
+    ips: ["13.110.54.10", "13.110.54.11"]
+    tags: [cdn]
+
+  # === Certificate infrastructure ===
+  - domain: crl3.digicert.com
+    ips: ["93.184.220.31", "93.184.221.31"]
+    tags: [background]
+  - domain: crl4.digicert.com
+    ips: ["93.184.220.32", "93.184.221.32"]
+    tags: [background]
+  - domain: ocsp.sectigo.com
+    ips: ["91.199.212.132", "91.199.212.133"]
+    tags: [background]
+  - domain: ocsp.globalsign.com
+    ips: ["104.18.25.243", "104.18.26.243"]
+    tags: [background]
+  - domain: ocsp.pki.goog
+    ips: ["142.250.190.99", "142.250.191.99"]
+    tags: [background]
+  - domain: crls.pki.goog
+    ips: ["142.250.190.100", "142.250.191.100"]
+    tags: [background]
+  - domain: ocsp.int-x3.letsencrypt.org
+    ips: ["23.45.101.12", "23.45.101.13"]
+    tags: [background]
+  - domain: r3.o.lencr.org
+    ips: ["23.45.101.14", "23.45.101.15"]
+    tags: [background]
+  - domain: x1.c.lencr.org
+    ips: ["23.45.101.16", "23.45.101.17"]
+    tags: [background]
 
   # === Cloud storage ===
   - domain: api.pcloud.com
@@ -301,6 +432,26 @@ domains:
   - domain: pypi.org
     ips: ["151.101.0.223", "151.101.64.223"]
     tags: [background, linux]
+  - domain: api.snapcraft.io
+    ips: ["185.125.188.59", "185.125.188.60"]
+    tags: [background, linux]
+  - domain: files.pythonhosted.org
+    ips: ["151.101.0.223", "151.101.64.223"]
+    tags: [dev, linux]
+  - domain: deb.nodesource.com
+    ips: ["104.20.22.46", "104.20.23.46"]
+    tags: [dev, linux]
+
+  # === CDN and static assets ===
+  - domain: spoprod-a.akamaihd.net
+    ips: ["23.45.101.60", "23.45.101.61"]
+    tags: [cdn, onedrive]
+  - domain: static.dash.cloudflare.com
+    ips: ["104.18.32.8", "104.18.33.8"]
+    tags: [cdn]
+  - domain: cf-assets.www.cloudflare.com
+    ips: ["104.16.132.230", "104.16.133.230"]
+    tags: [cdn]
 
   # === Internal infrastructure ===
   - domain: db-primary.corp.local

@@ -385,3 +385,88 @@ class TestTapVsSpanPlacement:
         """TAP sensor sees desktop→external traffic."""
         engine = self._make_engine("tap")
         assert engine.is_connection_visible("10.10.10.1", "8.8.8.8") is True
+
+    def test_multisegment_tap_requires_both_internal_segments(self):
+        """Boundary TAPs should not see unrelated internal traffic to one monitored segment."""
+        systems = _make_systems()
+        config = _make_config(
+            segments=[
+                NetworkSegment(
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01", "WS-02"],
+                    exposure="internal",
+                ),
+                NetworkSegment(
+                    name="servers",
+                    cidr="10.10.30.0/24",
+                    systems=["SRV-01", "SRV-02"],
+                    exposure="internal",
+                ),
+                NetworkSegment(
+                    name="dmz", cidr="10.10.50.0/24", systems=["DMZ-01"], exposure="external"
+                ),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="network",
+                    name="dmz-services-tap",
+                    monitoring_segments=["servers", "dmz"],
+                    direction="bidirectional",
+                    placement="tap",
+                    log_formats=["zeek"],
+                ),
+            ],
+        )
+        engine = NetworkVisibilityEngine(config, systems)
+
+        assert engine.is_connection_visible("10.10.10.1", "10.10.30.1") is False
+        assert engine.is_connection_visible("10.10.30.1", "10.10.50.1") is True
+        assert engine.is_connection_visible("10.10.50.1", "8.8.8.8") is True
+
+    def test_link_local_broadcast_only_reaches_source_segment_span(self):
+        """DHCP-style local broadcast should not cross routed TAP boundaries."""
+        systems = _make_systems()
+        config = _make_config(
+            segments=[
+                NetworkSegment(
+                    name="workstations",
+                    cidr="10.10.10.0/24",
+                    systems=["WS-01", "WS-02"],
+                    exposure="internal",
+                ),
+                NetworkSegment(
+                    name="servers",
+                    cidr="10.10.30.0/24",
+                    systems=["SRV-01", "SRV-02"],
+                    exposure="internal",
+                ),
+                NetworkSegment(
+                    name="dmz", cidr="10.10.50.0/24", systems=["DMZ-01"], exposure="external"
+                ),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="network",
+                    name="ws-span",
+                    monitoring_segments=["workstations"],
+                    direction="bidirectional",
+                    placement="span",
+                    log_formats=["zeek"],
+                ),
+                NetworkSensor(
+                    type="network",
+                    name="dmz-services-tap",
+                    monitoring_segments=["servers", "dmz"],
+                    direction="bidirectional",
+                    placement="tap",
+                    log_formats=["zeek"],
+                ),
+            ],
+        )
+        engine = NetworkVisibilityEngine(config, systems)
+
+        sensors = engine.get_link_local_sensors("10.10.10.1")
+
+        assert [sensor.name for sensor in sensors] == ["ws-span"]
+        assert "zeek_dhcp" in engine.get_log_formats_for_link_local("10.10.10.1")

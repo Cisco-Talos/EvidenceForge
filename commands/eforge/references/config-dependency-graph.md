@@ -58,8 +58,8 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### proxy_user_agents.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | `dns_registry.yaml` | Package-manager hostnames should exist in dns_registry when used as generated destinations |
-| **depended on by** | Engine (runtime) | Selects workstation/server proxy User-Agent values for proxy log generation |
+| depends on | `dns_registry.yaml` | Package-manager and domain-override hostnames should exist in dns_registry when used as generated destinations |
+| **depended on by** | Engine (runtime) | Selects workstation/server and domain-specific proxy User-Agent values for proxy log generation |
 
 ### site_maps.yaml
 | Direction | File | Relationship |
@@ -126,14 +126,26 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | nothing | Standalone MAC OUI data |
-| **depended on by** | Engine (runtime) | Generates realistic MAC addresses |
+| depends on | nothing | Standalone MAC OUI and public NTP server data |
+| **depended on by** | Engine (runtime) | Generates realistic MAC addresses and fallback public NTP server metadata |
 
 ### tls_issuers.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | nothing | Standalone certificate authority data |
 | **depended on by** | Engine (runtime) | Drives Zeek x509/SSL certificate generation |
+
+### tls_realism.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates match issuer names/patterns selected from issuer config; destination profiles can pull domains by DNS tag |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+
+### smb_file_transfers.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone SMB file-analysis tuning |
+| **depended on by** | Engine (runtime) | Controls when SMB connections generate Zeek files.log rows and their filename/MIME/analyzer mix |
 
 ### sysmon_filters.yaml
 | Direction | File | Relationship |

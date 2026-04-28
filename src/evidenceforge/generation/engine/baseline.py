@@ -43,7 +43,12 @@ from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
 )
-from evidenceforge.generation.activity.generator import _dns_rtt
+from evidenceforge.generation.activity.generator import (
+    _dns_base_ttl,
+    _dns_is_internal_name,
+    _dns_rtt,
+    _linux_uid_for_user,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
 from evidenceforge.generation.activity.process_access_patterns import (
@@ -1434,6 +1439,10 @@ class BaselineMixin:
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
 
+                    dns_server_ips = getattr(
+                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                    )
+                    dns_server_ip = rng.choice(dns_server_ips)
                     dns_ctx = DnsContext(
                         query=result["hostname"],
                         trans_id=rng.randint(1, 65535),
@@ -1442,16 +1451,23 @@ class BaselineMixin:
                         rcode="NOERROR",
                         rcode_num=0,
                         answers=[_generate_random_external_ip(rng)],
-                        TTLs=[float(rng.randint(30, 300))],
-                        rtt=_dns_rtt(rng),
-                    )
-                    dns_server_ips = getattr(
-                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                        TTLs=[
+                            float(
+                                _dns_base_ttl(
+                                    result["hostname"],
+                                    _dns_is_internal_name(
+                                        result["hostname"],
+                                        self.scenario.environment.domain or "corp.local",
+                                    ),
+                                )
+                            )
+                        ],
+                        rtt=_dns_rtt(rng, dns_server_ip),
                     )
                     self.state_manager.set_current_time(result["time"])
                     self.activity_generator.generate_connection(
                         src_ip=result["system"].ip,
-                        dst_ip=rng.choice(dns_server_ips),
+                        dst_ip=dns_server_ip,
                         time=result["time"],
                         dst_port=53,
                         proto="udp",
@@ -2557,7 +2573,17 @@ class BaselineMixin:
                 tags = self._SERVICE_DNS_DEFAULTS[service]
             else:
                 tags = ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
+            if service == "ssl":
+                from evidenceforge.generation.activity.tls_realism import pick_tls_destination
+
+                domain, ip = pick_tls_destination(
+                    rng,
+                    src_host=src_host,
+                    source_os=os_cat,
+                    purpose_tags=tuple(tags),
+                )
+            else:
+                domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
             return ip, domain
 
         if hasattr(self, "world_model"):
@@ -2683,6 +2709,93 @@ class BaselineMixin:
             logon_type=3,
         )
         return logon_id
+
+    def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
+        """Build weighted SMB targets for Windows client browsing noise."""
+        dc_targets = [ip for ip in dc_ips if ip != system.ip]
+        fs_targets = [
+            s
+            for s in self.scenario.environment.systems
+            if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
+        ]
+
+        targets = list(dc_targets)
+        for fs in fs_targets:
+            weight = 3 if fs.ip not in dc_targets else 2
+            targets.extend([fs.ip] * weight)
+        return targets, fs_targets
+
+    def _emit_smb_file_operations(
+        self,
+        user: Any,
+        file_server: Any,
+        client_system: Any,
+        time: datetime,
+        rng: Any,
+    ) -> None:
+        """Emit eCAR file operations that make SMB sessions look like file work."""
+        import uuid
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, EdrContext, FileContext
+
+        host_ctx = self.activity_generator._build_host_context(file_server)
+        username = getattr(user, "username", "unknown")
+        client_name = getattr(client_system, "hostname", "client").lower()
+        share = rng.choice(["Departments", "Finance", "Projects", "Shared", "IT"])
+        stems = [
+            "budget-review",
+            "client-onboarding",
+            "change-request",
+            "expense-export",
+            "incident-summary",
+            "inventory",
+            "maintenance-window",
+            "monthly-close",
+            "oncall-roster",
+            "purchase-order",
+            "quarterly-report",
+            "renewal-tracker",
+            "risk-register",
+            "server-build",
+            "vendor-list",
+            "project-plan",
+            "meeting-notes",
+            "policy-update",
+            "service-review",
+            "status-update",
+            "team-roadmap",
+        ]
+        extensions = ["docx", "xlsx", "pdf", "pptx", "txt"]
+        op_count = rng.randint(3, 8)
+        operation_choices = ["file_read", "file_read", "file_read", "file_modify", "file_create"]
+        session_operations = ["file_read", "file_modify"]
+        if rng.random() < 0.18:
+            session_operations.append("file_create")
+        if rng.random() < 0.08:
+            session_operations.append("file_delete")
+        while len(session_operations) < op_count:
+            session_operations.append(rng.choice(operation_choices))
+        rng.shuffle(session_operations)
+
+        for idx, event_type in enumerate(session_operations):
+            stem = rng.choice(stems)
+            ext = rng.choice(extensions)
+            file_path = rf"\\{file_server.hostname}\{share}\{client_name}\{stem}-{rng.randint(1, 99):02d}.{ext}"
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=time + timedelta(milliseconds=idx * rng.randint(200, 1500)),
+                    event_type=event_type,
+                    src_host=host_ctx,
+                    auth=AuthContext(username=username),
+                    file=FileContext(
+                        path=file_path,
+                        action=event_type.removeprefix("file_"),
+                        pid=4,
+                    ),
+                    edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
+                )
+            )
 
     def _generate_profile_traffic(
         self,
@@ -3157,6 +3270,7 @@ class BaselineMixin:
         from evidenceforge.generation.activity.dns_registry import (
             get_domain_tags,
             pick_domain_and_ip,
+            resolve_domain_ip,
         )
 
         domain_tags = get_domain_tags(hostname) if hostname else []
@@ -3219,10 +3333,7 @@ class BaselineMixin:
                     )
                 else:
                     req_hostname = req.hostname
-                    # Resolve CDN domain to an IP
-                    _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
-                    if cdn_ip:
-                        req_dst_ip = cdn_ip
+                    req_dst_ip = resolve_domain_ip(req_hostname, src_host=system.hostname)
 
             http_ctx = HttpContext(
                 method=req.method,
@@ -3250,7 +3361,7 @@ class BaselineMixin:
                 duration=rng.uniform(0.05, 2.0),
                 orig_bytes=req.request_body_len,
                 resp_bytes=req.response_body_len,
-                emit_dns=req.is_page_load,  # DNS only for page loads, not subresources
+                emit_dns=req.is_page_load or req_hostname != hostname,
                 source_system=system,
                 hostname=req_hostname,
                 pid=persona_pid,
@@ -3406,70 +3517,88 @@ class BaselineMixin:
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
-
-            # Include file servers in SMB targets for workstations
-            fs_targets = [
-                s
-                for s in self.scenario.environment.systems
-                if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
-            ]
-
-            if "smb-client" in services and os_cat == "windows" and dc_targets:
-                # Combine DC + file server IPs as SMB targets
-                smb_targets = list(dc_targets)
-                for fs in fs_targets:
-                    if fs.ip not in smb_targets:
-                        smb_targets.append(fs.ip)
-
-                _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
-                _smb_range = max(1, _smb_hi - _smb_lo)
-                smb_interval = _smb_lo + (_stable_seed(f"smb_iv_{system.hostname}") % _smb_range)
-                smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
-                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
-                t = smb_phase
-                while t < hour_start_sec:
-                    t += smb_interval
-                while t < hour_start_sec + 3600:
-                    offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
-                    offset = max(0, min(3599, offset))
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    smb_dst_ip = rng.choice(smb_targets)
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=smb_dst_ip,
-                        time=ts,
-                        dst_port=445,
-                        proto="tcp",
-                        service="smb",
-                        duration=rng.uniform(0.1, 2.0),
-                        orig_bytes=rng.randint(200, 2000),
-                        resp_bytes=rng.randint(500, 5000),
-                        emit_dns=rng.random() > 0.02,
-                        source_system=system,
-                        pid=4,  # SMB: kernel System process
+            if "smb-client" in services and os_cat == "windows":
+                # Include DC SYSVOL/GPO traffic and weight file servers higher
+                # when present; file-server environments should still produce
+                # SMB even if no DC role has been inferred.
+                smb_targets, fs_targets = self._build_smb_targets(system, dc_ips)
+                if smb_targets:
+                    _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
+                    _smb_range = max(1, _smb_hi - _smb_lo)
+                    smb_interval = _smb_lo + (
+                        _stable_seed(f"smb_iv_{system.hostname}") % _smb_range
                     )
-                    # Emit type 3 logon on file server for SMB access
-                    smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
-                    if smb_dst_sys:
-                        # Find active user on this workstation
-                        ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
-                        for sess in ws_sessions:
-                            if sess.logon_type in (2, 10, 11):
-                                ws_user = next(
-                                    (
-                                        u
-                                        for u in self.scenario.environment.users
-                                        if u.username == sess.username
-                                    ),
-                                    None,
-                                )
-                                if ws_user:
-                                    self._emit_smb_logon_pair(
-                                        ws_user, smb_dst_sys, system.ip, ts, rng
+                    smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
+                    hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+                    t = smb_phase
+                    while t < hour_start_sec:
+                        t += smb_interval
+                    while t < hour_start_sec + 3600:
+                        offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
+                        offset = max(0, min(3599, offset))
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        smb_dst_ip = rng.choice(smb_targets)
+                        smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                        if smb_dst_sys:
+                            operation_profile = rng.choices(
+                                ["read", "write", "metadata"],
+                                weights=[55, 30, 15],
+                                k=1,
+                            )[0]
+                            if operation_profile == "read":
+                                duration = rng.uniform(2.0, 90.0)
+                                orig_bytes = rng.randint(1_200, 12_000)
+                                resp_bytes = rng.randint(80_000, 5_000_000)
+                            elif operation_profile == "write":
+                                duration = rng.uniform(3.0, 120.0)
+                                orig_bytes = rng.randint(80_000, 4_000_000)
+                                resp_bytes = rng.randint(2_000, 50_000)
+                            else:
+                                duration = rng.uniform(0.2, 5.0)
+                                orig_bytes = rng.randint(800, 8_000)
+                                resp_bytes = rng.randint(1_000, 25_000)
+                        else:
+                            duration = rng.uniform(0.1, 2.0)
+                            orig_bytes = rng.randint(200, 2_000)
+                            resp_bytes = rng.randint(500, 5_000)
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=smb_dst_ip,
+                            time=ts,
+                            dst_port=445,
+                            proto="tcp",
+                            service="smb",
+                            duration=duration,
+                            orig_bytes=orig_bytes,
+                            resp_bytes=resp_bytes,
+                            emit_dns=rng.random() > 0.02,
+                            source_system=system,
+                            pid=4,  # SMB: kernel System process
+                        )
+                        # Emit type 3 logon on file server for SMB access
+                        if smb_dst_sys:
+                            # Find active user on this workstation
+                            ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+                            for sess in ws_sessions:
+                                if sess.logon_type in (2, 10, 11):
+                                    ws_user = next(
+                                        (
+                                            u
+                                            for u in self.scenario.environment.users
+                                            if u.username == sess.username
+                                        ),
+                                        None,
                                     )
-                                    break
-                    t += smb_interval
+                                    if ws_user:
+                                        self._emit_smb_logon_pair(
+                                            ws_user, smb_dst_sys, system.ip, ts, rng
+                                        )
+                                        self._emit_smb_file_operations(
+                                            ws_user, smb_dst_sys, system, ts, rng
+                                        )
+                                        break
+                        t += smb_interval
 
             # Kerberos
             if "kerberos-client" in services and os_cat == "windows" and dc_targets:
@@ -4122,6 +4251,7 @@ class BaselineMixin:
                 any(r in (system.roles or []) for r in ("web_server", "forward_proxy"))
                 or "web" in system.hostname.lower()
             )
+            has_ntp_client = "ntp-client" in self._system_service_defaults.get(system.hostname, [])
             num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             scenario_start = self.scenario.time_window.start
@@ -4225,17 +4355,22 @@ class BaselineMixin:
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
-                    action = rng.choice(
-                        [f"New session {sid} of user {user}.", f"Removed session {sid}."]
-                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="systemd-logind",
-                        message=action,
+                        message=f"New session {sid} of user {user}.",
                         pid=sys_pids.get("logind", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.65:
+                    if rng.random() < 0.65:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(seconds=rng.randint(120, 5400)),
+                            app_name="systemd-logind",
+                            message=f"Removed session {sid}.",
+                            pid=sys_pids.get("logind", rng.randint(400, 800)),
+                        )
+                elif source_roll < 0.53:
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -4283,6 +4418,11 @@ class BaselineMixin:
                             auth_msg = (
                                 f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                             )
+                        if not hasattr(self, "_session_counters"):
+                            self._session_counters = {}
+                        self._session_counters.setdefault(system.hostname, 0)
+                        self._session_counters[system.hostname] += 1
+                        ssh_sid = self._session_counters[system.hostname]
                         login_msgs = [
                             (
                                 "sshd",
@@ -4293,12 +4433,12 @@ class BaselineMixin:
                             (
                                 "sshd",
                                 sshd_pid,
-                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
                             ),
                             (
                                 "systemd-logind",
                                 sys_pids.get("logind", 456),
-                                f"New session {rng.randint(50, 9999)} of user {ssh_user}.",
+                                f"New session {ssh_sid} of user {ssh_user}.",
                             ),
                         ]
                         _msg_offset = rng.randint(10, 50)
@@ -4327,7 +4467,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.80:
+                elif source_roll < 0.68:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -4343,7 +4483,9 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.88:
+                elif source_roll < 0.76:
+                    if not has_ntp_client:
+                        continue
                     if is_rhel_like:
                         continue  # RHEL uses chronyd, not systemd-timesyncd
                     # Use the same deterministic NTP source as network-level NTP
@@ -4363,13 +4505,17 @@ class BaselineMixin:
                         msg = f"Synchronized to time server for the first time {ntp_ip}:123."
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
-                        msg = rng.choice(
+                        msg = rng.choices(
                             [
-                                f"Initial synchronization to time server {ntp_ip}:123.",
+                                f"Network configuration changed, trying to establish synchronization with {ntp_ip}:123.",
+                                f"System clock synchronized to {ntp_ip}:123.",
+                                f"Time has been changed by {-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d} seconds.",
                                 f"Timed out waiting for reply from {ntp_ip}:123.",
-                                f"Synchronized to time server {ntp_ip}:123.",
-                            ]
-                        )
+                                f"Selected time server {ntp_ip}:123.",
+                            ],
+                            weights=[8, 45, 8, 4, 35],
+                            k=1,
+                        )[0]
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,

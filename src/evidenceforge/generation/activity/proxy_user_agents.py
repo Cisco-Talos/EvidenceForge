@@ -89,6 +89,54 @@ def _pick_package_manager_agent(
     return None
 
 
+def _pick_domain_override_agent(
+    rng: random.Random,
+    source_system: "System",
+    hostname: str | None,
+    data: dict[str, Any],
+) -> str | None:
+    """Pick a domain-specific agent for update, telemetry, and cert infrastructure."""
+    host = (hostname or "").lower()
+    if not host:
+        return None
+
+    overrides = data.get("domain_overrides", {})
+    if not isinstance(overrides, dict):
+        return None
+
+    os_name = source_system.os.lower()
+    for override in overrides.values():
+        if not isinstance(override, dict):
+            continue
+        os_keywords = override.get("os_keywords", [])
+        hosts = override.get("hosts", [])
+        user_agents = override.get("user_agents", [])
+        if not isinstance(os_keywords, list) or not isinstance(hosts, list):
+            continue
+        if not isinstance(user_agents, list) or not user_agents:
+            continue
+        host_matches = any(
+            host == str(candidate).lower() or host.endswith(f".{str(candidate).lower()}")
+            for candidate in hosts
+        )
+        if host_matches and any(str(keyword).lower() in os_name for keyword in os_keywords):
+            return rng.choice(user_agents)
+    return None
+
+
+def pick_proxy_domain_user_agent(
+    rng: random.Random,
+    source_system: "System | None",
+    *,
+    hostname: str | None = None,
+) -> str | None:
+    """Pick a domain-specific proxy User-Agent override, if one applies."""
+    if source_system is None:
+        return None
+    data = load_proxy_user_agents()
+    return _pick_domain_override_agent(rng, source_system, hostname, data)
+
+
 def pick_proxy_user_agent(
     rng: random.Random,
     source_system: "System | None",
@@ -103,6 +151,10 @@ def pick_proxy_user_agent(
     if source_system is None:
         windows_pool = _pool(data, "workstation", "windows")
         return rng.choice(windows_pool)
+
+    domain_agent = _pick_domain_override_agent(rng, source_system, hostname, data)
+    if domain_agent:
+        return domain_agent
 
     if _is_server_source(source_system, data):
         package_agent = _pick_package_manager_agent(rng, source_system, hostname, data)

@@ -72,7 +72,7 @@ For scripted or non-interactive use:
 | `eforge validate <scenario.yaml>` | Validate scenario schema and cross-references |
 | `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (5 dimensions, 23 sub-scores) |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
-| `eforge validate-config` | Validate config files for cross-reference integrity (27 checks). Use `--json` for machine output. |
+| `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
 | `eforge install-skills [--global]` | Install Claude Code skills |
 | `eforge version` | Show version |
 
