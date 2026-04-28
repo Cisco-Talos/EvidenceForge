@@ -58,7 +58,7 @@ def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | da
     rng = random.Random(seed)
     host_len = len(str(px.host or ""))
     return {
-        "timestamp": request_time - timedelta(milliseconds=rng.randint(80, 850)),
+        "timestamp": request_time - timedelta(milliseconds=rng.randint(1200, 3500)),
         "sc_bytes": rng.randint(90, 260),
         "cs_bytes": rng.randint(180 + host_len, 520 + host_len),
         "time_taken": rng.randint(20, 450),
