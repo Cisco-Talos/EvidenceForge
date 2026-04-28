@@ -549,6 +549,95 @@ class TestWindowsEventEmitter:
         assert "UserData" in content
         assert "EventData" not in content or content.count("EventData") == 0
 
+    def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):
+        """Test emitting 4800 (workstation locked) with populated EventData fields."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4800,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 540,
+            "ExecutionThreadID": 112,
+            "TargetUserSid": "S-1-5-21-123-456-789-1001",
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4800</EventID>" in content
+        assert '<Data Name="TargetUserName">jsmith</Data>' in content
+        assert '<Data Name="TargetLogonId">0x4f2a1b</Data>' in content
+        assert '<Data Name="SessionId">2</Data>' in content
+
+    def test_emit_workstation_unlock_contains_event_data(self, format_def, temp_output):
+        """Test emitting 4801 (workstation unlocked) with populated EventData fields."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event_data = {
+            "EventID": 4801,
+            "TimeCreated": datetime(2024, 1, 15, 10, 35, 0, 0, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 541,
+            "ExecutionThreadID": 113,
+            "TargetUserSid": "S-1-5-21-123-456-789-1001",
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x4f2a1b",
+            "SessionId": 2,
+        }
+        emitter.emit_event(event_data)
+        emitter.close()
+        content = temp_output.read_text()
+        assert "<EventID>4801</EventID>" in content
+        assert '<Data Name="TargetUserName">jsmith</Data>' in content
+        assert '<Data Name="TargetLogonId">0x4f2a1b</Data>' in content
+        assert '<Data Name="SessionId">2</Data>' in content
+
+    def test_lock_unlock_share_stable_session_id(self, format_def, temp_output):
+        """4800 and 4801 for the same LogonID should share the same SessionId."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WKS-01",
+            fqdn="WKS-01.corp.local",
+            ip="10.0.0.50",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        auth = AuthContext(
+            username="jsmith",
+            user_sid="S-1-5-21-123-456-789-1001",
+            logon_id="0x4f2a1b",
+        )
+        emitter.emit(
+            SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+                event_type="workstation_locked",
+                dst_host=host,
+                auth=auth,
+            )
+        )
+        emitter.emit(
+            SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 35, 0, 0, tzinfo=UTC),
+                event_type="workstation_unlocked",
+                dst_host=host,
+                auth=auth,
+            )
+        )
+        emitter.close()
+        content = temp_output.read_text()
+        session_lines = [line for line in content.splitlines() if 'Data Name="SessionId"' in line]
+        assert len(session_lines) == 2
+        assert session_lines[0] == session_lines[1]
+
     def test_emit_service_installed(self, format_def, temp_output):
         """Test emitting 4697 (service installed)."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

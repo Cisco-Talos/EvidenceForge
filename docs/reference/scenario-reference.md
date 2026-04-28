@@ -420,7 +420,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
 | `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `supplementary` (auto/none) |
-| `logon` | 4624, 4672, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
+| `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
@@ -487,7 +487,7 @@ The generation engine automatically emits prerequisite events for certain event 
 | Trigger Event | Auto-Generated Prerequisites | Timing |
 |---|---|---|
 | `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | 5-80ms before |
-| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC, optional 4672 for elevated users | TGT 50-200ms before, TGS 20-100ms after TGT |
+| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | TGT 50-200ms before, TGS 20-100ms after TGT. Elevated-session 4672 is emitted with the target-host 4624. |
 | `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
 | `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
 | `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | 100-500ms after |

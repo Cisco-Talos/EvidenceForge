@@ -254,7 +254,7 @@ class TestFailedLogonDC:
         assert "DC-01" in hosts, "Missing 4625/4776 on DC"
 
     def test_failed_logon_dc_gets_4776(self, state_manager, mock_emitters, timestamp):
-        """DC should receive an NTLM validation (4776) event."""
+        """DC should receive a failed NTLM validation (4776) event."""
         ag = ActivityGenerator(state_manager, mock_emitters)
         state_manager.set_current_time(timestamp)
 
@@ -277,6 +277,8 @@ class TestFailedLogonDC:
         ]
         event_types = {e.event_type for e in dc_events}
         assert "ntlm_validation" in event_types, "Missing 4776 on DC"
+        ntlm_event = next(e for e in dc_events if e.event_type == "ntlm_validation")
+        assert ntlm_event.auth.failure_status != "0x0"
 
     def test_no_dc_no_extra_events(self, state_manager, mock_emitters, timestamp):
         """Without dc_system, only workstation events are emitted."""
