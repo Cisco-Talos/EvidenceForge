@@ -386,6 +386,9 @@ domains:
     tags: [cdn]
 
   # === Certificate infrastructure ===
+  - domain: ocsp.example.com
+    ips: ["10.0.0.15"]
+    tags: [background, internal]
   - domain: crl3.digicert.com
     ips: ["93.184.220.31", "93.184.221.31"]
     tags: [background]

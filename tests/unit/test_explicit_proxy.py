@@ -794,6 +794,11 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.status_code == 403
         assert proxy_event.proxy.cache_result == "DENIED"
         assert emitters["zeek_http"].emit.called
+        http_event = emitters["zeek_http"].emit.call_args.args[0]
+        assert http_event.http.status_code == 403
+        assert http_event.http.status_msg == "Forbidden"
+        assert http_event.http.response_body_len == 1200
+        assert http_event.http.resp_mime_types == ["text/html"]
         assert all(
             call.args[0].network.dst_ip == "10.0.3.10"
             for call in emitters["zeek_http"].emit.call_args_list
@@ -801,6 +806,69 @@ class TestExplicitProxyVisibility:
         assert not emitters["zeek_ssl"].emit.called
         assert not emitters["snort_alert"].emit.called
         assert not emitters["cisco_asa"].emit.called
+
+    def test_inspected_https_denial_keeps_connect_successful(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="GET",
+                url="https://example.com/private",
+                host="example.com",
+                status_code=403,
+                tunnel_status_code=200,
+                sc_bytes=1200,
+                cs_bytes=420,
+                time_taken=250,
+                user_agent="Mozilla/5.0",
+                content_type="text/html",
+                cache_result="DENIED",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/private",
+                version="1.1",
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.status_code == 403
+        assert proxy_event.proxy.tunnel_status_code == 200
+        http_event = emitters["zeek_http"].emit.call_args.args[0]
+        assert http_event.http.method == "CONNECT"
+        assert http_event.http.status_code == 200
+        assert http_event.http.status_msg == "Connection Established"
+        assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_cache_hit_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(

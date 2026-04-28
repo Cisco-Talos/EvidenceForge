@@ -24,17 +24,18 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 5 | Empty IPs | ERROR | Domain entry with missing or empty `ips:` list |
 | 6 | Invalid tags | WARNING | Tag not in the valid set (web, saas, cdn, email, git, background, windows, linux, internal, storage, dev, social) |
 | 7 | Orphaned proxy templates | WARNING | Domain key in proxy_uri_templates that doesn't exist in dns_registry |
-| 8 | Orphaned site maps | WARNING | Domain key or referenced subresource host in site_maps that doesn't exist in dns_registry |
-| 9 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
-| 10 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
+| 8 | Orphaned OCSP responders | WARNING | OCSP responder host in tls_realism that doesn't exist in dns_registry |
+| 9 | Orphaned site maps | WARNING | Domain key or referenced subresource host in site_maps that doesn't exist in dns_registry |
+| 10 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
+| 11 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
 
 ## Traffic Profile Integrity
 
 | # | Check | Severity | Description |
 |---|-------|----------|-------------|
-| 11 | Orphaned dns_tags | WARNING | `dns_tags:` value in traffic_profiles, process_network_map, or tls_realism profiles/overrides that no dns_registry domain uses |
-| 12 | Orphaned persona_traffic keys | WARNING | Persona name in `persona_traffic:` with no matching persona file |
-| 13 | Missing required fields | ERROR | Connection entry without `role`, `port`, or `weight` |
+| 12 | Orphaned dns_tags | WARNING | `dns_tags:` value in traffic_profiles, process_network_map, or tls_realism profiles/overrides that no dns_registry domain uses |
+| 13 | Orphaned persona_traffic keys | WARNING | Persona name in `persona_traffic:` with no matching persona file |
+| 14 | Missing required fields | ERROR | Connection entry without `role`, `port`, or `weight` |
 
 ## Application Catalog Integrity
 

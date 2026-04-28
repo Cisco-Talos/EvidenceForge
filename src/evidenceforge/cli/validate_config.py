@@ -543,6 +543,19 @@ def validate_config() -> ValidationResult:
                 f'Domain override host "{domain}" not found in dns_registry',
             )
         )
+    ocsp_responder_hosts: set[str] = set()
+    for responder in tls_realism_data.get("ocsp", {}).get("responders", []):
+        if not isinstance(responder, dict):
+            continue
+        ocsp_responder_hosts.update(str(host) for host in responder.get("domains", []) if host)
+    for domain in ocsp_responder_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "tls_realism.yaml",
+                f'OCSP responder host "{domain}" not found in dns_registry',
+            )
+        )
 
     # Check 8: Orphaned site maps
     for domain in site_domains - dns_domain_set:

@@ -120,7 +120,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._conn_id_sequences[sequence_key] = sequence + 1
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
         sensor_offset = seed % 50_000
-        return 1_000_000 + sensor_offset + day_index * 900_000 + seconds_of_day * 10 + sequence
+        return 1_000_000 + sensor_offset + day_index * 2_000_000 + seconds_of_day * 23 + sequence
 
     @staticmethod
     def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:

@@ -20,6 +20,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.contexts import DnsContext, FirewallContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.state_manager import StateManager
@@ -439,6 +440,49 @@ class TestWeirdProtocolConstraint:
         assert any(char.islower() for char in event.network.history)
         assert event.network.resp_pkts > 0
         assert event.network.resp_ip_bytes is not None
+
+    def test_denied_dns_query_has_no_response_payload(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.01,
+            orig_bytes=60,
+            resp_bytes=180,
+            dns=DnsContext(
+                query="blocked.example.com",
+                trans_id=1234,
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                TTLs=[300.0],
+                rtt=0.02,
+            ),
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106023,
+                connection_id=1,
+                src_interface="inside",
+                dst_interface="outside",
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "S0"
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
+        assert event.dns.answers == []
+        assert event.dns.TTLs == []
+        assert event.dns.rtt is None
 
     def test_tcp_connections_get_tcp_weird_names(
         self, activity_gen, timestamp, state_manager, mock_emitters

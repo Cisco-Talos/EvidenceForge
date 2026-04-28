@@ -411,6 +411,8 @@ destinations:
 `ocsp.responders` maps certificate issuer DN patterns to OCSP responder hostnames.
 When Zeek OCSP evidence is generated, the engine emits a supporting HTTP/file-analysis
 transaction to one of these responders so `ocsp.id` joins to `files.fuid`.
+Responder hostnames should also exist in `dns_registry.yaml`; `eforge validate-config`
+warns when an OCSP responder host is missing from the registry.
 
 `ocsp.suppress_revoked_suffixes` prevents routine mainstream browsing certificates from being marked revoked while still allowing rare revoked statuses for uncategorized or intentionally suspicious certificate identities.
 

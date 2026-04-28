@@ -1047,6 +1047,9 @@ class ActivityGenerator:
             url=url,
             host=proxy_hostname,
             status_code=status_code,
+            tunnel_status_code=200
+            if explicit_mode and dst_port == 443 and proxy_method != "CONNECT"
+            else status_code,
             sc_bytes=sc_bytes,
             cs_bytes=cs_bytes,
             time_taken=int((duration or 0) * 1000),
@@ -2720,6 +2723,9 @@ class ActivityGenerator:
 
             client_http: HttpContext | None = None
             if dst_port == 443:
+                tunnel_status_code = proxy_context.tunnel_status_code
+                if tunnel_status_code is None:
+                    tunnel_status_code = proxy_context.status_code
                 connect_status_messages = {
                     200: "Connection Established",
                     403: "Forbidden",
@@ -2736,16 +2742,26 @@ class ActivityGenerator:
                     user_agent=proxy_context.user_agent,
                     request_body_len=0,
                     response_body_len=0,
-                    status_code=proxy_context.status_code,
+                    status_code=tunnel_status_code,
                     status_msg=connect_status_messages.get(
-                        proxy_context.status_code,
-                        "Connection Established"
-                        if proxy_context.status_code < 400
-                        else "Proxy Error",
+                        tunnel_status_code,
+                        "Connection Established" if tunnel_status_code < 400 else "Proxy Error",
                     ),
                     tags=[],
                 )
             elif http is not None:
+                status_messages = {
+                    200: "OK",
+                    301: "Moved Permanently",
+                    302: "Found",
+                    304: "Not Modified",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    500: "Internal Server Error",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
                 client_http = HttpContext(
                     method=http.method,
                     host=proxy_context.host,
@@ -2753,13 +2769,15 @@ class ActivityGenerator:
                     version=http.version,
                     user_agent=http.user_agent,
                     request_body_len=http.request_body_len,
-                    response_body_len=http.response_body_len,
-                    status_code=http.status_code,
-                    status_msg=http.status_msg,
+                    response_body_len=proxy_context.sc_bytes,
+                    status_code=proxy_context.status_code,
+                    status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
                     referrer=http.referrer,
                     trans_depth=http.trans_depth,
                     tags=list(http.tags),
-                    resp_mime_types=list(http.resp_mime_types),
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type
+                    else list(http.resp_mime_types),
                 )
             else:
                 request_body_len = 0
@@ -3213,6 +3231,23 @@ class ActivityGenerator:
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
             event.dns = dns
+            if (
+                event.firewall is not None
+                and event.firewall.action == "deny"
+                and proto in ("udp", "tcp")
+                and dst_port == 53
+            ):
+                event.dns.rcode = "NOERROR"
+                event.dns.rcode_num = 0
+                event.dns.answers = []
+                event.dns.TTLs = []
+                event.dns.rtt = None
+                event.network.conn_state = "S0"
+                event.network.history = "D" if proto == "udp" else "S"
+                event.network.duration = None
+                event.network.resp_bytes = 0
+                event.network.resp_pkts = 0
+                event.network.resp_ip_bytes = None
         elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
             event.dns = DnsContext(
@@ -4328,8 +4363,10 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import DnsContext
 
-        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
-        if rng.random() < 0.002:
+        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures).
+        # Known internal names are served by authoritative internal DNS and
+        # should not randomly fail unless a scenario explicitly models DNS trouble.
+        if not is_internal and rng.random() < 0.002:
             dns_ctx = DnsContext(
                 query=hostname,
                 trans_id=rng.randint(1, 65535),

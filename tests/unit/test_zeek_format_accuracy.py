@@ -501,6 +501,13 @@ class TestZeekUidGeneration:
             for ch in uid:
                 assert ch in base62, f"Non-base62 char '{ch}' in UID: {uid}"
 
+    def test_uid_avoids_obvious_synthetic_markers(self):
+        """UIDs should not contain words that make generated data self-identifying."""
+        from evidenceforge.utils.ids import _has_synthetic_marker
+
+        assert _has_synthetic_marker("FAKEB3N5AIrSrZlxB")
+        assert not _has_synthetic_marker("F8cadxE7noECqoc9I")
+
 
 SAMPLE_DIR = Path(__file__).parent.parent.parent / "sample_data" / "Zeek-JSON"
 

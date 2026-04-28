@@ -130,7 +130,9 @@ class ProxyEmitter(HostMultiplexEmitter):
                     "method": "CONNECT",
                     "url": f"{px.host}:443",
                     "protocol": "HTTP/1.1",
-                    "status_code": 200,
+                    "status_code": px.tunnel_status_code
+                    if px.tunnel_status_code is not None
+                    else 200,
                     "sc_bytes": setup["sc_bytes"],
                     "cs_bytes": setup["cs_bytes"],
                     "time_taken": setup["time_taken"],

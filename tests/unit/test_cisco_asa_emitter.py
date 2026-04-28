@@ -159,6 +159,14 @@ class TestConnectionIdCounter:
         assert conn_id < 1_000_000_000
         assert not str(conn_id).endswith("000")
 
+    def test_connection_id_terminal_digits_vary(self, asa_emitter):
+        ids = [
+            asa_emitter._next_conn_id("fw01", T0 + timedelta(seconds=offset))
+            for offset in range(60)
+        ]
+        terminal_digits = {conn_id % 10 for conn_id in ids}
+        assert len(terminal_digits) >= 8
+
     def test_sorted_built_ids_follow_timestamp_order(self, asa_emitter, tmp_path):
         late_event = _make_connection_event(
             timestamp=T0 + timedelta(seconds=30),
