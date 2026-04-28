@@ -13,8 +13,6 @@ from collections import Counter
 
 from evidenceforge.generation.activity.generator import (
     _NTP_STRATUM_TIMING,
-    _PROXY_UAS_LINUX,
-    _PROXY_UAS_WINDOWS,
     _SSL_FAILURE_RATE,
     _SSL_HIST_FAILURE_VALUES,
     _SSL_HIST_SUCCESS_VALUES,
@@ -28,6 +26,14 @@ from evidenceforge.generation.activity.generator import (
     _UDP_OVERHEAD_VALUES,
     _UDP_OVERHEAD_WEIGHTS,
 )
+from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
+
+
+def _proxy_ua_pool(*path: str) -> list[str]:
+    value = load_proxy_user_agents()
+    for key in path:
+        value = value[key]
+    return value
 
 
 class TestProtocolOverhead:
@@ -135,28 +141,31 @@ class TestProxyRealism:
         cs = orig_bytes + rng.randint(*_PROXY_CS_OVERHEAD)
         assert cs > orig_bytes
 
-    def test_proxy_cache_hit_varies_bytes(self):
-        """Cache HIT response size should differ from wire resp_bytes."""
+    def test_proxy_cache_hit_sc_bytes_include_response_overhead(self):
+        """Cache HIT sc-bytes should be response payload plus proxy overhead."""
         rng = random.Random(42)
         resp_bytes = 10000
-        _sc = rng.randint(max(1, int(resp_bytes * 0.4)), max(2, int(resp_bytes * 1.1)))
-        # Should be in the 40%-110% range, not exactly resp_bytes
-        assert 3000 < _sc < 12000
+        from evidenceforge.generation.activity.generator import _PROXY_SC_OVERHEAD
+
+        _sc = resp_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+        assert resp_bytes < _sc <= resp_bytes + _PROXY_SC_OVERHEAD[1]
 
 
 class TestProxyUaOsMatch:
     """Bug #19: Proxy UAs match source OS."""
 
     def test_linux_ua_pool_has_package_managers(self):
-        linux_uas = " ".join(_PROXY_UAS_LINUX)
+        linux_uas = " ".join(_proxy_ua_pool("workstation", "linux"))
         assert "apt-http" in linux_uas
         assert "python-requests" in linux_uas
         assert "curl" in linux_uas
 
     def test_windows_ua_pool_has_browsers(self):
-        windows_uas = " ".join(_PROXY_UAS_WINDOWS)
+        windows_uas = " ".join(_proxy_ua_pool("workstation", "windows"))
         assert "Windows NT" in windows_uas
         assert "Chrome" in windows_uas
 
     def test_linux_pool_differs_from_windows(self):
-        assert set(_PROXY_UAS_LINUX) != set(_PROXY_UAS_WINDOWS)
+        assert set(_proxy_ua_pool("workstation", "linux")) != set(
+            _proxy_ua_pool("workstation", "windows")
+        )

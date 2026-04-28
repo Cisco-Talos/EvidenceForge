@@ -260,6 +260,8 @@ LogEmitter (ABC)
 
 **Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors, each writing to `<sensor_hostname>/<log_file>`. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
 
+**Proxy path modeling:** `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions.
+
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 
 **Two rendering paths:**

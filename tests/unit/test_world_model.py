@@ -344,3 +344,26 @@ def test_find_user_session_handles_mixed_timezone_start_times(
 
     assert selected is not None
     assert selected.logon_id == latest_id
+
+
+def test_find_user_session_ignores_sessions_starting_after_activity_time(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+) -> None:
+    """Session lookup should not reuse a future same-hour session."""
+    state_manager.set_current_time(datetime(2024, 1, 15, 10, 55, 0, tzinfo=UTC))
+    state_manager.create_session(
+        username="alice.admin",
+        system="APP-01",
+        logon_type=10,
+        source_ip="10.10.10.50",
+        session_kind="rdp",
+    )
+
+    selected = planner._find_user_session(
+        "alice.admin",
+        "APP-01",
+        at_time=datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC),
+    )
+
+    assert selected is None

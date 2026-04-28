@@ -184,6 +184,7 @@ class ScenarioValidator:
         self._validate_network_segments()
         self._validate_network_sensors()
         self._validate_output_formats()
+        self._validate_proxy_output_topology()
         # Eval-informed checks
         self._validate_format_os_compatibility()
         self._validate_segment_sensor_coverage()
@@ -197,6 +198,7 @@ class ScenarioValidator:
         self._validate_storyline_linkability()
         self._validate_storyline_causal_order()
         self._validate_storyline_event_ids()
+        self._validate_storyline_time_window()
         self._validate_expansion_redundancy()
         self._validate_process_network_pairing()
         self._validate_firewall_config()
@@ -593,6 +595,66 @@ class ScenarioValidator:
                     )
                 )
 
+    def _validate_proxy_output_topology(self) -> None:
+        """Warn when proxy logs are requested but proxy topology/config is incomplete."""
+        expanded_formats = self._get_expanded_formats()
+        if "proxy_access" not in expanded_formats:
+            return
+
+        has_forward_proxy = any(
+            "forward_proxy" in (system.roles or []) for system in self.scenario.environment.systems
+        )
+        if not has_forward_proxy:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="output.logs",
+                    message=(
+                        "Format 'proxy_access' is requested but no system has "
+                        "roles: [forward_proxy], so proxy access logs will not be generated"
+                    ),
+                    suggestion=(
+                        "Add a proxy system with roles: [forward_proxy] and an appropriate "
+                        "proxy service label such as forward_proxy or remove proxy_access "
+                        "from output.logs"
+                    ),
+                )
+            )
+            return
+
+        proxy_config = self.scenario.environment.proxy
+        if "proxy" not in self.scenario.environment.model_fields_set:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.proxy",
+                    message=(
+                        "proxy_access is requested but environment.proxy is not set; "
+                        "defaulting to transparent proxy mode"
+                    ),
+                    suggestion=(
+                        "Add environment.proxy.mode: transparent or explicit. Use explicit "
+                        "for PAC/browser-configured forward proxies."
+                    ),
+                )
+            )
+
+        if proxy_config.mode == "explicit" and "listener_port" not in proxy_config.model_fields_set:
+            self.issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    field_path="environment.proxy.listener_port",
+                    message=(
+                        "Explicit proxy mode is configured without listener_port; "
+                        "defaulting to 8080"
+                    ),
+                    suggestion=(
+                        "Set environment.proxy.listener_port to the client-visible proxy "
+                        "port, such as 8080 or a product-specific value."
+                    ),
+                )
+            )
+
     def _get_system_ip(self, hostname: str) -> str | None:
         """Get IP address for a system by hostname."""
         for system in self.scenario.environment.systems:
@@ -670,8 +732,16 @@ class ScenarioValidator:
             return
 
         monitored_segments: set[str] = set()
+        link_local_span_segments: set[str] = set()
         for sensor in self.scenario.environment.network.sensors:
             monitored_segments.update(sensor.monitoring_segments)
+            if (
+                sensor.type != "firewall"
+                and sensor.placement == "span"
+                and sensor.direction in {"bidirectional", "outbound"}
+                and "zeek" in sensor.log_formats
+            ):
+                link_local_span_segments.update(sensor.monitoring_segments)
 
         for idx, segment in enumerate(self.scenario.environment.network.segments):
             if segment.systems and segment.name not in monitored_segments:
@@ -683,6 +753,21 @@ class ScenarioValidator:
                             f"Segment '{segment.name}' has systems but no sensor monitoring it"
                         ),
                         suggestion="Add a sensor with this segment in monitoring_segments",
+                    )
+                )
+            if segment.systems and segment.name not in link_local_span_segments:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"environment.network.segments.{idx}",
+                        message=(
+                            f"Segment '{segment.name}' has no SPAN-style Zeek sensor for "
+                            "link-local traffic such as DHCP broadcast"
+                        ),
+                        suggestion=(
+                            "Use placement: span on a Zeek sensor monitoring this segment if "
+                            "you expect DHCP lease evidence from hosts there"
+                        ),
                     )
                 )
 
@@ -1217,20 +1302,72 @@ class ScenarioValidator:
                 return td.total_seconds()
             except (ValueError, TypeError):
                 return None
-        else:
-            # Absolute ISO 8601
-            try:
-                from datetime import datetime
+        # Absolute ISO 8601
+        try:
+            from datetime import datetime
 
-                dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                start = self.scenario.time_window.start
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=UTC)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=UTC)
-                return (dt - start).total_seconds()
+            dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+            start = self.scenario.time_window.start
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return (dt - start).total_seconds()
+        except (ValueError, TypeError):
+            return None
+
+    def _time_window_seconds(self) -> float | None:
+        """Return configured generation window length in seconds, if resolvable."""
+        from evidenceforge.utils.time import parse_duration
+
+        if self.scenario.time_window.duration:
+            try:
+                return parse_duration(self.scenario.time_window.duration).total_seconds()
             except (ValueError, TypeError):
                 return None
+        if self.scenario.time_window.end:
+            start = self.scenario.time_window.start
+            end = self.scenario.time_window.end
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=UTC)
+            return (end - start).total_seconds()
+        return None
+
+    def _validate_storyline_time_window(self) -> None:
+        """Warn when storyline steps are scheduled outside the generation window."""
+        if not self.scenario.storyline:
+            return
+
+        window_seconds = self._time_window_seconds()
+        if window_seconds is None:
+            return
+
+        for idx, event in enumerate(self.scenario.storyline):
+            event_seconds = self._resolve_event_time(event)
+            if event_seconds is None:
+                continue
+            if event_seconds < 0 or event_seconds > window_seconds:
+                window_label = (
+                    self.scenario.time_window.duration
+                    if self.scenario.time_window.duration
+                    else self.scenario.time_window.end
+                )
+                self.issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        field_path=f"storyline.{idx}.time",
+                        message=(
+                            f"Storyline event time '{event.time}' falls outside "
+                            f"the configured time_window ({window_label})"
+                        ),
+                        suggestion=(
+                            "Extend time_window so baseline and all storyline evidence share "
+                            "the same collection horizon, or move the storyline step inside it."
+                        ),
+                    )
+                )
 
     def _validate_expansion_redundancy(self) -> None:
         """Warn when scenario manually specifies events the causal expansion engine auto-generates.

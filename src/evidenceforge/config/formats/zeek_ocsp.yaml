@@ -1,7 +1,7 @@
 # zeek_ocsp format definition — Zeek ocsp.log format (JSON output) - OCSP response logging
 #
 # Category: network
-# Standalone: yes (no cross-file dependencies)
+# Cross-file dependency: id is the OCSP response file ID and should join to files.log fuid.
 # Note: Field names may be referenced by evaluation rules in config/evaluation/
 #
 # Full schema: see commands/eforge/references/config-formats.md

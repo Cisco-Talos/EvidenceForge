@@ -99,7 +99,47 @@ class TestProxyEmitterReferrer:
         emitter.emit(event)
 
         assert len(rendered_lines) == 1
-        assert '"-"' in rendered_lines[0]
+        fields = rendered_lines[0].split()
+        assert fields[13] == "-"
+
+    def test_proxy_access_flush_sorts_by_request_timestamp(self, tmp_path):
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, tmp_path, buffer_size=2)
+
+        for ts in [
+            datetime(2024, 3, 15, 10, 5, 0, tzinfo=UTC),
+            datetime(2024, 3, 15, 10, 1, 0, tzinfo=UTC),
+            datetime(2024, 3, 15, 10, 3, 0, tzinfo=UTC),
+        ]:
+            event = SecurityEvent(
+                timestamp=ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                ),
+                proxy=ProxyContext(
+                    client_ip="10.0.10.50",
+                    method="GET",
+                    url="http://example.com/page",
+                    host="example.com",
+                    proxy_fqdn="PROXY-01",
+                ),
+            )
+            emitter.emit(event)
+
+        emitter.close()
+
+        lines = (tmp_path / "PROXY-01" / "proxy_access.log").read_text().splitlines()
+        assert lines[0].startswith("2024-03-15 10:01:00")
+        assert lines[1].startswith("2024-03-15 10:03:00")
+        assert lines[2].startswith("2024-03-15 10:05:00")
 
 
 class TestConnectTunnelBehavior:
@@ -137,13 +177,152 @@ class TestConnectTunnelBehavior:
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
         emitter.emit(event)
 
-        # Should have CONNECT + GET = 2 lines
         assert len(rendered_lines) == 2
-        assert "CONNECT" in rendered_lines[0]
-        assert "GET" in rendered_lines[1]
+        fields = rendered_lines[0].split()
+        assert fields[4] == "CONNECT"
+        assert fields[5] == "example.com:443"
+        assert fields[6] == "HTTP/1.1"
+        inspected_fields = rendered_lines[1].split()
+        assert inspected_fields[4] == "GET"
+        assert inspected_fields[5] == "https://example.com/page"
+
+    def test_connect_setup_row_differs_from_inspected_request_accounting(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.20.10",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="GET",
+                url="https://example.com/status.gif",
+                host="example.com",
+                sc_bytes=4096,
+                cs_bytes=700,
+                time_taken=900,
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 2
+        connect_fields = rendered_lines[0].split()
+        inspected_fields = rendered_lines[1].split()
+        assert connect_fields[4] == "CONNECT"
+        assert inspected_fields[4] == "GET"
+        assert connect_fields[0:2] <= inspected_fields[0:2]
+        assert connect_fields[7:10] != inspected_fields[7:10]
+        assert connect_fields[7] == "200"
+        assert int(connect_fields[8]) < int(inspected_fields[8])
+        assert int(connect_fields[9]) < int(inspected_fields[9])
+
+    def test_inspected_https_denial_has_successful_connect_setup(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.20.10",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="GET",
+                url="https://example.com/blocked.js",
+                host="example.com",
+                status_code=403,
+                sc_bytes=1200,
+                cs_bytes=700,
+                time_taken=900,
+                content_type="text/html",
+                cache_result="DENIED",
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 2
+        connect_fields = rendered_lines[0].split()
+        denied_fields = rendered_lines[1].split()
+        assert connect_fields[4] == "CONNECT"
+        assert connect_fields[7] == "200"
+        assert denied_fields[4] == "GET"
+        assert denied_fields[7] == "403"
+
+    def test_denied_connect_does_not_emit_inspected_request(self):
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=54321,
+                dst_ip="10.0.20.10",
+                dst_port=8080,
+                protocol="tcp",
+            ),
+            proxy=ProxyContext(
+                client_ip="10.0.10.50",
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=403,
+                sc_bytes=1200,
+                cs_bytes=700,
+                time_taken=900,
+                content_type="text/html",
+                cache_result="DENIED",
+                proxy_fqdn="PROXY-01",
+            ),
+        )
+
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        emitter.emit(event)
+
+        assert len(rendered_lines) == 1
+        denied_fields = rendered_lines[0].split()
+        assert denied_fields[4] == "CONNECT"
+        assert denied_fields[7] == "403"
 
     def test_tunnel_reuse_within_timeout(self):
-        """Multiple HTTPS requests within timeout produce only one CONNECT."""
+        """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""
         from pathlib import Path
 
         from evidenceforge.formats import load_format
@@ -178,10 +357,10 @@ class TestConnectTunnelBehavior:
             emitter.emit(event)
 
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
-        get_count = sum(1 for line in all_lines if "GET" in line)
+        get_count = sum(1 for line in all_lines if " GET " in line)
 
         assert connect_count == 1, f"Expected 1 CONNECT, got {connect_count}"
-        assert get_count == 5, f"Expected 5 GETs, got {get_count}"
+        assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"
 
     def test_tunnel_expires_after_timeout(self):
         """CONNECT re-emitted after tunnel timeout expires."""

@@ -1257,7 +1257,7 @@ class NetworkConfig(BaseModel):
     sensors: list[NetworkSensor]
     public_cidrs: list[str] = Field(
         default_factory=list,
-        description="Public address blocks allocated to the org (e.g., ['203.0.113.0/28']). "
+        description="Public address blocks allocated to the org (e.g., ['45.83.220.0/28']). "
         "External scans/probes target these ranges. When empty, auto-derived "
         "from static NAT VIPs by grouping into /24 blocks.",
     )
@@ -1288,6 +1288,32 @@ class NetworkConfig(BaseModel):
         if not v:
             raise ValueError("Network config must have at least one sensor")
         return v
+
+
+class ProxyConfig(BaseModel):
+    """Forward proxy deployment semantics.
+
+    Attributes:
+        mode: transparent preserves direct-looking client→origin network evidence;
+              explicit emits client→proxy and proxy→origin legs.
+        listener_port: Client-visible proxy listener port for explicit mode.
+    """
+
+    mode: Literal["transparent", "explicit"] = Field(
+        default="transparent",
+        description=(
+            "Proxy deployment mode. transparent preserves direct client-to-origin network "
+            "shape; explicit/PAC emits client-to-proxy and proxy-to-origin legs."
+        ),
+    )
+    listener_port: int = Field(
+        default=8080,
+        ge=1,
+        le=65535,
+        description="Client-visible listener port used when mode is explicit.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class StaleAccount(BaseModel):
@@ -1348,6 +1374,10 @@ class Environment(BaseModel):
     groups: list[Group] | None = Field(default_factory=list)
     network: NetworkConfig | None = Field(
         None, description="Optional network topology and sensor config"
+    )
+    proxy: ProxyConfig = Field(
+        default_factory=ProxyConfig,
+        description="Forward proxy deployment semantics for proxy_access generation.",
     )
 
     @field_validator("users")

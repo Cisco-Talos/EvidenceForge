@@ -304,6 +304,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._netbios_domain = self._ad_domain.split(".")[0].upper() if self._ad_domain else "CORP"
         self.activity_generator._ad_domain = self._ad_domain
         self.activity_generator._netbios_domain = self._netbios_domain
+        self.activity_generator._users_by_username = {
+            user.username: user for user in self.scenario.environment.users
+        }
         self.world_model = WorldModel(self.scenario, self._ad_domain)
         self.activity_generator._world_model = self.world_model
         self.activity_generator._ip_to_system = dict(self.world_model.systems_by_ip)
@@ -392,6 +395,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._proxy_routes: dict[str, list] = {}
         self._build_proxy_routes()
         self.activity_generator._proxy_routes = self._proxy_routes
+        self.activity_generator._proxy_mode = self.scenario.environment.proxy.mode
+        self.activity_generator._proxy_listener_port = self.scenario.environment.proxy.listener_port
         self.world_planner = WorldPlanner(
             world_model=self.world_model,
             state_manager=self.state_manager,

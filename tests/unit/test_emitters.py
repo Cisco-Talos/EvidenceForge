@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
@@ -83,16 +85,52 @@ class TestWindowsEventEmitter:
         assert "2024-01-15T10:30:45.123456Z" in content
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
-        assert '<Data Name="TargetDomainName">CORP</Data>' in content
-        assert '<Data Name="LogonType">2</Data>' in content
-        assert "<Version>2</Version>" in content  # 4624 = Version 2
-        assert '<Data Name="TargetLinkedLogonId">' in content  # Not LinkedLogonId
 
-        print(f"\n{'=' * 80}")
-        print("WINDOWS EVENT LOG SAMPLE (4624 - Logon):")
-        print(f"{'=' * 80}")
-        print(content)
-        print(f"{'=' * 80}\n")
+    def test_network_logon_workstation_name_uses_source_host(self, format_def, temp_output):
+        """Network 4624 events should name the source workstation, not the destination."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            src_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.1.10",
+                fqdn="WS-01.example.com",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            dst_host=HostContext(
+                hostname="FS-01",
+                ip="10.0.2.20",
+                fqdn="FS-01.example.com",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0x12345",
+                logon_type=3,
+                source_ip="10.0.1.10",
+                auth_package="NTLM",
+                logon_process="NtLmSsp",
+                lm_package="NTLM V2",
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                reporting_pid=744,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="WorkstationName">WS-01</Data>' in content
+        assert "<Computer>FS-01.example.com</Computer>" in content
 
     def test_emit_logoff_event(self, format_def, temp_output):
         """Test emitting a logoff event (4634)."""

@@ -23,9 +23,12 @@
 """Tests for Zeek files.log emitter."""
 
 import json
+import random
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+
+import yaml
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FileTransferContext, NetworkContext
@@ -40,14 +43,16 @@ class TestFilesFormatAccuracy:
         """Field names and types match sample_data/Zeek-JSON/files.log line 1."""
         real = json.loads(
             '{"ts":1427847434.287139,"fuid":"FheZAo1hKNan3xnZCd",'
-            '"uid":"Chs9FGiGqSvNnbrAk","id.orig_h":"192.168.0.51",'
-            '"id.orig_p":37959,"id.resp_h":"74.125.71.103","id.resp_p":80,'
+            '"tx_hosts":["74.125.71.103"],"rx_hosts":["192.168.0.51"],'
+            '"conn_uids":["Chs9FGiGqSvNnbrAk"],'
             '"source":"HTTP","depth":0,"analyzers":[],"mime_type":"text/plain",'
             '"duration":0.0,"local_orig":false,"is_orig":false,"seen_bytes":341,'
             '"missing_bytes":0,"overflow_bytes":0,"timedout":false}'
         )
         assert real["fuid"].startswith("F")
-        assert real["uid"].startswith("C")
+        assert real["conn_uids"][0].startswith("C")
+        assert isinstance(real["tx_hosts"], list)
+        assert isinstance(real["rx_hosts"], list)
         assert isinstance(real["analyzers"], list)
         assert isinstance(real["seen_bytes"], int)
         assert isinstance(real["is_orig"], bool)
@@ -63,11 +68,9 @@ class TestFilesFormatAccuracy:
                 {
                     "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                     "fuid": "FTest12345678901",
-                    "uid": "CTest123456789ab",
-                    "id.orig_h": "10.0.0.1",
-                    "id.orig_p": 50000,
-                    "id.resp_h": "93.184.216.34",
-                    "id.resp_p": 80,
+                    "tx_hosts": ["93.184.216.34"],
+                    "rx_hosts": ["10.0.0.1"],
+                    "conn_uids": ["CTest123456789ab"],
                     "source": "HTTP",
                     "depth": 0,
                     "analyzers": [],
@@ -88,7 +91,9 @@ class TestFilesFormatAccuracy:
                 data = json.loads(f.readline())
 
             assert data["fuid"] == "FTest12345678901"
-            assert data["uid"] == "CTest123456789ab"
+            assert data["conn_uids"] == ["CTest123456789ab"]
+            assert data["tx_hosts"] == ["93.184.216.34"]
+            assert data["rx_hosts"] == ["10.0.0.1"]
             assert data["source"] == "HTTP"
             assert data["analyzers"] == []
             assert data["seen_bytes"] == 1024
@@ -120,6 +125,28 @@ class TestFilesCanHandle:
         )
         assert emitter.can_handle(event) is True
 
+    def test_accepts_smb_file_transfer_source(self):
+        fmt = load_format("zeek_files")
+        emitter = ZeekFilesEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="10.0.0.10",
+                dst_port=445,
+                protocol="tcp",
+                zeek_uid="CConnUID12345678",
+            ),
+            file_transfer=FileTransferContext(
+                fuid="FFileUID12345678",
+                source="SMB",
+                seen_bytes=4096,
+            ),
+        )
+        assert emitter.can_handle(event) is True
+
     def test_rejects_without_file_transfer(self):
         fmt = load_format("zeek_files")
         emitter = ZeekFilesEmitter(fmt, Path("/tmp/test.json"))
@@ -134,10 +161,10 @@ class TestFilesCanHandle:
 
 
 class TestFilesUidCorrelation:
-    """Verify files.log has both uid and fuid for cross-log correlation."""
+    """Verify files.log has conn_uids and fuid for cross-log correlation."""
 
-    def test_dual_uids_present(self):
-        """Output should have both uid (conn correlation) and fuid (file tracking)."""
+    def test_conn_uids_present(self):
+        """Output should have conn_uids (conn correlation) and fuid (file tracking)."""
         fmt = load_format("zeek_files")
         with tempfile.TemporaryDirectory() as tmpdir:
             output = Path(tmpdir) / "files.json"
@@ -165,5 +192,134 @@ class TestFilesUidCorrelation:
 
             with open(output) as f:
                 data = json.loads(f.readline())
-            assert data["uid"] == "CConnUID12345678"
+            assert data["conn_uids"] == ["CConnUID12345678"]
             assert data["fuid"] == "FFileUID12345678"
+            assert "uid" not in data
+            assert "id.orig_h" not in data
+
+    def test_hash_fields_render_when_analyzers_run(self):
+        """files.log should include hash fields that correspond to analyzer names."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CConnUID12345678",
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FFileUID12345678",
+                    source="SMB",
+                    analyzers=["MD5", "SHA1", "SHA256"],
+                    seen_bytes=4096,
+                    md5="0" * 32,
+                    sha1="1" * 40,
+                    sha256="2" * 64,
+                ),
+            )
+            emitter.emit(event)
+            emitter.close()
+
+            with open(output) as f:
+                data = json.loads(f.readline())
+
+            assert data["md5"] == "0" * 32
+            assert data["sha1"] == "1" * 40
+            assert data["sha256"] == "2" * 64
+
+    def test_smb_filename_renders_when_present(self):
+        """SMB files.log rows should include Zeek filename when the context has one."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CConnUID12345678",
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FFileUID12345678",
+                    source="SMB",
+                    filename=r"\\files01\Shared\Finance\budget-review.xlsx",
+                    seen_bytes=4096,
+                ),
+            )
+            emitter.emit(event)
+            emitter.close()
+
+            with open(output) as f:
+                data = json.loads(f.readline())
+
+            assert data["filename"] == r"\\files01\Shared\Finance\budget-review.xlsx"
+
+
+class TestSmbFileTransferConfig:
+    """Verify SMB file-transfer realism config loading."""
+
+    def test_overlay_updates_threshold_and_extends_mime_types(self, tmp_path, monkeypatch):
+        from evidenceforge.generation.activity.smb_file_transfers import (
+            load_smb_file_transfers,
+            reset_smb_file_transfers_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "smb_file_transfers.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "min_transfer_bytes": 8192,
+                    "mime_types": [{"mime_type": "application/x-test", "weight": 1}],
+                },
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_smb_file_transfers_cache()
+
+        try:
+            data = load_smb_file_transfers()
+            assert data["min_transfer_bytes"] == 8192
+            assert any(entry["mime_type"] == "application/x-test" for entry in data["mime_types"])
+        finally:
+            reset_smb_file_transfers_cache()
+
+    def test_filename_picker_uses_overlay_templates(self):
+        """Filename templates should be data-driven and support overlays."""
+        from evidenceforge.generation.activity.smb_file_transfers import pick_smb_filename
+
+        config = {
+            "filename_templates": [
+                {
+                    "mime_types": ["application/pdf"],
+                    "templates": [r"\\{server}\Evidence\{basename}.pdf"],
+                    "weight": 1,
+                }
+            ]
+        }
+
+        filename = pick_smb_filename(
+            random.Random(42),
+            config,
+            mime_type="application/pdf",
+            server="files01.example.com",
+            user="alice",
+        )
+
+        assert filename.startswith("\\\\files01\\Evidence\\")
+        assert filename.endswith(".pdf")

@@ -43,9 +43,13 @@ def _make_host(system_type: str, roles: list[str]) -> HostContext:
     )
 
 
-def _make_event(dst_host: HostContext | None, http: HttpContext | None) -> SecurityEvent:
+def _make_event(
+    dst_host: HostContext | None,
+    http: HttpContext | None,
+    timestamp: datetime | None = None,
+) -> SecurityEvent:
     return SecurityEvent(
-        timestamp=datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC),
+        timestamp=timestamp or datetime(2024, 7, 15, 12, 0, 0, tzinfo=UTC),
         event_type="connection",
         dst_host=dst_host,
         http=http,
@@ -121,3 +125,45 @@ class TestWebEmitterCanHandle:
         host = _make_host("server", ["web_server", "forward_proxy"])
         event = _make_event(dst_host=host, http=_HTTP)
         assert emitter.can_handle(event) is True
+
+    def test_web_access_flush_sorts_by_request_timestamp(self, tmp_path):
+        """Out-of-order web events should be written chronologically per host."""
+        fmt = load_format("web_access")
+        emitter = WebEmitter(fmt, tmp_path, buffer_size=2)
+        host = _make_host("server", ["web_server"])
+
+        for ts in [
+            datetime(2024, 7, 15, 12, 5, 0, tzinfo=UTC),
+            datetime(2024, 7, 15, 12, 1, 0, tzinfo=UTC),
+            datetime(2024, 7, 15, 12, 3, 0, tzinfo=UTC),
+        ]:
+            emitter.emit(_make_event(dst_host=host, http=_HTTP, timestamp=ts))
+
+        emitter.close()
+
+        lines = (tmp_path / "target" / "web_access.log").read_text().splitlines()
+        assert "[15/Jul/2024:12:01:00 +0000]" in lines[0]
+        assert "[15/Jul/2024:12:03:00 +0000]" in lines[1]
+        assert "[15/Jul/2024:12:05:00 +0000]" in lines[2]
+
+    def test_combined_log_quoted_fields_are_escaped(self, emitter):
+        """Referer and User-Agent quotes should not break combined-log fields."""
+        host = _make_host("server", ["web_server"])
+        http = HttpContext(
+            method="GET",
+            host="web01.example.com",
+            uri="/index.html",
+            version="1.1",
+            user_agent='Mozilla/5.0 "Test"',
+            response_body_len=1024,
+            status_code=200,
+            referrer='https://example.com/search?q="quoted"',
+        )
+        event = _make_event(dst_host=host, http=http)
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+
+        emitter.emit(event)
+
+        assert r'"https://example.com/search?q=\"quoted\""' in rendered_lines[0]
+        assert r'"Mozilla/5.0 \"Test\""' in rendered_lines[0]

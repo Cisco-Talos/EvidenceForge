@@ -28,6 +28,13 @@ from evidenceforge.utils.rng import _get_rng
 
 # Base62 alphabet (used by Zeek for UIDs)
 BASE62_CHARS = string.ascii_uppercase + string.ascii_lowercase + string.digits
+SYNTHETIC_MARKER_SUBSTRINGS = ("FAKE",)
+
+
+def _has_synthetic_marker(value: str) -> bool:
+    """Return whether an identifier contains an obvious synthetic marker."""
+    upper_value = value.upper()
+    return any(marker in upper_value for marker in SYNTHETIC_MARKER_SUBSTRINGS)
 
 
 def generate_zeek_uid(prefix: str = "C") -> str:
@@ -61,6 +68,7 @@ def generate_zeek_uid(prefix: str = "C") -> str:
     # Weight distribution based on observed real Zeek traffic.
     rng = _get_rng()
     length = rng.choices([17, 18, 19], weights=[10, 60, 30], k=1)[0]
-    random_chars = "".join(rng.choices(BASE62_CHARS, k=length - 1))
-
-    return prefix + random_chars
+    uid = prefix + "".join(rng.choices(BASE62_CHARS, k=length - 1))
+    while _has_synthetic_marker(uid):
+        uid = prefix + "".join(rng.choices(BASE62_CHARS, k=length - 1))
+    return uid

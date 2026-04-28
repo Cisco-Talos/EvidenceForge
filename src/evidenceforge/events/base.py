@@ -108,6 +108,7 @@ class SecurityEvent:
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
     x509: X509Context | None = None
+    x509_chain: list[X509Context] = field(default_factory=list)
     dhcp: DhcpContext | None = None
     ntp: NtpContext | None = None
     ocsp: OcspContext | None = None

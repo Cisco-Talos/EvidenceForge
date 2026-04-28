@@ -38,6 +38,7 @@ from evidenceforge.generation.activity.dns_registry import (
     get_reverse_dns,
     load_dns_registry,
 )
+from evidenceforge.utils.rng import _stable_seed
 
 
 def _is_private_ip(ip: str) -> bool:
@@ -193,6 +194,20 @@ def _detect_ip_provider(ip: str) -> str:
     return "generic"
 
 
+def _aws_identity_for_ip(ip: str) -> tuple[str, str]:
+    """Return stable AWS region and edge-pop hints for an IPv4 address."""
+    regions = [
+        ("us-east-1", "iad89"),
+        ("us-east-2", "cmh55"),
+        ("us-west-2", "pdx50"),
+        ("eu-west-1", "dub56"),
+        ("eu-central-1", "fra56"),
+        ("ap-southeast-1", "sin52"),
+    ]
+    region, pop = regions[_stable_seed(f"aws_identity_{ip}") % len(regions)]
+    return region, pop
+
+
 # Long-tail domain generation — delegates to dns_registry
 _generate_long_tail_domain = generate_long_tail_domain
 
@@ -214,13 +229,12 @@ def _generate_random_hostname(rng, ip: str) -> str:
             ]
         )
     elif provider == "aws":
-        regions = ["us-east-1", "us-west-2", "eu-west-1"]
+        region, edge_pop = _aws_identity_for_ip(ip)
         cf_chars = "abcdefghijklmnopqrstuvwxyz0123456789"
         return rng.choice(
             [
-                f"ec2-{'-'.join(octets)}.{rng.choice(regions)}.compute.amazonaws.com",
                 f"d{''.join(rng.choices(cf_chars, k=13))}.cloudfront.net",
-                f"server-{'-'.join(octets)}.iad89.r.cloudfront.net",
+                f"server-{'-'.join(octets)}.{edge_pop}.r.cloudfront.net",
             ]
         )
     elif provider == "akamai":
@@ -234,9 +248,8 @@ def _generate_random_hostname(rng, ip: str) -> str:
     elif provider == "microsoft":
         return f"{'-'.join(octets)}.microsoft.com"
     else:
-        # Generate plausible domain names for unknown IPs (including RFC 5737
-        # documentation ranges used for attacker C2/exfiltration in storylines).
-        # Realistic mix of SaaS, CDN, analytics, and cloud storage domains.
+        # Generate plausible domain names for unknown IPs instead of revealing
+        # synthetic host-x-x-x-x patterns.
         _PLAUSIBLE_DOMAINS = [
             "api.segment-analytics.io",
             "cdn.jsdelivr.net",
@@ -272,11 +285,13 @@ def _generate_random_hostname(rng, ip: str) -> str:
         return rng.choice(_PLAUSIBLE_DOMAINS)
 
 
-def _generate_rdns_name(rng, ip: str) -> str:
+def _generate_rdns_name(rng, ip: str, forward_hostname: str | None = None) -> str:
     """Generate a realistic reverse DNS name for an IP (for PTR query answers).
 
     rDNS names differ from forward hostnames -- they typically embed the IP
-    octets and use provider-specific naming conventions.
+    octets and use provider-specific naming conventions. For cloud addresses,
+    keep provider-local region/edge hints stable for the IP so PTR answers do
+    not contradict SSL SNI or forward DNS context for the same destination.
     """
     octets = ip.split(".")
     provider = _detect_ip_provider(ip)
@@ -286,11 +301,27 @@ def _generate_rdns_name(rng, ip: str) -> str:
         regions = ["lax17", "sfo07", "dfw25", "iad30", "ord37"]
         return f"{rng.choice(regions)}s{rng.randint(10, 99)}-in-f{octets[3]}.1e100.net"
     elif provider == "aws":
-        regions = ["us-east-1", "us-west-2", "eu-west-1"]
+        region, edge_pop = _aws_identity_for_ip(ip)
+        if forward_hostname:
+            for candidate in (
+                "us-east-1",
+                "us-east-2",
+                "us-west-2",
+                "eu-west-1",
+                "eu-central-1",
+                "ap-southeast-1",
+            ):
+                if f".{candidate}." in forward_hostname:
+                    region = candidate
+                    break
+            if ".compute.amazonaws.com" in forward_hostname:
+                return f"ec2-{'-'.join(octets)}.{region}.compute.amazonaws.com"
+            if ".cloudfront.net" in forward_hostname:
+                return f"server-{'-'.join(octets)}.{edge_pop}.r.cloudfront.net"
         return rng.choice(
             [
-                f"ec2-{'-'.join(octets)}.{rng.choice(regions)}.compute.amazonaws.com",
-                f"server-{'-'.join(octets)}.iad89.r.cloudfront.net",
+                f"ec2-{'-'.join(octets)}.{region}.compute.amazonaws.com",
+                f"server-{'-'.join(octets)}.{edge_pop}.r.cloudfront.net",
             ]
         )
     elif provider == "akamai":

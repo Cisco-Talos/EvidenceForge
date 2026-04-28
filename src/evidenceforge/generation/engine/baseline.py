@@ -39,8 +39,22 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
-from evidenceforge.generation.activity.generator import _dns_rtt
+from evidenceforge.generation.activity.create_remote_thread_patterns import (
+    load_create_remote_thread_patterns,
+    pick_create_remote_thread_pattern,
+)
+from evidenceforge.generation.activity.generator import (
+    _dns_base_ttl,
+    _dns_is_internal_name,
+    _dns_rtt,
+    _linux_uid_for_user,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
+from evidenceforge.generation.activity.process_access_patterns import (
+    load_process_access_patterns,
+    pick_granted_access,
+)
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
@@ -58,6 +72,18 @@ from evidenceforge.models.scenario import Persona, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
+
+
+def _session_started_by(session: Any, time: datetime) -> bool:
+    """Return whether a session exists at the given activity time."""
+    session_start = session.start_time
+    if session_start.tzinfo is None:
+        session_start = session_start.replace(tzinfo=UTC)
+    else:
+        session_start = session_start.astimezone(UTC)
+    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+    return session_start <= activity_time
+
 
 # Day-of-week intensity multipliers (0=Monday, 6=Sunday).
 # Models weekly rhythm: Monday login storms, Friday early departures,
@@ -135,114 +161,129 @@ def _hawkes_params_from_persona(persona: Persona | None) -> dict:
     return _HAWKES_RISK_PARAMS.get(risk, _HAWKES_RISK_PARAMS["medium"])
 
 
-# Benign CreateRemoteThread pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image)
-_BENIGN_CRT_PAIRS = [
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "explorer",
-        r"C:\Windows\explorer.exe",
-    ),
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "runtime_broker",
-        r"C:\Windows\System32\RuntimeBroker.exe",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "svchost_local_system",
-        r"C:\Windows\System32\svchost.exe",
-    ),
-    (
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "taskhostw",
-        r"C:\Windows\System32\taskhostw.exe",
-    ),
-]
+def _signature_for_loaded_module(path: str) -> str:
+    """Infer a plausible signer for a generic baseline DLL path."""
+    lower = path.lower()
+    if "google\\chrome" in lower:
+        return "Google LLC"
+    if "mozilla firefox" in lower:
+        return "Mozilla Corporation"
+    if "adobe" in lower:
+        return "Adobe Inc."
+    if "vmware" in lower:
+        return "VMware, Inc."
+    if "dell" in lower:
+        return "Dell Inc."
+    if "cisco" in lower:
+        return "Cisco Systems, Inc."
+    if "git\\" in lower:
+        return "Git for Windows"
+    if "videolan" in lower:
+        return "VideoLAN"
+    if "notepad++" in lower:
+        return "Notepad++"
+    if "7-zip" in lower:
+        return "-"
+    return "Microsoft Corporation"
 
-# Benign ProcessAccess pairs: (src_pid_key, src_image, tgt_pid_key, tgt_image, granted_access)
-_BENIGN_PA_PAIRS = [
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "explorer",
-        r"C:\Windows\explorer.exe",
-        "0x1410",
-    ),
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "0x1010",
-    ),
-    (
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1410",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "explorer",
-        r"C:\Windows\explorer.exe",
-        "0x1000",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "svchost_local_system",
-        r"C:\Windows\System32\svchost.exe",
-        "0x1000",
-    ),
-    (
-        "services",
-        r"C:\Windows\System32\services.exe",
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "0x1000",
-    ),
-    (
-        "services",
-        r"C:\Windows\System32\services.exe",
-        "msmpeng",
-        r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe",
-        "0x1000",
-    ),
-    (
-        "svchost_local_system",
-        r"C:\Windows\System32\svchost.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-    (
-        "csrss_s0",
-        r"C:\Windows\System32\csrss.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-    (
-        "svchost_netsvcs",
-        r"C:\Windows\System32\svchost.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-    (
-        "services",
-        r"C:\Windows\System32\services.exe",
-        "lsass",
-        r"C:\Windows\System32\lsass.exe",
-        "0x1000",
-    ),
-]
+
+def _module_matches_process(exe_name: str, module_path: str) -> bool:
+    """Return whether a generic DLL path plausibly belongs to a process."""
+    exe = exe_name.lower()
+    path = module_path.lower()
+    if "google\\chrome" in path:
+        return exe in {"chrome.exe", "msedge.exe"}
+    if "mozilla firefox" in path:
+        return exe == "firefox.exe"
+    if "microsoft onedrive" in path:
+        return exe in {"onedrive.exe", "explorer.exe"}
+    if "microsoft office" in path or "clicktorun" in path:
+        return exe in {"outlook.exe", "winword.exe", "excel.exe", "powerpnt.exe", "onedrive.exe"}
+    if "7-zip" in path or "notepad++" in path:
+        return exe == "explorer.exe"
+    if "windows defender" in path:
+        return exe in {"msmpeng.exe", "svchost.exe", "taskhostw.exe"}
+    if "vmware tools" in path or "dell\\supportassist" in path:
+        return exe in {"services.exe", "svchost.exe", "taskhostw.exe"}
+    if "cisco\\cisco anyconnect" in path:
+        return exe in {"vpnui.exe", "vpnagent.exe", "svchost.exe"}
+    if "git\\mingw64" in path:
+        return exe in {"git.exe", "code.exe", "powershell.exe", "cmd.exe"}
+    if "videolan" in path:
+        return exe == "vlc.exe"
+    if "microsoft vs code" in path:
+        return exe == "code.exe"
+    return "windows\\system32" in path
+
+
+def _registry_writer_candidates(
+    key: str,
+    sys_pids: dict[str, int],
+    desktop_user: str | None,
+) -> list[tuple[int, str, str]]:
+    """Choose plausible registry writer processes for a key family."""
+    key_lower = key.lower()
+
+    def _candidate(pid_key: str, image: str, user: str = "SYSTEM") -> tuple[int, str, str] | None:
+        pid = sys_pids.get(pid_key)
+        if pid is None:
+            return None
+        return pid, image, user
+
+    candidates: list[tuple[int, str, str] | None]
+    if key.startswith("HKCU\\"):
+        user = desktop_user or "SYSTEM"
+        candidates = [
+            _candidate("explorer", r"C:\Windows\explorer.exe", user),
+            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", user),
+            _candidate("search_indexer", r"C:\Windows\System32\SearchIndexer.exe", "SYSTEM"),
+        ]
+    elif "windows defender" in key_lower:
+        candidates = [
+            _candidate(
+                "msmpeng", r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe"
+            ),
+            _candidate(
+                "mpcmdrun",
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpCmdRun.exe",
+            ),
+            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
+        ]
+    elif "windowsupdate" in key_lower or "component based servicing" in key_lower:
+        candidates = [
+            _candidate("svchost_wusvcs", r"C:\Windows\System32\svchost.exe"),
+            _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+        ]
+    elif "wbem" in key_lower or "cimom" in key_lower:
+        candidates = [
+            _candidate("wmiprvse", r"C:\Windows\System32\wbem\WmiPrvSE.exe", "NETWORK SERVICE"),
+            _candidate("svchost_dcom", r"C:\Windows\System32\svchost.exe"),
+        ]
+    elif "schedule\\taskcache" in key_lower:
+        candidates = [
+            _candidate("taskhostw", r"C:\Windows\System32\taskhostw.exe"),
+            _candidate("svchost_local_system", r"C:\Windows\System32\svchost.exe"),
+        ]
+    elif "installer" in key_lower or "uninstall" in key_lower or "app paths" in key_lower:
+        candidates = [
+            _candidate("msiexec", r"C:\Windows\System32\msiexec.exe"),
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+        ]
+    elif "tcpip" in key_lower or "w32time" in key_lower or "netlogon" in key_lower:
+        candidates = [
+            _candidate("svchost_netsvcs", r"C:\Windows\System32\svchost.exe", "NETWORK SERVICE"),
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+        ]
+    else:
+        candidates = [
+            _candidate("services", r"C:\Windows\System32\services.exe"),
+            _candidate("svchost_netsvcs", r"C:\Windows\System32\svchost.exe", "NETWORK SERVICE"),
+            _candidate("dllhost", r"C:\Windows\System32\dllhost.exe"),
+        ]
+
+    return [candidate for candidate in candidates if candidate is not None]
+
 
 # Synthetic SYSTEM user for baseline Event 8/10 generation
 _SYSTEM_USER = User(
@@ -383,14 +424,16 @@ def _generate_web_request(rng: random.Random) -> tuple[str, str, int, str]:
     Uses weighted categories for realistic URI distribution. Occasionally
     generates parameterized paths for additional variety.
     """
+    from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
+
     # 20% chance of parameterized path for extra diversity
     if rng.random() < 0.20:
         template, method, status, mime = rng.choice(_PARAMETERIZED_PATHS)
         path = template.replace("{id}", str(rng.randint(1, 9999)))
-        return (path, method, status, mime)
+        return (path, method, status, normalize_mime_type_for_path(path, mime))
 
-    choice = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
-    return choice
+    path, method, status, mime = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
+    return (path, method, status, normalize_mime_type_for_path(path, mime))
 
 
 class BaselineMixin:
@@ -1278,7 +1321,10 @@ class BaselineMixin:
             return session.logon_id
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        session_on_system = next((s for s in sessions if s.system == system.hostname), None)
+        session_on_system = next(
+            (s for s in sessions if s.system == system.hostname and _session_started_by(s, time)),
+            None,
+        )
         if session_on_system:
             return session_on_system.logon_id
 
@@ -1395,6 +1441,10 @@ class BaselineMixin:
                     # Emit DNS query via a UDP/53 connection with DnsContext
                     from evidenceforge.events.contexts import DnsContext
 
+                    dns_server_ips = getattr(
+                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                    )
+                    dns_server_ip = rng.choice(dns_server_ips)
                     dns_ctx = DnsContext(
                         query=result["hostname"],
                         trans_id=rng.randint(1, 65535),
@@ -1402,17 +1452,24 @@ class BaselineMixin:
                         query_type="A",
                         rcode="NOERROR",
                         rcode_num=0,
-                        answers=[f"198.51.100.{rng.randint(1, 254)}"],
-                        TTLs=[float(rng.randint(30, 300))],
-                        rtt=_dns_rtt(rng),
-                    )
-                    dns_server_ips = getattr(
-                        self.activity_generator, "_dns_server_ips", ["10.0.0.1"]
+                        answers=[_generate_random_external_ip(rng)],
+                        TTLs=[
+                            float(
+                                _dns_base_ttl(
+                                    result["hostname"],
+                                    _dns_is_internal_name(
+                                        result["hostname"],
+                                        self.scenario.environment.domain or "corp.local",
+                                    ),
+                                )
+                            )
+                        ],
+                        rtt=_dns_rtt(rng, dns_server_ip),
                     )
                     self.state_manager.set_current_time(result["time"])
                     self.activity_generator.generate_connection(
                         src_ip=result["system"].ip,
-                        dst_ip=rng.choice(dns_server_ips),
+                        dst_ip=dns_server_ip,
                         time=result["time"],
                         dst_port=53,
                         proto="udp",
@@ -2204,7 +2261,9 @@ class BaselineMixin:
                     activities.append(activity_type)
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        has_session_on_system = any(s.system == system.hostname for s in sessions)
+        has_session_on_system = any(
+            s.system == system.hostname and _session_started_by(s, event_time) for s in sessions
+        )
         if not has_session_on_system and activities:
             if hasattr(self, "world_planner"):
                 self.world_planner.ensure_user_session(user, system, event_time, rng)
@@ -2231,8 +2290,15 @@ class BaselineMixin:
             if _pn in ("sysadmin", "security_analyst") and rng.random() < 0.15 and servers:
                 target_server = rng.choice(servers)
                 admin_alias = f"{user.username}-admin"
-                session = next((s for s in sessions if s.system == system.hostname), None)
                 runas_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                session = next(
+                    (
+                        s
+                        for s in sessions
+                        if s.system == system.hostname and _session_started_by(s, runas_t)
+                    ),
+                    None,
+                )
                 self.state_manager.set_current_time(runas_t)
                 self.activity_generator.generate_explicit_credentials(
                     user=user,
@@ -2260,8 +2326,15 @@ class BaselineMixin:
                 ]
                 if non_admins:
                     target_user = rng.choice(non_admins)
-                    session = next((s for s in sessions if s.system == system.hostname), None)
                     hd_t = event_time + timedelta(seconds=rng.randint(0, 55))
+                    session = next(
+                        (
+                            s
+                            for s in sessions
+                            if s.system == system.hostname and _session_started_by(s, hd_t)
+                        ),
+                        None,
+                    )
                     self.state_manager.set_current_time(hd_t)
                     self.activity_generator.generate_explicit_credentials(
                         user=user,
@@ -2502,7 +2575,17 @@ class BaselineMixin:
                 tags = self._SERVICE_DNS_DEFAULTS[service]
             else:
                 tags = ("background", os_cat)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
+            if service == "ssl":
+                from evidenceforge.generation.activity.tls_realism import pick_tls_destination
+
+                domain, ip = pick_tls_destination(
+                    rng,
+                    src_host=src_host,
+                    source_os=os_cat,
+                    purpose_tags=tuple(tags),
+                )
+            else:
+                domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
             return ip, domain
 
         if hasattr(self, "world_model"):
@@ -2628,6 +2711,93 @@ class BaselineMixin:
             logon_type=3,
         )
         return logon_id
+
+    def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
+        """Build weighted SMB targets for Windows client browsing noise."""
+        dc_targets = [ip for ip in dc_ips if ip != system.ip]
+        fs_targets = [
+            s
+            for s in self.scenario.environment.systems
+            if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
+        ]
+
+        targets = list(dc_targets)
+        for fs in fs_targets:
+            weight = 3 if fs.ip not in dc_targets else 2
+            targets.extend([fs.ip] * weight)
+        return targets, fs_targets
+
+    def _emit_smb_file_operations(
+        self,
+        user: Any,
+        file_server: Any,
+        client_system: Any,
+        time: datetime,
+        rng: Any,
+    ) -> None:
+        """Emit eCAR file operations that make SMB sessions look like file work."""
+        import uuid
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, EdrContext, FileContext
+
+        host_ctx = self.activity_generator._build_host_context(file_server)
+        username = getattr(user, "username", "unknown")
+        client_name = getattr(client_system, "hostname", "client").lower()
+        share = rng.choice(["Departments", "Finance", "Projects", "Shared", "IT"])
+        stems = [
+            "budget-review",
+            "client-onboarding",
+            "change-request",
+            "expense-export",
+            "incident-summary",
+            "inventory",
+            "maintenance-window",
+            "monthly-close",
+            "oncall-roster",
+            "purchase-order",
+            "quarterly-report",
+            "renewal-tracker",
+            "risk-register",
+            "server-build",
+            "vendor-list",
+            "project-plan",
+            "meeting-notes",
+            "policy-update",
+            "service-review",
+            "status-update",
+            "team-roadmap",
+        ]
+        extensions = ["docx", "xlsx", "pdf", "pptx", "txt"]
+        op_count = rng.randint(3, 8)
+        operation_choices = ["file_read", "file_read", "file_read", "file_modify", "file_create"]
+        session_operations = ["file_read", "file_modify"]
+        if rng.random() < 0.18:
+            session_operations.append("file_create")
+        if rng.random() < 0.08:
+            session_operations.append("file_delete")
+        while len(session_operations) < op_count:
+            session_operations.append(rng.choice(operation_choices))
+        rng.shuffle(session_operations)
+
+        for idx, event_type in enumerate(session_operations):
+            stem = rng.choice(stems)
+            ext = rng.choice(extensions)
+            file_path = rf"\\{file_server.hostname}\{share}\{client_name}\{stem}-{rng.randint(1, 99):02d}.{ext}"
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=time + timedelta(milliseconds=idx * rng.randint(200, 1500)),
+                    event_type=event_type,
+                    src_host=host_ctx,
+                    auth=AuthContext(username=username),
+                    file=FileContext(
+                        path=file_path,
+                        action=event_type.removeprefix("file_"),
+                        pid=4,
+                    ),
+                    edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
+                )
+            )
 
     def _generate_profile_traffic(
         self,
@@ -3024,6 +3194,7 @@ class BaselineMixin:
                         service=conn["service"],
                         rng=rng,
                         effective_persona=eff_persona,
+                        destination_hostname=hostname,
                     )
 
                 self.state_manager.set_current_time(ts)
@@ -3031,7 +3202,21 @@ class BaselineMixin:
                 # For HTTP/HTTPS: generate browsing session with subresources,
                 # referrer chains, and cross-domain CDN fan-out.
                 svc = conn.get("service", "")
-                if svc in ("ssl", "http") and hostname:
+                is_server_source = system.type == "server" or bool(
+                    set(system.roles or [])
+                    & {
+                        "app_server",
+                        "database",
+                        "dns_server",
+                        "domain_controller",
+                        "file_server",
+                        "log_server",
+                        "mail_server",
+                        "monitoring",
+                        "web_server",
+                    }
+                )
+                if svc in ("ssl", "http") and hostname and not is_server_source:
                     self._emit_browsing_session(
                         system=system,
                         user_obj=user_obj,
@@ -3087,6 +3272,7 @@ class BaselineMixin:
         from evidenceforge.generation.activity.dns_registry import (
             get_domain_tags,
             pick_domain_and_ip,
+            resolve_domain_ip,
         )
 
         domain_tags = get_domain_tags(hostname) if hostname else []
@@ -3136,11 +3322,20 @@ class BaselineMixin:
             req_dst_ip = dst_ip
             req_hostname = hostname
             if req.hostname != hostname:
-                req_hostname = req.hostname
-                # Resolve CDN domain to an IP
-                _, cdn_ip = pick_domain_and_ip(rng, "cdn", src_host=system.hostname)
-                if cdn_ip:
-                    req_dst_ip = cdn_ip
+                app_specific_tags = [
+                    tag for tag in ("outlook", "teams", "onedrive") if tag in domain_tags
+                ]
+                if app_specific_tags:
+                    # App clients fetch supporting resources from their own
+                    # SaaS endpoint family, not arbitrary web/CDN domains.
+                    req_hostname, req_dst_ip = pick_domain_and_ip(
+                        rng,
+                        rng.choice(app_specific_tags),
+                        src_host=system.hostname,
+                    )
+                else:
+                    req_hostname = req.hostname
+                    req_dst_ip = resolve_domain_ip(req_hostname, src_host=system.hostname)
 
             http_ctx = HttpContext(
                 method=req.method,
@@ -3168,7 +3363,7 @@ class BaselineMixin:
                 duration=rng.uniform(0.05, 2.0),
                 orig_bytes=req.request_body_len,
                 resp_bytes=req.response_body_len,
-                emit_dns=req.is_page_load,  # DNS only for page loads, not subresources
+                emit_dns=req.is_page_load or req_hostname != hostname,
                 source_system=system,
                 hostname=req_hostname,
                 pid=persona_pid,
@@ -3324,70 +3519,88 @@ class BaselineMixin:
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
-
-            # Include file servers in SMB targets for workstations
-            fs_targets = [
-                s
-                for s in self.scenario.environment.systems
-                if s.ip != system.ip and s.roles and "file_server" in [r.lower() for r in s.roles]
-            ]
-
-            if "smb-client" in services and os_cat == "windows" and dc_targets:
-                # Combine DC + file server IPs as SMB targets
-                smb_targets = list(dc_targets)
-                for fs in fs_targets:
-                    if fs.ip not in smb_targets:
-                        smb_targets.append(fs.ip)
-
-                _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
-                _smb_range = max(1, _smb_hi - _smb_lo)
-                smb_interval = _smb_lo + (_stable_seed(f"smb_iv_{system.hostname}") % _smb_range)
-                smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
-                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
-                t = smb_phase
-                while t < hour_start_sec:
-                    t += smb_interval
-                while t < hour_start_sec + 3600:
-                    offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
-                    offset = max(0, min(3599, offset))
-                    ts = current_hour + timedelta(seconds=offset)
-                    self.state_manager.set_current_time(ts)
-                    smb_dst_ip = rng.choice(smb_targets)
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=smb_dst_ip,
-                        time=ts,
-                        dst_port=445,
-                        proto="tcp",
-                        service="smb",
-                        duration=rng.uniform(0.1, 2.0),
-                        orig_bytes=rng.randint(200, 2000),
-                        resp_bytes=rng.randint(500, 5000),
-                        emit_dns=rng.random() > 0.02,
-                        source_system=system,
-                        pid=4,  # SMB: kernel System process
+            if "smb-client" in services and os_cat == "windows":
+                # Include DC SYSVOL/GPO traffic and weight file servers higher
+                # when present; file-server environments should still produce
+                # SMB even if no DC role has been inferred.
+                smb_targets, fs_targets = self._build_smb_targets(system, dc_ips)
+                if smb_targets:
+                    _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
+                    _smb_range = max(1, _smb_hi - _smb_lo)
+                    smb_interval = _smb_lo + (
+                        _stable_seed(f"smb_iv_{system.hostname}") % _smb_range
                     )
-                    # Emit type 3 logon on file server for SMB access
-                    smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
-                    if smb_dst_sys:
-                        # Find active user on this workstation
-                        ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
-                        for sess in ws_sessions:
-                            if sess.logon_type in (2, 10, 11):
-                                ws_user = next(
-                                    (
-                                        u
-                                        for u in self.scenario.environment.users
-                                        if u.username == sess.username
-                                    ),
-                                    None,
-                                )
-                                if ws_user:
-                                    self._emit_smb_logon_pair(
-                                        ws_user, smb_dst_sys, system.ip, ts, rng
+                    smb_phase = _stable_seed(f"smb_ph_{system.hostname}") % smb_interval
+                    hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+                    t = smb_phase
+                    while t < hour_start_sec:
+                        t += smb_interval
+                    while t < hour_start_sec + 3600:
+                        offset = t - hour_start_sec + rng.gauss(0, smb_interval * 0.02)
+                        offset = max(0, min(3599, offset))
+                        ts = current_hour + timedelta(seconds=offset)
+                        self.state_manager.set_current_time(ts)
+                        smb_dst_ip = rng.choice(smb_targets)
+                        smb_dst_sys = next((s for s in fs_targets if s.ip == smb_dst_ip), None)
+                        if smb_dst_sys:
+                            operation_profile = rng.choices(
+                                ["read", "write", "metadata"],
+                                weights=[55, 30, 15],
+                                k=1,
+                            )[0]
+                            if operation_profile == "read":
+                                duration = rng.uniform(2.0, 90.0)
+                                orig_bytes = rng.randint(1_200, 12_000)
+                                resp_bytes = rng.randint(80_000, 5_000_000)
+                            elif operation_profile == "write":
+                                duration = rng.uniform(3.0, 120.0)
+                                orig_bytes = rng.randint(80_000, 4_000_000)
+                                resp_bytes = rng.randint(2_000, 50_000)
+                            else:
+                                duration = rng.uniform(0.2, 5.0)
+                                orig_bytes = rng.randint(800, 8_000)
+                                resp_bytes = rng.randint(1_000, 25_000)
+                        else:
+                            duration = rng.uniform(0.1, 2.0)
+                            orig_bytes = rng.randint(200, 2_000)
+                            resp_bytes = rng.randint(500, 5_000)
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=smb_dst_ip,
+                            time=ts,
+                            dst_port=445,
+                            proto="tcp",
+                            service="smb",
+                            duration=duration,
+                            orig_bytes=orig_bytes,
+                            resp_bytes=resp_bytes,
+                            emit_dns=rng.random() > 0.02,
+                            source_system=system,
+                            pid=4,  # SMB: kernel System process
+                        )
+                        # Emit type 3 logon on file server for SMB access
+                        if smb_dst_sys:
+                            # Find active user on this workstation
+                            ws_sessions = self.state_manager.get_sessions_on_system(system.hostname)
+                            for sess in ws_sessions:
+                                if sess.logon_type in (2, 10, 11):
+                                    ws_user = next(
+                                        (
+                                            u
+                                            for u in self.scenario.environment.users
+                                            if u.username == sess.username
+                                        ),
+                                        None,
                                     )
-                                    break
-                    t += smb_interval
+                                    if ws_user:
+                                        self._emit_smb_logon_pair(
+                                            ws_user, smb_dst_sys, system.ip, ts, rng
+                                        )
+                                        self._emit_smb_file_operations(
+                                            ws_user, smb_dst_sys, system, ts, rng
+                                        )
+                                        break
+                        t += smb_interval
 
             # Kerberos
             if "kerberos-client" in services and os_cat == "windows" and dc_targets:
@@ -3490,6 +3703,7 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.edr_pools import (
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
+                    materialize_edr_template,
                 )
 
                 _REG_KEYS_HKCU = get_registry_keys_hkcu()
@@ -3505,14 +3719,28 @@ class BaselineMixin:
                 _hkcu_rate = 0.30 if _has_desktop else 0.0
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
-                    if rng.random() >= _hkcu_rate:
-                        _key, _vname, _details = rng.choice(_REG_KEYS_HKLM)
-                        _reg_pid = _svc_pid
-                        _reg_user = "SYSTEM"
-                    else:
+                    if rng.random() < _hkcu_rate:
                         _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
-                        _reg_pid = sys_pids.get("explorer", _svc_pid)
-                        _reg_user = system.assigned_user or "SYSTEM"
+                    else:
+                        dynamic_hklm = [entry for entry in _REG_KEYS_HKLM if "{" in entry[0]]
+                        static_hklm = [entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]]
+                        pool = dynamic_hklm if dynamic_hklm and rng.random() < 0.65 else static_hklm
+                        _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
+                    _template_user = system.assigned_user or "SYSTEM"
+                    _key = materialize_edr_template(_key, rng, _template_user)
+                    _vname = materialize_edr_template(_vname, rng, _template_user)
+                    _details = materialize_edr_template(_details, rng, _template_user)
+                    writer_candidates = _registry_writer_candidates(
+                        _key,
+                        sys_pids,
+                        system.assigned_user,
+                    )
+                    if writer_candidates:
+                        _reg_pid, _reg_image, _reg_user = rng.choice(writer_candidates)
+                    else:
+                        _reg_pid = _svc_pid
+                        _reg_image = r"C:\Windows\System32\svchost.exe"
+                        _reg_user = "SYSTEM"
                     _target = f"{_key}\\{_vname}"
                     # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
                     _reg_action = "delete" if rng.random() < 0.10 else "modify"
@@ -3525,10 +3753,7 @@ class BaselineMixin:
                             process=ProcessContext(
                                 pid=_reg_pid,
                                 parent_pid=0,
-                                image=self.activity_generator._lookup_process_name(
-                                    system.hostname, _reg_pid, "windows"
-                                )
-                                or r"C:\Windows\System32\svchost.exe",
+                                image=_reg_image,
                                 command_line="",
                                 username=_reg_user,
                             ),
@@ -3623,12 +3848,19 @@ class BaselineMixin:
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
             if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
-                # Filter pairs to only those whose PIDs are actually seeded on this host
-                valid_crt = [p for p in _BENIGN_CRT_PAIRS if p[0] in sys_pids and p[2] in sys_pids]
+                valid_crt = [
+                    p
+                    for p in load_create_remote_thread_patterns()
+                    if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
+                ]
                 if valid_crt:
                     num_crt = rng.randint(1, 3)
                     for _ in range(num_crt):
-                        src_key, src_image, tgt_key, tgt_image = rng.choice(valid_crt)
+                        pattern = pick_create_remote_thread_pattern(valid_crt, rng)
+                        src_key = pattern["source_pid_key"]
+                        src_image = pattern["source_image"]
+                        tgt_key = pattern["target_pid_key"]
+                        tgt_image = pattern["target_image"]
                         src_pid = sys_pids[src_key]
                         tgt_pid = sys_pids[tgt_key]
                         if src_pid == tgt_pid:
@@ -3648,11 +3880,19 @@ class BaselineMixin:
 
             # Sysmon Event 10 (ProcessAccess) baseline noise — Windows only
             if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
-                valid_pa = [p for p in _BENIGN_PA_PAIRS if p[0] in sys_pids and p[2] in sys_pids]
+                valid_pa = [
+                    p
+                    for p in load_process_access_patterns()
+                    if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
+                ]
                 if valid_pa:
                     num_pa = rng.randint(3, 8)
                     for _ in range(num_pa):
-                        src_key, src_image, tgt_key, tgt_image, access = rng.choice(valid_pa)
+                        pattern = rng.choice(valid_pa)
+                        src_key = pattern["source_pid_key"]
+                        src_image = pattern["source_image"]
+                        tgt_key = pattern["target_pid_key"]
+                        tgt_image = pattern["target_image"]
                         src_pid = sys_pids[src_key]
                         tgt_pid = sys_pids[tgt_key]
                         offset = rng.uniform(0, 3599)
@@ -3666,7 +3906,7 @@ class BaselineMixin:
                             source_image=src_image,
                             target_pid=tgt_pid,
                             target_image=tgt_image,
-                            granted_access=access,
+                            granted_access=pick_granted_access(pattern, rng),
                         )
 
             # Sysmon Event 7 (ImageLoaded) baseline noise — Windows only
@@ -3677,15 +3917,39 @@ class BaselineMixin:
                 from evidenceforge.generation.activity.dll_load_profiles import (
                     get_dlls_for_process,
                 )
+                from evidenceforge.generation.activity.edr_pools import (
+                    get_dll_pool,
+                    materialize_edr_template,
+                )
 
                 running = self.state_manager.get_processes_on_system(system.hostname)
                 win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
                 if win_procs:
-                    num_dll = rng.randint(15, 40)
+                    generic_dll_pool = get_dll_pool()
+                    num_dll = rng.randint(20, 45)
                     for _ in range(num_dll):
                         proc_pid, proc_image = rng.choice(win_procs)
                         exe_name = proc_image.rsplit("\\", 1)[-1]
-                        dll_pool = get_dlls_for_process(exe_name)
+                        profiled_dlls = get_dlls_for_process(exe_name)
+                        dll_pool = list(profiled_dlls)
+                        for path in generic_dll_pool:
+                            if not _module_matches_process(exe_name, path):
+                                continue
+                            dll_pool.append(
+                                {
+                                    "path": materialize_edr_template(
+                                        path,
+                                        rng,
+                                        system.assigned_user or "SYSTEM",
+                                    ),
+                                    "signed": not any(
+                                        vendor in path
+                                        for vendor in ["7-Zip", "VideoLAN", "Notepad++"]
+                                    ),
+                                    "signature": _signature_for_loaded_module(path),
+                                    "signature_status": "Valid",
+                                }
+                            )
                         if not dll_pool:
                             continue
                         dll = rng.choice(dll_pool)
@@ -3989,6 +4253,7 @@ class BaselineMixin:
                 any(r in (system.roles or []) for r in ("web_server", "forward_proxy"))
                 or "web" in system.hostname.lower()
             )
+            has_ntp_client = "ntp-client" in self._system_service_defaults.get(system.hostname, [])
             num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
 
             scenario_start = self.scenario.time_window.start
@@ -4092,17 +4357,22 @@ class BaselineMixin:
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
-                    action = rng.choice(
-                        [f"New session {sid} of user {user}.", f"Removed session {sid}."]
-                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="systemd-logind",
-                        message=action,
+                        message=f"New session {sid} of user {user}.",
                         pid=sys_pids.get("logind", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.65:
+                    if rng.random() < 0.65:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(seconds=rng.randint(120, 5400)),
+                            app_name="systemd-logind",
+                            message=f"Removed session {sid}.",
+                            pid=sys_pids.get("logind", rng.randint(400, 800)),
+                        )
+                elif source_roll < 0.53:
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -4150,6 +4420,11 @@ class BaselineMixin:
                             auth_msg = (
                                 f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                             )
+                        if not hasattr(self, "_session_counters"):
+                            self._session_counters = {}
+                        self._session_counters.setdefault(system.hostname, 0)
+                        self._session_counters[system.hostname] += 1
+                        ssh_sid = self._session_counters[system.hostname]
                         login_msgs = [
                             (
                                 "sshd",
@@ -4160,12 +4435,12 @@ class BaselineMixin:
                             (
                                 "sshd",
                                 sshd_pid,
-                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid=0) by (uid=0)",
+                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
                             ),
                             (
                                 "systemd-logind",
                                 sys_pids.get("logind", 456),
-                                f"New session {rng.randint(50, 9999)} of user {ssh_user}.",
+                                f"New session {ssh_sid} of user {ssh_user}.",
                             ),
                         ]
                         _msg_offset = rng.randint(10, 50)
@@ -4194,7 +4469,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.80:
+                elif source_roll < 0.68:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -4210,7 +4485,9 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.88:
+                elif source_roll < 0.76:
+                    if not has_ntp_client:
+                        continue
                     if is_rhel_like:
                         continue  # RHEL uses chronyd, not systemd-timesyncd
                     # Use the same deterministic NTP source as network-level NTP
@@ -4230,13 +4507,17 @@ class BaselineMixin:
                         msg = f"Synchronized to time server for the first time {ntp_ip}:123."
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
-                        msg = rng.choice(
+                        msg = rng.choices(
                             [
-                                f"Initial synchronization to time server {ntp_ip}:123.",
+                                f"Network configuration changed, trying to establish synchronization with {ntp_ip}:123.",
+                                f"System clock synchronized to {ntp_ip}:123.",
+                                f"Time has been changed by {-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d} seconds.",
                                 f"Timed out waiting for reply from {ntp_ip}:123.",
-                                f"Synchronized to time server {ntp_ip}:123.",
-                            ]
-                        )
+                                f"Selected time server {ntp_ip}:123.",
+                            ],
+                            weights=[8, 45, 8, 4, 35],
+                            k=1,
+                        )[0]
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -4387,6 +4668,9 @@ class BaselineMixin:
             for sensor in self.scenario.environment.network.sensors:
                 if "snort_alert" not in expand_formats(sensor.log_formats):
                     continue
+                inbound_vips = {}
+                if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                    inbound_vips = self.dispatcher.visibility_engine._real_ip_to_vip
                 monitored_systems = []
                 for seg_name in sensor.monitoring_segments:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
@@ -4446,9 +4730,11 @@ class BaselineMixin:
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         dst_ip = ext_ip
+                        source_system = local_sys
                     else:
                         src_ip = ext_ip
-                        dst_ip = local_sys.ip
+                        dst_ip = inbound_vips.get(local_sys.ip, local_sys.ip)
+                        source_system = None
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
@@ -4461,6 +4747,7 @@ class BaselineMixin:
                         duration=rng.uniform(0.001, 5.0),
                         orig_bytes=rng.randint(40, 2000),
                         resp_bytes=rng.randint(0, 1000),
+                        source_system=source_system,
                         ids=IdsContext(
                             sid=sig["sid"],
                             rev=sig.get("rev", 1),
@@ -4538,7 +4825,12 @@ class BaselineMixin:
                             else "10.0.0.1"
                         )
 
-                    is_external_client = not client_ip.startswith(("10.", "172.", "192.168."))
+                    is_external_client = not _is_private_ip(client_ip)
+                    dst_port = 80
+                    dst_service = "http"
+                    if is_external_client and rng.random() < 0.85:
+                        dst_port = 443
+                        dst_service = "ssl"
                     if is_external_client and _pub_hosts:
                         http_host = rng.choice(_pub_hosts)
                     else:
@@ -4553,7 +4845,15 @@ class BaselineMixin:
                         ]
                     else:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
-                    resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
+                    from evidenceforge.generation.activity.http_content import (
+                        response_size_for_mime,
+                    )
+
+                    resp_bytes = (
+                        response_size_for_mime(rng, mime)
+                        if status == 200
+                        else rng.randint(100, 500)
+                    )
                     chosen_ua = rng.choice(ua_pool)
                     _ua_is_bot = any(
                         bot in chosen_ua for bot in ("Googlebot", "bingbot", "AhrefsBot")
@@ -4567,15 +4867,21 @@ class BaselineMixin:
                         site_map=_site_map,
                         is_bot=_ua_is_bot,
                         context="general",
-                        port=80,
+                        port=dst_port,
                     )
+                    effective_dst_ip = sys_obj.ip
+                    if is_external_client and hasattr(self, "dispatcher"):
+                        visibility = self.dispatcher.visibility_engine
+                        vip = visibility._real_ip_to_vip.get(sys_obj.ip) if visibility else None
+                        if vip:
+                            effective_dst_ip = vip
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
-                        dst_ip=sys_obj.ip,
+                        dst_ip=effective_dst_ip,
                         time=ts,
-                        dst_port=80,
+                        dst_port=dst_port,
                         proto="tcp",
-                        service="http",
+                        service=dst_service,
                         duration=rng.uniform(0.01, 2.0),
                         orig_bytes=rng.randint(200, 2000),
                         resp_bytes=resp_bytes,
@@ -4595,6 +4901,7 @@ class BaselineMixin:
                             resp_mime_types=[mime] if status == 200 else [],
                             tags=[],
                         ),
+                        hostname=http_host,
                     )
 
     def _generate_rsat_sessions(self, current_hour: datetime, rng, local_dt) -> None:
@@ -4654,7 +4961,10 @@ class BaselineMixin:
             logon_id = self._ensure_session_on_system(admin, ws, base_time, rng)
 
             sessions = self.state_manager.get_sessions_for_user(admin.username)
-            ws_session = next((s for s in sessions if s.system == ws.hostname), None)
+            ws_session = next(
+                (s for s in sessions if s.system == ws.hostname and s.logon_id == logon_id),
+                None,
+            )
             parent_pid = ws_session.explorer_pid if ws_session and ws_session.explorer_pid else 4
 
             mmc_time = base_time

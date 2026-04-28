@@ -31,7 +31,7 @@ import logging
 import math
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Optional
 
@@ -41,14 +41,21 @@ from evidenceforge.events.contexts import (
     DnsContext,
     EdrContext,
     FileContext,
+    FileTransferContext,
     FirewallContext,
     HostContext,
     HttpContext,
     IdsContext,
     KerberosContext,
+    OcspContext,
+    ProxyContext,
     RegistryContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.activity.proxy_user_agents import (
+    pick_proxy_domain_user_agent,
+    pick_proxy_user_agent,
+)
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -72,6 +79,17 @@ from .network import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _session_started_by(session: Any, time: datetime) -> bool:
+    """Return whether a session exists at the given activity time."""
+    session_start = session.start_time
+    if session_start.tzinfo is None:
+        session_start = session_start.replace(tzinfo=UTC)
+    else:
+        session_start = session_start.astimezone(UTC)
+    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+    return session_start <= activity_time
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -409,6 +427,9 @@ _NTP_STRATUM_TIMING = {
 }
 
 # TLS cipher distributions (weighted)
+_TLS_VERSION_VALUES = ("TLSv12", "TLSv13")
+_TLS_VERSION_WEIGHTS = (45, 55)
+
 _TLS12_CIPHER_DIST = (
     ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", 60),
     ("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384", 25),
@@ -449,31 +470,8 @@ _SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
 # Proxy header overhead ranges (bytes)
 _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
-
-# OS-aware proxy User-Agent pools
-_PROXY_UAS_WINDOWS = (
-    # Browser UAs only — system-level UAs (Microsoft-CryptoAPI, Windows-Update-Agent)
-    # are handled by domain-specific overrides in proxy_uri_templates.yaml.
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; WOW64; Trident/7.0; rv:11.0) like Gecko",
-)
-
-_PROXY_UAS_LINUX = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "python-requests/2.31.0",
-    "curl/7.88.1",
-    "Wget/1.21.3",
-    "apt-http/2.4.11 (amd64)",
-    "Debian APT-HTTP/1.3 (2.4.11)",
-    "libdnf (Fedora Linux 39; workstation; Linux.x86_64)",
-)
-
+_AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
+_EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 300
 
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
@@ -499,18 +497,26 @@ def _ephemeral_port(rng: random.Random, os_category: str = "windows") -> int:
     return rng.randint(49152, 65535)
 
 
-def _dns_rtt(rng: random.Random) -> float:
+def _dns_rtt(rng: random.Random, resolver_ip: str | None = None) -> float:
     """Generate a realistic DNS round-trip time using a mixture model.
 
     Models real DNS traffic distribution:
-    - ~60% cache hits (sub-1ms)
-    - ~25% local resolver responses (1-10ms)
-    - ~12% recursive lookups (10-80ms)
-    - ~3% slow/distant servers (80-250ms)
+    - Internal resolvers: cache/local responses can be sub-ms
+    - Public resolvers: LAN-to-resolver RTT should rarely be sub-ms
 
     Returns:
         RTT in seconds.
     """
+    if resolver_ip and not _is_private_ip(resolver_ip):
+        roll = rng.random()
+        if roll < 0.08:
+            return rng.uniform(0.002, 0.008)  # Very close public resolver / warmed path
+        if roll < 0.70:
+            return rng.uniform(0.008, 0.035)  # Common enterprise egress latency
+        if roll < 0.95:
+            return rng.uniform(0.035, 0.120)  # Recursive/cache miss or distance
+        return rng.uniform(0.120, 0.350)  # Slow/distant resolver response
+
     roll = rng.random()
     if roll < 0.60:
         return rng.uniform(0.0001, 0.001)  # Cache hit: 0.1-1ms
@@ -520,6 +526,183 @@ def _dns_rtt(rng: random.Random) -> float:
         return rng.uniform(0.010, 0.080)  # Recursive lookup: 10-80ms
     else:
         return rng.uniform(0.080, 0.250)  # Slow/distant: 80-250ms
+
+
+def _dns_registrable_domain(hostname: str) -> str:
+    """Return a practical DNS owner name for mail/TXT companion lookups."""
+    parts = [part for part in hostname.rstrip(".").split(".") if part]
+    if len(parts) <= 2:
+        return hostname.rstrip(".")
+    return ".".join(parts[-2:])
+
+
+def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str]:
+    """Build a plausible TXT lookup for mail/authentication background noise."""
+    domain = _dns_registrable_domain(hostname)
+    roll = rng.random()
+    if roll < 0.45:
+        return domain, f"v=spf1 include:_spf.{domain} ~all"
+    if roll < 0.75:
+        return f"_dmarc.{domain}", f"v=DMARC1; p=none; rua=mailto:dmarc@{domain}"
+    selector = rng.choice(["selector1", "selector2", "google", "k1"])
+    return f"{selector}._domainkey.{domain}", "v=DKIM1; k=rsa; p=MIIBIjANBgkqh"
+
+
+def _dns_hostname_allows_mx(hostname: str) -> bool:
+    """Return whether a hostname is plausible owner context for MX lookups."""
+    lowered = hostname.lower().rstrip(".")
+    cdn_suffixes = (
+        "cloudfront.net",
+        "akamaiedge.net",
+        "akamaitechnologies.com",
+        "fastly.net",
+        "global.ssl.fastly.net",
+        "cdn.cloudflare.net",
+    )
+    if lowered.endswith(cdn_suffixes):
+        return False
+    service_labels = {"cdn", "static", "assets", "media", "img", "js", "css"}
+    return lowered.split(".", 1)[0] not in service_labels
+
+
+def _linux_uid_for_user(username: str) -> int:
+    """Return a stable plausible Linux UID for a login username."""
+    if username == "root":
+        return 0
+    well_known = {
+        "ubuntu": 1000,
+        "ec2-user": 1000,
+        "admin": 1001,
+        "ansible": 998,
+        "deploy": 1002,
+    }
+    if username in well_known:
+        return well_known[username]
+    return 1000 + (_stable_seed(f"linux_uid_{username}") % 5000)
+
+
+def _dns_base_ttl(query: str, is_internal: bool) -> int:
+    """Return a stable authoritative TTL for a DNS query name."""
+    domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
+    if is_internal:
+        return domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
+    return domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
+
+
+def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
+    """Return whether a DNS query belongs to the scenario's internal namespace."""
+    lowered = query.rstrip(".").lower()
+    domain = ad_domain.rstrip(".").lower()
+    return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
+
+
+def _tls_san_dns_names(cert_name: str) -> list[str]:
+    """Build DNS SANs without wildcarding public suffixes."""
+    from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
+
+    try:
+        import ipaddress as _ipa
+
+        _ipa.ip_address(cert_name)
+        return []
+    except ValueError:
+        pass
+
+    labels = [part for part in cert_name.rstrip(".").split(".") if part]
+    if len(labels) < 2:
+        return [cert_name]
+    parent = ".".join(labels[1:])
+    if len(labels) == 2 or parent in multi_label_public_suffixes():
+        wildcard_base = cert_name
+    else:
+        wildcard_base = parent
+    return [cert_name, f"*.{wildcard_base}"]
+
+
+def _ocsp_status_for_certificate(cert_name: str, serial_number: str) -> str:
+    """Pick a stable mostly-good OCSP status per certificate identity."""
+    from evidenceforge.generation.activity.tls_realism import ocsp_config
+
+    config = ocsp_config()
+    weights = config.get("status_weights", {"good": 90, "unknown": 7, "revoked": 3})
+    cert_name_lower = cert_name.rstrip(".").lower()
+    suppress_suffixes = {
+        str(suffix).lower()
+        for suffix in config.get("suppress_revoked_suffixes", [])
+        if str(suffix).strip()
+    }
+    if any(
+        cert_name_lower == suffix.lstrip(".") or cert_name_lower.endswith(suffix)
+        for suffix in suppress_suffixes
+    ):
+        weights = {**weights, "revoked": 0}
+    ordered = ("good", "unknown", "revoked")
+    total = sum(max(0, int(weights.get(status, 0))) for status in ordered)
+    if total <= 0:
+        return "good"
+    bucket = _stable_seed(f"ocsp_status:{cert_name}:{serial_number}") % total
+    cumulative = 0
+    for status in ordered:
+        cumulative += max(0, int(weights.get(status, 0)))
+        if bucket < cumulative:
+            return status
+    return "good"
+
+
+def _ntp_stratum_and_ref_id(dst_ip: str) -> tuple[int, str]:
+    """Return stable NTP server metadata for a destination."""
+    from evidenceforge.generation.activity.network_params import public_ntp_servers
+
+    for server in public_ntp_servers():
+        if server.get("ip") == dst_ip:
+            stratum = int(server.get("stratum", 2))
+            ref_id = str(server.get("ref_id", ".GPS."))
+            return stratum, ref_id
+
+    rng = random.Random(_stable_seed(f"ntp_server_profile:{dst_ip}"))
+    if _is_private_ip(dst_ip):
+        return rng.choice([2, 2, 3, 3, 4]), rng.choice(
+            [
+                server.get("ip")
+                for server in public_ntp_servers()
+                if isinstance(server.get("ip"), str) and server.get("ip") != dst_ip
+            ]
+            or ["129.6.15.28", "132.163.97.1", "132.163.96.1", "192.5.41.40"]
+        )
+    return rng.choice([1, 1, 2]), rng.choice([".GPS.", ".PPS.", ".GOES.", ".ACTS."])
+
+
+def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
+    """Return deterministic Zeek files.log hashes for requested analyzers."""
+    import hashlib
+
+    analyzer_names = {analyzer.upper() for analyzer in analyzers}
+    hashes: dict[str, str] = {}
+    if "MD5" in analyzer_names:
+        hashes["md5"] = hashlib.md5(seed_material.encode()).hexdigest()
+    if "SHA1" in analyzer_names:
+        hashes["sha1"] = hashlib.sha1(seed_material.encode()).hexdigest()
+    if "SHA256" in analyzer_names:
+        hashes["sha256"] = hashlib.sha256(seed_material.encode()).hexdigest()
+    return hashes
+
+
+def _enterprise_tls_issuer() -> dict[str, Any]:
+    """Return the configured enterprise issuer for internal TLS certificates."""
+    from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
+
+    issuer_name = "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+    for issuer in load_tls_issuers().get("issuers", []):
+        if issuer.get("name") == issuer_name:
+            return issuer
+    return {
+        "name": issuer_name,
+        "weight": 0,
+        "validity_days_min": 180,
+        "validity_days_max": 825,
+        "not_before_max_days": 730,
+        "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+    }
 
 
 class ActivityGenerator:
@@ -578,10 +761,43 @@ class ActivityGenerator:
 
         # Network visibility stored on dispatcher; keep local ref for fast-path check
         self._network_visibility = network_visibility
+        self._proxy_mode = "transparent"
+        self._proxy_listener_port = 8080
+        self._explicit_proxy_tunnels: dict[
+            tuple[str, str, str, str, int], tuple[datetime, str]
+        ] = {}
+        self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._dns_cache: dict[tuple[str, str, str], float] = {}
+        self._dns_cache_last_prune = 0.0
+        self._tls_seen_server_names: set[str] = set()
+        self._tls_cert_validity: dict[str, tuple[int, int]] = {}
+        self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
+        self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
+        self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
+
+    def _ntp_association_profile(self, src_ip: str, dst_ip: str) -> dict[str, float | int]:
+        """Return stable NTP client/server association fields."""
+        key = (src_ip, dst_ip)
+        profile = self._ntp_association_profiles.get(key)
+        if profile is not None:
+            return profile
+
+        profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
+        version = 3 if profile_rng.random() < 0.08 else 4
+        poll = float(profile_rng.choices([256, 512, 1024], weights=[25, 45, 30], k=1)[0])
+        profile = {
+            "version": version,
+            "poll": poll,
+            "precision": float(profile_rng.randint(-24, -19)),
+            "root_delay": profile_rng.uniform(0.001, 0.08),
+            "root_disp": profile_rng.uniform(0.001, 0.04),
+        }
+        self._ntp_association_profiles[key] = profile
+        return profile
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build a HostContext from a System model object.
@@ -602,6 +818,90 @@ class ActivityGenerator:
             roles=list(system.roles),
         )
 
+    def _remember_connection_tuple(
+        self,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        proto: str,
+        time: datetime,
+    ) -> None:
+        """Track recently allocated 5-tuples to avoid synthetic exact repeats."""
+        if proto == "icmp":
+            return
+        ts_epoch = time.timestamp()
+        if len(self._recent_connection_tuples) > 100_000:
+            cutoff = ts_epoch - 86_400
+            self._recent_connection_tuples = {
+                key: seen_at
+                for key, seen_at in self._recent_connection_tuples.items()
+                if seen_at >= cutoff
+            }
+        self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
+
+    def _allocate_ephemeral_port(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str,
+        time: datetime,
+        os_category: str,
+    ) -> int:
+        """Allocate an ephemeral port while avoiding exact 5-tuple reuse."""
+        rng = _get_rng()
+        ts_epoch = time.timestamp()
+        reuse_window = 86_400.0
+        for _ in range(128):
+            src_port = _ephemeral_port(rng, os_category)
+            key = (src_ip, src_port, dst_ip, dst_port, proto)
+            last_seen = self._recent_connection_tuples.get(key)
+            if last_seen is None or ts_epoch - last_seen > reuse_window:
+                self._recent_connection_tuples[key] = ts_epoch
+                return src_port
+        src_port = _ephemeral_port(rng, os_category)
+        self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
+        return src_port
+
+    def _infer_connection_pid(
+        self,
+        source_system: System | None,
+        service: str | None,
+        dst_port: int,
+        proto: str,
+    ) -> int:
+        """Infer a durable system-service PID for infrastructure connections."""
+        if source_system is None:
+            return -1
+        pids = getattr(self, "_system_pids", {}).get(source_system.hostname, {})
+        if not pids:
+            return -1
+
+        service_name = (service or "").lower()
+        roles = set(getattr(source_system, "roles", []) or [])
+        os_category = _get_os_category(source_system.os)
+
+        candidates: list[str] = []
+        if proto == "udp" and dst_port == 53 or service_name == "dns":
+            candidates = ["systemd_resolved", "svchost_netsvcs", "svchost_net_svc"]
+        elif proto == "udp" and dst_port == 123 or service_name == "ntp":
+            candidates = ["timesyncd", "chronyd", "svchost_netsvcs"]
+        elif service_name in ("kerberos", "ldap") or dst_port in (88, 389):
+            candidates = ["lsass", "svchost_netsvcs"]
+        elif service_name == "smb" or dst_port == 445:
+            return 4 if os_category == "windows" else pids.get("smbd", -1)
+        elif service_name == "ssh" or dst_port == 22:
+            candidates = ["sshd"]
+        elif "forward_proxy" in roles and service_name in ("http", "ssl"):
+            candidates = ["squid", "nginx", "apache2", "httpd"]
+
+        for name in candidates:
+            pid = pids.get(name)
+            if pid and pid > 0:
+                return pid
+        return -1
+
     def _build_dc_host_context(self, dc_hostname: str) -> HostContext:
         """Build a HostContext for a domain controller from raw hostname string.
 
@@ -620,6 +920,678 @@ class ActivityGenerator:
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
         )
 
+    def _proxy_fqdn(self, proxy_sys: "System") -> str:
+        """Return the FQDN used to route proxy access logs."""
+        proxy_fqdn = getattr(proxy_sys, "hostname", "")
+        ad_domain = getattr(self, "_ad_domain", "")
+        if ad_domain and "." not in proxy_fqdn:
+            proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
+        return proxy_fqdn
+
+    def _build_proxy_context(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        service: str | None,
+        duration: float | None,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        hostname: str | None,
+        source_system: Optional["System"],
+        proxy_sys: "System",
+        http: Optional["HttpContext"] = None,
+        explicit_mode: bool = False,
+    ) -> ProxyContext:
+        """Build a proxy access context from the logical origin request."""
+        rng = _get_rng()
+        proxy_hostname = hostname
+        if proxy_hostname is None:
+            proxy_hostname = REVERSE_DNS.get(dst_ip)
+        if proxy_hostname is None:
+            proxy_hostname = _generate_random_hostname(rng, dst_ip)
+        if proxy_hostname == "":
+            proxy_hostname = dst_ip
+
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+        from evidenceforge.generation.activity.referrer import pick_referrer
+
+        domain_tags = get_domain_tags(proxy_hostname)
+        proxy_ua_override = None
+        if http is not None:
+            scheme = "https" if dst_port == 443 or service == "ssl" else "http"
+            proxy_method = http.method
+            url = f"{scheme}://{proxy_hostname}{http.uri}"
+            proxy_content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
+            user_agent = http.user_agent
+            proxy_referrer = http.referrer
+        elif explicit_mode and dst_port == 443:
+            proxy_method = "CONNECT"
+            url = f"{proxy_hostname}:443"
+            proxy_content_type = ""
+            proxy_referrer = ""
+            user_agent = ""
+        else:
+            source_os = _get_os_category(source_system.os) if source_system else None
+            path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
+                rng, proxy_hostname, domain_tags, source_os=source_os
+            )
+            scheme = "https" if dst_port == 443 or service == "ssl" else "http"
+            url = f"{scheme}://{proxy_hostname}{path}"
+            proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
+            user_agent = ""
+
+        domain_user_agent = pick_proxy_domain_user_agent(
+            rng,
+            source_system,
+            hostname=proxy_hostname,
+        )
+        if domain_user_agent:
+            user_agent = domain_user_agent
+        elif not user_agent:
+            if proxy_ua_override:
+                user_agent = proxy_ua_override
+            else:
+                user_agent = pick_proxy_user_agent(
+                    rng,
+                    source_system,
+                    hostname=proxy_hostname,
+                    domain_tags=domain_tags,
+                )
+
+        cache_roll = rng.random()
+        if explicit_mode and proxy_method == "CONNECT":
+            if cache_roll < 0.975:
+                cache_result = "NONE"
+            elif cache_roll < 0.988:
+                cache_result = "DENIED"
+            elif cache_roll < 0.995:
+                cache_result = "AUTH_REQUIRED"
+            else:
+                cache_result = "GATEWAY_ERROR"
+        elif cache_roll < 0.30:
+            cache_result = "HIT"
+        elif cache_roll < 0.95:
+            cache_result = "MISS"
+        else:
+            cache_result = "DENIED"
+
+        response_bytes = http.response_body_len if http is not None else (resp_bytes or 0)
+        cs_bytes = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+        if cache_result == "DENIED":
+            sc_bytes = rng.randint(500, 2000)
+        elif cache_result == "AUTH_REQUIRED":
+            sc_bytes = rng.randint(300, 1200)
+        elif cache_result == "GATEWAY_ERROR":
+            sc_bytes = rng.randint(250, 1800)
+        elif cache_result == "HIT":
+            sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+        elif proxy_method == "CONNECT":
+            host_len = len(proxy_hostname)
+            cs_bytes = rng.randint(180 + host_len, 520 + host_len)
+            sc_bytes = rng.randint(90, 260)
+        else:
+            sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+
+        status_code = {
+            "DENIED": 403,
+            "AUTH_REQUIRED": 407,
+            "GATEWAY_ERROR": rng.choice([502, 503, 504]),
+        }.get(cache_result, 200)
+
+        return ProxyContext(
+            client_ip=src_ip,
+            method=proxy_method,
+            url=url,
+            host=proxy_hostname,
+            status_code=status_code,
+            tunnel_status_code=200
+            if explicit_mode and dst_port == 443 and proxy_method != "CONNECT"
+            else status_code,
+            sc_bytes=sc_bytes,
+            cs_bytes=cs_bytes,
+            time_taken=int((duration or 0) * 1000),
+            user_agent=user_agent,
+            content_type=proxy_content_type,
+            cache_result=cache_result,
+            referrer=proxy_referrer,
+            proxy_fqdn=self._proxy_fqdn(proxy_sys),
+        )
+
+    def _attach_ssl_context(
+        self,
+        event: SecurityEvent,
+        *,
+        hostname: str | None,
+        dns: Optional["DnsContext"],
+        dst_ip: str,
+        rng: random.Random,
+        allow_failure: bool = True,
+    ) -> None:
+        """Attach Zeek SSL and x509 contexts to an established TLS connection."""
+        from evidenceforge.events.contexts import SslContext
+
+        net = event.network
+        if net is None or event.ssl is not None:
+            return
+
+        # Hostname is the SNI source of truth.  Do not invent SNI from a bare
+        # destination IP or PTR; raw-IP TLS should either have no SNI or an
+        # explicit/DNS-backed hostname.
+        server_name = hostname
+        if server_name is None and dns is not None and dns.query:
+            server_name = dns.query
+        # Suppressed hostname -> no SNI (raw-IP C2, etc.)
+        if server_name == "":
+            server_name = None
+
+        # For suppressed external hostnames (raw-IP C2), use the IP as the cert subject.
+        # For internal/private endpoints without explicit SNI, use the known
+        # internal hostname so x509.log does not show public-CA certificates
+        # issued to private IPs. If explicit internal SNI exists, it remains
+        # the certificate identity and SAN source of truth.
+        internal_cert_name = ""
+        if _is_private_ip(dst_ip):
+            if server_name:
+                internal_cert_name = server_name
+            else:
+                dst_host = event.dst_host
+                if dst_host is None and hasattr(self, "_ip_to_system"):
+                    dst_system = self._ip_to_system.get(dst_ip)
+                    if dst_system is not None:
+                        dst_host = self._build_host_context(dst_system)
+                if dst_host is not None:
+                    internal_cert_name = dst_host.fqdn or dst_host.hostname
+        cert_name = server_name or internal_cert_name or dst_ip
+
+        # Issuer-aware certificate generation from YAML config.
+        from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
+
+        cert_rng = random.Random(_stable_seed(f"tls_cert_profile:{cert_name}"))
+        issuer_cfg = (
+            _enterprise_tls_issuer()
+            if internal_cert_name
+            else pick_issuer(cert_rng, server_name=cert_name)
+        )
+        key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
+        is_ecdsa = key_type == "ecdsa"
+
+        modern_tls_domain = bool(server_name) and server_name.endswith(
+            (
+                ".google.com",
+                ".gstatic.com",
+                ".googleapis.com",
+                ".microsoft.com",
+                ".office.com",
+                ".office365.com",
+                ".microsoftonline.com",
+                ".windowsupdate.com",
+                ".cloudfront.net",
+                ".github.com",
+                ".slack.com",
+                ".zoom.us",
+            )
+        )
+        _tls_rng = random.Random(_stable_seed(f"tls:{server_name or dst_ip}:{net.src_ip}"))
+        if modern_tls_domain:
+            tls_version = _tls_rng.choices(("TLSv12", "TLSv13"), weights=(15, 85), k=1)[0]
+        else:
+            tls_version = _tls_rng.choices(_TLS_VERSION_VALUES, weights=_TLS_VERSION_WEIGHTS, k=1)[
+                0
+            ]
+        if tls_version == "TLSv13":
+            cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[0]
+        elif is_ecdsa:
+            cipher = "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+        elif modern_tls_domain:
+            cipher = _tls_rng.choices(
+                (
+                    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                ),
+                weights=(75, 25),
+                k=1,
+            )[0]
+        else:
+            cipher = _tls_rng.choices(
+                (
+                    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                    "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+                ),
+                weights=(65, 28, 7),
+                k=1,
+            )[0]
+
+        ssl_established = (rng.random() > _SSL_FAILURE_RATE) if allow_failure else True
+        if ssl_established:
+            ssl_hist = rng.choices(
+                _SSL_HIST_SUCCESS_VALUES, weights=_SSL_HIST_SUCCESS_WEIGHTS, k=1
+            )[0]
+        else:
+            ssl_hist = rng.choices(
+                _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
+            )[0]
+        tls_name_key = server_name or dst_ip
+        first_observed_name = tls_name_key not in self._tls_seen_server_names
+        resumed = (rng.random() < 0.45 and not first_observed_name) if ssl_established else False
+        self._tls_seen_server_names.add(tls_name_key)
+
+        event.ssl = SslContext(
+            version=tls_version,
+            cipher=cipher if ssl_established else "",
+            server_name=server_name,
+            resumed=resumed,
+            established=ssl_established,
+            ssl_history=ssl_hist,
+        )
+        if not ssl_established:
+            net.conn_state = rng.choice(["S1", "SH"])
+            net.history = "Sh" if net.conn_state == "SH" else "ShR"
+            net.resp_bytes = 0
+            net.orig_bytes = 0
+            if net.duration is not None:
+                net.duration = rng.uniform(0.0, 0.5)
+            return
+
+        import hashlib
+
+        from evidenceforge.events.contexts import X509Context
+
+        if resumed:
+            return
+        cert_fuid_hash = hashlib.sha256(
+            f"cert_fuid_{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}".encode()
+        ).hexdigest()
+        cert_fuid = f"F{cert_fuid_hash[:16]}"
+        # Support validity_days_min/max ranges; fall back to scalar validity_days
+        _vd_fallback = issuer_cfg.get("validity_days", 397)
+        _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
+        _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
+        validity = self._tls_cert_validity.get(cert_name)
+        if validity is None:
+            now_epoch = int(event.timestamp.timestamp())
+            validity_days = cert_rng.randint(_vd_min, _vd_max)
+            not_before_max = issuer_cfg.get("not_before_max_days", 300)
+            not_before_days = cert_rng.randint(1, min(not_before_max, validity_days - 1))
+            not_valid_before = now_epoch - not_before_days * 86400
+            not_valid_after = not_valid_before + validity_days * 86400
+            validity = (not_valid_before, not_valid_after)
+            self._tls_cert_validity[cert_name] = validity
+        if internal_cert_name:
+            short_name = internal_cert_name.split(".", 1)[0]
+            san_dns_list = list(dict.fromkeys([internal_cert_name, short_name]))
+        else:
+            san_dns_list = _tls_san_dns_names(cert_name)
+        serial_seed = "|".join(
+            [
+                "tls_cert_serial",
+                cert_name,
+                issuer_cfg["name"],
+                key_type,
+                str(key_length),
+                str(validity[0]),
+                str(validity[1]),
+            ]
+        )
+        serial_number = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+        cert_hash = hashlib.sha256(
+            "|".join(
+                [
+                    "cert",
+                    cert_name,
+                    serial_number,
+                    issuer_cfg["name"],
+                    key_type,
+                    str(key_length),
+                    str(validity[0]),
+                    str(validity[1]),
+                ]
+            ).encode()
+        ).hexdigest()
+        event.x509 = X509Context(
+            fuid=cert_fuid,
+            fingerprint=cert_hash,
+            certificate_version=3,
+            certificate_serial=serial_number,
+            certificate_subject=f"CN={cert_name}",
+            certificate_issuer=issuer_cfg["name"],
+            certificate_not_valid_before=validity[0],
+            certificate_not_valid_after=validity[1],
+            certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+            certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
+            certificate_key_type=key_type,
+            certificate_key_length=key_length,
+            certificate_exponent="65537" if not is_ecdsa else "",
+            san_dns=san_dns_list,
+            basic_constraints_ca=False,
+            host_cert=True,
+            client_cert=False,
+        )
+        event.x509_chain = self._build_tls_certificate_chain(
+            leaf=event.x509,
+            cert_name=cert_name,
+            issuer_name=issuer_cfg["name"],
+            event_time=event.timestamp,
+            connection_uid=net.zeek_uid,
+            rng=rng,
+        )
+        event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
+
+        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses).
+        # Zeek ocsp.log joins through a separate OCSP HTTP response file
+        # (`ocsp.id == files.fuid`), not through the encrypted TLS connection UID.
+        if rng.random() < 0.18:
+            from evidenceforge.generation.activity.tls_realism import ocsp_config
+            from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
+
+            ocsp_settings = ocsp_config()
+            ocsp_bucket_seconds = int(ocsp_settings.get("cache_bucket_seconds", 4 * 60 * 60))
+            this_update_max_skew = int(ocsp_settings.get("this_update_max_skew_seconds", 3600))
+            next_update_min = int(ocsp_settings.get("next_update_min_seconds", 8 * 3600))
+            next_update_max = int(ocsp_settings.get("next_update_max_seconds", 7 * 86400))
+            event_epoch = int(event.timestamp.timestamp())
+            bucket_start = event_epoch - (event_epoch % ocsp_bucket_seconds)
+            ocsp_window_key = (
+                cert_name,
+                event.x509.certificate_serial,
+                bucket_start,
+            )
+            ocsp_window = self._tls_ocsp_windows.get(ocsp_window_key)
+            if ocsp_window is None:
+                ocsp_rng = random.Random(
+                    _stable_seed(
+                        f"ocsp_window:{cert_name}:{event.x509.certificate_serial}:{bucket_start}"
+                    )
+                )
+                this_update = bucket_start - ocsp_rng.randint(0, max(0, this_update_max_skew))
+                next_update = (
+                    bucket_start
+                    + ocsp_bucket_seconds
+                    + ocsp_rng.randint(next_update_min, max(next_update_min, next_update_max))
+                )
+                ocsp_window = (this_update, next_update)
+                self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
+            this_update, next_update = ocsp_window
+            ocsp_id = _gen_uid("F")
+            ocsp_ctx = OcspContext(
+                id=ocsp_id,
+                hash_algorithm="sha256",
+                issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[
+                    :40
+                ],
+                issuer_key_hash=hashlib.sha256(
+                    f"key_{event.x509.certificate_issuer}".encode()
+                ).hexdigest()[:40],
+                serial_number=event.x509.certificate_serial,
+                cert_status=_ocsp_status_for_certificate(cert_name, event.x509.certificate_serial),
+                this_update=this_update,
+                next_update=next_update,
+            )
+            self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
+
+    def _emit_ocsp_http_response(
+        self,
+        tls_event: SecurityEvent,
+        *,
+        cert_name: str,
+        ocsp: OcspContext,
+        rng: random.Random,
+    ) -> None:
+        """Emit Zeek-native OCSP HTTP/file evidence for an OCSP response."""
+        net = tls_event.network
+        if net is None:
+            return
+        import hashlib
+
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+        from evidenceforge.generation.activity.tls_realism import pick_ocsp_responder
+
+        issuer_name = tls_event.x509.certificate_issuer if tls_event.x509 else ""
+        responder = pick_ocsp_responder(issuer_name, rng)
+        responder_ip = resolve_domain_ip(responder, src_host=net.src_ip)
+        ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp.id}")).randint(900, 2500)
+        ocsp_time = tls_event.timestamp + timedelta(
+            milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
+        )
+        uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
+        http_ctx = HttpContext(
+            method="GET",
+            host=responder,
+            uri=f"/{uri_seed}",
+            version="1.1",
+            user_agent="Microsoft-CryptoAPI/10.0",
+            request_body_len=0,
+            response_body_len=ocsp_size,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/ocsp-response"],
+            resp_fuids=[ocsp.id],
+            tags=["ocsp"],
+        )
+        file_ctx = FileTransferContext(
+            fuid=ocsp.id,
+            source="HTTP",
+            depth=0,
+            analyzers=[],
+            mime_type="application/ocsp-response",
+            duration=random.Random(_stable_seed(f"ocsp_file_duration:{ocsp.id}")).uniform(
+                0.001, 0.02
+            ),
+            local_orig=_is_private_ip(responder_ip),
+            is_orig=False,
+            seen_bytes=ocsp_size,
+            total_bytes=ocsp_size,
+            missing_bytes=0,
+            overflow_bytes=0,
+            timedout=False,
+        )
+        source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
+        self.generate_connection(
+            src_ip=net.src_ip,
+            dst_ip=responder_ip,
+            time=ocsp_time,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=random.Random(_stable_seed(f"ocsp_conn_duration:{ocsp.id}")).uniform(
+                0.02, 0.35
+            ),
+            orig_bytes=320,
+            resp_bytes=ocsp_size,
+            emit_dns=True,
+            pid=net.initiating_pid,
+            source_system=source_system,
+            conn_state="SF",
+            http=http_ctx,
+            file_transfer=file_ctx,
+            ocsp=ocsp,
+            hostname=responder,
+            proxy_bypass=True,
+        )
+
+    def _pick_profiled_tls_destination(
+        self,
+        rng: random.Random,
+        *,
+        src_ip: str,
+        source_system: Optional["System"] = None,
+        purpose_tags: tuple[str, ...] = (),
+    ) -> tuple[str, str]:
+        """Pick a profile-aware TLS hostname/IP for baseline external TLS."""
+        from evidenceforge.generation.activity.tls_realism import pick_tls_destination
+
+        resolved_source = source_system
+        if (
+            resolved_source is None
+            and hasattr(self, "_ip_to_system")
+            and src_ip in self._ip_to_system
+        ):
+            resolved_source = self._ip_to_system[src_ip]
+
+        source_os = _get_os_category(resolved_source.os) if resolved_source else None
+        persona = None
+        if resolved_source is not None and getattr(resolved_source, "assigned_user", None):
+            user = getattr(self, "_users_by_username", {}).get(resolved_source.assigned_user)
+            persona = getattr(user, "persona", None) if user is not None else None
+
+        return pick_tls_destination(
+            rng,
+            src_host=resolved_source.hostname if resolved_source else src_ip,
+            source_os=source_os,
+            persona=persona,
+            system_type=getattr(resolved_source, "type", None) if resolved_source else None,
+            purpose_tags=purpose_tags,
+        )
+
+    def _build_tls_certificate_chain(
+        self,
+        *,
+        leaf: Any,
+        cert_name: str,
+        issuer_name: str,
+        event_time: datetime,
+        connection_uid: str,
+        rng: random.Random,
+    ) -> list[Any]:
+        """Build a configured leaf/intermediate certificate chain."""
+        import hashlib
+
+        from evidenceforge.events.contexts import X509Context
+        from evidenceforge.generation.activity.tls_realism import (
+            certificate_chain_config,
+            chain_template_for_issuer,
+        )
+
+        chain = [leaf]
+        config = certificate_chain_config()
+        include_probability = float(config.get("include_intermediate_probability", 0.86))
+        if rng.random() >= include_probability:
+            return chain
+
+        template = chain_template_for_issuer(issuer_name)
+        intermediate_subjects = [
+            str(subject) for subject in template.get("intermediates", []) if subject
+        ]
+        if not intermediate_subjects:
+            return chain
+
+        chain_rng = random.Random(_stable_seed(f"tls_chain:{cert_name}:{issuer_name}"))
+        selected_subjects = [chain_rng.choice(intermediate_subjects)]
+        second_probability = float(config.get("include_second_intermediate_probability", 0.08))
+        remaining_subjects = [
+            subject for subject in intermediate_subjects if subject != selected_subjects[0]
+        ]
+        if remaining_subjects and chain_rng.random() < second_probability:
+            selected_subjects.append(chain_rng.choice(remaining_subjects))
+
+        parent_issuer = selected_subjects[1] if len(selected_subjects) > 1 else selected_subjects[0]
+        for idx, subject in enumerate(selected_subjects):
+            certificate_issuer = (
+                selected_subjects[idx + 1] if idx + 1 < len(selected_subjects) else subject
+            )
+            if idx == 0:
+                subject = issuer_name
+            fuid_hash = hashlib.sha256(
+                f"cert_chain_fuid:{subject}:{connection_uid}:{event_time.timestamp()}".encode()
+            ).hexdigest()
+            resolved_issuer = certificate_issuer or parent_issuer
+            profile_key = (subject, resolved_issuer)
+            profile = self._tls_intermediate_profiles.get(profile_key)
+            if profile is None:
+                profile_rng = random.Random(
+                    _stable_seed(f"tls_intermediate_profile:{subject}:{resolved_issuer}")
+                )
+                validity = self._tls_cert_validity.get(subject)
+                if validity is None:
+                    now_epoch = int(event_time.timestamp())
+                    min_days = int(config.get("intermediate_validity_days_min", 1825))
+                    max_days = int(config.get("intermediate_validity_days_max", 3650))
+                    max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
+                    validity_days = profile_rng.randint(min_days, max(max_days, min_days))
+                    not_before_days = profile_rng.randint(
+                        30, min(max_not_before, validity_days - 1)
+                    )
+                    not_valid_before = now_epoch - not_before_days * 86400
+                    not_valid_after = not_valid_before + validity_days * 86400
+                    validity = (not_valid_before, not_valid_after)
+                    self._tls_cert_validity[subject] = validity
+
+                key_types = config.get(
+                    "key_types",
+                    [{"type": "rsa", "length": 2048, "weight": 100}],
+                )
+                weights = [int(entry.get("weight", 0)) for entry in key_types]
+                selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
+                key_type = str(selected_key.get("type", "rsa"))
+                key_length = int(selected_key.get("length", 2048))
+                serial_seed = "|".join(
+                    [
+                        "tls_chain_serial",
+                        subject,
+                        resolved_issuer,
+                        key_type,
+                        str(key_length),
+                        str(validity[0]),
+                        str(validity[1]),
+                    ]
+                )
+                serial = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+                cert_hash = hashlib.sha256(
+                    "|".join(
+                        [
+                            "cert_chain",
+                            subject,
+                            serial,
+                            resolved_issuer,
+                            key_type,
+                            str(key_length),
+                            str(validity[0]),
+                            str(validity[1]),
+                        ]
+                    ).encode()
+                ).hexdigest()
+                profile = {
+                    "fingerprint": cert_hash,
+                    "certificate_serial": serial,
+                    "certificate_subject": subject,
+                    "certificate_issuer": resolved_issuer,
+                    "certificate_not_valid_before": validity[0],
+                    "certificate_not_valid_after": validity[1],
+                    "certificate_key_type": key_type,
+                    "certificate_key_length": key_length,
+                }
+                self._tls_intermediate_profiles[profile_key] = profile
+            key_type = str(profile["certificate_key_type"])
+            key_length = int(profile["certificate_key_length"])
+            is_ecdsa = key_type == "ecdsa"
+            chain.append(
+                X509Context(
+                    fuid=f"F{fuid_hash[:16]}",
+                    fingerprint=str(profile["fingerprint"]),
+                    certificate_version=3,
+                    certificate_serial=str(profile["certificate_serial"]),
+                    certificate_subject=str(profile["certificate_subject"]),
+                    certificate_issuer=str(profile["certificate_issuer"]),
+                    certificate_not_valid_before=int(profile["certificate_not_valid_before"]),
+                    certificate_not_valid_after=int(profile["certificate_not_valid_after"]),
+                    certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
+                    certificate_sig_alg="ecdsa-with-SHA256"
+                    if is_ecdsa
+                    else "sha256WithRSAEncryption",
+                    certificate_key_type=key_type,
+                    certificate_key_length=key_length,
+                    certificate_exponent="65537" if not is_ecdsa else "",
+                    san_dns=[],
+                    basic_constraints_ca=True,
+                    host_cert=False,
+                    client_cert=False,
+                )
+            )
+        return chain
+
     def _build_expansion_context(
         self,
         event_type: str,
@@ -631,7 +1603,7 @@ class ActivityGenerator:
         dc_hostnames = getattr(self, "_dc_hostnames", [])
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         if not hasattr(self, "_dns_cache"):
-            self._dns_cache: dict[tuple[str, str], float] = {}
+            self._dns_cache: dict[tuple[str, str, str], float] = {}
         if not hasattr(self, "_kerberos_cache"):
             self._kerberos_cache: dict[str, float] = {}
 
@@ -1467,6 +2439,7 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.edr_pools import (
                 get_registry_keys_hkcu,
                 get_registry_keys_hklm,
+                materialize_edr_template,
             )
 
             _pool_hkcu = get_registry_keys_hkcu()
@@ -1476,6 +2449,10 @@ class ActivityGenerator:
                     _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
                 else:
                     _key, _vname, _details = rng.choice(_pool_hkcu)
+                _template_user = user.username if user else "SYSTEM"
+                _key = materialize_edr_template(_key, rng, _template_user)
+                _vname = materialize_edr_template(_vname, rng, _template_user)
+                _details = materialize_edr_template(_details, rng, _template_user)
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
                 # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
@@ -1566,8 +2543,12 @@ class ActivityGenerator:
         dns: Optional["DnsContext"] = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
+        file_transfer: FileTransferContext | None = None,
+        ocsp: OcspContext | None = None,
+        proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
+        proxy_bypass: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -1599,18 +2580,306 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
-        # Resolve hostname ONCE for DNS/SNI/proxy consistency.
-        # All downstream uses (causal DNS expansion, SSL SNI, proxy hostname)
+        caller_provided_conn_state = conn_state is not None
+
+        # Resolve hostname ONCE for DNS/proxy consistency.
+        # All downstream uses (causal DNS expansion, proxy hostname)
         # share this single resolved value instead of doing independent lookups.
         #
         # hostname semantics (preserved through all downstream builders):
         #   None  → auto-resolve from REVERSE_DNS or generate random
         #   ""    → suppress resolution (raw-IP C2, exposed hosts w/o public_hostnames)
         #   "x.y" → use this hostname explicitly
+        hostname_was_explicit = hostname not in (None, "")
+        hostname_from_reverse_dns = False
         if hostname is None:
-            hostname = REVERSE_DNS.get(dst_ip)
+            if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
+                hostname = _generate_internal_hostname(
+                    _get_rng(), dst_ip, getattr(self, "_ad_domain", "corp.local")
+                )
+            else:
+                hostname = REVERSE_DNS.get(dst_ip)
+                hostname_from_reverse_dns = hostname is not None
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
-            hostname = _generate_random_hostname(_get_rng(), dst_ip)
+            if not _is_private_ip(dst_ip):
+                hostname = _generate_random_hostname(_get_rng(), dst_ip)
+
+        if hostname and hostname_was_explicit:
+            from evidenceforge.generation.activity.dns_registry import (
+                get_domain_ips,
+                resolve_domain_ip,
+            )
+
+            domain_ips = get_domain_ips(hostname)
+            if domain_ips and dst_ip not in domain_ips:
+                src_host = source_system.hostname if source_system else src_ip
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        hostname_is_external = (
+            bool(hostname)
+            and "." in hostname
+            and not hostname.endswith(f".{ad_domain}")
+            and not hostname.endswith(".local")
+        )
+        proxyable_external_destination = hostname_is_external or not _is_private_ip(dst_ip)
+        dns_server_ips = set(getattr(self, "_dns_server_ips", []))
+        if (
+            proto == "tcp"
+            and dst_port in (80, 443)
+            and hostname_is_external
+            and dst_ip in dns_server_ips
+        ):
+            from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+            src_host = source_system.hostname if source_system else src_ip
+            dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+
+        # Infer common payload service from destination port before proxy
+        # routing and DNS expansion. Some callers provide only port/protocol;
+        # explicit proxy semantics still need to catch 80/443 before a
+        # client-side origin DNS lookup is emitted.
+        if proto == "tcp" and dst_port in (80, 443) and service not in ("http", "ssl"):
+            service = "http" if dst_port == 80 else "ssl"
+
+        if (
+            proto == "tcp"
+            and service == "ssl"
+            and dst_port == 443
+            and emit_dns
+            and dns is None
+            and http is None
+            and not hostname_was_explicit
+            and _is_private_ip(src_ip)
+            and not _is_private_ip(dst_ip)
+        ):
+            hostname, dst_ip = self._pick_profiled_tls_destination(
+                rng=_get_rng(),
+                src_ip=src_ip,
+                source_system=source_system,
+                purpose_tags=("web", "saas", "background"),
+            )
+
+        tls_hostname = hostname
+        if hostname_from_reverse_dns and not emit_dns and dns is None and http is None:
+            # A PTR/reverse-DNS-style fallback is useful for proxy URL rendering
+            # but should not become TLS SNI unless the client actually resolved
+            # or was explicitly configured to use that hostname.
+            tls_hostname = ""
+
+        proxy_routes = getattr(self, "_proxy_routes", {})
+        proxy_chain = proxy_routes.get(src_ip)
+        explicit_proxy = (
+            not proxy_bypass
+            and getattr(self, "_proxy_mode", "transparent") == "explicit"
+            and proxy_chain
+            and proto == "tcp"
+            and service in ("ssl", "http")
+            and dst_port in (80, 443)
+            and proxyable_external_destination
+            and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
+        )
+        if explicit_proxy:
+            proxy_sys = proxy_chain[0]
+            listener_port = int(getattr(self, "_proxy_listener_port", 8080))
+            proxy_context = proxy or self._build_proxy_context(
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                hostname=hostname,
+                source_system=source_system,
+                proxy_sys=proxy_sys,
+                http=http,
+                explicit_mode=True,
+            )
+            tunnel_key = (
+                src_ip,
+                proxy_sys.ip,
+                proxy_context.host,
+                dst_ip,
+                dst_port,
+            )
+            reuse_safe = (
+                dst_port == 443
+                and http is not None
+                and dns is None
+                and ids is None
+                and firewall is None
+                and proxy is None
+                and proxy_context.status_code < 400
+            )
+            if reuse_safe:
+                active_tunnel = self._explicit_proxy_tunnels.get(tunnel_key)
+                if active_tunnel is not None:
+                    last_activity, cached_uid = active_tunnel
+                    elapsed = (time - last_activity).total_seconds()
+                    if 0 <= elapsed < _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
+                        self._explicit_proxy_tunnels[tunnel_key] = (time, cached_uid)
+                        return cached_uid
+
+            client_http: HttpContext | None = None
+            if dst_port == 443:
+                tunnel_status_code = proxy_context.tunnel_status_code
+                if tunnel_status_code is None:
+                    tunnel_status_code = proxy_context.status_code
+                connect_status_messages = {
+                    200: "Connection Established",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
+                client_http = HttpContext(
+                    method="CONNECT",
+                    host=proxy_context.host,
+                    uri=f"{proxy_context.host}:443",
+                    version="1.1",
+                    user_agent=proxy_context.user_agent,
+                    request_body_len=0,
+                    response_body_len=0,
+                    status_code=tunnel_status_code,
+                    status_msg=connect_status_messages.get(
+                        tunnel_status_code,
+                        "Connection Established" if tunnel_status_code < 400 else "Proxy Error",
+                    ),
+                    tags=[],
+                )
+            elif http is not None:
+                status_messages = {
+                    200: "OK",
+                    301: "Moved Permanently",
+                    302: "Found",
+                    304: "Not Modified",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    500: "Internal Server Error",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
+                client_http = HttpContext(
+                    method=http.method,
+                    host=proxy_context.host,
+                    uri=proxy_context.url,
+                    version=http.version,
+                    user_agent=http.user_agent,
+                    request_body_len=http.request_body_len,
+                    response_body_len=proxy_context.sc_bytes,
+                    status_code=proxy_context.status_code,
+                    status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
+                    referrer=http.referrer,
+                    trans_depth=http.trans_depth,
+                    tags=list(http.tags),
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type
+                    else list(http.resp_mime_types),
+                )
+            else:
+                request_body_len = 0
+                if proxy_context.method not in ("GET", "HEAD", "CONNECT", "OPTIONS"):
+                    request_body_len = proxy_context.cs_bytes
+                client_http = HttpContext(
+                    method=proxy_context.method,
+                    host=proxy_context.host,
+                    uri=proxy_context.url,
+                    version="1.1",
+                    user_agent=proxy_context.user_agent,
+                    request_body_len=request_body_len,
+                    response_body_len=proxy_context.sc_bytes,
+                    status_code=proxy_context.status_code,
+                    status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
+                    referrer=proxy_context.referrer,
+                    tags=[],
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type
+                    else [],
+                )
+
+            client_orig_bytes = max(1, proxy_context.cs_bytes or orig_bytes or 1)
+            client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
+            client_duration = min(duration or 0.2, 2.0)
+            if dst_port == 443 and proxy_context.status_code < 400:
+                rng = _get_rng()
+                client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
+                client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
+                client_duration = duration or rng.uniform(0.5, 10.0)
+
+            client_uid = self.generate_connection(
+                src_ip=src_ip,
+                dst_ip=proxy_sys.ip,
+                time=time,
+                dst_port=listener_port,
+                proto="tcp",
+                service="http",
+                duration=client_duration,
+                orig_bytes=client_orig_bytes,
+                resp_bytes=client_resp_bytes,
+                src_port=src_port,
+                emit_dns=False,
+                pid=pid,
+                source_system=source_system,
+                conn_state=conn_state or "SF",
+                http=client_http,
+                proxy=proxy_context,
+                hostname=self._proxy_fqdn(proxy_sys),
+                proxy_bypass=True,
+            )
+
+            if proxy_context.status_code >= 400:
+                return client_uid
+            if proxy_context.cache_result == "HIT":
+                return client_uid
+
+            egress_http = http if dst_port == 80 and service == "http" else None
+            egress_resp_bytes = resp_bytes
+            if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
+                egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
+            egress_delay = timedelta(
+                milliseconds=random.Random(
+                    _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
+                ).lognormvariate(3.0, 0.65)
+            )
+            if proxy_context.host:
+                self._emit_dns_lookup(
+                    proxy_sys.ip,
+                    dst_ip,
+                    time + egress_delay,
+                    hostname=proxy_context.host,
+                )
+            egress_conn_state = conn_state
+            if not caller_provided_conn_state and proxy_context.status_code < 400:
+                egress_conn_state = "SF"
+            self.generate_connection(
+                src_ip=proxy_sys.ip,
+                dst_ip=dst_ip,
+                time=time + egress_delay,
+                dst_port=dst_port,
+                proto=proto,
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=egress_resp_bytes,
+                emit_dns=False,
+                pid=-1,
+                source_system=proxy_sys,
+                conn_state=egress_conn_state,
+                dns=dns,
+                ids=ids,
+                http=egress_http,
+                file_transfer=file_transfer,
+                ocsp=ocsp,
+                firewall=firewall,
+                hostname=hostname,
+                proxy_bypass=True,
+            )
+            if dst_port == 443:
+                self._explicit_proxy_tunnels[tunnel_key] = (time, client_uid)
+            return client_uid
 
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
@@ -1663,26 +2932,54 @@ class ActivityGenerator:
                 )
                 return ""
 
+        resolved_source_system = source_system
+        if (
+            resolved_source_system is None
+            and hasattr(self, "_ip_to_system")
+            and src_ip in self._ip_to_system
+        ):
+            resolved_source_system = self._ip_to_system[src_ip]
+
         if proto == "icmp":
             src_port = 0
             dst_port = 0
         elif src_port is None:
             # Determine source OS for correct ephemeral port range
             _src_os = "windows"
-            if source_system:
-                _src_os = _get_os_category(source_system.os)
-            elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-                _src_os = _get_os_category(self._ip_to_system[src_ip].os)
-            src_port = _ephemeral_port(_get_rng(), _src_os)
+            if resolved_source_system:
+                _src_os = _get_os_category(resolved_source_system.os)
+            src_port = self._allocate_ephemeral_port(src_ip, dst_ip, dst_port, proto, time, _src_os)
+        else:
+            self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
 
-        state_source_system = source_system.hostname if source_system else ""
+        if pid <= 0:
+            pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
+
+        if pid > 0 and resolved_source_system:
+            process = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if process and process.start_time and time < process.start_time:
+                time = process.start_time + timedelta(milliseconds=1)
+
+        if (
+            service == "dns"
+            and proto in ("udp", "tcp")
+            and dst_port == 53
+            and dns is None
+            and hostname
+        ):
+            ad_domain = getattr(self, "_ad_domain", "corp.local")
+            dns_cache_key = (src_ip, hostname, "A")
+            ts_epoch = time.timestamp()
+            cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
+            last_query = self._dns_cache.get(dns_cache_key, 0)
+            if last_query and ts_epoch - last_query < cache_ttl:
+                return ""
+            self._dns_cache[dns_cache_key] = ts_epoch
+
+        state_source_system = resolved_source_system.hostname if resolved_source_system else ""
         state_source_hostname = ""
-        if source_system:
-            state_source_hostname = self._build_host_context(source_system).fqdn
-        elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            _src_system = self._ip_to_system[src_ip]
-            state_source_system = _src_system.hostname
-            state_source_hostname = self._build_host_context(_src_system).fqdn
+        if resolved_source_system:
+            state_source_hostname = self._build_host_context(resolved_source_system).fqdn
         close_time = time + timedelta(seconds=duration) if duration is not None else None
 
         # Phase 1: Allocate IDs from StateManager
@@ -1796,6 +3093,13 @@ class ActivityGenerator:
                 if duration is not None:
                     duration = rng.uniform(0.001, 0.5)
 
+        if proto == "tcp" and service == "ssl" and conn_state == "SF":
+            # A completed TLS session with ssl.log/SNI evidence must include
+            # at least a ClientHello and server handshake payload at conn.log
+            # accounting level, even when the logical request body is empty.
+            orig_bytes = max(orig_bytes or 0, rng.randint(180, 900))
+            resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
+
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
             orig_pkts = history.count("D")
@@ -1813,10 +3117,6 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
-            # Enforce consistency: resp_pkts > 0 requires resp_bytes > 0
-            # (orig always has at least the SYN, so orig_pkts stays from history)
-            if resp_pkts > 0 and resp_bytes == 0:
-                resp_pkts = 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -1851,24 +3151,35 @@ class ActivityGenerator:
         }
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
             service = _PORT_SERVICE[dst_port]
+        if (
+            proto == "tcp"
+            and conn_state in {"S0", "REJ", "SH", "SHR"}
+            and service in {"http", "ssl"}
+            and http is None
+        ):
+            service = ""
 
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
         src_host_ctx = None
-        if source_system:
-            src_host_ctx = self._build_host_context(source_system)
-        elif hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            src_host_ctx = self._build_host_context(self._ip_to_system[src_ip])
+        if resolved_source_system:
+            src_host_ctx = self._build_host_context(resolved_source_system)
 
         # Resolve destination system for dst_host
         dst_host_ctx = None
         if hasattr(self, "_ip_to_system") and dst_ip in self._ip_to_system:
             dst_host_ctx = self._build_host_context(self._ip_to_system[dst_ip])
+        elif self.dispatcher and self.dispatcher.visibility_engine:
+            real_dst_ip = self.dispatcher.visibility_engine._vip_to_real_ip.get(dst_ip)
+            if real_dst_ip and real_dst_ip in self._ip_to_system:
+                dst_host_ctx = self._build_host_context(self._ip_to_system[real_dst_ip])
 
         # Resolve eCAR actor_id from initiating process (if pid is known)
         conn_actor_id = ""
-        if pid > 0 and source_system:
-            conn_actor_id = self.state_manager.get_process_object_id(source_system.hostname, pid)
+        if pid > 0 and resolved_source_system:
+            conn_actor_id = self.state_manager.get_process_object_id(
+                resolved_source_system.hostname, pid
+            )
 
         event = SecurityEvent(
             timestamp=time,
@@ -1908,12 +3219,57 @@ class ActivityGenerator:
             event.ids = ids
         if http is not None:
             event.http = http
+        if file_transfer is not None:
+            event.file_transfer = file_transfer
+        if ocsp is not None:
+            event.ocsp = ocsp
+        if proxy is not None:
+            event.proxy = proxy
         if firewall is not None:
             event.firewall = firewall
 
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
             event.dns = dns
+            if (
+                event.firewall is not None
+                and event.firewall.action == "deny"
+                and proto in ("udp", "tcp")
+                and dst_port == 53
+            ):
+                event.dns.rcode = "NOERROR"
+                event.dns.rcode_num = 0
+                event.dns.answers = []
+                event.dns.TTLs = []
+                event.dns.rtt = None
+                event.network.conn_state = "S0"
+                event.network.history = "D" if proto == "udp" else "S"
+                event.network.duration = None
+                event.network.resp_bytes = 0
+                event.network.resp_pkts = 0
+                event.network.resp_ip_bytes = None
+        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+            dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
+            event.dns = DnsContext(
+                query=dns_query,
+                trans_id=rng.randint(1, 65535),
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR" if resp_bytes else "SERVFAIL",
+                rcode_num=0 if resp_bytes else 2,
+                answers=[dst_ip] if resp_bytes else [],
+                TTLs=[
+                    float(
+                        _dns_base_ttl(
+                            dns_query,
+                            _dns_is_internal_name(dns_query, getattr(self, "_ad_domain", "")),
+                        )
+                    )
+                ]
+                if resp_bytes
+                else [],
+                rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
+            )
 
         # Proxy context: attach only for established outbound internet traffic.
         # Forward proxies only see egress that completes (not blocked/denied flows).
@@ -1921,6 +3277,7 @@ class ActivityGenerator:
             not local_only
             and service in ("ssl", "http")
             and dst_port in (80, 443)
+            and event.proxy is None
             and not _is_private_ip(dst_ip)
             and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
         ):
@@ -1949,6 +3306,8 @@ class ActivityGenerator:
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
                 from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
+                domain_tags = get_domain_tags(proxy_hostname)
+
                 # When a pre-built HttpContext exists (from browsing session
                 # generator), derive proxy fields from it.  The proxy emitter
                 # handles CONNECT tunnel deduplication automatically.
@@ -1964,7 +3323,6 @@ class ActivityGenerator:
                     proxy_referrer = event.http.referrer
                 elif dst_port == 443:
                     # Legacy single-connection HTTPS path
-                    domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
                     path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
@@ -1974,7 +3332,6 @@ class ActivityGenerator:
 
                     proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=443)
                 else:
-                    domain_tags = get_domain_tags(proxy_hostname)
                     _src_os = _get_os_category(source_system.os) if source_system else None
                     path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
                         _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
@@ -1987,10 +3344,20 @@ class ActivityGenerator:
                 if event.http is None:
                     if proxy_ua_override:
                         user_agent = proxy_ua_override
-                    elif source_system and _get_os_category(source_system.os) == "linux":
-                        user_agent = rng.choice(_PROXY_UAS_LINUX)
                     else:
-                        user_agent = rng.choice(_PROXY_UAS_WINDOWS)
+                        user_agent = pick_proxy_user_agent(
+                            rng,
+                            source_system,
+                            hostname=proxy_hostname,
+                            domain_tags=domain_tags,
+                        )
+                domain_user_agent = pick_proxy_domain_user_agent(
+                    rng,
+                    source_system,
+                    hostname=proxy_hostname,
+                )
+                if domain_user_agent:
+                    user_agent = domain_user_agent
                 cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
@@ -1998,16 +3365,19 @@ class ActivityGenerator:
                     cache_result = "MISS"
                 else:
                     cache_result = "DENIED"
-                # Proxy byte counts differ from wire bytes: header overhead,
-                # cache effects, and proxy error pages.
+                # W3C sc-bytes/cs-bytes are proxy-side accounting fields:
+                # payload plus HTTP/proxy headers for allowed responses,
+                # or proxy-generated error pages for failures.
                 _cs = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+                _response_bytes = (
+                    event.http.response_body_len if event.http is not None else (resp_bytes or 0)
+                )
                 if cache_result == "DENIED":
                     _sc = rng.randint(500, 2000)  # proxy error page
                 elif cache_result == "HIT":
-                    _rb = max(1, resp_bytes or 0)
-                    _sc = rng.randint(max(1, int(_rb * 0.4)), max(2, int(_rb * 1.1)))
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 else:
-                    _sc = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
                     method=proxy_method,
@@ -2028,140 +3398,22 @@ class ActivityGenerator:
         # Skip for local-only events (no network sensor will see them)
         rng = _get_rng()
         if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
-            from evidenceforge.events.contexts import SslContext
-
-            # Hostname was resolved once at the top of generate_connection().
-            # Fall back to DnsContext query or IP-based generation only for
-            # connections that skipped early resolution (no emit_dns, internal).
-            server_name = hostname
-            if server_name is None and dns is not None and dns.query:
-                server_name = dns.query
-            if server_name is None:
-                server_name = REVERSE_DNS.get(dst_ip)
-            if server_name is None:
-                server_name = _generate_random_hostname(rng, dst_ip)
-            # Suppressed hostname → no SNI (raw-IP C2, etc.)
-            if server_name == "":
-                server_name = None
-            _tls_rng = random.Random(_stable_seed(f"tls:{src_ip}:{dst_ip}:{dst_port}"))
-            tls_version = _tls_rng.choice(["TLSv12", "TLSv12", "TLSv12", "TLSv13"])
-            if tls_version == "TLSv13":
-                cipher = _tls_rng.choices(_TLS13_CIPHER_VALUES, weights=_TLS13_CIPHER_WEIGHTS, k=1)[
-                    0
-                ]
-            else:
-                cipher = _tls_rng.choices(_TLS12_CIPHER_VALUES, weights=_TLS12_CIPHER_WEIGHTS, k=1)[
-                    0
-                ]
-            # ~2% handshake failure (bug #5)
-            ssl_established = rng.random() > _SSL_FAILURE_RATE
-            # Weighted SSL history patterns (bug #6)
-            if ssl_established:
-                ssl_hist = rng.choices(
-                    _SSL_HIST_SUCCESS_VALUES, weights=_SSL_HIST_SUCCESS_WEIGHTS, k=1
-                )[0]
-            else:
-                ssl_hist = rng.choices(
-                    _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
-                )[0]
-            event.ssl = SslContext(
-                version=tls_version,
-                cipher=cipher if ssl_established else "",
-                server_name=server_name,
-                resumed=rng.random() < 0.45 if ssl_established else False,
-                established=ssl_established,
-                ssl_history=ssl_hist,
+            self._attach_ssl_context(
+                event,
+                hostname=tls_hostname,
+                dns=dns,
+                dst_ip=dst_ip,
+                rng=rng,
+                allow_failure=True,
             )
-            # Failed handshake side-effects on connection state
-            if not ssl_established:
-                event.network.conn_state = rng.choice(["S1", "SH"])
-                event.network.history = "Sh" if event.network.conn_state == "SH" else "ShR"
-                event.network.resp_bytes = 0
-                event.network.orig_bytes = 0
-                if event.network.duration is not None:
-                    event.network.duration = rng.uniform(0.0, 0.5)
-
-            # X.509 certificate for SSL connections (fan-out to x509.log)
-            # Only for established handshakes — failed ones have no cert exchange.
-            if ssl_established:
-                import hashlib
-
-                from evidenceforge.events.contexts import X509Context
-
-                # For suppressed hostnames (raw-IP C2), use the IP as the cert subject
-                cert_name = server_name or dst_ip
-                cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
-                # Issuer-aware certificate generation from YAML config
-                from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
-
-                issuer_cfg = pick_issuer(rng, server_name=cert_name)
-                key_type, key_length = pick_key_type(rng, issuer_cfg)
-                is_ecdsa = key_type == "ecdsa"
-                now_epoch = int(event.timestamp.timestamp())
-                # Support validity_days_min/max ranges; fall back to scalar validity_days
-                _vd_fallback = issuer_cfg.get("validity_days", 397)
-                _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
-                _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
-                validity_days = rng.randint(_vd_min, _vd_max)
-                not_before_max = issuer_cfg.get("not_before_max_days", 300)
-                not_before_days = rng.randint(1, min(not_before_max, validity_days - 1))
-                remaining_days = validity_days - not_before_days
-                # IP literals get empty san_dns (no wildcard DNS SANs for IPs);
-                # real hostnames get the domain + wildcard SAN.
-                _is_ip = False
-                try:
-                    import ipaddress as _ipa
-
-                    _ipa.ip_address(cert_name)
-                    _is_ip = True
-                except ValueError:
-                    pass
-                if _is_ip:
-                    san_dns_list: list[str] = []
-                elif "." in cert_name:
-                    san_dns_list = [cert_name, f"*.{'.'.join(cert_name.split('.')[1:])}"]
-                else:
-                    san_dns_list = [cert_name]
-                event.x509 = X509Context(
-                    fingerprint=cert_hash,
-                    certificate_version=3,
-                    certificate_serial=f"{rng.getrandbits(128):032X}",
-                    certificate_subject=f"CN={cert_name}",
-                    certificate_issuer=issuer_cfg["name"],
-                    certificate_not_valid_before=now_epoch - not_before_days * 86400,
-                    certificate_not_valid_after=now_epoch + remaining_days * 86400,
-                    certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-                    certificate_sig_alg="ecdsa-with-SHA256"
-                    if is_ecdsa
-                    else "sha256WithRSAEncryption",
-                    certificate_key_type=key_type,
-                    certificate_key_length=key_length,
-                    certificate_exponent="65537" if not is_ecdsa else "",
-                    san_dns=san_dns_list,
-                    basic_constraints_ca=False,
-                    host_cert=True,
-                    client_cert=False,
-                )
-
-                # OCSP response (~30% of SSL connections)
-                if rng.random() < 0.30:
-                    from evidenceforge.events.contexts import OcspContext
-                    from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
-
-                    event.ocsp = OcspContext(
-                        id=_gen_uid("F"),
-                        hash_algorithm="sha256",
-                        issuer_name_hash=hashlib.sha256(
-                            event.x509.certificate_issuer.encode()
-                        ).hexdigest()[:40],
-                        issuer_key_hash=hashlib.sha256(
-                            f"key_{event.x509.certificate_issuer}".encode()
-                        ).hexdigest()[:40],
-                        serial_number=event.x509.certificate_serial,
-                        cert_status="good",
-                        this_update=now_epoch - rng.randint(0, 86400),
-                        next_update=now_epoch + rng.randint(86400, 86400 * 7),
-                    )
+        if (
+            proto == "tcp"
+            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
+            and event.network.service in {"http", "ssl"}
+            and event.http is None
+            and event.ssl is None
+        ):
+            event.network.service = ""
 
         elif (
             not local_only
@@ -2170,8 +3422,6 @@ class ActivityGenerator:
             and conn_state == "SF"
             and event.http is None  # Skip auto-generation if caller provided HttpContext
         ):
-            from evidenceforge.events.contexts import HttpContext
-
             _USER_AGENTS_WINDOWS = [
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
@@ -2244,6 +3494,12 @@ class ActivityGenerator:
                 from evidenceforge.utils.ids import generate_zeek_uid
 
                 fuid = generate_zeek_uid("F")
+                file_hashes = _file_transfer_hashes(
+                    f"http:{host}:{uri}:{resp_body_len}:{fuid}",
+                    ["SHA1"]
+                    if mime_type in {"application/x-dosexec", "application/octet-stream"}
+                    else [],
+                )
                 event.file_transfer = FileTransferContext(
                     fuid=fuid,
                     source="HTTP",
@@ -2258,6 +3514,7 @@ class ActivityGenerator:
                     missing_bytes=0,
                     overflow_bytes=0,
                     timedout=False,
+                    **file_hashes,
                 )
                 event.http.resp_fuids = [fuid]
                 event.http.resp_mime_types = [event.file_transfer.mime_type]
@@ -2286,6 +3543,92 @@ class ActivityGenerator:
                         has_debug_data=rng.random() < 0.4,
                     )
 
+        if (
+            event.file_transfer is None
+            and service == "smb"
+            and proto == "tcp"
+            and dst_port == 445
+            and event.network.conn_state == "SF"
+        ):
+            from evidenceforge.events.contexts import FileTransferContext
+            from evidenceforge.generation.activity.smb_file_transfers import (
+                load_smb_file_transfers,
+                pick_smb_filename,
+            )
+            from evidenceforge.utils.ids import generate_zeek_uid
+
+            smb_config = load_smb_file_transfers()
+            min_transfer_bytes = int(smb_config.get("min_transfer_bytes", 32768))
+            transfer_bytes = max(event.network.orig_bytes or 0, event.network.resp_bytes or 0)
+            if transfer_bytes >= min_transfer_bytes:
+                mime_entries = smb_config.get("mime_types", [])
+                analyzer_entries = smb_config.get("analyzer_sets", [])
+                mime_type = "application/octet-stream"
+                if mime_entries:
+                    mime_values = [
+                        str(entry.get("mime_type", "application/octet-stream"))
+                        for entry in mime_entries
+                    ]
+                    mime_weights = [int(entry.get("weight", 1)) for entry in mime_entries]
+                    mime_type = rng.choices(
+                        mime_values,
+                        weights=mime_weights,
+                        k=1,
+                    )[0]
+                analyzers: list[str] = []
+                if analyzer_entries:
+                    analyzer_values = [entry.get("analyzers", []) for entry in analyzer_entries]
+                    analyzer_weights = [int(entry.get("weight", 1)) for entry in analyzer_entries]
+                    analyzers = list(
+                        rng.choices(
+                            analyzer_values,
+                            weights=analyzer_weights,
+                            k=1,
+                        )[0]
+                    )
+                missing_probability = float(smb_config.get("missing_bytes_probability", 0.0))
+                timeout_probability = float(smb_config.get("timeout_probability", 0.0))
+                missing_bytes = (
+                    rng.randint(1, max(1, min(65536, transfer_bytes // 20)))
+                    if rng.random() < missing_probability
+                    else 0
+                )
+                fuid = generate_zeek_uid("F")
+                file_hashes = _file_transfer_hashes(
+                    f"smb:{event.network.src_ip}:{event.network.dst_ip}:{transfer_bytes}:{fuid}",
+                    analyzers,
+                )
+                smb_server = ""
+                if event.dst_host is not None:
+                    smb_server = event.dst_host.hostname or event.dst_host.fqdn
+                if not smb_server:
+                    smb_server = REVERSE_DNS.get(event.network.dst_ip, event.network.dst_ip)
+                smb_user = getattr(resolved_source_system, "assigned_user", "") or "Public"
+                filename = pick_smb_filename(
+                    rng,
+                    smb_config,
+                    mime_type=mime_type,
+                    server=smb_server,
+                    user=smb_user,
+                )
+                event.file_transfer = FileTransferContext(
+                    fuid=fuid,
+                    source="SMB",
+                    depth=0,
+                    filename=filename,
+                    analyzers=analyzers,
+                    mime_type=mime_type,
+                    duration=max(0.0, (event.network.duration or 0.0) * rng.uniform(0.6, 0.98)),
+                    local_orig=_is_private_ip(event.network.src_ip),
+                    is_orig=(event.network.orig_bytes or 0) >= (event.network.resp_bytes or 0),
+                    seen_bytes=max(0, transfer_bytes - missing_bytes),
+                    total_bytes=transfer_bytes,
+                    missing_bytes=missing_bytes,
+                    overflow_bytes=0,
+                    timedout=rng.random() < timeout_probability,
+                    **file_hashes,
+                )
+
         # NTP context for Zeek ntp.log fan-out
         if not local_only and service == "ntp" and proto == "udp":
             from evidenceforge.events.contexts import NtpContext
@@ -2293,69 +3636,99 @@ class ActivityGenerator:
             ntp_rng = _get_rng()
             ntp_epoch = time.timestamp()
             # Stratum-aware timing via log-normal distribution
-            stratum = (_stable_seed(f"ntp_stratum_{dst_ip}") % 3) + 1
+            stratum, ref_id = _ntp_stratum_and_ref_id(dst_ip)
+            association = self._ntp_association_profile(event.network.src_ip, dst_ip)
             _ntp_mean_ms, _ntp_sigma = _NTP_STRATUM_TIMING.get(stratum, (10.0, 0.7))
             _ntp_mu = math.log(_ntp_mean_ms) - (_ntp_sigma**2) / 2
             rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
             proc_sec = ntp_rng.lognormvariate(math.log(0.5) - 0.3**2 / 2, 0.3) / 1000.0
             ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
             event.ntp = NtpContext(
-                version=ntp_rng.choice([3, 4]),
-                mode=3,  # client
+                version=int(association["version"]),
+                mode=4,  # server response
                 stratum=stratum,
-                poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
-                precision=float(ntp_rng.randint(-25, -18)),
-                root_delay=ntp_rng.uniform(0.0, 0.1),
-                root_disp=ntp_rng.uniform(0.0, 0.05),
-                ref_id=random.Random(_stable_seed(f"ntp_refid_{dst_ip}")).choice(
-                    [".GPS.", ".PPS.", ".GOES.", ".DCFa.", ".ACTS."]
-                ),
+                poll=float(association["poll"]),
+                precision=float(association["precision"]),
+                root_delay=float(association["root_delay"]),
+                root_disp=float(association["root_disp"]),
+                ref_id=ref_id,
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
                 org_ts=round(ntp_epoch + ntp_jitter, 6),
                 rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),
                 xmt_ts=round(ntp_epoch + ntp_jitter + rtt_sec + proc_sec, 6),
             )
 
-        # Zeek weird.log: probabilistic network anomalies
-        # TCP: ~3% of connections; UDP: ~0.5% (much rarer in real Zeek deployments)
-        weird_prob = 0.03 if proto == "tcp" else 0.005 if proto == "udp" else 0
-        if not local_only and weird_prob > 0 and rng.random() < weird_prob:
-            from evidenceforge.events.contexts import WeirdContext
-
-            _TCP_WEIRD_NAMES = [
-                "window_recision",
-                "possible_split_routing",
-                "above_hole_data_without_any_acks",
-                "data_before_established",
-                "connection_originator_SYN_ack",
-                "truncated_header",
-                "inappropriate_FIN",
-                "bad_TCP_checksum",
-            ]
-            _UDP_WEIRD_NAMES = [
-                "DNS_truncated_len_lt_hdr_len",
-                "bad_UDP_checksum",
-                "UDP_datagram_length_mismatch",
-                "DNS_RR_unknown_type",
-            ]
-            weird_pool = _TCP_WEIRD_NAMES if proto == "tcp" else _UDP_WEIRD_NAMES
-            event.weird = WeirdContext(
-                name=rng.choice(weird_pool),
-                source="TCP" if proto == "tcp" else "UDP",
-            )
-
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
         # the connection must have completed successfully (SF). A connection
-        # with S0/REJ cannot have served an HTTP response.
-        if event.http is not None and event.network.conn_state in ("S0", "REJ", "RSTR", "RSTO"):
+        # with a handshake-only, reset, or half-close state cannot have served
+        # a Zeek HTTP transaction with request/response body accounting.
+        if (
+            event.http is not None
+            and event.network.protocol == "tcp"
+            and event.network.conn_state != "SF"
+        ):
             event.network.conn_state = "SF"
             event.network.history = "ShADadfF"
             if event.network.duration is None:
                 event.network.duration = rng.uniform(0.01, 2.0)
-            if event.network.orig_bytes == 0:
-                event.network.orig_bytes = event.http.request_body_len or rng.randint(200, 2000)
-            if event.network.resp_bytes == 0:
-                event.network.resp_bytes = event.http.response_body_len or rng.randint(200, 5000)
+
+        if event.network.protocol == "tcp" and event.network.conn_state == "SF":
+            if event.http is not None:
+                event.network.orig_bytes = max(
+                    event.network.orig_bytes or 0,
+                    event.http.request_body_len or 0,
+                    rng.randint(180, 520),
+                )
+                event.network.resp_bytes = max(
+                    event.network.resp_bytes or 0,
+                    event.http.response_body_len or 0,
+                    rng.randint(90, 450),
+                )
+            if event.network.service == "ssl":
+                event.network.orig_bytes = max(event.network.orig_bytes or 0, rng.randint(180, 900))
+                event.network.resp_bytes = max(
+                    event.network.resp_bytes or 0, rng.randint(900, 4500)
+                )
+            hist_orig = sum(1 for c in (event.network.history or "") if c.isupper())
+            hist_resp = sum(1 for c in (event.network.history or "") if c.islower())
+            event.network.orig_pkts = max(
+                hist_orig, max(1, ((event.network.orig_bytes or 0) // 1460) + 1)
+            )
+            event.network.resp_pkts = max(
+                hist_resp, max(1, ((event.network.resp_bytes or 0) // 1460) + 1)
+            )
+            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
+            orig_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
+            resp_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
+            event.network.orig_ip_bytes = (
+                (event.network.orig_bytes or 0) + event.network.orig_pkts * overhead + orig_extra
+            )
+            event.network.resp_ip_bytes = (
+                (event.network.resp_bytes or 0) + event.network.resp_pkts * overhead + resp_extra
+            )
+
+        if (
+            not local_only
+            and event.network.service == "ssl"
+            and event.network.conn_state == "SF"
+            and event.ssl is None
+        ):
+            self._attach_ssl_context(
+                event,
+                hostname=tls_hostname,
+                dns=dns,
+                dst_ip=dst_ip,
+                rng=rng,
+                allow_failure=False,
+            )
+
+        # Automatic weird.log synthesis is intentionally disabled for now. The
+        # Zeek weird type space is broad and state-sensitive; poorly matched
+        # weird rows are more damaging than sparse weird.log output. Explicit
+        # WeirdContext events still render through ZeekWeirdEmitter. Keep one
+        # RNG draw to avoid reshaping unrelated deterministic traffic choices.
+        if not _AUTO_WEIRD_ENABLED:
+            rng.random()
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
@@ -2417,6 +3790,14 @@ class ActivityGenerator:
         duration = rng.uniform(30.0, 3600.0)
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
+        visibility = self._network_visibility or (
+            self.dispatcher.visibility_engine if self.dispatcher else None
+        )
+        network_visible = (
+            True
+            if visibility is None
+            else visibility.is_connection_visible(source_ip, target_system.ip)
+        )
 
         src_host_ctx = None
         if source_system is not None:
@@ -2556,7 +3937,7 @@ class ActivityGenerator:
                     severity=6,
                     message=(
                         f"pam_unix(sshd:session): session opened for user "
-                        f"{user.username} by (uid=0)"
+                        f"{user.username}(uid={_linux_uid_for_user(user.username)}) by (uid=0)"
                     ),
                 ),
             )
@@ -2580,7 +3961,7 @@ class ActivityGenerator:
         logger.debug(
             f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})"
         )
-        return uid
+        return uid if network_visible else ""
 
     def generate_bash_command(
         self, user: User, system: System, time: datetime, activity_type_or_command: str = "default"
@@ -2938,7 +4319,7 @@ class ActivityGenerator:
         # Keep the cache bounded: drop entries older than the max TTL horizon,
         # and enforce a hard cap under high-cardinality/adversarial inputs.
         if ts_epoch - self._dns_cache_last_prune >= 60 or len(self._dns_cache) > 50_000:
-            max_ttl_window = 600
+            max_ttl_window = 86_400
             cutoff = ts_epoch - max_ttl_window
             self._dns_cache = {
                 key: cached_at for key, cached_at in self._dns_cache.items() if cached_at >= cutoff
@@ -2952,29 +4333,40 @@ class ActivityGenerator:
                 self._dns_cache = dict(sorted_items[:50_000])
             self._dns_cache_last_prune = ts_epoch
 
-        last_query = self._dns_cache.get(cache_key, 0)
-        cache_ttl = rng.choice([60, 120, 300, 600])  # Varied TTLs
-        if ts_epoch - last_query < cache_ttl:
-            return  # Cache hit — skip DNS emission
-        self._dns_cache[cache_key] = ts_epoch
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        is_internal = _dns_is_internal_name(hostname, ad_domain)
+        authoritative_ttl = _dns_base_ttl(hostname, is_internal)
 
-        # Determine DNS server IP from network visibility or use default
+        last_query = self._dns_cache.get(cache_key, 0)
+        cache_ttl = authoritative_ttl if is_internal else min(authoritative_ttl, 600)
+        if last_query and ts_epoch - last_query < cache_ttl:
+            return  # Cache hit — skip DNS emission
+
+        # Determine DNS server IP from network visibility or use default. Forward
+        # proxies often use upstream resolvers for Internet destinations; this
+        # also keeps explicit-proxy DNS visible when the proxy and DC share a
+        # same-segment TAP that would not observe local resolver traffic.
         dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
-        dns_server_ip = _get_rng().choice(dns_ips)
+        src_system = getattr(self, "_ip_to_system", {}).get(src_ip)
+        if src_system and "forward_proxy" in (src_system.roles or []) and not is_internal:
+            dns_server_ip = _get_rng().choice(["1.1.1.1", "8.8.8.8", "9.9.9.9"])
+        else:
+            dns_server_ip = _get_rng().choice(dns_ips)
 
         _src_os = "windows"
-        if hasattr(self, "_ip_to_system") and src_ip in self._ip_to_system:
-            _src_os = _get_os_category(self._ip_to_system[src_ip].os)
-        src_port = _ephemeral_port(rng, _src_os)
+        if src_system is not None:
+            _src_os = _get_os_category(src_system.os)
+        dns_time = time - timedelta(milliseconds=rng.randint(900, 1400))
+        src_port = self._allocate_ephemeral_port(
+            src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
+        )
 
         from evidenceforge.events.contexts import DnsContext
 
-        dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
-        ad_domain = getattr(self, "_ad_domain", "corp.local")
-        is_internal = hostname.endswith(f".{ad_domain}") or hostname.endswith(".local")
-
-        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
-        if rng.random() < 0.002:
+        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures).
+        # Known internal names are served by authoritative internal DNS and
+        # should not randomly fail unless a scenario explicitly models DNS trouble.
+        if not is_internal and rng.random() < 0.002:
             dns_ctx = DnsContext(
                 query=hostname,
                 trans_id=rng.randint(1, 65535),
@@ -3038,7 +4430,7 @@ class ActivityGenerator:
             if _is_private_ip(dst_ip):
                 answers = [hostname]
             else:
-                answers = [_generate_rdns_name(rng, dst_ip)]
+                answers = [_generate_rdns_name(rng, dst_ip, hostname)]
         elif qtype_roll < 0.98:
             # SRV record: AD service discovery — must resolve to DCs only
             qtype, qtype_name = 33, "SRV"
@@ -3056,24 +4448,45 @@ class ActivityGenerator:
             port = _SRV_PORT_MAP.get(svc_prefix, 389)
             answers = [f"0 100 {port} {dc_hostname}"]
             is_internal = True
+        elif qtype_roll < 0.995:
+            # TXT record: SPF/DKIM/DMARC-style mail/authentication lookups.
+            qtype, qtype_name = 16, "TXT"
+            query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
+            answers = [txt_answer]
         else:
             # MX record: domain → mail server
-            qtype, qtype_name = 15, "MX"
-            parts = hostname.split(".", 1)
-            query = parts[1] if len(parts) > 1 else hostname
-            answers = [f"10 mail.{query}"]
+            if _dns_hostname_allows_mx(hostname):
+                qtype, qtype_name = 15, "MX"
+                query = _dns_registrable_domain(hostname)
+                answers = [f"10 mail.{query}"]
+            else:
+                qtype, qtype_name = 16, "TXT"
+                query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
+                answers = [txt_answer]
 
-        # Deterministic base TTL per domain (consistent across queries) + cache aging
-        domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
+        query_is_internal = qtype_name == "SRV" or _dns_is_internal_name(query, ad_domain)
+        if query_is_internal and not _is_private_ip(dns_server_ip):
+            dns_server_ip = _get_rng().choice(dns_ips)
+            src_port = self._allocate_ephemeral_port(
+                src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
+            )
+        is_internal = query_is_internal
+
+        # Internal authoritative names use stable TTLs. External answers may be
+        # observed through a resolver cache, so expose realistic countdown TTLs.
+        base_ttl = _dns_base_ttl(query, is_internal)
         if is_internal:
-            base_ttl = domain_seed.choice([300, 600, 1800, 3600, 7200, 86400])
+            shared_ttl = float(base_ttl)
         else:
-            base_ttl = domain_seed.choice([30, 60, 120, 300, 600, 1800, 3600])
-
-        # All answers in one response share the same TTL (arrived together)
-        cache_age = rng.randint(0, max(1, base_ttl - 1))
-        shared_ttl = float(max(1, base_ttl - cache_age))
+            cache_age = rng.randint(0, max(1, base_ttl - 1))
+            shared_ttl = float(max(1, base_ttl - cache_age))
         ttls = [shared_ttl] * len(answers)
+
+        # Only address lookups for the requested hostname populate the client
+        # DNS cache. PTR/SRV/MX companions should not hide future A/AAAA
+        # evidence for high-volume proxy or browser destinations.
+        if query == hostname and qtype in (1, 28):
+            self._dns_cache[cache_key] = ts_epoch
 
         # Build DnsContext and emit connection + dns.log via fan-out
         dns_ctx = DnsContext(
@@ -3085,7 +4498,7 @@ class ActivityGenerator:
             rcode_num=0,
             answers=answers,
             TTLs=ttls,
-            rtt=_dns_rtt(rng),
+            rtt=_dns_rtt(rng, dns_server_ip),
             AA=is_internal,
             RD=True,
             RA=True,
@@ -3104,10 +4517,18 @@ class ActivityGenerator:
             dns=dns_ctx,
         )
 
-        # Phase 6.0: ~20% chance of NXDOMAIN companion query
-        if rng.random() < 0.20:
+        # Occasional resolver search-suffix mistakes/background discovery probes.
+        # Keep this low-volume and avoid doubling an already-qualified internal name.
+        if rng.random() < 0.05:
+            suffix_queries: list[str] = []
+            if (
+                hostname
+                and "." in hostname
+                and not hostname.endswith(f".{ad_domain}")
+                and not hostname.endswith(".local")
+            ):
+                suffix_queries.append(f"{hostname}.{ad_domain}")
             nxdomain_queries = [
-                f"{hostname}.{ad_domain}",
                 f"wpad.{ad_domain}",
                 "wpad.local",
                 "wpad",
@@ -3117,9 +4538,20 @@ class ActivityGenerator:
                 f"oldserver.{ad_domain}",
                 f"printer01.{ad_domain}",
             ]
+            nxdomain_queries = suffix_queries + nxdomain_queries
             nx_query = rng.choice(nxdomain_queries)
             nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
-            nx_src_port = _ephemeral_port(rng, _src_os)
+            nx_is_internal = _dns_is_internal_name(nx_query, ad_domain) or nx_query in {
+                "wpad",
+                "wpad.local",
+                "isatap",
+            }
+            nx_dns_server_ip = dns_server_ip
+            if nx_is_internal and not _is_private_ip(nx_dns_server_ip):
+                nx_dns_server_ip = _get_rng().choice(dns_ips)
+            nx_src_port = self._allocate_ephemeral_port(
+                src_ip, nx_dns_server_ip, 53, "udp", nx_time, _src_os
+            )
             nx_ctx = DnsContext(
                 query=nx_query,
                 trans_id=rng.randint(1, 65535),
@@ -3127,13 +4559,14 @@ class ActivityGenerator:
                 query_type="A",
                 rcode="NXDOMAIN",
                 rcode_num=3,
-                AA=True,
+                rtt=_dns_rtt(rng, nx_dns_server_ip),
+                AA=nx_is_internal,
                 RD=True,
                 RA=True,
             )
             self.generate_connection(
                 src_ip=src_ip,
-                dst_ip=dns_server_ip,
+                dst_ip=nx_dns_server_ip,
                 time=nx_time,
                 dst_port=53,
                 proto="udp",
@@ -3246,18 +4679,41 @@ class ActivityGenerator:
             return
 
         conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
+        ext_hostname = None
 
         if conn_info["external"]:
-            # External connection: domain-first selection
+            # External connection: domain-first selection. App-specific mappings
+            # can constrain destinations via DNS registry tags (e.g., Teams →
+            # Teams/M365 endpoints instead of arbitrary web/CDN domains).
             from evidenceforge.generation.activity.dns_registry import (
                 _domain_to_ip as _d2ip,
             )
             from evidenceforge.generation.activity.dns_registry import (
                 generate_long_tail_domain as _gen_lt_domain,
             )
+            from evidenceforge.generation.activity.dns_registry import (
+                pick_domain_and_ip as _pick_domain_and_ip,
+            )
 
-            ext_hostname = _gen_lt_domain(rng)
-            dst_ip = _d2ip(ext_hostname)
+            dns_tags = conn_info.get("dns_tags") or []
+            if conn_info["service"] == "ssl":
+                ext_hostname, dst_ip = self._pick_profiled_tls_destination(
+                    rng,
+                    src_ip=system.ip,
+                    source_system=system,
+                    purpose_tags=tuple(dns_tags) if dns_tags else ("web", "saas"),
+                )
+            elif dns_tags:
+                tag = rng.choice(dns_tags)
+                ext_hostname, dst_ip = _pick_domain_and_ip(
+                    rng,
+                    tag,
+                    src_host=system.hostname,
+                    include_os=_get_os_category(system.os),
+                )
+            else:
+                ext_hostname = _gen_lt_domain(rng)
+                dst_ip = _d2ip(ext_hostname)
         else:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])
@@ -3395,7 +4851,14 @@ class ActivityGenerator:
             # Get or create session for this user (with login cooldown)
             sessions = self.state_manager.get_sessions_for_user(user.username)
             active_session = (
-                next((s for s in sessions if s.system == system.hostname), None)
+                next(
+                    (
+                        s
+                        for s in sessions
+                        if s.system == system.hostname and _session_started_by(s, time)
+                    ),
+                    None,
+                )
                 if sessions
                 else None
             )
@@ -3569,6 +5032,13 @@ class ActivityGenerator:
             if activity_type in ("connection_web", "connection_saas"):
                 service = rng.choice(["http", "ssl"])
                 dst_port = 443 if service == "ssl" else 80
+                if service == "ssl":
+                    conn_hostname, dst_ip = self._pick_profiled_tls_destination(
+                        rng,
+                        src_ip=system.ip,
+                        source_system=system,
+                        purpose_tags=(tag,),
+                    )
             elif activity_type == "connection_email":
                 service = "smtp"
                 # Route through internal Exchange if detected (P1-15)
@@ -3588,6 +5058,7 @@ class ActivityGenerator:
                     dst_ip = db["ip"]
                     service = db["service"]
                     dst_port = db["port"]
+                    conn_hostname = None
                 else:
                     # No DB servers detected from scenario; skip DB connection
                     return
@@ -4565,6 +6036,21 @@ class ActivityGenerator:
                 src_port=68,
                 dst_port=67,
                 protocol="udp",
+                service="dhcp",
+                zeek_uid=uid,
+                duration=0.01,
+                orig_bytes=300 if "DISCOVER" in msg_types else 180,
+                resp_bytes=300,
+                orig_pkts=2 if "DISCOVER" in msg_types else 1,
+                resp_pkts=2 if "OFFER" in msg_types else 1,
+                orig_ip_bytes=356 if "DISCOVER" in msg_types else 208,
+                resp_ip_bytes=356,
+                conn_state="SF",
+                history="DdDd" if "DISCOVER" in msg_types else "Dd",
+                local_orig=True,
+                local_resp=True,
+                ip_proto=17,
+                link_local=True,
             ),
             dhcp=DhcpContext(
                 client_addr=system.ip,

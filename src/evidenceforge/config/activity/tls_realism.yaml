@@ -1,0 +1,250 @@
+# TLS realism knobs for SAN generation, OCSP behavior, and certificate chains.
+#
+# User customizations go in:
+#   .eforge/config/activity/tls_realism.yaml
+#
+# Overlay behavior: nested dicts merge and lists extend.
+
+san:
+  multi_label_public_suffixes:
+    - ac.uk
+    - co.jp
+    - co.nz
+    - co.uk
+    - com.au
+    - com.br
+    - com.mx
+    - com.sg
+    - gov.uk
+    - net.au
+    - org.au
+    - org.uk
+
+ocsp:
+  cache_bucket_seconds: 14400
+  this_update_max_skew_seconds: 3600
+  next_update_min_seconds: 28800
+  next_update_max_seconds: 604800
+  responders:
+    - issuer_patterns: ["*Acme Enterprise*", "*Enterprise*"]
+      domains: ["ocsp.example.com"]
+    - issuer_patterns: ["*Let's Encrypt*"]
+      domains: ["r3.o.lencr.org", "ocsp.int-x3.letsencrypt.org"]
+    - issuer_patterns: ["*DigiCert*"]
+      domains: ["ocsp.digicert.com"]
+    - issuer_patterns: ["*Google Trust Services*", "*Google Trust*"]
+      domains: ["ocsp.pki.goog"]
+    - issuer_patterns: ["*GlobalSign*"]
+      domains: ["ocsp.globalsign.com"]
+    - issuer_patterns: ["*Sectigo*"]
+      domains: ["ocsp.sectigo.com"]
+    - issuer_patterns: ["*"]
+      domains: ["ocsp.digicert.com", "ocsp.sectigo.com", "ocsp.globalsign.com"]
+  status_weights:
+    good: 90
+    unknown: 7
+    revoked: 3
+  suppress_revoked_suffixes:
+    - .amazon.com
+    - .awsstatic.com
+    - .bing.com
+    - .cloudflare.com
+    - .digicert.com
+    - .fbcdn.net
+    - .facebook.com
+    - .github.com
+    - .githubusercontent.com
+    - .google.com
+    - .googleapis.com
+    - .gstatic.com
+    - .lencr.org
+    - .linkedin.com
+    - .live.com
+    - .microsoft.com
+    - .microsoftonline.com
+    - .office.com
+    - .office.net
+    - .office365.com
+    - .pki.goog
+    - .salesforce.com
+    - .slack.com
+    - .windowsupdate.com
+    - .zoom.us
+
+certificate_chains:
+  include_intermediate_probability: 0.86
+  include_second_intermediate_probability: 0.08
+  intermediate_validity_days_min: 1825
+  intermediate_validity_days_max: 3650
+  intermediate_not_before_max_days: 1460
+  key_types:
+    - {type: "rsa", length: 2048, weight: 55}
+    - {type: "rsa", length: 4096, weight: 20}
+    - {type: "ecdsa", length: 256, weight: 25}
+  templates:
+    - name: lets_encrypt
+      issuer_patterns: ["*Let's Encrypt*"]
+      intermediates:
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+        - "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
+    - name: digicert
+      issuer_patterns: ["*DigiCert*"]
+      intermediates:
+        - "CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US"
+        - "CN=DigiCert Global Root CA, OU=www.digicert.com, O=DigiCert Inc, C=US"
+    - name: google
+      issuer_patterns: ["*Google Trust Services*"]
+      intermediates:
+        - "CN=GTS Root R1, O=Google Trust Services LLC, C=US"
+        - "CN=GTS Root R4, O=Google Trust Services LLC, C=US"
+    - name: amazon
+      issuer_patterns: ["*Amazon*"]
+      intermediates:
+        - "CN=Amazon Root CA 1, O=Amazon, C=US"
+        - "CN=Amazon Root CA 3, O=Amazon, C=US"
+    - name: microsoft
+      issuer_patterns: ["*Microsoft*"]
+      intermediates:
+        - "CN=Microsoft RSA Root Certificate Authority 2017, O=Microsoft Corporation, C=US"
+        - "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE"
+    - name: cloudflare
+      issuer_patterns: ["*Cloudflare*"]
+      intermediates:
+        - "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US"
+    - name: apple
+      issuer_patterns: ["*Apple*"]
+      intermediates:
+        - "CN=Apple Root CA - G3, O=Apple Inc., C=US"
+    - name: enterprise
+      issuer_patterns: ["*Enterprise*"]
+      intermediates:
+        - "CN=Acme Enterprise Root CA, O=Acme Corp, C=US"
+    - name: default
+      issuer_patterns: ["*"]
+      intermediates:
+        - "CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE"
+        - "CN=Sectigo Public Server Authentication Root R46, O=Sectigo Limited, C=GB"
+
+destinations:
+  enabled: true
+  host_preferred_domain_count: 6
+  host_preferred_probability: 0.68
+  profiles:
+    - name: enterprise_heavy_hitters
+      weight: 34
+      system_types: [workstation]
+      dns_tags: [saas, outlook, teams, onedrive]
+      domains:
+        - login.microsoftonline.com
+        - graph.microsoft.com
+        - outlook.office365.com
+        - www.office.com
+        - teams.microsoft.com
+        - sharepoint.com
+        - onedrive.live.com
+        - portal.azure.com
+        - accounts.google.com
+        - drive.google.com
+        - docs.google.com
+        - calendar.google.com
+        - slack.com
+        - zoom.us
+        - login.salesforce.com
+        - na139.salesforce.com
+    - name: certificate_infra
+      weight: 14
+      domains:
+        - ocsp.digicert.com
+        - crl.microsoft.com
+        - ctldl.windowsupdate.com
+        - crl3.digicert.com
+        - crl4.digicert.com
+        - ocsp.sectigo.com
+        - ocsp.globalsign.com
+        - ocsp.pki.goog
+        - crls.pki.goog
+        - ocsp.int-x3.letsencrypt.org
+        - r3.o.lencr.org
+        - x1.c.lencr.org
+    - name: package_update
+      weight: 18
+      dns_tags: [background]
+      domains:
+        - download.windowsupdate.com
+        - settings-win.data.microsoft.com
+        - security.ubuntu.com
+        - archive.ubuntu.com
+        - changelogs.ubuntu.com
+        - pypi.org
+        - registry.npmjs.org
+        - packages.microsoft.com
+        - api.snapcraft.io
+        - dl.google.com
+        - update.googleapis.com
+        - github-releases.githubusercontent.com
+      os_overrides:
+        windows:
+          dns_tags: [background, windows]
+          domains:
+            - download.windowsupdate.com
+            - settings-win.data.microsoft.com
+            - ctldl.windowsupdate.com
+            - crl.microsoft.com
+            - packages.microsoft.com
+            - dl.google.com
+            - update.googleapis.com
+        linux:
+          dns_tags: [background, linux]
+          domains:
+            - security.ubuntu.com
+            - archive.ubuntu.com
+            - changelogs.ubuntu.com
+            - pypi.org
+            - registry.npmjs.org
+            - api.snapcraft.io
+            - packages.microsoft.com
+    - name: developer_tools
+      weight: 12
+      personas: [developer, sysadmin, security_analyst, analyst]
+      system_types: [workstation]
+      dns_tags: [git, dev]
+      domains:
+        - github.com
+        - api.github.com
+        - gist.github.com
+        - pages.github.io
+        - gitlab.com
+        - registry.gitlab.com
+        - api.gitlab.com
+        - bitbucket.org
+        - api.bitbucket.org
+        - registry.npmjs.org
+        - pypi.org
+        - files.pythonhosted.org
+        - deb.nodesource.com
+        - objects.githubusercontent.com
+    - name: browsing_long_tail
+      weight: 22
+      system_types: [workstation]
+      dns_tags: [web, cdn, social]
+      domains:
+        - www.google.com
+        - www.cloudflare.com
+        - blog.cloudflare.com
+        - www.reddit.com
+        - i.redd.it
+        - www.linkedin.com
+        - static.licdn.com
+        - media.licdn.com
+        - aws.amazon.com
+        - console.aws.amazon.com
+        - www.bing.com
+        - www.facebook.com
+        - stackoverflow.com
+        - en.wikipedia.org
+        - upload.wikimedia.org
+        - news.ycombinator.com
+        - cdn.sstatic.net
+        - cdn.jsdelivr.net
+        - static.akamai.net
+        - media.akamai.net

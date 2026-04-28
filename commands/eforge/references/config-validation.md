@@ -4,7 +4,7 @@
 >
 > To discover config file paths, run `eforge info <field>` (e.g., `eforge info paths.activity`). Run `eforge info --fields` to see all available fields.
 
-27 checks for verifying config file integrity. Run via the config skill's validation operation ("validate config files", "check config", etc.) or automatically after edits (scoped to affected files).
+Checks for verifying config file integrity. Run via the config skill's validation operation ("validate config files", "check config", etc.) or automatically after edits (scoped to affected files).
 
 Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activity`, `eforge info overlay.exists`). Run `eforge info --fields` to see all available fields. Use `eforge info --json` if you need everything at once.
 
@@ -24,17 +24,18 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 5 | Empty IPs | ERROR | Domain entry with missing or empty `ips:` list |
 | 6 | Invalid tags | WARNING | Tag not in the valid set (web, saas, cdn, email, git, background, windows, linux, internal, storage, dev, social) |
 | 7 | Orphaned proxy templates | WARNING | Domain key in proxy_uri_templates that doesn't exist in dns_registry |
-| 8 | Orphaned site maps | WARNING | Domain key in site_maps that doesn't exist in dns_registry |
-| 9 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
-| 10 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
+| 8 | Orphaned OCSP responders | WARNING | OCSP responder host in tls_realism that doesn't exist in dns_registry |
+| 9 | Orphaned site maps | WARNING | Domain key or referenced subresource host in site_maps that doesn't exist in dns_registry |
+| 10 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
+| 11 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
 
 ## Traffic Profile Integrity
 
 | # | Check | Severity | Description |
 |---|-------|----------|-------------|
-| 11 | Orphaned dns_tags | WARNING | `dns_tags:` value in traffic_profiles that no dns_registry domain uses |
-| 12 | Orphaned persona_traffic keys | WARNING | Persona name in `persona_traffic:` with no matching persona file |
-| 13 | Missing required fields | ERROR | Connection entry without `role`, `port`, or `weight` |
+| 12 | Orphaned dns_tags | WARNING | `dns_tags:` value in traffic_profiles, process_network_map, or tls_realism profiles/overrides that no dns_registry domain uses |
+| 13 | Orphaned persona_traffic keys | WARNING | Persona name in `persona_traffic:` with no matching persona file |
+| 14 | Missing required fields | ERROR | Connection entry without `role`, `port`, or `weight` |
 
 ## Application Catalog Integrity
 
@@ -74,6 +75,9 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 30 | calltrace_patterns.yaml structure | ERROR | Patterns list empty, or pattern missing `modules`/`offset_ranges` fields |
 | 31 | rsat_tools.yaml structure | ERROR | Tool missing required fields (`id`, `snap_in`, `command_line`, `target_ports`, `weight`), invalid weight, or target_ports missing `port`/`service` |
 | 32 | traffic_rates.yaml structure | ERROR | Missing intensity level (low/medium/high), or level missing required traffic type keys (`user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`), or values not `[lo, hi]` positive integer pairs with lo ≤ hi |
+| 33 | process_access_patterns.yaml structure | ERROR | Baseline pair missing source/target PID keys, image paths, or positive weighted hex access masks |
+| 34 | create_remote_thread_patterns.yaml structure | ERROR | Baseline pair missing source/target PID keys, image paths, or positive weight |
+| 35 | smb_file_transfers.yaml structure | ERROR | Missing SMB file-analysis thresholds/probabilities, invalid probability ranges, empty MIME/analyzer lists, invalid filename templates, or non-positive weights |
 
 ## Scenario Validation: traffic_rates
 

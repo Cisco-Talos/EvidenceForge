@@ -18,6 +18,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `bash_commands.yaml` | `bash_commands.py` | Per-role bash command pools (sysadmin, dba, developer, generic) with `{placeholder}` templates. |
 | `system_processes.yaml` | `system_processes.py` | Baseline Windows scheduled tasks and system services (svchost, MpCmdRun, etc.). |
 | `tls_issuers.yaml` | `tls_issuers.py` | Certificate issuer configs (Let's Encrypt, DigiCert, etc.) with validity periods and key types. |
+| `tls_realism.yaml` | `tls_realism.py` | TLS SAN, OCSP, certificate-chain, and destination-profile settings with overlay support. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `engine/emitter_setup.py` | MAC address OUI prefixes (Dell, HP, VMware, etc.) for realistic MAC generation. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
@@ -25,6 +26,9 @@ caches data after first load. Two files (`network_params.yaml`,
 | `application_catalog.yaml` | `application_catalog.py` | Unified app definitions: image paths, PE metadata, command templates, persona filtering, child processes. |
 | `traffic_profiles.yaml` | `traffic_profiles.py` | Role-based and persona-based network traffic profiles. See `docs/design/traffic-profiles-design.md`. |
 | `process_network_map.yaml` | `process_network.py` | Process-to-network service mappings for PID attribution and process-network correlation. |
+| `process_access_patterns.yaml` | `process_access_patterns.py` | Sysmon Event 10 baseline source/target pairs and weighted GrantedAccess masks. |
+| `create_remote_thread_patterns.yaml` | `create_remote_thread_patterns.py` | Sysmon Event 8 benign source/target pairs for baseline CreateRemoteThread noise. |
+| `edr_pools.yaml` | `edr_pools.py` | File, registry, and DLL diversity pools with template placeholders for ambient EDR/Sysmon events. |
 
 ## Adding a New Data File
 

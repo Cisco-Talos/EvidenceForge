@@ -474,6 +474,25 @@ class TestActivityGenerator:
         assert "process_create" in event_types
         assert "logon" not in event_types  # No new logon after reset
 
+    def test_execute_baseline_activity_process_ignores_future_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A process should not reuse a session whose logon is later than the process."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        future_logon_time = datetime(2024, 1, 15, 10, 55, 0, tzinfo=UTC)
+        state_manager.set_current_time(future_logon_time)
+        activity_gen.generate_logon(test_user, test_system, future_logon_time)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.execute_baseline_activity(test_user, test_system, process_time, "process_code")
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert len(sessions) == 2
+        emitter = mock_emitters["windows_event_security"]
+        event_types = [c[0][0].event_type for c in emitter.emit.call_args_list]
+        assert "logon" in event_types
+        assert "process_create" in event_types
+
     def test_execute_baseline_activity_connection_web(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

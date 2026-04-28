@@ -210,6 +210,11 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
+        workstation_name = (
+            event.src_host.hostname
+            if auth.logon_type in (3, 10) and event.src_host is not None
+            else host.hostname
+        )
 
         event_data = {
             "EventID": 4624,
@@ -228,7 +233,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
             "TargetLogonId": auth.logon_id,
             "LogonType": auth.logon_type,
-            "WorkstationName": host.hostname,
+            "WorkstationName": workstation_name,
             "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x2e0",
             "ProcessName": r"C:\Windows\System32\lsass.exe",
             "IpAddress": self._ipv6_mapped(auth.source_ip),

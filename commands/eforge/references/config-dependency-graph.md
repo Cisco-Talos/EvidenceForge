@@ -29,6 +29,7 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | **depended on by** | `traffic_profiles.yaml` | `dns_tags:` field selects domains by tag |
+| **depended on by** | `process_network_map.yaml` | `dns_tags:` field constrains app-specific destinations |
 | **depended on by** | `proxy_uri_templates.yaml` | `domains:` section keys must match dns_registry domains |
 | **depended on by** | `site_maps.yaml` | `domains:` section keys must match dns_registry domains |
 | **depended on by** | Engine (runtime) | Builds FORWARD_DNS, REVERSE_DNS, and tag-based lookup tables |
@@ -53,6 +54,12 @@ Each row is a file; columns show what it depends on and what depends on it.
 |-----------|------|-------------|
 | depends on | `dns_registry.yaml` | Domain keys should exist in dns_registry |
 | **depended on by** | Engine (runtime) | Provides realistic URI paths for proxy log generation |
+
+### proxy_user_agents.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | `dns_registry.yaml` | Package-manager and domain-override hostnames should exist in dns_registry when used as generated destinations |
+| **depended on by** | Engine (runtime) | Selects workstation/server and domain-specific proxy User-Agent values for proxy log generation |
 
 ### site_maps.yaml
 | Direction | File | Relationship |
@@ -79,6 +86,7 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | `application_catalog.yaml` | Exe basenames should match catalog entries |
+| depends on | `dns_registry.yaml` | `dns_tags:` values must match domain tags |
 | **depended on by** | Engine (runtime) | Correlates process events with network connections |
 
 ### personas/*.yaml
@@ -118,14 +126,26 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | nothing | Standalone MAC OUI data |
-| **depended on by** | Engine (runtime) | Generates realistic MAC addresses |
+| depends on | nothing | Standalone MAC OUI and public NTP server data |
+| **depended on by** | Engine (runtime) | Generates realistic MAC addresses and fallback public NTP server metadata |
 
 ### tls_issuers.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | nothing | Standalone certificate authority data |
 | **depended on by** | Engine (runtime) | Drives Zeek x509/SSL certificate generation |
+
+### tls_realism.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates match issuer names/patterns selected from issuer config; OCSP responder hosts must exist in dns_registry; destination profiles can pull domains by DNS tag |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+
+### smb_file_transfers.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone SMB file-analysis tuning |
+| **depended on by** | Engine (runtime) | Controls when SMB connections generate Zeek files.log rows and their filename/MIME/analyzer mix |
 
 ### sysmon_filters.yaml
 | Direction | File | Relationship |
@@ -144,6 +164,18 @@ Each row is a file; columns show what it depends on and what depends on it.
 |-----------|------|-------------|
 | depends on | nothing | Standalone call chain template definitions |
 | **depended on by** | Engine (runtime) | Drives Sysmon Event 10 CallTrace field generation |
+
+### process_access_patterns.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone source/target process pairs and access-mask weights |
+| **depended on by** | Engine (runtime) | Drives Sysmon Event 10 baseline ProcessAccess pairs and GrantedAccess diversity |
+
+### create_remote_thread_patterns.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone source/target process pairs and weights |
+| **depended on by** | Engine (runtime) | Drives Sysmon Event 8 baseline CreateRemoteThread pairs |
 
 ### formats/*.yaml
 | Direction | File | Relationship |
@@ -231,6 +263,20 @@ Use these checklists when performing each type of edit. Items marked with **[aut
 2. Verify all child exe basenames exist in `application_catalog.yaml` or `system_processes.yaml`
 3. Verify parent command_templates use correct fully-qualified paths
 
+### Modify ProcessAccess Patterns
+
+1. Edit `process_access_patterns.yaml`
+2. Verify each `source_pid_key` and `target_pid_key` refers to a seeded Windows system process
+3. Verify every `access_masks:` entry has a hex `mask` and positive `weight`
+4. Edit `calltrace_patterns.yaml` separately if changing the Event 10 CallTrace shape
+
+### Modify CreateRemoteThread Patterns
+
+1. Edit `create_remote_thread_patterns.yaml`
+2. Verify each `source_pid_key` and `target_pid_key` refers to a seeded Windows system process
+3. Verify each `weight` is positive
+4. Edit Sysmon Event 8 rendering logic only if changing StartModule/StartFunction selection semantics
+
 ### Modify Format Definitions
 
 1. Edit `formats/{name}.yaml`
@@ -249,7 +295,8 @@ Use these checklists when performing each type of edit. Items marked with **[aut
 ## Tag and Name Registries
 
 ### Valid DNS Tags
-These are the tags used in `dns_registry.yaml` and referenced by `dns_tags:` in `traffic_profiles.yaml`:
+These are the tags used in `dns_registry.yaml` and referenced by `dns_tags:` in
+`traffic_profiles.yaml` and `process_network_map.yaml`:
 
 | Tag | Meaning | Example Domains |
 |-----|---------|----------------|
@@ -305,5 +352,5 @@ These are situations where a missing cross-reference doesn't crash the engine bu
 | App processes with wrong image paths | Exe in spawn_rules but not in application_catalog | Grep spawn_rules children against application_catalog ids |
 | Persona never spawns expected apps | Persona name missing from application_catalog `personas:` lists | Grep persona filename against application_catalog personas fields |
 | Persona traffic falls back to generic [background] | No dns_tags on traffic_profiles entry, or dns_tags point to unused tags | Check dns_tags values against dns_registry tag usage |
-| Missing process-network correlation | App generates traffic but has no process_network_map entry | Check network-capable apps against process_network_map keys |
+| Missing process-network correlation | App generates traffic but has no process_network_map entry | Check network-capable apps against process_network_map keys and `dns_tags` |
 | Stale proxy templates for removed domains | Domain removed from dns_registry but template remains | Grep proxy_uri_templates keys against dns_registry domains |

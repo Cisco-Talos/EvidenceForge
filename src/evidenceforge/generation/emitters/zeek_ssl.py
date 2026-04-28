@@ -26,6 +26,7 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekSslEmitter(SensorMultiplexEmitter):
@@ -49,8 +50,9 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
         ssl = event.ssl
+        analyzer_delay_ms = 5 + (_stable_seed(f"zeek_ssl_ts:{net.zeek_uid}") % 76)
         event_data: dict[str, Any] = {
-            "ts": event.timestamp,
+            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
             "uid": net.zeek_uid,
             "id.orig_h": net.src_ip,
             "id.orig_p": net.src_port,
@@ -62,6 +64,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "resumed": ssl.resumed,
             "established": ssl.established,
             "ssl_history": ssl.ssl_history or None,
+            "cert_chain_fuids": ssl.cert_chain_fuids or None,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:
@@ -76,6 +79,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
             "resumed",
             "established",
             "ssl_history",
+            "cert_chain_fuids",
         ]
         for f in optional_fields:
             if f not in event_data:

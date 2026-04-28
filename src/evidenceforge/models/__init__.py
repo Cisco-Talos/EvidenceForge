@@ -47,6 +47,7 @@ from .scenario import (
     NetworkSensor,
     OutputSpec,
     Persona,
+    ProxyConfig,
     RedHerringEvent,
     Scenario,
     StaleAccount,
@@ -85,6 +86,7 @@ __all__ = [
     "NetworkSegment",
     "NetworkSensor",
     "NetworkConfig",
+    "ProxyConfig",
     # State models
     "GeneratorState",
     "ActiveSession",

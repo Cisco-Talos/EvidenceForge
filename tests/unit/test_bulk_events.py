@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.generation.engine.storyline import _iter_periodic_ticks
+from evidenceforge.generation.engine.storyline import _effective_rate_interval, _iter_periodic_ticks
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
     CredentialSprayEventSpec,
@@ -280,6 +280,26 @@ class TestIterPeriodicTicks:
         # duration=30s, interval=60s → only tick at t=0 (0 <= 30)
         ticks = list(_iter_periodic_ticks(start, 60.0, 30.0, None, 0.0, rng))
         assert len(ticks) == 1
+
+
+class TestEffectiveRateInterval:
+    def test_count_based_rate_stays_exact(self):
+        rng = random.Random(42)
+        interval = _effective_rate_interval(10.0, 100, rng)
+        assert interval == 0.1
+
+    def test_duration_based_rate_gets_campaign_drift(self):
+        rng = random.Random(42)
+        interval = _effective_rate_interval(10.0, None, rng)
+        assert interval != 0.1
+        assert (1.0 / interval) >= 8.2
+        assert (1.0 / interval) <= 11.8
+
+    def test_duration_based_rate_drift_varies_by_campaign(self):
+        intervals = {
+            _effective_rate_interval(10.0, None, random.Random(seed)) for seed in range(10)
+        }
+        assert len(intervals) > 1
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────

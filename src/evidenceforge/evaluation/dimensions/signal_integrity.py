@@ -136,6 +136,12 @@ class SignalIntegrityScorer(DimensionScorer):
 
         # Step 1: Resolve storyline to absolute timeline
         resolved = self._resolve_storyline(storyline, scenario)
+        self._proxy_mode = scenario.environment.proxy.mode
+        self._proxy_ips = {
+            system.ip
+            for system in scenario.environment.systems
+            if "forward_proxy" in (system.roles or [])
+        }
 
         # Step 2: Find traces for each event
         self._find_traces(resolved, records)
@@ -294,6 +300,8 @@ class SignalIntegrityScorer(DimensionScorer):
                     if val and isinstance(val, str):
                         hostname = val
                         break
+                if hostname is None and rec.source_host:
+                    hostname = rec.source_host
                 # For zeek/snort, index by originator IP too
                 ts = rec.timestamp
                 if ts.tzinfo is None:
@@ -304,6 +312,9 @@ class SignalIntegrityScorer(DimensionScorer):
                 orig_ip = rec.fields.get("id.orig_h")
                 if orig_ip:
                     host_time_index[f"{orig_ip}|{bucket}"][format_name].append(rec)
+                resp_ip = rec.fields.get("id.resp_h")
+                if resp_ip and resp_ip != orig_ip:
+                    host_time_index[f"{resp_ip}|{bucket}"][format_name].append(rec)
                 # cisco_asa: index by src_ip and dst_ip from parsed message body
                 asa_src = rec.fields.get("src_ip")
                 if asa_src:
@@ -590,10 +601,17 @@ class SignalIntegrityScorer(DimensionScorer):
         elif event_type == "web_scan":
             expected_dst = event.details.get("dst_ip", "")
             expected_port = event.details.get("dst_port")
-            if format_name in ("web_access", "zeek_http"):
-                return f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+            expected_src = event.details.get("source_ip")
+            if format_name == "web_access":
+                source_ok = not expected_src or f.get("client_ip") == expected_src
+                return source_ok and self._host_matches(record.source_host, event.system)
+            if format_name == "zeek_http":
+                source_ok = not expected_src or f.get("id.orig_h") == expected_src
+                return source_ok and f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
             if format_name == "zeek_conn":
-                return f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
+                source_ok = not expected_src or f.get("id.orig_h") == expected_src
+                port_ok = expected_port is None or f.get("id.resp_p") == expected_port
+                return source_ok and f.get("id.resp_h") == expected_dst and port_ok
 
         elif event_type == "credential_spray":
             target_accounts = event.details.get("target_accounts", [])
@@ -649,7 +667,19 @@ class SignalIntegrityScorer(DimensionScorer):
         if event.system_ip and orig_h == event.system_ip:
             # If dst_ip specified, check responder
             if "dst_ip" in details:
+                if getattr(self, "_proxy_mode", "transparent") == "explicit" and resp_h in getattr(
+                    self, "_proxy_ips", set()
+                ):
+                    return True
                 return resp_h == details["dst_ip"]
+            return True
+
+        if (
+            getattr(self, "_proxy_mode", "transparent") == "explicit"
+            and orig_h in getattr(self, "_proxy_ips", set())
+            and "dst_ip" in details
+            and resp_h == details["dst_ip"]
+        ):
             return True
 
         # Or check if dst_ip from details matches
@@ -793,7 +823,10 @@ class SignalIntegrityScorer(DimensionScorer):
             ip_fields = ["IpAddress", "id.orig_h", "src_ip"]
             for ipf in ip_fields:
                 if ipf in f and f[ipf] and f[ipf] != "-":
-                    checks.append(("source_ip", f[ipf] == details["source_ip"]))
+                    source_ok = f[ipf] == details["source_ip"]
+                    if not source_ok and self._is_explicit_proxy_egress_trace(f, details):
+                        source_ok = True
+                    checks.append(("source_ip", source_ok))
                     break
 
         # Destination IP (if specified in details)
@@ -801,17 +834,36 @@ class SignalIntegrityScorer(DimensionScorer):
             dst_fields = ["id.resp_h", "dst_ip"]
             for df in dst_fields:
                 if df in f and f[df]:
-                    checks.append(("dst_ip", f[df] == details["dst_ip"]))
+                    dst_ok = f[df] == details["dst_ip"]
+                    if not dst_ok and self._is_explicit_proxy_client_trace(f, event):
+                        dst_ok = True
+                    checks.append(("dst_ip", dst_ok))
                     break
 
         return checks
+
+    def _is_explicit_proxy_client_trace(self, fields: dict, event: ResolvedEvent) -> bool:
+        """Return True when a trace is the client→proxy leg for a logical connection."""
+        if getattr(self, "_proxy_mode", "transparent") != "explicit":
+            return False
+        return fields.get("id.orig_h", fields.get("src_ip")) == event.system_ip and fields.get(
+            "id.resp_h", fields.get("dst_ip")
+        ) in getattr(self, "_proxy_ips", set())
+
+    def _is_explicit_proxy_egress_trace(self, fields: dict, details: dict[str, Any]) -> bool:
+        """Return True when a trace is the proxy→origin leg for a logical connection."""
+        if getattr(self, "_proxy_mode", "transparent") != "explicit":
+            return False
+        return fields.get("id.orig_h", fields.get("src_ip")) in getattr(
+            self, "_proxy_ips", set()
+        ) and fields.get("id.resp_h", fields.get("dst_ip")) == details.get("dst_ip")
 
     @staticmethod
     def _best_sub_detail(event: ResolvedEvent, fields: dict) -> dict[str, Any]:
         """Pick the sub-event detail dict whose IPs best match the trace record.
 
         For compound storyline steps with multiple connections (e.g., webshell
-        access to 10.10.3.10 AND reverse shell to 198.51.100.30), the merged
+        access to 10.10.3.10 AND reverse shell to 45.83.221.30), the merged
         details dict has last-writer-wins IPs. This selects the sub-event that
         actually matches the trace.
         """

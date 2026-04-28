@@ -52,7 +52,10 @@ network_connect:  # Event 3
     - onedrive.exe
     - teams.exe
     - outlook.exe
-  user_app_sample_rate: 0.05  # 5% of connections logged
+    - chrome.exe
+    - msedge.exe
+    - firefox.exe
+  user_app_sample_rate: 0.08  # 8% of app connections logged
   include_dest_ports:
     - 22     # SSH
     - 25     # SMTP

@@ -1,7 +1,7 @@
 # network_params.yaml — Network parameters for realistic DHCP and MAC address generation.
 #
-# Purpose: Defines OUI prefixes and vendor weights for generating realistic
-#          MAC addresses in DHCP and network logs.
+# Purpose: Defines OUI prefixes and public NTP server defaults for realistic
+#          DHCP, MAC address, and time synchronization evidence.
 #
 # Depended on by: generation engine (MAC address generation)
 # Depends on: nothing — standalone
@@ -30,3 +30,47 @@ oui_prefixes:
   - prefix: "8C:DC:D4"
     vendor: "Intel"
     weight: 5
+
+public_ntp_servers:
+  - name: "time-a-g.nist.gov"
+    ip: "129.6.15.28"
+    operator: "NIST"
+    stratum: 1
+    ref_id: ".NIST."
+    weight: 20
+  - name: "time-b-g.nist.gov"
+    ip: "129.6.15.29"
+    operator: "NIST"
+    stratum: 1
+    ref_id: ".NIST."
+    weight: 15
+  - name: "time.cloudflare.com"
+    ip: "162.159.200.1"
+    operator: "Cloudflare"
+    stratum: 2
+    ref_id: ".GPS."
+    weight: 20
+  - name: "time.google.com"
+    ip: "216.239.35.0"
+    operator: "Google"
+    stratum: 2
+    ref_id: ".GOOG."
+    weight: 15
+  - name: "time.apple.com"
+    ip: "17.253.34.125"
+    operator: "Apple"
+    stratum: 2
+    ref_id: ".PPS."
+    weight: 10
+  - name: "ntp.ubuntu.com"
+    ip: "91.189.89.198"
+    operator: "Canonical"
+    stratum: 2
+    ref_id: ".GPS."
+    weight: 10
+  - name: "pool.ntp.org"
+    ip: "23.186.168.130"
+    operator: "NTP Pool"
+    stratum: 2
+    ref_id: ".PPS."
+    weight: 10

@@ -9,6 +9,7 @@
 #   service: Zeek service label
 #   port: destination port
 #   external: true if the connection targets external IPs, false for internal
+#   dns_tags: optional DNS registry tags that constrain external destinations
 #
 # Depended on by: generation engine (process-network correlation)
 # Depends on: application_catalog.yaml (exe basenames should match catalog entries)
@@ -21,29 +22,46 @@ mappings:
     service: ssl
     port: 443
     external: true
+    dns_tags: [web, saas, cdn, social]
 
   - exe: [firefox.exe, firefox]
     service: ssl
     port: 443
     external: true
+    dns_tags: [web, saas, cdn, social]
 
   # Office/productivity apps → external HTTPS (O365, cloud services)
-  - exe: [OUTLOOK.EXE, Teams.exe, OneDrive.exe]
+  - exe: [OUTLOOK.EXE]
     service: ssl
     port: 443
     external: true
+    dns_tags: [outlook]
+
+  - exe: [Teams.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [teams]
+
+  - exe: [OneDrive.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [onedrive]
 
   # Dev tools → external HTTPS (registries, repos, CI/CD)
   - exe: [Code.exe, git, npm, cargo, docker, kubectl]
     service: ssl
     port: 443
     external: true
+    dns_tags: [dev, git]
 
   # HTTP clients → external HTTPS
   - exe: [curl, wget]
     service: ssl
     port: 443
     external: true
+    dns_tags: [web, cdn]
 
   # Database clients → internal DB
   - exe: [sqlcmd.exe]

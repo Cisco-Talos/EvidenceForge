@@ -36,6 +36,7 @@ import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import parse_duration, parse_iso8601
@@ -132,6 +133,19 @@ def _iter_periodic_ticks(
         yield tick_time
         emitted += 1
         t += interval_sec
+
+
+def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
+    """Return interval for rate-based bulk events.
+
+    Explicit count-based events stay exact. Duration/end-time based events treat
+    rate as an average throughput and apply deterministic per-campaign drift so
+    repeated scans with the same nominal rate do not produce identical counts.
+    """
+    effective_rate = rate
+    if count is None:
+        effective_rate *= rng.uniform(0.82, 1.18)
+    return 1.0 / effective_rate
 
 
 # Realistic decoded PowerShell commands for base64 encoding
@@ -543,6 +557,21 @@ class StorylineMixin:
             "type": spec.type,
         }
 
+        def _ground_truth_uid(uid: str, src_ip: str, dst_ip: str) -> str:
+            if not uid:
+                return "(filtered by sensor placement)"
+            visibility = getattr(self.dispatcher, "visibility_engine", None)
+            if visibility is None:
+                return uid
+            from evidenceforge.events.dispatcher import expand_formats
+            from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+
+            for sensor in visibility.get_observing_sensors(src_ip, dst_ip):
+                if "zeek_conn" in expand_formats(sensor.log_formats):
+                    hostname = sensor.hostname or sensor.name
+                    return SensorMultiplexEmitter._derive_sensor_uid(uid, hostname)
+            return "(filtered by sensor placement)"
+
         if spec.type == "logon":
             _attacker_ips = [
                 "45.33.32.156",
@@ -752,6 +781,15 @@ class StorylineMixin:
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]
             source_ip = spec.source_ip or system.ip
             dst_ip = spec.dst_ip
+            effective_dst_ip = dst_ip
+            if (
+                not _is_private_ip(source_ip)
+                and hasattr(self, "dispatcher")
+                and self.dispatcher.visibility_engine
+            ):
+                effective_dst_ip = self.dispatcher.visibility_engine._real_ip_to_vip.get(
+                    dst_ip, dst_ip
+                )
             dst_port = spec.dst_port
             service = spec.service or (
                 "ssl" if dst_port == 443 else "http" if dst_port == 80 else "ssl"
@@ -760,10 +798,16 @@ class StorylineMixin:
             http_ctx = None
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
+                from evidenceforge.generation.activity.http_content import (
+                    normalize_mime_type_for_path,
+                    response_size_for_mime,
+                )
 
                 # Context-aware response sizing (or author-specified override)
                 _method = spec.method or "GET"
-                _uri = (spec.uri or "/").lower()
+                _uri_raw = spec.uri or "/"
+                _uri = _uri_raw.lower()
+                _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
                 if spec.response_body_len is not None:
                     resp_bytes = spec.response_body_len
                 elif _method == "POST" and any(
@@ -777,14 +821,14 @@ class StorylineMixin:
                 elif _method == "POST":
                     resp_bytes = rng.randint(200, 5000)
                 else:
-                    resp_bytes = rng.randint(5000, 50000)
+                    resp_bytes = response_size_for_mime(rng, _mime_type)
                 from evidenceforge.generation.activity.referrer import pick_referrer
 
                 _http_host = spec.hostname or dst_ip
                 http_ctx = HttpContext(
                     method=_method,
                     host=_http_host,
-                    uri=spec.uri or "/",
+                    uri=_uri_raw,
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
                     request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
@@ -801,7 +845,7 @@ class StorylineMixin:
                     referrer=spec.referrer
                     if spec.referrer is not None
                     else pick_referrer(rng, _http_host, context="general"),
-                    resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                    resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                     tags=[],
                 )
 
@@ -832,7 +876,7 @@ class StorylineMixin:
             s_conn_state = spec.conn_state or "SF"
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
-                dst_ip=dst_ip,
+                dst_ip=effective_dst_ip,
                 time=time,
                 dst_port=dst_port,
                 service=service,
@@ -848,7 +892,7 @@ class StorylineMixin:
             )
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port
-            malicious_event["uid"] = uid if uid else "(filtered by sensor placement)"
+            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, effective_dst_ip)
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
@@ -896,8 +940,15 @@ class StorylineMixin:
                 result = SimpleNamespace(network_uid=uid)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
-            malicious_event["uid"] = (
-                result.network_uid if result.network_uid else "(filtered by sensor placement)"
+            result_source_ip = (
+                result.session.source_ip
+                if getattr(result, "session", None) is not None
+                else spec.source_ip or system.ip
+            )
+            malicious_event["uid"] = _ground_truth_uid(
+                result.network_uid or "",
+                result_source_ip,
+                target.ip,
             )
 
         elif spec.type == "rdp_session":
@@ -932,8 +983,15 @@ class StorylineMixin:
                 result = SimpleNamespace(network_uid=uid)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 3389
-            malicious_event["uid"] = (
-                result.network_uid if result.network_uid else "(filtered by sensor placement)"
+            result_source_ip = (
+                result.session.source_ip
+                if getattr(result, "session", None) is not None
+                else spec.source_ip or system.ip
+            )
+            malicious_event["uid"] = _ground_truth_uid(
+                result.network_uid or "",
+                result_source_ip,
+                target.ip,
             )
 
         elif spec.type == "account_created":
@@ -1225,25 +1283,32 @@ class StorylineMixin:
                 service = service or (
                     "ssl" if spec.dst_port == 443 else "http" if spec.dst_port == 80 else "ssl"
                 )
-                # Build HttpContext if HTTP fields are provided
-                if spec.method or spec.uri:
+                # Build HttpContext if HTTP/proxy-visible request metadata is provided.
+                # HTTPS CONNECT beacons still need this for proxy User-Agent fidelity
+                # even though no origin-side Zeek http.log is emitted for TLS.
+                if spec.method or spec.uri or spec.user_agent:
                     from evidenceforge.events.contexts import HttpContext
+                    from evidenceforge.generation.activity.http_content import (
+                        normalize_mime_type_for_path,
+                        response_size_for_mime,
+                    )
 
                     _method = spec.method or "GET"
-                    _uri = (spec.uri or "/").lower()
+                    _uri_raw = spec.uri or "/"
+                    _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
                     if spec.response_body_len is not None:
                         resp_bytes = spec.response_body_len
                     elif _method == "POST":
                         resp_bytes = rng.randint(200, 2000)
                     else:
-                        resp_bytes = rng.randint(500, 5000)
+                        resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
                     _http_host2 = spec.hostname or spec.dst_ip
                     http_ctx = HttpContext(
                         method=_method,
                         host=_http_host2,
-                        uri=spec.uri or "/",
+                        uri=_uri_raw,
                         version="1.1",
                         user_agent=spec.user_agent or "Mozilla/5.0",
                         request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
@@ -1260,7 +1325,7 @@ class StorylineMixin:
                         referrer=spec.referrer
                         if spec.referrer is not None
                         else pick_referrer(rng, _http_host2, context="general"),
-                        resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                        resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                         tags=[],
                     )
 
@@ -1291,16 +1356,70 @@ class StorylineMixin:
             ):
                 self.state_manager.set_current_time(tick_time)
                 if spec.action == "deny":
-                    self.activity_generator.generate_connection(
-                        src_ip=beacon_src_ip,
-                        dst_ip=spec.dst_ip,
-                        time=tick_time,
-                        dst_port=spec.dst_port,
-                        proto=spec.protocol,
-                        conn_state=deny_conn_state,
-                        firewall=fw_ctx,
-                        emit_dns=False,
+                    proxy_chain = getattr(self.activity_generator, "_proxy_routes", {}).get(
+                        beacon_src_ip
                     )
+                    explicit_proxy = (
+                        getattr(self.activity_generator, "_proxy_mode", "transparent") == "explicit"
+                        and proxy_chain
+                        and spec.protocol == "tcp"
+                        and spec.dst_port in (80, 443)
+                    )
+                    if explicit_proxy:
+                        from evidenceforge.events.contexts import ProxyContext
+
+                        proxy_sys = proxy_chain[0]
+                        beacon_host = spec.hostname or spec.dst_ip
+                        proxy_method = "CONNECT" if spec.dst_port == 443 else (spec.method or "GET")
+                        proxy_url = (
+                            f"{beacon_host}:443"
+                            if proxy_method == "CONNECT"
+                            else f"http://{beacon_host}{spec.uri or '/'}"
+                        )
+                        proxy_ctx = ProxyContext(
+                            client_ip=beacon_src_ip,
+                            method=proxy_method,
+                            url=proxy_url,
+                            host=beacon_host,
+                            status_code=403,
+                            sc_bytes=rng.randint(500, 2000),
+                            cs_bytes=rng.randint(180, 520),
+                            time_taken=rng.randint(20, 1500),
+                            user_agent=spec.user_agent or "Mozilla/5.0",
+                            content_type="text/html",
+                            cache_result="DENIED",
+                            referrer=spec.referrer or "",
+                            proxy_fqdn=self.activity_generator._proxy_fqdn(proxy_sys),
+                        )
+                        self.activity_generator.generate_connection(
+                            src_ip=beacon_src_ip,
+                            dst_ip=spec.dst_ip,
+                            time=tick_time,
+                            dst_port=spec.dst_port,
+                            proto=spec.protocol,
+                            service="ssl" if spec.dst_port == 443 else "http",
+                            duration=rng.uniform(0.05, 2.0),
+                            orig_bytes=s_ob,
+                            resp_bytes=s_rb,
+                            conn_state="SF",
+                            emit_dns=emit_dns and attempt_count == 0,
+                            source_system=src_sys,
+                            http=http_ctx,
+                            proxy=proxy_ctx,
+                            hostname=conn_hostname if conn_hostname is not None else spec.hostname,
+                            pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                        )
+                    else:
+                        self.activity_generator.generate_connection(
+                            src_ip=beacon_src_ip,
+                            dst_ip=spec.dst_ip,
+                            time=tick_time,
+                            dst_port=spec.dst_port,
+                            proto=spec.protocol,
+                            conn_state=deny_conn_state,
+                            firewall=fw_ctx,
+                            emit_dns=False,
+                        )
                 else:
                     # Allow DNS only on the first tick; cache handles the rest
                     self.activity_generator.generate_connection(
@@ -1421,7 +1540,6 @@ class StorylineMixin:
 
             # Timing: rate-based → convert to interval
             start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
-            interval_sec = 1.0 / spec.rate
             duration_sec = None
             count = spec.count
             if spec.duration is not None:
@@ -1429,10 +1547,20 @@ class StorylineMixin:
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
+            interval_sec = _effective_rate_interval(spec.rate, count, rng)
 
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip
             service = "http" if spec.dst_port == 80 else "ssl"
+            scan_dst_ip = spec.dst_ip
+            if (
+                not _is_private_ip(scan_src_ip)
+                and hasattr(self, "dispatcher")
+                and self.dispatcher.visibility_engine
+            ):
+                scan_dst_ip = self.dispatcher.visibility_engine._real_ip_to_vip.get(
+                    spec.dst_ip, spec.dst_ip
+                )
 
             # Resolve source system
             src_sys = None
@@ -1466,6 +1594,12 @@ class StorylineMixin:
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")
                 _status = path_entry.get("status", 404)
+                from evidenceforge.generation.activity.http_content import (
+                    normalize_mime_type_for_path,
+                    response_size_for_mime,
+                )
+
+                _mime_type = normalize_mime_type_for_path(_uri, "text/html")
                 _scan_referrer = pick_scan_referrer(
                     rng, scan_host, _send_referrer_config, port=spec.dst_port
                 )
@@ -1477,7 +1611,7 @@ class StorylineMixin:
                     version="1.1",
                     user_agent=render_ua(scan_ua, rng),
                     request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
-                    response_body_len=rng.randint(200, 5000),
+                    response_body_len=response_size_for_mime(rng, _mime_type),
                     status_code=_status,
                     status_msg={
                         200: "OK",
@@ -1489,7 +1623,7 @@ class StorylineMixin:
                         500: "Internal Server Error",
                     }.get(_status, "OK"),
                     referrer=_scan_referrer,
-                    resp_mime_types=["text/html"] if _status == 200 else [],
+                    resp_mime_types=[_mime_type] if _status == 200 else [],
                     tags=[],
                 )
 
@@ -1537,7 +1671,7 @@ class StorylineMixin:
 
                 self.activity_generator.generate_connection(
                     src_ip=scan_src_ip,
-                    dst_ip=spec.dst_ip,
+                    dst_ip=scan_dst_ip,
                     time=tick_time,
                     dst_port=spec.dst_port,
                     service=service,

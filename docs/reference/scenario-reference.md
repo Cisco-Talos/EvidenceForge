@@ -96,6 +96,21 @@ systems:
 
 `roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
 
+### Proxy Deployment
+
+```yaml
+proxy:
+  mode: transparent              # Optional: transparent|explicit (default: transparent)
+  listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
+```
+
+`environment.proxy` controls how systems with `roles: [forward_proxy]` appear in network evidence:
+
+- `transparent` preserves direct-looking client-to-origin Zeek/IDS traffic while still generating proxy access logs.
+- `explicit` models PAC/browser-configured proxy behavior by replacing the logical client-to-origin connection with two concrete legs: client-to-proxy on `listener_port`, then proxy-to-origin on the destination port. Sensor placement determines which leg each Zeek/IDS/firewall source sees. Denied proxy requests stop at the proxy and do not emit a proxy-to-origin leg.
+
+If `proxy_access` is requested and `environment.proxy` is omitted, validation warns and defaults to `transparent`. If `mode: explicit` is set without `listener_port`, validation warns and defaults to `8080`.
+
 ### System Roles
 
 The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
@@ -103,7 +118,7 @@ The `roles` field declares a system's function in the network. The engine uses r
 - `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users
 - `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
 - `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
-- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations
+- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations. File-server roles also increase baseline SMB target selection beyond normal DC SYSVOL/GPO traffic.
 - `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
 - `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
 - `dns_server` — DNS resolution target
@@ -141,9 +156,11 @@ network:
       hostname: zeek01          # Output directory name (falls back to name)
       monitoring_segments: [corporate_lan, server_vlan]
       direction: bidirectional  # bidirectional | inbound | outbound
-      placement: span           # span (sees intra-segment) | tap (cross-segment only)
+      placement: span           # span mirrors segment traffic | tap observes uplink/boundary traffic
       log_formats: [zeek]       # Format groups or individual formats
 ```
+
+`span` sensors can see traffic where either endpoint belongs to a monitored segment, including same-segment traffic. `tap` sensors do not see same-segment traffic. When a TAP monitors multiple internal segments, internal cross-segment traffic is visible only if both endpoint segments are monitored; external/boundary traffic remains visible when either side is monitored.
 
 #### Firewall Sensors
 
@@ -167,10 +184,10 @@ Firewall sensors produce Cisco ASA syslog records for permitted and denied conne
       nat_rules:
         - type: dynamic_pat
           src: [workstations, servers]
-          mapped_ip: 198.51.100.1
+          mapped_ip: 45.83.220.1
         - type: static
           real_ip: 172.16.0.5
-          mapped_ip: 203.0.113.5
+          mapped_ip: 45.83.220.5
       policy:                   # Ordered rules — first match wins
         - {src: external, dst: dmz, ports: [80, 443]}
         - {src: workstations, dst: any}
@@ -189,12 +206,12 @@ The `public_cidrs` field on `NetworkConfig` declares the org's public IP address
 
 ```yaml
 network:
-  public_cidrs: ["203.0.113.0/28"]  # Optional — auto-derived from VIPs if omitted
+  public_cidrs: ["45.83.220.0/28"]  # Optional — auto-derived from VIPs if omitted
   segments: [...]
   sensors: [...]
 ```
 
-**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `203.0.113.10` and `203.0.113.14` produce `["203.0.113.0/24"]`.
+**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `45.83.220.10` and `45.83.220.14` produce `["45.83.220.0/24"]`.
 
 **Inbound traffic flow:** External clients connect to VIPs (public IPs). The NAT engine translates to real (internal) IPs per sensor — outside Zeek sees VIPs, inside Zeek sees real IPs, ASA shows both in Built/Teardown records.
 - Rules are evaluated in order; first match wins (like real ACLs)
@@ -358,6 +375,11 @@ Events generated during warm-up update state but are **not** written to output f
 the first minutes of output look like a running system rather than a cold start. Minimum 1 hour;
 default 8 hours covers a full day/night transition for maximum realism.
 
+All `storyline` and `red_herrings` times should fall inside the configured `time_window`. For
+example, if the final storyline step is scheduled at `+36h`, set `duration` longer than 36 hours
+so baseline logs, proxy/firewall evidence, and attack traces cover the same collection horizon.
+`eforge validate` warns when a storyline step falls outside the window.
+
 ## Baseline Activity
 
 ```yaml
@@ -495,7 +517,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.
 
-**Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` events tells the engine which domain name the client resolved to reach that IP. Omit `hostname` for raw-IP C2 (no DNS lookup expected). The validator will warn about unmatched domains.
+**Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` and `beacon` events should be the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Avoid reverse-DNS/PTR artifacts or provider-generated infrastructure names unless the scenario intentionally models the client using that name. Omit `hostname` for raw-IP C2 (no DNS lookup expected). For realism-bound generated datasets, avoid using reserved documentation domains (`example.com`, `example.net`, `example.org`) as live public infrastructure; use a scenario-owned lab domain or realistic non-reserved domain when public resolver answers and certificates should appear. The validator will warn about unmatched domains.
 
 **NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
 
@@ -527,7 +549,7 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing — they will only appear on sensors monitoring the client's network segment.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
 
 ### Port Scan Events
 
@@ -564,7 +586,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
   activity: "C2 beacon to attacker infrastructure"
   events:
     - type: beacon
-      dst_ip: "198.51.100.30"
+      dst_ip: "45.83.221.30"
       dst_port: 443
       hostname: "cdn-analytics.example.com"
       interval: "5m"
@@ -580,7 +602,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
   activity: "Blocked C2 beaconing — firewall denies outbound from DC"
   events:
     - type: beacon
-      dst_ip: "198.51.100.30"
+      dst_ip: "45.83.221.30"
       dst_port: 443
       interval: "30m"
       duration: "12h"
@@ -589,7 +611,7 @@ Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) o
       technique: "T1071.001 - Web Protocols"
 ```
 
-Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download).
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
 
 ### DNS Query Events
 
@@ -631,7 +653,7 @@ Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, S
       dst_ip: "10.10.20.10"
       dst_port: 80
       hostname: "portal.example.com"
-      source_ip: "203.0.113.45"
+      source_ip: "104.248.71.33"
       preset: nikto
       rate: 10                        # 10 requests/second
       duration: "15m"
@@ -647,7 +669,7 @@ Fields:
 - `paths` (optional): Custom URI path list — `[{uri: "/admin", method: "GET", status: 403}]`
 - `user_agent` (optional): Override the preset's default user agent
 - `status_codes` (optional): Override status code distribution (e.g., `{"404": 0.7, "200": 0.2, "403": 0.1}`)
-- `rate` (required): Requests per second
+- `rate` (required): Average requests per second. With `duration`/`end_time`, the engine applies deterministic per-campaign throughput drift so repeated scans with the same nominal rate do not produce identical request totals. With explicit `count`, the count remains exact.
 - `duration` / `count` / `end_time`: Termination condition (exactly one required)
 - `jitter` (default: **0.4**): Timing variation — wide variance reflects real-world latency jitter from target server response times
 
@@ -706,7 +728,7 @@ Use `dga_queries` for domain generation algorithm (DGA) traffic — algorithmica
       rcode_distribution:
         NXDOMAIN: 0.95
         NOERROR: 0.05
-      answer_ip: "198.51.100.99"
+      answer_ip: "45.83.221.99"
       technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
 ```
 
@@ -770,7 +792,7 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       dst_ip: "10.10.20.10"
       dst_port: 80
       service: http
-      source_ip: "203.0.113.45"
+      source_ip: "104.248.71.33"
       method: "GET"
       uri: "/ehr/login.php?id=1%27%20OR%201=1--"
       status_code: 200
@@ -915,7 +937,9 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
 #### Format Filtering
 

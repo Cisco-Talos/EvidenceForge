@@ -26,6 +26,7 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekX509Emitter(SensorMultiplexEmitter):
@@ -39,22 +40,29 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
     _flat_filename = "zeek_x509.json"
     _supported_types: set[str] = {"connection"}
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._seen_fingerprints: set[str] = set()
-
     def can_handle(self, event: SecurityEvent) -> bool:
-        return event.event_type in self._supported_types and event.x509 is not None
+        return event.event_type in self._supported_types and (
+            event.x509 is not None or bool(event.x509_chain)
+        )
 
     def emit(self, event: SecurityEvent) -> None:
-        x509 = event.x509
-        # Deduplicate: real Zeek logs each unique cert once
-        if x509.fingerprint in self._seen_fingerprints:
-            return
-        self._seen_fingerprints.add(x509.fingerprint)
+        certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        for x509 in certificates:
+            self._emit_certificate(event, x509)
+
+    def _emit_certificate(self, event: SecurityEvent, x509: Any) -> None:
+        x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
+            self.format_def.name if self.format_def else "zeek_x509", []
+        )
+        ssl_sensor_hostnames = event._sensor_hostnames_by_format.get("zeek_ssl", [])
+        sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
+        targets = sensor_hostnames or self._sensor_hostnames
+        new_targets = targets
+        analyzer_delay_ms = 120 + (_stable_seed(f"zeek_x509_ts:{x509.fuid}") % 531)
 
         event_data: dict[str, Any] = {
-            "ts": event.timestamp,
+            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
+            "id": x509.fuid,
             "fingerprint": x509.fingerprint,
             "certificate.version": x509.certificate_version,
             "certificate.serial": x509.certificate_serial,
@@ -67,13 +75,11 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
             "certificate.key_type": x509.certificate_key_type,
             "certificate.key_length": x509.certificate_key_length,
             "certificate.exponent": x509.certificate_exponent,
-            "san.dns": x509.san_dns,
-            "basic_constraints.ca": x509.basic_constraints_ca,
+            "san_dns": x509.san_dns,
+            "basic_constraints_ca": x509.basic_constraints_ca,
             "host_cert": x509.host_cert,
             "client_cert": x509.client_cert,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(
-                self.format_def.name if self.format_def else "zeek_x509", []
-            ),
+            "_sensor_hostnames": new_targets,
         }
         if event._nat_swaps_by_sensor:
             event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor

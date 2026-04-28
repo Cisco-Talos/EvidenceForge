@@ -22,8 +22,8 @@
 
 """Validate EvidenceForge config files for integrity and cross-references.
 
-Runs 27 checks across all config YAML files (activity, personas, formats,
-evaluation) and reports errors, warnings, and info items.
+Runs integrity checks across all config YAML files (activity, personas,
+formats, evaluation) and reports errors, warnings, and info items.
 """
 
 from dataclasses import dataclass, field
@@ -137,11 +137,20 @@ def validate_config() -> ValidationResult:
         "activity/proxy_uri_templates.yaml": {
             "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
+        "activity/proxy_user_agents.yaml": {
+            "dict_fields": {"domain_overrides", "workstation", "server"},
+        },
         "activity/site_maps.yaml": {
             "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
         "activity/process_network_map.yaml": {
             "list_fields": {"mappings": None},
+        },
+        "activity/process_access_patterns.yaml": {
+            "list_fields": {"baseline_pairs": None},
+        },
+        "activity/create_remote_thread_patterns.yaml": {
+            "list_fields": {"baseline_pairs": None},
         },
         "activity/system_processes.yaml": {
             "dict_fields": {
@@ -162,8 +171,14 @@ def validate_config() -> ValidationResult:
             "list_fields": {"issuers": "name"},
             "dict_fields": {"domain_ca_overrides"},
         },
+        "activity/tls_realism.yaml": {
+            "dict_fields": {"san", "ocsp", "certificate_chains", "destinations"},
+        },
+        "activity/smb_file_transfers.yaml": {
+            "list_fields": {"mime_types": None, "analyzer_sets": None},
+        },
         "activity/network_params.yaml": {
-            "list_fields": {"oui_prefixes": None},
+            "list_fields": {"oui_prefixes": None, "public_ntp_servers": "name"},
         },
         "activity/bash_commands.yaml": {
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
@@ -390,12 +405,20 @@ def validate_config() -> ValidationResult:
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
     from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.generation.activity.create_remote_thread_patterns import (
+        load_create_remote_thread_patterns,
+    )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.process_access_patterns import (
+        load_process_access_patterns,
+    )
     from evidenceforge.generation.activity.process_network import load_process_network_map
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
+    from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
 
     dns_data = load_dns_registry()
@@ -403,9 +426,13 @@ def validate_config() -> ValidationResult:
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
+    process_access_data = load_process_access_patterns()
+    create_remote_thread_data = load_create_remote_thread_patterns()
     proxy_data = load_proxy_uri_templates()
+    proxy_ua_data = load_proxy_user_agents()
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
+    tls_realism_data = load_tls_realism()
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
@@ -477,6 +504,21 @@ def validate_config() -> ValidationResult:
         if isinstance(site_data.get("domains"), dict)
         else set()
     )
+    site_referenced_hosts: set[str] = set()
+    if isinstance(site_data.get("domains"), dict):
+        for site_domain, site_config in site_data.get("domains", {}).items():
+            site_referenced_hosts.add(site_domain)
+            if not isinstance(site_config, dict):
+                continue
+            site_referenced_hosts.update(
+                str(host) for host in site_config.get("cdn_domains", []) if host
+            )
+            for page in site_config.get("pages", []):
+                if not isinstance(page, dict):
+                    continue
+                for subresource in page.get("subresources", []):
+                    if isinstance(subresource, dict) and subresource.get("host"):
+                        site_referenced_hosts.add(str(subresource["host"]))
 
     # Check 7: Orphaned proxy templates
     for domain in proxy_domains - dns_domain_set:
@@ -487,11 +529,46 @@ def validate_config() -> ValidationResult:
                 f'Domain "{domain}" not found in dns_registry',
             )
         )
+    proxy_ua_hosts: set[str] = set()
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        for override in proxy_ua_data.get("domain_overrides", {}).values():
+            if not isinstance(override, dict):
+                continue
+            proxy_ua_hosts.update(str(host) for host in override.get("hosts", []) if host)
+    for domain in proxy_ua_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "proxy_user_agents.yaml",
+                f'Domain override host "{domain}" not found in dns_registry',
+            )
+        )
+    ocsp_responder_hosts: set[str] = set()
+    for responder in tls_realism_data.get("ocsp", {}).get("responders", []):
+        if not isinstance(responder, dict):
+            continue
+        ocsp_responder_hosts.update(str(host) for host in responder.get("domains", []) if host)
+    for domain in ocsp_responder_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "tls_realism.yaml",
+                f'OCSP responder host "{domain}" not found in dns_registry',
+            )
+        )
 
     # Check 8: Orphaned site maps
     for domain in site_domains - dns_domain_set:
         result.issues.append(
             Issue("WARNING", "site_maps.yaml", f'Domain "{domain}" not found in dns_registry')
+        )
+    for domain in site_referenced_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "site_maps.yaml",
+                f'Referenced host "{domain}" not found in dns_registry',
+            )
         )
 
     # Checks 9-10: Missing proxy templates / site maps for web/saas domains
@@ -542,6 +619,41 @@ def validate_config() -> ValidationResult:
                         f'dns_tag "{tag}" not used by any domain in dns_registry',
                     )
                 )
+    for entry in process_net_data:
+        for tag in entry.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "process_network_map.yaml",
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+    tls_destination_profiles = tls_realism_data.get("destinations", {}).get("profiles", [])
+    for profile in tls_destination_profiles:
+        for tag in profile.get("dns_tags", []):
+            if tag not in all_dns_tags:
+                result.issues.append(
+                    Issue(
+                        "WARNING",
+                        "tls_realism.yaml",
+                        f'tls destination profile "{profile.get("name", "")}" references '
+                        f'dns_tag "{tag}" not used by any domain in dns_registry',
+                    )
+                )
+        for override in profile.get("os_overrides", {}).values():
+            if not isinstance(override, dict):
+                continue
+            for tag in override.get("dns_tags", []):
+                if tag not in all_dns_tags:
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            "tls_realism.yaml",
+                            f'tls destination profile "{profile.get("name", "")}" references '
+                            f'override dns_tag "{tag}" not used by any domain in dns_registry',
+                        )
+                    )
 
     # Check 12: Orphaned persona_traffic keys
     persona_names = _get_persona_names(personas_dir)
@@ -768,12 +880,16 @@ def validate_config() -> ValidationResult:
 
     # --- Checks 28-30: Defined But Unreachable ---
 
-    # Collect all dns_tags referenced by traffic profiles
+    # Collect all dns_tags referenced by generation config. Traffic profiles
+    # drive role/persona baseline traffic; process_network_map drives
+    # process-correlated external app traffic (for example Teams→M365).
     all_traffic_dns_tags: set[str] = set()
     for entry in all_traffic_entries:
         all_traffic_dns_tags.update(entry.get("dns_tags", []))
+    for entry in process_net_data:
+        all_traffic_dns_tags.update(entry.get("dns_tags", []))
 
-    # Check 28: DNS tags on domains that no traffic profile references
+    # Check 28: DNS tags on domains that no generation config references
     # Tags that reach domains through other mechanisms (not dns_tags):
     #   cdn — loaded as subresources via site_maps
     #   internal — reached via role-based connections (database, file_server, etc.)
@@ -788,7 +904,7 @@ def validate_config() -> ValidationResult:
                     Issue(
                         "INFO",
                         "dns_registry.yaml",
-                        f'Tag "{tag}" used by {count} domain(s) (e.g., "{example}") but no traffic profile references it via dns_tags — these domains will never receive traffic',
+                        f'Tag "{tag}" used by {count} domain(s) (e.g., "{example}") but no generation config references it via dns_tags — these domains will never receive traffic',
                     )
                 )
 
@@ -900,17 +1016,23 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         ConnectionEntry,
+        CreateRemoteThreadPatternEntry,
         DnsEntry,
         OuiEntry,
         PersonaEntry,
+        ProcessAccessPatternEntry,
         ProcessNetworkEntry,
+        ProxyUserAgentOverrideEntry,
+        PublicNtpServerEntry,
         ScheduledTaskEntry,
+        SmbFileTransferConfig,
         SpawnRuleEntry,
         SyslogProgramEntry,
         SystemBinaryEntry,
         SystemdScheduleEntry,
         SystemServiceEntry,
         TlsIssuerEntry,
+        TlsRealismConfig,
         validate_entry,
     )
 
@@ -952,6 +1074,20 @@ def validate_config() -> ValidationResult:
     if isinstance(process_net_data, list):
         _SCHEMA_CHECKS.append((process_net_data, ProcessNetworkEntry, "process_network_map.yaml"))
 
+    # process_access_patterns.yaml
+    if isinstance(process_access_data, list):
+        _SCHEMA_CHECKS.append(
+            (process_access_data, ProcessAccessPatternEntry, "process_access_patterns.yaml")
+        )
+    if isinstance(create_remote_thread_data, list):
+        _SCHEMA_CHECKS.append(
+            (
+                create_remote_thread_data,
+                CreateRemoteThreadPatternEntry,
+                "create_remote_thread_patterns.yaml",
+            )
+        )
+
     # traffic_profiles.yaml: connection entries
     all_traffic_connection_entries = []
     for _rn, role_data in traffic_data.get("role_traffic", {}).items():
@@ -983,6 +1119,22 @@ def validate_config() -> ValidationResult:
     if tls_data:
         _SCHEMA_CHECKS.append((tls_data.get("issuers", []), TlsIssuerEntry, "tls_issuers.yaml"))
 
+    # tls_realism.yaml
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
+
+    tls_realism_data = load_tls_realism()
+    if tls_realism_data:
+        _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
+
+    # smb_file_transfers.yaml
+    from evidenceforge.generation.activity.smb_file_transfers import load_smb_file_transfers
+
+    smb_file_transfer_data = load_smb_file_transfers()
+    if smb_file_transfer_data:
+        _SCHEMA_CHECKS.append(
+            ([smb_file_transfer_data], SmbFileTransferConfig, "smb_file_transfers.yaml")
+        )
+
     # extra_syslog_messages.yaml
     from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
 
@@ -998,16 +1150,27 @@ def validate_config() -> ValidationResult:
         _SCHEMA_CHECKS.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
 
     # network_params.yaml
-    from evidenceforge.generation.engine.emitter_setup import _merge_network_params
+    from evidenceforge.generation.activity.network_params import load_network_params
 
-    net_params_path = get_activity_directory() / "network_params.yaml"
-    from evidenceforge.config.overlay import load_with_overlay
-
-    net_params = load_with_overlay(
-        net_params_path, "activity/network_params.yaml", _merge_network_params
-    )
+    net_params = load_network_params()
     if net_params:
         _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
+        _SCHEMA_CHECKS.append(
+            (
+                net_params.get("public_ntp_servers", []),
+                PublicNtpServerEntry,
+                "network_params.yaml (public_ntp_servers)",
+            )
+        )
+
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        _SCHEMA_CHECKS.append(
+            (
+                list(proxy_ua_data.get("domain_overrides", {}).values()),
+                ProxyUserAgentOverrideEntry,
+                "proxy_user_agents.yaml (domain_overrides)",
+            )
+        )
 
     # Run all schema validations
     for entries, schema, file_name in _SCHEMA_CHECKS:

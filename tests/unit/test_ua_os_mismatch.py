@@ -5,6 +5,8 @@
 
 import random
 
+import yaml
+
 
 class TestProxyUriOsFiltering:
     """Verify pick_proxy_uri() respects source_os for UA overrides."""
@@ -57,3 +59,123 @@ class TestProxyUriOsFiltering:
         rng = random.Random(42)
         _, _, _, ua_override = pick_proxy_uri(rng, "crl.microsoft.com", [], source_os="linux")
         assert ua_override is None
+
+    def test_overlay_path_extension_overrides_bad_content_type(self, tmp_path, monkeypatch):
+        """Overlay-defined paths should still get extension-coherent MIME types."""
+        from evidenceforge.generation.activity.proxy_uri import (
+            pick_proxy_uri,
+            reset_proxy_uri_templates_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "proxy_uri_templates.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "domains": {
+                        "updates.example.test": {
+                            "paths": ["/status.gif"],
+                            "content_type": "text/html",
+                            "methods": ["GET"],
+                        }
+                    }
+                },
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_proxy_uri_templates_cache()
+
+        try:
+            path, content_type, method, _ = pick_proxy_uri(
+                random.Random(42),
+                "updates.example.test",
+                [],
+                source_os="windows",
+            )
+        finally:
+            reset_proxy_uri_templates_cache()
+
+        assert path == "/status.gif"
+        assert method == "GET"
+        assert content_type == "image/gif"
+
+    def test_connect_user_agent_uses_domain_override(self):
+        """CONNECT proxy entries should still use destination-specific service UAs."""
+        from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+        from evidenceforge.models.scenario import System
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+        )
+
+        ua = pick_proxy_user_agent(
+            random.Random(42),
+            source,
+            hostname="ctldl.windowsupdate.com",
+        )
+
+        assert ua == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+
+    def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
+        """Domain-specific proxy UA rules should override inherited browser session UAs."""
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.10.20.5",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        generator = ActivityGenerator(StateManager(), {})
+
+        context = generator._build_proxy_context(
+            src_ip=source.ip,
+            dst_ip="13.107.4.50",
+            dst_port=80,
+            service="http",
+            duration=0.2,
+            orig_bytes=400,
+            resp_bytes=2048,
+            hostname="ctldl.windowsupdate.com",
+            source_system=source,
+            proxy_sys=proxy,
+            http=HttpContext(
+                method="GET",
+                uri="/msdownload/update/v3/static/trustedr/en/authrootstl.cab",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+            ),
+        )
+
+        assert context.user_agent == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+
+
+class TestProxyUriTemplateSubstitution:
+    """Verify proxy URI templates don't leak unresolved placeholders."""
+
+    def test_slug_placeholder_is_materialized(self):
+        """The generic /{slug}/ template should render as a concrete path."""
+        from evidenceforge.generation.activity.proxy_uri import _substitute_vars
+
+        rng = random.Random(42)
+        uri = _substitute_vars(rng, "/{slug}/{slug}/{unknown}/", {})
+
+        assert "{" not in uri
+        assert "}" not in uri
+        assert uri.endswith("/item/")

@@ -71,6 +71,14 @@ class TestWindowsEventFormat:
         assert "Channel" in field_names
         assert "Level" in field_names
 
+    def test_allowed_event_ids_include_workstation_lock_unlock(self):
+        """Test workstation lock/unlock IDs are valid base EventIDs."""
+        event_id_field = next(field for field in self.format.fields if field.name == "EventID")
+        assert event_id_field.constraints is not None
+        assert event_id_field.constraints.allowed_values is not None
+        assert 4800 in event_id_field.constraints.allowed_values
+        assert 4801 in event_id_field.constraints.allowed_values
+
     def test_output_is_xml(self):
         """Test that output format is XML."""
         assert self.format.output.format == "xml"

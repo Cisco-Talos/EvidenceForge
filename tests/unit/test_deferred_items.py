@@ -4,8 +4,14 @@
 """Tests for deferred items: server-admin profiles, catalog gaps, public hostnames."""
 
 from datetime import datetime
+from random import Random
+from types import SimpleNamespace
 
-from evidenceforge.generation.activity.process_network import get_service_to_exes
+from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.activity.process_network import (
+    get_exe_to_service,
+    get_service_to_exes,
+)
 from evidenceforge.generation.activity.traffic_profiles import get_persona_connections
 from evidenceforge.models.scenario import System
 
@@ -71,6 +77,68 @@ class TestCatalogGapsFilled:
         exes = mapping["ldap"]
         assert "dsquery.exe" in exes
         assert "ldapsearch" in exes
+
+    def test_office_apps_have_constrained_dns_tags(self):
+        mapping = get_exe_to_service()
+
+        assert mapping["OUTLOOK.EXE"]["dns_tags"] == ["outlook"]
+        assert mapping["Teams.exe"]["dns_tags"] == ["teams"]
+        assert mapping["OneDrive.exe"]["dns_tags"] == ["onedrive"]
+
+    def test_process_network_correlation_uses_app_dns_tags(self):
+        """Office app process connections should target matching SaaS endpoints."""
+        allowed_by_exe = {
+            "OUTLOOK.EXE": {
+                "outlook.office365.com",
+                "smtp.office365.com",
+                "protection.outlook.com",
+                "outlook.office.com",
+                "mail.protection.outlook.com",
+                "mx.office365.com",
+                "login.microsoftonline.com",
+                "graph.microsoft.com",
+            },
+            "Teams.exe": {
+                "teams.microsoft.com",
+                "login.microsoftonline.com",
+                "graph.microsoft.com",
+            },
+            "OneDrive.exe": {
+                "sharepoint.com",
+                "onedrive.live.com",
+                "cdn.onenote.net",
+                "onenote.officeapps.live.com",
+                "graph.microsoft.com",
+                "login.live.com",
+                "login.microsoftonline.com",
+            },
+        }
+
+        for exe, allowed_domains in allowed_by_exe.items():
+            captured: list[dict] = []
+
+            def capture_connection(_captured=captured, **kwargs):
+                _captured.append(kwargs)
+
+            fake_generator = SimpleNamespace(generate_connection=capture_connection)
+            method = ActivityGenerator._emit_process_network_correlation.__get__(
+                fake_generator, ActivityGenerator
+            )
+            system = SimpleNamespace(ip="192.168.2.10", hostname="wkstn01", os="Windows 11")
+
+            method(
+                system=system,
+                process_name=rf"C:\Program Files\Test\{exe}",
+                command_line=exe,
+                time=datetime(2024, 7, 15, 12, 0, 0),
+                pid=4242,
+                rng=Random(1),
+            )
+
+            assert captured, f"Expected {exe} to emit a correlated connection"
+            assert captured[0]["hostname"] in allowed_domains
+            assert captured[0]["emit_dns"] is True
+            assert captured[0]["pid"] == 4242
 
     def test_data_analyst_allowed_for_sqlcmd(self):
         from evidenceforge.generation.activity.application_catalog import is_persona_allowed

@@ -26,7 +26,7 @@ Verifies that baseline and storyline connections carry realistic
 initiating process PIDs in eCAR FLOW records.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -149,6 +149,66 @@ class TestConnectionPidPropagation:
         event = self._find_connection_event(mock_emitters)
         assert event is not None
         assert event.network.initiating_pid == -1
+
+    def test_inferred_dns_pid_from_source_ip(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """DNS connections inferred from an internal source IP should use resolver PID."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "NETWORK SERVICE",
+            "System",
+        )
+        activity_gen._ip_to_system = {"10.0.10.1": win_system}
+        activity_gen._system_pids = {"WKS-01": {"svchost_netsvcs": pid}}
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == pid
+        assert event.edr is not None
+        assert event.edr.actor_id == state_manager.get_process_object_id("WKS-01", pid)
+
+    def test_connection_timestamp_not_before_process_start(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """A FLOW attributed to a process should not predate that process."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe"',
+            "jdoe",
+            "Medium",
+        )
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp - timedelta(milliseconds=100),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            source_system=win_system,
+            pid=pid,
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.timestamp > timestamp
 
     def test_connection_with_pid_gets_edr_actor_id(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters

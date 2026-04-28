@@ -121,6 +121,7 @@ class NetworkContext:
     ip_proto: int = 6  # TCP=6, UDP=17, ICMP=1
     missed_bytes: int = 0
     initiating_pid: int = -1  # PID of process that opened this connection (-1 = unknown)
+    link_local: bool = False  # True for same-broadcast-domain traffic such as DHCP
 
 
 @dataclass(slots=True)
@@ -302,6 +303,7 @@ class SslContext:
     resumed: bool = False
     established: bool = True
     ssl_history: str = ""  # e.g., "CsiI"
+    cert_chain_fuids: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -335,6 +337,7 @@ class FileTransferContext:
     fuid: str = ""  # F-prefix Zeek file UID
     source: str = ""  # "HTTP", "SSL", "SMTP"
     depth: int = 0
+    filename: str = ""
     analyzers: list[str] = field(default_factory=list)
     mime_type: str = ""
     duration: float = 0.0
@@ -345,12 +348,16 @@ class FileTransferContext:
     missing_bytes: int = 0
     overflow_bytes: int = 0
     timedout: bool = False
+    md5: str = ""
+    sha1: str = ""
+    sha256: str = ""
 
 
 @dataclass(slots=True)
 class X509Context:
     """X.509 certificate details for Zeek x509.log."""
 
+    fuid: str = ""  # Zeek file UID referenced by ssl.cert_chain_fuids
     fingerprint: str = ""  # SHA256 hex
     certificate_version: int = 3
     certificate_serial: str = ""
@@ -450,6 +457,7 @@ class ProxyContext:
     url: str = ""  # Full destination URL or host:port for CONNECT
     host: str = ""  # Destination hostname
     status_code: int = 200
+    tunnel_status_code: int | None = None
     sc_bytes: int = 0  # Server→client bytes
     cs_bytes: int = 0  # Client→server bytes
     time_taken: int = 0  # Request duration in ms

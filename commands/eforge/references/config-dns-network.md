@@ -14,6 +14,8 @@ Schema documentation for the network-related config files. User customizations g
 4. [site_maps.yaml](#site_mapsyaml)
 5. [network_params.yaml](#network_paramsyaml)
 6. [tls_issuers.yaml](#tls_issuersyaml)
+7. [tls_realism.yaml](#tls_realismyaml)
+8. [smb_file_transfers.yaml](#smb_file_transfersyaml)
 
 ---
 
@@ -234,6 +236,46 @@ When the skill auto-generates a proxy_uri_templates entry for a new domain, use 
 
 ---
 
+## proxy_user_agents.yaml
+
+Proxy User-Agent pools for `proxy_access.log` generation. This file is overlay-safe: lists extend by default, so project overlays can add workstation browser UAs, server API clients, package-manager hosts, or custom OS families without copying package defaults.
+
+### Structure
+
+```yaml
+domain_overrides:
+  windows_update:
+    os_keywords: ["windows"]
+    hosts: ["download.windowsupdate.com", "ctldl.windowsupdate.com"]
+    user_agents:
+      - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+
+workstation:
+  windows:
+    - "Mozilla/5.0 ..."
+  linux:
+    - "curl/7.88.1"
+
+server:
+  roles: [web_server, app_server]
+  generic:
+    - "python-requests/2.31.0"
+  package_managers:
+    debian:
+      os_keywords: ["ubuntu", "debian"]
+      hosts: ["archive.ubuntu.com"]
+      user_agents: ["apt-http/2.4.11 (amd64)"]
+```
+
+### Rules
+
+- Keep package-manager UAs bound to package/update repository hostnames.
+- Keep OS-specific package UAs matched to `os_keywords`; do not use Fedora `libdnf` for Ubuntu hosts.
+- Use `domain_overrides` for update, telemetry, certificate, OCSP, and CRL endpoints that have a service-specific User-Agent even when the proxy request is HTTPS CONNECT.
+- Use `server.generic` for SaaS/API/CDN destinations from servers.
+
+---
+
 ## site_maps.yaml
 
 Site map definitions for realistic browsing session generation. Three tiers of resolution.
@@ -288,7 +330,7 @@ Minimal single-page structure for domains with no curated or tag-based match.
 
 ## network_params.yaml
 
-MAC OUI (vendor) prefixes with frequency weights for realistic DHCP and MAC address generation. Standalone — no cross-file dependencies.
+MAC OUI (vendor) prefixes and public NTP server defaults with frequency weights. Scenario-defined internal/domain NTP servers are preferred at generation time; `public_ntp_servers` is the fallback pool for non-domain environments and for upstream refids on internal NTP servers.
 
 ### Structure
 
@@ -297,6 +339,14 @@ oui_prefixes:
   - prefix: "D4:BE:D9"    # First 3 octets of MAC address
     vendor: "Dell"          # Hardware vendor name
     weight: 25              # Relative frequency weight
+
+public_ntp_servers:
+  - name: "time-a-g.nist.gov"
+    ip: "129.6.15.28"
+    operator: "NIST"
+    stratum: 1
+    ref_id: ".NIST."
+    weight: 20
 ```
 
 ---
@@ -304,6 +354,7 @@ oui_prefixes:
 ## tls_issuers.yaml
 
 TLS certificate issuer configurations for realistic Zeek x509/SSL log generation. Standalone — no cross-file dependencies.
+`domain_ca_overrides` maps well-known domains to their expected issuing CA so SNI, x509 subject, and issuer stay plausible.
 
 ### Structure
 
@@ -315,9 +366,91 @@ issuers:
     validity_days_max: 90                     # Maximum cert validity (days)
     not_before_max_days: 60                   # Max days before scenario start for cert issuance
     key_types:
-      - {type: "ecdsa", length: 256, weight: 70}
-      - {type: "rsa", length: 2048, weight: 30}
+      - {type: "rsa", length: 2048, weight: 100}
 ```
+
+## tls_realism.yaml
+
+TLS SAN, OCSP, certificate-chain, and destination-profile realism settings. Used by the generation engine when building Zeek `ssl.log`, `x509.log`, and `ocsp.log`, and when selecting auto-generated external TLS SNI/certificate identities.
+
+**Location:** `src/evidenceforge/config/activity/tls_realism.yaml`  
+**Overlay:** `.eforge/config/activity/tls_realism.yaml`
+
+### Structure
+
+```yaml
+san:
+  multi_label_public_suffixes: ["co.uk", "com.au"]
+ocsp:
+  cache_bucket_seconds: 14400
+  responders:
+    - issuer_patterns: ["*Let's Encrypt*"]
+      domains: ["r3.o.lencr.org", "ocsp.int-x3.letsencrypt.org"]
+  status_weights: {good: 90, unknown: 7, revoked: 3}
+  suppress_revoked_suffixes: [.microsoft.com, .google.com, .zoom.us]
+certificate_chains:
+  include_intermediate_probability: 0.86
+  include_second_intermediate_probability: 0.08
+  templates:
+    - name: lets_encrypt
+      issuer_patterns: ["*Let's Encrypt*"]
+      intermediates:
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+destinations:
+  enabled: true
+  host_preferred_domain_count: 6
+  host_preferred_probability: 0.68
+  profiles:
+    - name: enterprise_heavy_hitters
+      weight: 34
+      system_types: [workstation]
+      dns_tags: [saas, outlook, teams, onedrive]
+      domains: [login.microsoftonline.com, graph.microsoft.com]
+```
+
+`ocsp.responders` maps certificate issuer DN patterns to OCSP responder hostnames.
+When Zeek OCSP evidence is generated, the engine emits a supporting HTTP/file-analysis
+transaction to one of these responders so `ocsp.id` joins to `files.fuid`.
+Responder hostnames should also exist in `dns_registry.yaml`; `eforge validate-config`
+warns when an OCSP responder host is missing from the registry.
+
+`ocsp.suppress_revoked_suffixes` prevents routine mainstream browsing certificates from being marked revoked while still allowing rare revoked statuses for uncategorized or intentionally suspicious certificate identities.
+
+`destinations.profiles` keeps TLS volume heavy-tailed without collapsing all hosts onto the same few SNI values. Profiles can list explicit `domains`, pull from `dns_registry.yaml` through `dns_tags`, limit by `os`, `personas`, `system_types`, or `purpose_tags`, and add `os_overrides` for OS-specific update/package endpoints. When an OS override provides domains or DNS tags, that override replaces the profile's generic pool for that OS so Windows update traffic does not drift into Linux package mirrors, and vice versa. Overlays merge nested dicts and extend lists, so project-local profiles can add domains without replacing the default pool.
+
+## smb_file_transfers.yaml
+
+Controls when successful SMB connections also produce Zeek `files.log` observations. This does not create dedicated Zeek SMB logs such as `smb_files.log`; it only tunes the generic file-analysis rows linked to SMB `conn.log` UIDs.
+
+**Location:** `src/evidenceforge/config/activity/smb_file_transfers.yaml`
+**Overlay:** `.eforge/config/activity/smb_file_transfers.yaml`
+
+### Structure
+
+```yaml
+min_transfer_bytes: 32768
+missing_bytes_probability: 0.02
+timeout_probability: 0.005
+mime_types:
+  - {mime_type: application/pdf, weight: 18}
+analyzer_sets:
+  - {analyzers: [], weight: 75}
+  - {analyzers: [MD5], weight: 15}
+filename_templates:
+  - mime_types: [application/pdf]
+    templates:
+      - "\\\\{server}\\{share}\\{department}\\{basename}.pdf"
+    weight: 18
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `min_transfer_bytes` | integer | Minimum originator or responder payload bytes before an SMB connection is treated as a file transfer |
+| `missing_bytes_probability` | float | Probability that a transfer has non-zero Zeek `missing_bytes` |
+| `timeout_probability` | float | Probability that the Zeek file-analysis row has `timedout: true` |
+| `mime_types` | weighted list | MIME type mix for SMB file observations |
+| `analyzer_sets` | weighted list | Zeek file analyzers attached to the observation, such as `MD5` or `SHA1` |
+| `filename_templates` | weighted list | Optional SMB share/path templates for `files.log` `filename`. Supported placeholders include `{server}`, `{share}`, `{department}`, `{project}`, `{basename}`, `{ext}`, and `{user}` |
 
 ## traffic_rates.yaml
 

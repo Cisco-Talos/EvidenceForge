@@ -141,7 +141,19 @@ class TestEvent3Filter:
         )
         assert emitter._passes_event3_filter(event) is True
 
-    def test_browser_filtered_out(self, emitter):
+    def test_browser_user_app_sampling_can_be_disabled(self, emitter):
+        emitter._filters = {
+            "network_connect": {
+                "enabled": True,
+                "mode": "include",
+                "include_images": [],
+                "include_baseline_images": [],
+                "include_user_app_images": ["chrome.exe"],
+                "user_app_sample_rate": 0.0,
+                "include_dest_ports": [],
+                "exclude_dest_ips": [],
+            }
+        }
         event = SecurityEvent(
             timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
             event_type="connection",
@@ -162,6 +174,40 @@ class TestEvent3Filter:
             ),
         )
         assert emitter._passes_event3_filter(event) is False
+
+    def test_browser_user_app_sampling_can_pass(self, emitter):
+        emitter._filters = {
+            "network_connect": {
+                "enabled": True,
+                "mode": "include",
+                "include_images": [],
+                "include_baseline_images": [],
+                "include_user_app_images": ["chrome.exe"],
+                "user_app_sample_rate": 1.0,
+                "include_dest_ports": [],
+                "exclude_dest_ips": [],
+            }
+        }
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=5678,
+                parent_pid=1,
+                image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                command_line="chrome",
+                username="user",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                src_port=49200,
+                dst_port=443,
+                protocol="tcp",
+            ),
+        )
+        assert emitter._passes_event3_filter(event) is True
 
     def test_suspicious_port_passes_filter(self, emitter):
         """Any process connecting to a suspicious port should pass."""
@@ -624,9 +670,22 @@ class TestPidResolutionInFilter:
         )
         assert emitter._passes_event3_filter(event) is True
 
-    def test_browser_connection_with_pid_only_filtered(self, emitter):
-        """chrome.exe connecting to port 443 with only initiating_pid should be filtered."""
+    def test_browser_connection_with_pid_only_can_be_sampled(self, emitter):
+        """chrome.exe with only initiating_pid should be eligible for user-app sampling."""
         from unittest.mock import MagicMock
+
+        emitter._filters = {
+            "network_connect": {
+                "enabled": True,
+                "mode": "include",
+                "include_images": [],
+                "include_baseline_images": [],
+                "include_user_app_images": ["chrome.exe"],
+                "user_app_sample_rate": 1.0,
+                "include_dest_ports": [],
+                "exclude_dest_ips": [],
+            }
+        }
 
         mock_sm = MagicMock()
         mock_proc = MagicMock()
@@ -647,7 +706,7 @@ class TestPidResolutionInFilter:
                 initiating_pid=5678,
             ),
         )
-        assert emitter._passes_event3_filter(event) is False
+        assert emitter._passes_event3_filter(event) is True
 
 
 class TestTemplateCompleteness:

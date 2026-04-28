@@ -10,6 +10,8 @@ a user overlay from .eforge/config/activity/edr_pools.yaml if present.
 from __future__ import annotations
 
 import logging
+import random
+import re
 from typing import Any
 
 import yaml
@@ -115,3 +117,38 @@ def get_dll_pool() -> list[str]:
     """Return DLL path pool for module load events."""
     pools = load_edr_pools()
     return pools.get("dll_pool", [])
+
+
+def materialize_edr_template(template: str, rng: random.Random, user: str = "SYSTEM") -> str:
+    """Materialize common EDR pool template placeholders deterministically from an RNG."""
+    replacements = {
+        "user": user,
+        "rand": f"{rng.randint(10000, 99999)}",
+        "hex": f"{rng.getrandbits(32):08X}",
+        "guid": (
+            f"{rng.getrandbits(32):08X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(48):012X}"
+        ),
+        "mru": str(rng.randint(0, 24)),
+        "doc": str(rng.randint(1, 80)),
+        "package": rng.choice(
+            [
+                "Package_for_RollupFix",
+                "Package_for_ServicingStack",
+                "Package_for_KB5034122",
+                "Package_for_DotNetRollup",
+                "Microsoft-Windows-Client-Features",
+            ]
+        ),
+        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+    }
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(1)
+        return str(replacements[token]) if token in replacements else match.group(0)
+
+    materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
+    return materialized.replace("{{", "{").replace("}}", "}")

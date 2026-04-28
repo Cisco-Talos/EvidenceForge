@@ -12,6 +12,9 @@ output/
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
     bash_history/<username>.bash_history    # Per-user bash history (Linux only)
+    ecar.json                              # eCAR EDR/XDR telemetry (NDJSON)
+    syslog.log                             # Linux syslog (BSD format)
+    web_access.log                         # Apache/Nginx access log
   <sensor-name>/                           # Per-sensor directories (network)
     conn.json                              # Zeek conn.log (NDJSON)
     dns.json                               # Zeek dns.log
@@ -19,10 +22,7 @@ output/
     ssl.json                               # Zeek ssl.log
     files.json                             # Zeek files.log
     ...                                    # Other Zeek logs
-  ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
-  syslog.log                               # Linux syslog (BSD format)
-  snort_alert.log                          # Snort/Suricata IDS alerts
-  web_access.log                           # Apache/Nginx access log
+    snort_alert.log                        # Snort/Suricata IDS alerts
   <proxy-hostname.domain>/                 # Per-proxy-host directories
     proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
 ```
@@ -87,15 +87,20 @@ output/
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
 | 1 | ProcessCreate | Execution | Version 5. Enriches 4688 with file hashes (SHA1/MD5/SHA256/IMPHASH), FileVersion, Description, Product, Company, OriginalFileName, ParentCommandLine. Hashes are deterministic fakes seeded from image path + hostname. |
+| 3 | NetworkConnect | Network | Outbound connection attributed to originating process. Source/destination IP, port, protocol. Skipped if the process cannot be resolved. svchost.exe is used for DNS/NTP; shows initiating process for attack tool connections. |
 | 5 | ProcessTerminate | Execution | Version 3. Emitted for both baseline stale-process cleanup and storyline process completions. Storyline processes terminate with realistic delays based on command type (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination). ProcessGuid matches the Event 1 that created the process. |
+| 7 | ImageLoaded | Execution | DLL/module loads. Includes file hashes, signing status, and signature details. |
 | 8 | CreateRemoteThread | Defense Evasion | Version 2. Detects process injection. Source and target process GUIDs, thread start address. |
 | 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz -> lsass). Source and target process GUIDs, GrantedAccess mask. |
+| 11 | FileCreate | Defense Evasion / Execution | File creation events. TargetFilename is the created file path. |
+| 12/13 | RegistryEvent | Persistence | Event 12 for key create/delete; Event 13 for value set. Includes target registry key and (for Event 13) the value written. |
+| 22 | DNSQuery | Discovery | DNS lookups as seen by the Windows DNS Client service (svchost.exe). QueryName, QueryStatus, and resolved addresses. |
 
 **Known Limitations:**
 - ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
-- Only events 1, 5, 8, and 10 are implemented; real Sysmon has 29 event types (network connections, registry, file create, etc.)
+- Events 1, 3, 5, 7, 8, 10, 11, 12/13, and 22 are implemented; real Sysmon has 30+ event types
 
 ---
 
@@ -109,23 +114,23 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | Log Type | File | Description | Notes |
 |----------|------|-------------|-------|
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
-| dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, MX query types. NXDOMAIN for suffix search. AA flag for internal zones. |
-| http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
-| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name. Generated for port 443 connections. |
-| files.log | `files.json` | File transfers | Extracted from HTTP responses. MIME type, seen_bytes, fuid correlation. |
-| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. |
-| ntp.log | `ntp.json` | NTP synchronization | Version, mode, stratum, poll interval. |
-| x509.log | `x509.json` | X.509 certificates | Certificate subject/issuer, validity, key info. |
-| weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. |
+| dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, and MX query types. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
+| http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Generated for unencrypted HTTP connections (any port); excludes TLS/SSL traffic. |
+| ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for any connection carrying TLS context, not restricted to port 443. Certificate-chain depth is driven by `tls_realism.yaml`. |
+| files.log | `files.json` | File transfers | Extracted from HTTP responses, OCSP responses, and substantial SMB transfers. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional `filename` for SMB, MIME type, byte counts, and `md5`/`sha1`/`sha256` when the matching analyzer ran. SMB thresholds, filename templates, and MIME/analyzer mix are driven by `smb_file_transfers.yaml`. |
+| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC, hostname. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
+| ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. Version, poll, precision, root delay, and root dispersion are stable per client/server association. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
+| x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity, key info, and CA constraints. Intermediate CA certificate profiles are reused by subject/issuer so the same CA does not appear as many different certificates in one dataset. |
+| weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. Automatic weird generation is currently disabled pending a data-driven Zeek weird compatibility model; explicitly supplied `WeirdContext` events still render. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
-| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation checks. |
+| ocsp.log | `ocsp.json` | OCSP responses | Certificate revocation responses whose `id` joins to `files.log` `fuid`, matching Zeek file-analysis semantics. |
 | packet_filter.log | `packet_filter.json` | BPF filter changes | Zeek packet filter status. |
 | reporter.log | `reporter.json` | Zeek internal messages | Zeek operational status. |
 
 **Known Limitations:**
-- No SMB-specific log (smb_files.log, smb_mapping.log) — SMB traffic appears only in conn.log
+- No SMB-specific Zeek log (smb_files.log, smb_mapping.log) — SMB traffic appears in conn.log, substantial transfers can appear in files.log, and file-server activity can also produce host-side eCAR FILE records
 - No SMTP log — email traffic appears in conn.log only
-- http.log only for port 80; HTTPS content is not decrypted (as expected)
+- http.log covers unencrypted HTTP on any port; HTTPS content is not decrypted (as expected)
 - `missed_bytes` is probabilistic (~3% of long TCP connections) rather than from actual packet capture
 - All timestamps use 6-digit microsecond precision
 
@@ -133,7 +138,7 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 ## eCAR Format (EDR/XDR Telemetry)
 
-**File:** `ecar.json`
+**File:** `<hostname.domain>/ecar.json`
 **Format:** NDJSON
 
 EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
@@ -145,7 +150,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
-| FILE | CREATE, MODIFY, DELETE | Generated alongside process activity. |
+| FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity and baseline SMB file-server access. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes. |
@@ -162,7 +167,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 ## Linux Syslog
 
-**File:** `syslog.log`
+**File:** `<hostname.domain>/syslog.log`
 **Format:** BSD syslog (RFC 3164 text format)
 
 Authentication and system logs from Linux hosts. All syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
@@ -203,7 +208,7 @@ Per-user command history for Linux systems.
 
 ## Snort/Suricata IDS Alerts
 
-**File:** `snort_alert.log`
+**File:** `<sensor-name>/snort_alert.log`
 **Format:** Snort fast alert format
 
 Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
@@ -215,10 +220,16 @@ Network intrusion detection alerts. Baseline generates false-positive alerts (e.
 
 ## Web Access Log
 
-**File:** `web_access.log`
+**File:** `<hostname.domain>/web_access.log`
 **Format:** Apache/Nginx combined log format
 
 HTTP access logs for web server systems.
+
+Entries use Apache/Nginx combined syntax:
+
+```text
+client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" status bytes "Referer" "User-Agent"
+```
 
 **Known Limitations:**
 - All responses return HTTP 200 (no 301/302/404/500 mix)
@@ -232,15 +243,26 @@ HTTP access logs for web server systems.
 **File:** `<proxy-hostname.domain>/proxy_access.log`
 **Format:** W3C Extended Log Format
 
-Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. HTTPS connections emit a CONNECT entry followed by the actual request. Includes cache hit/miss status and full destination URLs.
+Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline beacons from proxied hosts use the same explicit proxy path, including proxy-denied evidence for `action: deny`.
+
+The proxy log uses a W3C Extended-style `#Fields` header:
+
+```text
+#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
+```
+
+Fields are whitespace-delimited; values with spaces, such as User-Agent strings, are rendered with `+` separators. Missing values are `-`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
 
-**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT.
+**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
+
+**Status and byte semantics:** For explicit proxy mode, client-side Zeek HTTP records describe the client-to-proxy exchange. Plain HTTP denials therefore show the proxy's status code and proxy response size, not the origin's status/body. For intercepted HTTPS, the CONNECT setup status is tracked separately from the inspected request status, so a successful tunnel setup can coexist with a denied inspected GET.
 
 **Session depth:** Persona HTTP traffic generates multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, and fonts, producing realistic request clusters in the proxy log. The number of pages and subresources per session is controlled by the persona's `browsing_intensity` setting (light/normal/heavy).
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
+- Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled
 - Cache hit/miss status is probabilistic, not based on actual content caching logic
 - Limited to HTTP and HTTPS traffic

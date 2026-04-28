@@ -22,14 +22,22 @@
 
 """Web server access log emitter."""
 
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
+def _combined_log_quoted(value: str | None) -> str:
+    """Return a value safe for an Apache/Nginx combined quoted field."""
+    if not value or value == "-":
+        return "-"
+    return value.replace("\\", "\\\\").replace('"', r"\"")
+
+
 class WebEmitter(HostMultiplexEmitter):
-    """Emitter for W3C web server access logs (Apache/Nginx Combined Log Format).
+    """Emitter for Apache/Nginx combined web server access logs.
 
     Per-host FQDN directory routing: each web server gets its own access log.
 
@@ -39,6 +47,21 @@ class WebEmitter(HostMultiplexEmitter):
 
     _log_filename = "web_access.log"
     _supported_types: set[str] = {"connection"}
+    _sort_flat_file = True
+    _defer_sorted_flush_until_close = True
+
+    @staticmethod
+    def _sort_key(line: str) -> tuple[datetime, str]:
+        """Extract Apache/Nginx Combined Log timestamp for chronological flush sorting."""
+        start = line.find("[")
+        end = line.find("]", start + 1)
+        if start == -1 or end == -1:
+            return (datetime.max, line)
+        try:
+            ts = datetime.strptime(line[start + 1 : end], "%d/%b/%Y:%H:%M:%S %z")
+        except ValueError:
+            return (datetime.max, line)
+        return (ts, line)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry an HttpContext and target a web server.
@@ -74,8 +97,8 @@ class WebEmitter(HostMultiplexEmitter):
             "protocol": f"HTTP/{http.version}",
             "status_code": http.status_code,
             "bytes_sent": http.response_body_len,
-            "referer": http.referrer or "-",
-            "user_agent": http.user_agent,
+            "referer": _combined_log_quoted(http.referrer),
+            "user_agent": _combined_log_quoted(http.user_agent),
             "_host_fqdn": host.fqdn or host.hostname,
         }
         self._dispatch(event_data)
