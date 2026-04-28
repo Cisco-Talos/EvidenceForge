@@ -29,8 +29,15 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 
+def _combined_log_quoted(value: str | None) -> str:
+    """Return a value safe for an Apache/Nginx combined quoted field."""
+    if not value or value == "-":
+        return "-"
+    return value.replace("\\", "\\\\").replace('"', r"\"")
+
+
 class WebEmitter(HostMultiplexEmitter):
-    """Emitter for W3C web server access logs (Apache/Nginx Combined Log Format).
+    """Emitter for Apache/Nginx combined web server access logs.
 
     Per-host FQDN directory routing: each web server gets its own access log.
 
@@ -90,8 +97,8 @@ class WebEmitter(HostMultiplexEmitter):
             "protocol": f"HTTP/{http.version}",
             "status_code": http.status_code,
             "bytes_sent": http.response_body_len,
-            "referer": http.referrer or "-",
-            "user_agent": http.user_agent,
+            "referer": _combined_log_quoted(http.referrer),
+            "user_agent": _combined_log_quoted(http.user_agent),
             "_host_fqdn": host.fqdn or host.hostname,
         }
         self._dispatch(event_data)

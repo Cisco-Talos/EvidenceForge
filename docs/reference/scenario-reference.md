@@ -939,7 +939,7 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
-`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear.
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
 #### Format Filtering
 

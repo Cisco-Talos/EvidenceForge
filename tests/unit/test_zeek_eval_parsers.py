@@ -115,8 +115,8 @@ class TestProxyParserRegistration:
     def test_proxy_access_dash_fields_are_omitted(self):
         parser = get_parser("proxy_access")
         record = parser._parse_line(
-            "2024-07-15 10:00:00 10.0.0.1 - CONNECT example.com:443 200 "
-            '0 0 0 "-" example.com:443 - NONE "-"',
+            "2024-07-15 10:00:00 10.0.0.1 - CONNECT example.com:443 HTTP/1.1 200 "
+            "0 0 0 example.com - - - NONE",
             1,
         )
 
@@ -125,6 +125,24 @@ class TestProxyParserRegistration:
         assert "user_agent" not in record.fields
         assert "content_type" not in record.fields
         assert record.fields["cache_result"] == "NONE"
+
+    def test_proxy_access_parser_reads_all_w3c_columns(self):
+        parser = get_parser("proxy_access")
+        record = parser._parse_line(
+            "2024-07-15 10:00:00 10.0.0.1 jsmith GET http://example.com/ HTTP/1.1 "
+            "200 1024 350 42 example.com Mozilla/5.0+(Windows+NT+10.0) "
+            "https://intranet.example.com/ text/html MISS",
+            1,
+        )
+
+        assert record.parse_errors == []
+        assert record.fields["username"] == "jsmith"
+        assert record.fields["protocol"] == "HTTP/1.1"
+        assert record.fields["host"] == "example.com"
+        assert record.fields["user_agent"] == "Mozilla/5.0 (Windows NT 10.0)"
+        assert record.fields["referrer"] == "https://intranet.example.com/"
+        assert record.fields["content_type"] == "text/html"
+        assert record.fields["cache_result"] == "MISS"
 
 
 class TestCanParseFlatPaths:

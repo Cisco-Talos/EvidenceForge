@@ -99,7 +99,8 @@ class TestProxyEmitterReferrer:
         emitter.emit(event)
 
         assert len(rendered_lines) == 1
-        assert '"-"' in rendered_lines[0]
+        fields = rendered_lines[0].split()
+        assert fields[13] == "-"
 
     def test_proxy_access_flush_sorts_by_request_timestamp(self, tmp_path):
         from evidenceforge.formats import load_format
@@ -176,13 +177,17 @@ class TestConnectTunnelBehavior:
         emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
         emitter.emit(event)
 
-        # Should have CONNECT + GET = 2 lines
         assert len(rendered_lines) == 2
-        assert "CONNECT" in rendered_lines[0]
-        assert "GET" in rendered_lines[1]
+        fields = rendered_lines[0].split()
+        assert fields[4] == "CONNECT"
+        assert fields[5] == "example.com:443"
+        assert fields[6] == "HTTP/1.1"
+        inspected_fields = rendered_lines[1].split()
+        assert inspected_fields[4] == "GET"
+        assert inspected_fields[5] == "https://example.com/page"
 
     def test_tunnel_reuse_within_timeout(self):
-        """Multiple HTTPS requests within timeout produce only one CONNECT."""
+        """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""
         from pathlib import Path
 
         from evidenceforge.formats import load_format
@@ -217,10 +222,10 @@ class TestConnectTunnelBehavior:
             emitter.emit(event)
 
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
-        get_count = sum(1 for line in all_lines if "GET" in line)
+        get_count = sum(1 for line in all_lines if " GET " in line)
 
         assert connect_count == 1, f"Expected 1 CONNECT, got {connect_count}"
-        assert get_count == 5, f"Expected 5 GETs, got {get_count}"
+        assert get_count == 5, f"Expected 5 inspected GET rows, got {get_count}"
 
     def test_tunnel_expires_after_timeout(self):
         """CONNECT re-emitted after tunnel timeout expires."""

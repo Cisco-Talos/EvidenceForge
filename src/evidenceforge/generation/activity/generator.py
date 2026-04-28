@@ -957,19 +957,19 @@ class ActivityGenerator:
 
         domain_tags = get_domain_tags(proxy_hostname)
         proxy_ua_override = None
-        if explicit_mode and dst_port == 443:
-            proxy_method = "CONNECT"
-            url = f"{proxy_hostname}:443"
-            proxy_content_type = ""
-            proxy_referrer = ""
-            user_agent = http.user_agent if http is not None else ""
-        elif http is not None:
+        if http is not None:
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             proxy_method = http.method
             url = f"{scheme}://{proxy_hostname}{http.uri}"
             proxy_content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
             user_agent = http.user_agent
             proxy_referrer = http.referrer
+        elif explicit_mode and dst_port == 443:
+            proxy_method = "CONNECT"
+            url = f"{proxy_hostname}:443"
+            proxy_content_type = ""
+            proxy_referrer = ""
+            user_agent = ""
         else:
             source_os = _get_os_category(source_system.os) if source_system else None
             path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(

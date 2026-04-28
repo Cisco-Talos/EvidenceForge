@@ -279,6 +279,12 @@ Cisco ASA firewall logs for permitted and denied connections. Produced by firewa
 
 HTTP access logs for web server systems.
 
+Entries use Apache/Nginx combined syntax:
+
+```text
+client-ip - username [dd/Mon/yyyy:HH:MM:SS zone] "METHOD path HTTP/version" status bytes "Referer" "User-Agent"
+```
+
 **Referer field:** Browser-originated traffic carries a realistic Referer distribution — roughly 55% blank (direct/bookmark), 20% search engine (Google/Bing), 20% same-origin, 5% social/news. Bot user-agents (Googlebot, bingbot, AhrefsBot) always have blank Referer. Scanner traffic (`web_scan` events) follows per-preset rules grounded in real scanner behavior: Nikto sends same-origin Referer on ~30% of requests (partial-crawl mode); gobuster, sqlmap, dirb, and nmap_http send no Referer. This means the Referer field is useful for distinguishing human browsing from automated scans in training exercises.
 
 **Known Limitations:**
@@ -293,14 +299,22 @@ HTTP access logs for web server systems.
 
 Forward proxy access logs for systems with the `forward_proxy` role. Outbound HTTP/HTTPS traffic is routed through the proxy system. In `environment.proxy.mode: transparent`, network sensors can still show direct-looking client-to-origin traffic. In `mode: explicit`, the generator emits client-to-proxy and proxy-to-origin network legs; each Zeek/IDS/firewall sensor sees only the leg its topology can observe. If the proxy denies a request, the transaction stops at the proxy and no proxy-to-origin Zeek, IDS, or firewall evidence is emitted. HTTP/S storyline `beacon` events from proxied hosts use the same explicit proxy routing, including proxy-side denied CONNECT/GET evidence for `action: deny`.
 
+The proxy log uses a W3C Extended-style `#Fields` header:
+
+```text
+#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
+```
+
+Fields are whitespace-delimited; values with spaces, such as User-Agent strings, are rendered with `+` separators. Missing values are `-`.
+
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
 
-**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT.
+**CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
 
 **Session depth:** Persona HTTP traffic generates multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, and fonts, producing realistic request clusters in the proxy log. The number of pages and subresources per session is controlled by the persona's `browsing_intensity` setting (light/normal/heavy).
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
-- SSL inspection / SSL bump is not yet modeled
+- Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled
 - Cache hit/miss status is probabilistic, not based on actual content caching logic
 - Limited to HTTP and HTTPS traffic
