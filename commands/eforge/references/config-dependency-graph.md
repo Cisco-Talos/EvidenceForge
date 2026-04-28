@@ -49,6 +49,13 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone rate table |
 | **depended on by** | Engine (runtime) | Drives all baseline traffic rate calculations (user activity, web, DNS, SMB, Kerberos, LDAP, persona connections) |
 
+### kerberos_realism.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone Kerberos field-distribution profile |
+| **depended on by** | Engine (runtime) | Drives Windows 4768 TGT PreAuthType, TicketOptions, TicketEncryptionType, and PKINIT certificate fields |
+| validated by | `eforge validate-config` | Enforces coherent combinations: PKINIT requires a certificate profile, non-PKINIT must not emit certificate fields, and no-preauth/PKINIT/RC4 weights stay bounded |
+
 ### proxy_uri_templates.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

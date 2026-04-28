@@ -623,6 +623,9 @@ class WindowsEventEmitter(LogEmitter):
             "PreAuthType": krb.pre_auth_type,
             "IpAddress": krb.source_ip,
             "IpPort": krb.source_port,
+            "CertIssuerName": krb.cert_issuer_name,
+            "CertSerialNumber": krb.cert_serial_number,
+            "CertThumbprint": krb.cert_thumbprint,
         }
         self.emit_event(event_data)
 

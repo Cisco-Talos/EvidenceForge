@@ -160,6 +160,8 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Windows failed-auth DC consistency — failed NTLM validation 4776 now carries the matching failure status instead of success.
 - [x] Windows lock/unlock session consistency — 4800/4801 derive a stable SessionId from TargetLogonId so lock/unlock pairs do not change terminal sessions.
 - [x] Blind Windows authentication/security realism evaluation of latest regenerated `/private/tmp/eforge-windows-auth-baseline-output/data` completed; prior 4672, 4625/4776, and 4800/4801 findings are fixed, with remaining realism concerns around Kerberos 4768 PreAuthType distribution and missing Zeek visibility for external failed-auth source.
+- [x] Windows Kerberos 4768 pre-auth realism — moved TGT PreAuthType/ticket/encryption distributions into `kerberos_realism.yaml`, added overlay-aware loader and `eforge validate-config` schema/coherence checks, and verified generation now produces mostly encrypted timestamp pre-auth with rare populated PKINIT certificate fields.
+- [x] Blind Windows authentication/security realism evaluation of latest regenerated `/private/tmp/eforge-windows-auth-baseline-output/data` completed; Kerberos PreAuthType=15 empty-cert issue is fixed, with remaining lower-confidence tells in one repeated 4672 on unlock and absent Zeek visibility for external failed auth.
 
 **Snort/IDS:**
 - [x] ✓ Snort protocol field randomly assigned (no binding to SID/rule) — restructured `_FP_SIGS` to protocol-keyed dict with per-signature port and direction

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # --- DNS Registry ---
 
@@ -319,6 +319,183 @@ class TlsRealismConfig(BaseModel, extra="forbid"):
     ocsp: TlsOcspConfig
     certificate_chains: TlsCertificateChainConfig
     destinations: TlsDestinationsConfig
+
+
+# --- Kerberos Realism ---
+
+
+class KerberosWeightedHexValue(BaseModel, extra="forbid"):
+    """Weighted hex value used by kerberos_realism.yaml."""
+
+    value: str
+    weight: int
+
+    @field_validator("value")
+    @classmethod
+    def value_hex(cls, v: str) -> str:
+        if not v.startswith("0x"):
+            raise ValueError("value must be a hex string beginning with 0x")
+        int(v, 16)
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class KerberosPreAuthTypeEntry(BaseModel, extra="forbid"):
+    """Weighted Kerberos pre-auth type profile."""
+
+    value: int
+    weight: int
+    certificate_required: bool
+    certificate_profile: str | None = None
+    description: str = ""
+
+    @field_validator("value")
+    @classmethod
+    def allowed_pre_auth_type(cls, v: int) -> int:
+        if v not in {0, 2, 15}:
+            raise ValueError("pre-auth value must be one of 0, 2, or 15")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+    @model_validator(mode="after")
+    def coherent_certificate_flags(self) -> KerberosPreAuthTypeEntry:
+        if self.value == 15 and not self.certificate_required:
+            raise ValueError("PreAuthType 15 must set certificate_required=true")
+        if self.certificate_required and self.value != 15:
+            raise ValueError("certificate_required=true is only valid for PreAuthType 15")
+        if self.value == 15 and not self.certificate_profile:
+            raise ValueError("PreAuthType 15 must reference a certificate_profile")
+        if self.value != 15 and self.certificate_profile:
+            raise ValueError("certificate_profile is only valid for PreAuthType 15")
+        return self
+
+
+class KerberosTgtSuccessConfig(BaseModel, extra="forbid"):
+    """Successful 4768 field distributions."""
+
+    pre_auth_types: dict[str, KerberosPreAuthTypeEntry]
+    ticket_options: dict[str, KerberosWeightedHexValue]
+    encryption_types: dict[str, KerberosWeightedHexValue]
+
+    @field_validator("pre_auth_types", "ticket_options", "encryption_types")
+    @classmethod
+    def weighted_profiles_non_empty(cls, v: dict) -> dict:
+        if not v:
+            raise ValueError("weighted profile dict must not be empty")
+        if sum(entry.weight for entry in v.values()) <= 0:
+            raise ValueError("weighted profile dict must have a positive total weight")
+        return v
+
+    @field_validator("ticket_options")
+    @classmethod
+    def allowed_ticket_options(
+        cls, v: dict[str, KerberosWeightedHexValue]
+    ) -> dict[str, KerberosWeightedHexValue]:
+        allowed = {"0x40810010", "0x40810000", "0x40000010", "0x50800000", "0x10"}
+        invalid = sorted({entry.value for entry in v.values()} - allowed)
+        if invalid:
+            raise ValueError(f"ticket_options contains unsupported values: {invalid}")
+        return v
+
+    @field_validator("encryption_types")
+    @classmethod
+    def allowed_encryption_types(
+        cls, v: dict[str, KerberosWeightedHexValue]
+    ) -> dict[str, KerberosWeightedHexValue]:
+        allowed = {"0x12", "0x11", "0x17"}
+        invalid = sorted({entry.value for entry in v.values()} - allowed)
+        if invalid:
+            raise ValueError(f"encryption_types contains unsupported values: {invalid}")
+        return v
+
+    @model_validator(mode="after")
+    def realistic_weights(self) -> KerberosTgtSuccessConfig:
+        pre_auth_weight_by_value: dict[int, int] = {}
+        for entry in self.pre_auth_types.values():
+            pre_auth_weight_by_value[entry.value] = (
+                pre_auth_weight_by_value.get(entry.value, 0) + entry.weight
+            )
+        total_pre_auth = sum(pre_auth_weight_by_value.values())
+        if pre_auth_weight_by_value.get(2, 0) == 0:
+            raise ValueError("PreAuthType 2 must be present for normal encrypted timestamp TGTs")
+        if pre_auth_weight_by_value.get(15, 0) / total_pre_auth > 0.20:
+            raise ValueError("PreAuthType 15 PKINIT weight must not exceed 20% by default")
+        if pre_auth_weight_by_value.get(0, 0) / total_pre_auth > 0.05:
+            raise ValueError("PreAuthType 0/no-preauth weight must not exceed 5%")
+
+        encryption_weight_by_value: dict[str, int] = {}
+        for entry in self.encryption_types.values():
+            encryption_weight_by_value[entry.value] = (
+                encryption_weight_by_value.get(entry.value, 0) + entry.weight
+            )
+        total_encryption = sum(encryption_weight_by_value.values())
+        if encryption_weight_by_value.get("0x17", 0) / total_encryption > 0.30:
+            raise ValueError("RC4 encryption type 0x17 weight must not exceed 30%")
+        return self
+
+
+class KerberosCertificateProfile(BaseModel, extra="forbid"):
+    """Certificate field generation profile for Kerberos PKINIT events."""
+
+    issuer_names: list[str]
+    serial_hex_bytes: int = 16
+    thumbprint_hex_chars: int = 40
+
+    @field_validator("issuer_names")
+    @classmethod
+    def issuer_names_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("issuer_names must not be empty")
+        if any(not issuer for issuer in v):
+            raise ValueError("issuer_names entries must be non-empty")
+        return v
+
+    @field_validator("serial_hex_bytes")
+    @classmethod
+    def serial_bytes_range(cls, v: int) -> int:
+        if not 8 <= v <= 20:
+            raise ValueError("serial_hex_bytes must be between 8 and 20")
+        return v
+
+    @field_validator("thumbprint_hex_chars")
+    @classmethod
+    def thumbprint_length_valid(cls, v: int) -> int:
+        if v not in {40, 64}:
+            raise ValueError("thumbprint_hex_chars must be 40 (SHA-1) or 64 (SHA-256)")
+        return v
+
+
+class KerberosRealismConfig(BaseModel, extra="forbid"):
+    """Root schema for kerberos_realism.yaml."""
+
+    tgt_success: KerberosTgtSuccessConfig
+    certificate_profiles: dict[str, KerberosCertificateProfile] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def referenced_certificate_profiles_exist(self) -> KerberosRealismConfig:
+        profile_names = set(self.certificate_profiles)
+        missing = sorted(
+            {
+                entry.certificate_profile
+                for entry in self.tgt_success.pre_auth_types.values()
+                if entry.certificate_profile and entry.certificate_profile not in profile_names
+            }
+        )
+        if missing:
+            raise ValueError(f"unknown certificate_profile references: {missing}")
+        return self
 
 
 # --- SMB File Transfers ---

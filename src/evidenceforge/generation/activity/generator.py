@@ -5154,6 +5154,9 @@ class ActivityGenerator:
         # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
+        from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
+
+        tgt_fields = pick_tgt_success_fields(rng)
 
         event = SecurityEvent(
             timestamp=time,
@@ -5165,13 +5168,12 @@ class ActivityGenerator:
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
-                ticket_options=rng.choices(
-                    ["0x40810010", "0x40810000", "0x40000010", "0x50800000", "0x10"],
-                    weights=[60, 20, 10, 5, 5],
-                    k=1,
-                )[0],
-                encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
-                pre_auth_type=15,
+                ticket_options=tgt_fields["ticket_options"],
+                encryption_type=tgt_fields["encryption_type"],
+                pre_auth_type=tgt_fields["pre_auth_type"],
+                cert_issuer_name=tgt_fields["cert_issuer_name"],
+                cert_serial_number=tgt_fields["cert_serial_number"],
+                cert_thumbprint=tgt_fields["cert_thumbprint"],
                 source_ip=f"::ffff:{source_ip}",
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
             ),

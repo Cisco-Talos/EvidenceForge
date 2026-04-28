@@ -68,7 +68,7 @@ output/
 | 4738 | User Account Changed | Account Management | Has unique leading `Dummy` field (always "-"). Full account property fields. |
 | 4756 | Member Added to Universal Group | Privilege Escalation | e.g., Enterprise Admins. |
 | 4757 | Member Removed from Universal Group | Privilege Escalation | No sample data verification (identical structure to 4756). |
-| 4768 | Kerberos TGT Request | Authentication | Keywords reflect success/failure based on Status field. CertIssuerName/CertSerialNumber/CertThumbprint always empty. |
+| 4768 | Kerberos TGT Request | Authentication | Keywords reflect success/failure based on Status field. Successful TGTs use data-driven PreAuthType/TicketOptions/encryption distributions; PKINIT (`PreAuthType=15`) populates CertIssuerName/CertSerialNumber/CertThumbprint. |
 | 4769 | Kerberos Service Ticket | Authentication | TargetUserName includes @DOMAIN suffix. Keywords reflect success/failure. |
 | 4770 | Kerberos TGT Renewal | Authentication | Always success. |
 | 4771 | Kerberos Pre-Auth Failed | Credential Access | Keywords always 0x8010 (Audit Failure). Key indicator for password spraying. |
