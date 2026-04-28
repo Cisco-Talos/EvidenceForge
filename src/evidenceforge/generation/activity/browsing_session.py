@@ -15,6 +15,10 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
+from evidenceforge.generation.activity.http_content import (
+    normalize_mime_type_for_path,
+    response_size_for_mime,
+)
 from evidenceforge.generation.activity.site_maps import (
     PageDef,
     SiteMap,
@@ -39,26 +43,6 @@ class BrowsingRequest:
     request_body_len: int  # Estimated request size in bytes
 
 
-# ── Response size ranges by content type ──────────────────────────────
-
-_RESPONSE_SIZE_RANGES: dict[str, tuple[int, int]] = {
-    "text/html": (5_000, 80_000),
-    "text/css": (2_000, 50_000),
-    "application/javascript": (10_000, 200_000),
-    "image/jpeg": (5_000, 500_000),
-    "image/png": (2_000, 300_000),
-    "image/webp": (5_000, 400_000),
-    "image/gif": (500, 50_000),
-    "image/svg+xml": (500, 20_000),
-    "image/x-icon": (500, 5_000),
-    "font/woff2": (20_000, 100_000),
-    "font/woff": (20_000, 100_000),
-    "application/json": (200, 50_000),
-    "application/octet-stream": (1_000, 100_000),
-}
-
-# ── Intensity parameters ──────────────────────────────────────────────
-
 _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
     "light": {
         "pages": (1, 1),
@@ -80,8 +64,7 @@ _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
 
 def _response_size(rng: random.Random, content_type: str) -> int:
     """Generate a realistic response size for a given content type."""
-    lo, hi = _RESPONSE_SIZE_RANGES.get(content_type, (500, 50_000))
-    return rng.randint(lo, hi)
+    return response_size_for_mime(rng, content_type)
 
 
 def _request_size(rng: random.Random, method: str) -> int:
@@ -204,6 +187,7 @@ def generate_browsing_session(
             current_ms += rng.randint(3_000, 30_000)
 
         page = site_map.pages[current_page_idx]
+        page_content_type = normalize_mime_type_for_path(page.path, page.content_type)
         visited_indices.append(current_page_idx)
         page_url = _make_referrer(hostname, page.path, port)
 
@@ -214,11 +198,11 @@ def generate_browsing_session(
                 hostname=hostname,
                 path=page.path,
                 method="GET",
-                content_type=page.content_type,
+                content_type=page_content_type,
                 referrer=previous_page_url,
                 trans_depth=1,
                 is_page_load=True,
-                response_body_len=_response_size(rng, page.content_type),
+                response_body_len=_response_size(rng, page_content_type),
                 request_body_len=_request_size(rng, "GET"),
             )
         )
@@ -230,15 +214,16 @@ def generate_browsing_session(
 
         for sub_idx, sub in enumerate(subresources):
             sub_hostname = sub.host or hostname
+            sub_content_type = normalize_mime_type_for_path(sub.path, sub.content_type)
 
             # Timing: CSS/JS load early, images later, API calls latest
-            if sub.content_type in ("text/css", "application/javascript"):
+            if sub_content_type in ("text/css", "application/javascript"):
                 delay = rng.randint(50, 200)
-            elif sub.content_type.startswith("font/"):
+            elif sub_content_type.startswith("font/"):
                 delay = rng.randint(300, 600)
-            elif sub.content_type.startswith("image/"):
+            elif sub_content_type.startswith("image/"):
                 delay = rng.randint(200, 800)
-            elif sub.content_type == "application/json":
+            elif sub_content_type == "application/json":
                 delay = rng.randint(500, 2_000)
             else:
                 delay = rng.randint(100, 500)
@@ -249,11 +234,11 @@ def generate_browsing_session(
                     hostname=sub_hostname,
                     path=sub.path,
                     method=sub.method,
-                    content_type=sub.content_type,
+                    content_type=sub_content_type,
                     referrer=page_url,
                     trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
                     is_page_load=False,
-                    response_body_len=_response_size(rng, sub.content_type),
+                    response_body_len=_response_size(rng, sub_content_type),
                     request_body_len=_request_size(rng, sub.method),
                 )
             )

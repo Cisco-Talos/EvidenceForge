@@ -517,7 +517,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.
 
-**Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` and `beacon` events should be the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Avoid reverse-DNS/PTR artifacts or provider-generated infrastructure names unless the scenario intentionally models the client using that name. Omit `hostname` for raw-IP C2 (no DNS lookup expected). The validator will warn about unmatched domains.
+**Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` and `beacon` events should be the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Avoid reverse-DNS/PTR artifacts or provider-generated infrastructure names unless the scenario intentionally models the client using that name. Omit `hostname` for raw-IP C2 (no DNS lookup expected). For realism-bound generated datasets, avoid using reserved documentation domains (`example.com`, `example.net`, `example.org`) as live public infrastructure; use a scenario-owned lab domain or realistic non-reserved domain when public resolver answers and certificates should appear. The validator will warn about unmatched domains.
 
 **NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
 
@@ -939,7 +939,7 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
-`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear.
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
 #### Format Filtering
 

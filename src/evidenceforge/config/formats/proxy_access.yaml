@@ -40,7 +40,7 @@ fields:
   - name: protocol
     type: string
     required: false
-    description: "HTTP protocol version when present in the source proxy format"
+    description: "HTTP protocol version"
 
   - name: status_code
     type: integer
@@ -97,6 +97,6 @@ output:
   header_template: |
     #Software: EvidenceForge Proxy Log
     #Version: 1.0
-    #Fields: date time c-ip cs-username cs-method cs-uri sc-status sc-bytes cs-bytes time-taken cs(User-Agent) cs-host rs(Content-Type) s-cache-result cs(Referer)
+    #Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
   template: |
-    {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }} {{ client_ip }} {{ username if username else '-' }} {{ method }} {{ url }} {{ status_code }} {{ sc_bytes if sc_bytes else 0 }} {{ cs_bytes if cs_bytes else 0 }} {{ time_taken if time_taken else 0 }} "{{ user_agent if user_agent else '-' }}" {{ host }} {{ content_type if content_type else '-' }} {{ cache_result if cache_result else '-' }} "{{ referrer if referrer else '-' }}"
+    {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }} {{ client_ip }} {{ username if username else '-' }} {{ method }} {{ url }} {{ protocol if protocol else '-' }} {{ status_code }} {{ sc_bytes if sc_bytes else 0 }} {{ cs_bytes if cs_bytes else 0 }} {{ time_taken if time_taken else 0 }} {{ host }} {{ user_agent if user_agent else '-' }} {{ referrer if referrer else '-' }} {{ content_type if content_type else '-' }} {{ cache_result if cache_result else '-' }}

@@ -798,10 +798,16 @@ class StorylineMixin:
             http_ctx = None
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
+                from evidenceforge.generation.activity.http_content import (
+                    normalize_mime_type_for_path,
+                    response_size_for_mime,
+                )
 
                 # Context-aware response sizing (or author-specified override)
                 _method = spec.method or "GET"
-                _uri = (spec.uri or "/").lower()
+                _uri_raw = spec.uri or "/"
+                _uri = _uri_raw.lower()
+                _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
                 if spec.response_body_len is not None:
                     resp_bytes = spec.response_body_len
                 elif _method == "POST" and any(
@@ -815,14 +821,14 @@ class StorylineMixin:
                 elif _method == "POST":
                     resp_bytes = rng.randint(200, 5000)
                 else:
-                    resp_bytes = rng.randint(5000, 50000)
+                    resp_bytes = response_size_for_mime(rng, _mime_type)
                 from evidenceforge.generation.activity.referrer import pick_referrer
 
                 _http_host = spec.hostname or dst_ip
                 http_ctx = HttpContext(
                     method=_method,
                     host=_http_host,
-                    uri=spec.uri or "/",
+                    uri=_uri_raw,
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
                     request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
@@ -839,7 +845,7 @@ class StorylineMixin:
                     referrer=spec.referrer
                     if spec.referrer is not None
                     else pick_referrer(rng, _http_host, context="general"),
-                    resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                    resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                     tags=[],
                 )
 
@@ -1282,22 +1288,27 @@ class StorylineMixin:
                 # even though no origin-side Zeek http.log is emitted for TLS.
                 if spec.method or spec.uri or spec.user_agent:
                     from evidenceforge.events.contexts import HttpContext
+                    from evidenceforge.generation.activity.http_content import (
+                        normalize_mime_type_for_path,
+                        response_size_for_mime,
+                    )
 
                     _method = spec.method or "GET"
-                    _uri = (spec.uri or "/").lower()
+                    _uri_raw = spec.uri or "/"
+                    _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
                     if spec.response_body_len is not None:
                         resp_bytes = spec.response_body_len
                     elif _method == "POST":
                         resp_bytes = rng.randint(200, 2000)
                     else:
-                        resp_bytes = rng.randint(500, 5000)
+                        resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
                     _http_host2 = spec.hostname or spec.dst_ip
                     http_ctx = HttpContext(
                         method=_method,
                         host=_http_host2,
-                        uri=spec.uri or "/",
+                        uri=_uri_raw,
                         version="1.1",
                         user_agent=spec.user_agent or "Mozilla/5.0",
                         request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
@@ -1314,7 +1325,7 @@ class StorylineMixin:
                         referrer=spec.referrer
                         if spec.referrer is not None
                         else pick_referrer(rng, _http_host2, context="general"),
-                        resp_mime_types=["text/html"] if (spec.status_code or 200) == 200 else [],
+                        resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                         tags=[],
                     )
 
@@ -1583,6 +1594,12 @@ class StorylineMixin:
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")
                 _status = path_entry.get("status", 404)
+                from evidenceforge.generation.activity.http_content import (
+                    normalize_mime_type_for_path,
+                    response_size_for_mime,
+                )
+
+                _mime_type = normalize_mime_type_for_path(_uri, "text/html")
                 _scan_referrer = pick_scan_referrer(
                     rng, scan_host, _send_referrer_config, port=spec.dst_port
                 )
@@ -1594,7 +1611,7 @@ class StorylineMixin:
                     version="1.1",
                     user_agent=render_ua(scan_ua, rng),
                     request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
-                    response_body_len=rng.randint(200, 5000),
+                    response_body_len=response_size_for_mime(rng, _mime_type),
                     status_code=_status,
                     status_msg={
                         200: "OK",
@@ -1606,7 +1623,7 @@ class StorylineMixin:
                         500: "Internal Server Error",
                     }.get(_status, "OK"),
                     referrer=_scan_referrer,
-                    resp_mime_types=["text/html"] if _status == 200 else [],
+                    resp_mime_types=[_mime_type] if _status == 200 else [],
                     tags=[],
                 )
 

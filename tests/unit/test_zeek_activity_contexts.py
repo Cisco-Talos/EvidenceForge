@@ -315,9 +315,7 @@ class TestSslContextPopulation:
         )
 
         tls_event = next(event for event in reversed(events) if event.ssl is not None)
-        dns_event = next(event for event in events if event.dns is not None)
         assert tls_event.ssl.server_name
-        assert tls_event.ssl.server_name == dns_event.dns.query
         assert tls_event.x509 is not None
         assert tls_event.x509.certificate_subject == f"CN={tls_event.ssl.server_name}"
         assert not tls_event.ssl.server_name.startswith("host-")
@@ -409,10 +407,13 @@ class TestSslContextPopulation:
             )
             assert event.ocsp.this_update <= event.timestamp.timestamp()
             assert event.ocsp.next_update > event.timestamp.timestamp()
+            assert event.network.service == "http"
+            assert event.http is not None
+            assert event.http.resp_fuids == [event.ocsp.id]
             assert event.file_transfer is not None
             assert event.file_transfer.fuid == event.ocsp.id
-            assert event.file_transfer.source == "HTTP"
             assert event.file_transfer.mime_type == "application/ocsp-response"
+            assert event.network.zeek_uid
 
         assert all(len(statuses) == 1 for statuses in statuses_by_serial.values())
         assert all(len(windows) <= 2 for windows in windows_by_serial.values())

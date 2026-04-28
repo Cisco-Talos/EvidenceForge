@@ -229,11 +229,18 @@ class SensorMultiplexEmitter(LogEmitter):
         prefix = original_uid[0] if original_uid else "C"
         target_len = len(original_uid) - 1  # Exclude prefix
 
-        h = hashlib.sha256(f"{original_uid}:{sensor_hostname}".encode()).digest()
-        chars = []
-        for byte in h[:target_len]:
-            chars.append(base62[byte % 62])
-        return prefix + "".join(chars)
+        from evidenceforge.utils.ids import _has_synthetic_marker
+
+        for counter in range(16):
+            suffix = "" if counter == 0 else f":{counter}"
+            h = hashlib.sha256(f"{original_uid}:{sensor_hostname}{suffix}".encode()).digest()
+            chars = []
+            for byte in h[:target_len]:
+                chars.append(base62[byte % 62])
+            derived_uid = prefix + "".join(chars)
+            if not _has_synthetic_marker(derived_uid):
+                return derived_uid
+        return derived_uid
 
     @classmethod
     def _derive_sensor_file_id(cls, original_id: str, sensor_hostname: str) -> str:

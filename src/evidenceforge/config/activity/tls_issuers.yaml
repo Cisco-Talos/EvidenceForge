@@ -18,8 +18,7 @@ issuers:
     validity_days_max: 90
     not_before_max_days: 60
     key_types:
-      - {type: "ecdsa", length: 256, weight: 70}
-      - {type: "rsa", length: 2048, weight: 30}
+      - {type: "rsa", length: 2048, weight: 100}
 
   - name: "CN=E1, O=Let's Encrypt, C=US"
     weight: 10

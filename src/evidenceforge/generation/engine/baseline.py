@@ -424,14 +424,16 @@ def _generate_web_request(rng: random.Random) -> tuple[str, str, int, str]:
     Uses weighted categories for realistic URI distribution. Occasionally
     generates parameterized paths for additional variety.
     """
+    from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
+
     # 20% chance of parameterized path for extra diversity
     if rng.random() < 0.20:
         template, method, status, mime = rng.choice(_PARAMETERIZED_PATHS)
         path = template.replace("{id}", str(rng.randint(1, 9999)))
-        return (path, method, status, mime)
+        return (path, method, status, normalize_mime_type_for_path(path, mime))
 
-    choice = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
-    return choice
+    path, method, status, mime = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
+    return (path, method, status, normalize_mime_type_for_path(path, mime))
 
 
 class BaselineMixin:
@@ -4843,7 +4845,15 @@ class BaselineMixin:
                         ]
                     else:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
-                    resp_bytes = rng.randint(200, 50000) if status == 200 else rng.randint(100, 500)
+                    from evidenceforge.generation.activity.http_content import (
+                        response_size_for_mime,
+                    )
+
+                    resp_bytes = (
+                        response_size_for_mime(rng, mime)
+                        if status == 200
+                        else rng.randint(100, 500)
+                    )
                     chosen_ua = rng.choice(ua_pool)
                     _ua_is_bot = any(
                         bot in chosen_ua for bot in ("Googlebot", "bingbot", "AhrefsBot")

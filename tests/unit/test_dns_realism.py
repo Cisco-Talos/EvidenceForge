@@ -20,6 +20,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.contexts import DnsContext, FirewallContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
 from evidenceforge.generation.state_manager import StateManager
@@ -133,6 +134,31 @@ class TestHostnameConsistency:
         assert conn_event.network.dst_ip in get_domain_ips(hostname)
         assert conn_event.ssl is not None
         assert conn_event.ssl.server_name == hostname
+
+    def test_dns_response_completes_before_dependent_connection(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="142.250.72.36",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=True,
+            hostname="www.gstatic.com",
+            conn_state="SF",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+        )
+
+        dns_event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        dns_complete = dns_event.timestamp.timestamp() + (dns_event.dns.rtt or 0)
+        assert dns_complete < conn_event.timestamp.timestamp()
 
     def test_ephemeral_ports_do_not_repeat_exact_five_tuple(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -340,6 +366,123 @@ class TestWeirdProtocolConstraint:
         "UDP_datagram_length_mismatch",
         "DNS_RR_unknown_type",
     }
+
+    def test_automatic_weird_generation_is_disabled(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Generated connections should not synthesize weird.log rows by default."""
+        state_manager.set_current_time(timestamp)
+
+        for i in range(100):
+            t = timestamp + timedelta(seconds=i)
+            state_manager.set_current_time(t)
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip=f"93.184.10.{i + 1}",
+                time=t,
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                conn_state="S0",
+                orig_bytes=0,
+                resp_bytes=0,
+            )
+
+        emitted_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert emitted_events
+        assert all(event.weird is None for event in emitted_events)
+        if "zeek_weird" in mock_emitters:
+            assert not mock_emitters["zeek_weird"].emit.called
+
+    def test_failed_tcp_connections_do_not_keep_http_or_ssl_service(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        state_manager.set_current_time(timestamp)
+
+        for service, port in (("ssl", 443), ("http", 80)):
+            mock_emitters["zeek_conn"].reset_mock()
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="93.184.216.34",
+                time=timestamp,
+                dst_port=port,
+                proto="tcp",
+                service=service,
+                conn_state="S0",
+                orig_bytes=0,
+                resp_bytes=0,
+            )
+            event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+            assert event.network.service == ""
+
+    def test_tcp_history_responder_markers_have_responder_packets(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            conn_state="S1",
+            orig_bytes=0,
+            resp_bytes=0,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert any(char.islower() for char in event.network.history)
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_ip_bytes is not None
+
+    def test_denied_dns_query_has_no_response_payload(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.01,
+            orig_bytes=60,
+            resp_bytes=180,
+            dns=DnsContext(
+                query="blocked.example.com",
+                trans_id=1234,
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                TTLs=[300.0],
+                rtt=0.02,
+            ),
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106023,
+                connection_id=1,
+                src_interface="inside",
+                dst_interface="outside",
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "S0"
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
+        assert event.dns.answers == []
+        assert event.dns.TTLs == []
+        assert event.dns.rtt is None
 
     def test_tcp_connections_get_tcp_weird_names(
         self, activity_gen, timestamp, state_manager, mock_emitters

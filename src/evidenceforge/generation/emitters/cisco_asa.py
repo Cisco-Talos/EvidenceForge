@@ -85,8 +85,9 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostnames: list[str] | None = None,
     ):
         super().__init__(format_def, output_path, buffer_size, threaded, sensor_hostnames)
-        # Per-sensor monotonically increasing connection ID counter
-        self._conn_id_counters: dict[str, int] = {}
+        # Per-sensor, per-second connection ID sequence. IDs are compact and
+        # timestamp-ordered, but deliberately not epoch-shaped.
+        self._conn_id_sequences: dict[tuple[str, int], int] = {}
         # Network segment config for interface resolution (set by emitter_setup)
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
@@ -105,17 +106,21 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
     def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
-        """Get monotonically increasing connection ID for a sensor.
-
-        Uses timestamp-derived base so IDs remain monotonic after
-        chronological sorting of the output buffer.
-        """
-        current = self._conn_id_counters.get(sensor_hostname)
-        if current is None:
-            seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-            current = 1_000_000 + (seed % 100_000_000)
-        self._conn_id_counters[sensor_hostname] = current + 1
-        return current
+        """Get a deterministic connection ID that sorts with event time."""
+        if isinstance(ts, datetime):
+            ts_bucket = int(ts.timestamp())
+            day_index = max(0, (ts.date() - datetime(2024, 1, 1).date()).days)
+            seconds_of_day = ts.hour * 3600 + ts.minute * 60 + ts.second
+        else:
+            ts_bucket = 0
+            day_index = 0
+            seconds_of_day = 0
+        sequence_key = (sensor_hostname, ts_bucket)
+        sequence = self._conn_id_sequences.get(sequence_key, 0)
+        self._conn_id_sequences[sequence_key] = sequence + 1
+        seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
+        sensor_offset = seed % 50_000
+        return 1_000_000 + sensor_offset + day_index * 2_000_000 + seconds_of_day * 23 + sequence
 
     @staticmethod
     def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:
@@ -175,13 +180,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         return f"{hours}:{minutes:02d}:{secs:02d}"
 
     @staticmethod
-    def _format_teardown_duration(net: Any, protocol: str, reason: str, conn_id: int) -> str:
-        """Format teardown duration, including realistic SYN timeout waits."""
+    def _teardown_duration_seconds(net: Any, protocol: str, reason: str, conn_id: int) -> float:
+        """Return teardown duration, including realistic SYN timeout waits."""
         duration = getattr(net, "duration", None)
         if protocol == "tcp" and reason == "SYN Timeout" and (duration is None or duration < 1):
-            timeout_seconds = 15 + (conn_id % 31)
-            return CiscoAsaEmitter._format_duration(float(timeout_seconds))
-        return CiscoAsaEmitter._format_duration(duration)
+            return float(15 + (conn_id % 31))
+        return float(duration or 0)
+
+    @staticmethod
+    def _format_teardown_duration(net: Any, protocol: str, reason: str, conn_id: int) -> str:
+        """Format teardown duration, including realistic SYN timeout waits."""
+        seconds = CiscoAsaEmitter._teardown_duration_seconds(net, protocol, reason, conn_id)
+        return CiscoAsaEmitter._format_duration(seconds)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
@@ -325,11 +335,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     ) -> None:
         """Emit a Teardown connection record (302014/302016/302021)."""
         reason = self._teardown_reason(net, protocol, conn_id)
-        duration = self._format_teardown_duration(net, protocol, reason, conn_id)
+        duration_seconds = self._teardown_duration_seconds(net, protocol, reason, conn_id)
+        duration = self._format_duration(duration_seconds)
         total_bytes = (net.orig_bytes or 0) + (net.resp_bytes or 0)
-        teardown_ts = event.timestamp
-        if net.duration and net.duration > 0:
-            teardown_ts = event.timestamp + timedelta(seconds=net.duration)
+        teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
 
         if protocol == "icmp":
             msg_id = 302021

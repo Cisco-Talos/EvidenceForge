@@ -329,9 +329,9 @@ The `os` field on systems determines which native log formats are generated:
 - **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
 - **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
 - **web_access** → Generated for systems with `roles: [web_server]`
-- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs outbound HTTP/HTTPS routed through the proxy, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs
+- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs outbound HTTP/HTTPS routed through the proxy as W3C Extended rows, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs. Current proxy behavior assumes TLS interception, so HTTPS can include both CONNECT and inspected request rows.
 
-If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a realistic service such as `squid`; otherwise validation warns and no proxy log file will be generated. Also set `environment.proxy.mode`: use `transparent` when Zeek/IDS should show direct-looking client→origin traffic, or `explicit` for PAC/browser-configured proxies where Zeek/IDS/firewall sources should show client→proxy plus proxy→origin legs. In explicit mode, denied proxy requests stop at the proxy and do not emit proxy→origin evidence. For explicit mode, set `listener_port` (default/warning fallback: 8080).
+If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a generic proxy service label such as `forward_proxy`; otherwise validation warns and no proxy log file will be generated. Also set `environment.proxy.mode`: use `transparent` when Zeek/IDS should show direct-looking client→origin traffic, or `explicit` for PAC/browser-configured proxies where Zeek/IDS/firewall sources should show client→proxy plus proxy→origin legs. In explicit mode, denied proxy requests stop at the proxy and do not emit proxy→origin evidence. For explicit mode, set `listener_port` (default/warning fallback: 8080). Non-intercepting tunnel-only HTTPS proxy behavior is not modeled yet.
 
 For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
 
@@ -442,6 +442,8 @@ IMPORTANT: When a process command line references a domain URL (Invoke-WebReques
 IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
 
 IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. Use the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Do not use a reverse-DNS/PTR artifact or provider-generated infrastructure name unless the scenario explicitly says the client connected with that name. This ensures DNS, SSL SNI, x509 certificate subject, and proxy logs carry the same realistic name. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
+
+For realism-bound generated datasets, do not use reserved documentation domains (`example.com`, `example.net`, `example.org`) as if they were live public infrastructure. They are fine in documentation snippets, but successful public DNS/TLS/proxy evidence for those domains is an obvious synthetic tell. Use a scenario-owned lab domain or a realistic non-reserved domain when the logs should show public resolver answers and certificates.
 
 ```yaml
 events:

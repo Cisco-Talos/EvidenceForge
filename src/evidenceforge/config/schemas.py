@@ -157,6 +157,13 @@ class TlsSanConfig(BaseModel, extra="forbid"):
     multi_label_public_suffixes: list[str]
 
 
+class TlsOcspResponder(BaseModel, extra="forbid"):
+    """Issuer-pattern to OCSP responder mapping in tls_realism.yaml."""
+
+    issuer_patterns: list[str]
+    domains: list[str]
+
+
 class TlsOcspConfig(BaseModel, extra="forbid"):
     """OCSP behavior settings in tls_realism.yaml."""
 
@@ -164,6 +171,7 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     this_update_max_skew_seconds: int
     next_update_min_seconds: int
     next_update_max_seconds: int
+    responders: list[TlsOcspResponder] = Field(default_factory=list)
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
     suppress_revoked_suffixes: list[str] = Field(default_factory=list)
 

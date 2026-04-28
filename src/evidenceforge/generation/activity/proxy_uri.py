@@ -14,6 +14,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -48,6 +49,12 @@ def load_proxy_uri_templates() -> dict[str, Any]:
     return _CACHED_DATA
 
 
+def reset_proxy_uri_templates_cache() -> None:
+    """Clear cached proxy URI templates. Intended for tests."""
+    global _CACHED_DATA
+    _CACHED_DATA = None
+
+
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
     """Replace template variables in a URI path."""
     while "{guid}" in path:
@@ -67,27 +74,6 @@ def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str
         path = path.replace("{brand}", f"org-{rng.getrandbits(16):04x}", 1)
     path = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*\}", "item", path)
     return path
-
-
-# Extension-based MIME type inference (universal standards, not configurable)
-_EXT_MIME: dict[str, str] = {
-    ".js": "application/javascript",
-    ".css": "text/css",
-    ".json": "application/json",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".svg": "image/svg+xml",
-    ".woff2": "font/woff2",
-    ".woff": "font/woff",
-    ".txt": "text/plain",
-    ".xml": "application/xml",
-    ".pdf": "application/pdf",
-    ".ico": "image/x-icon",
-    ".webp": "image/webp",
-    ".map": "application/json",
-}
 
 
 def pick_proxy_uri(
@@ -154,12 +140,6 @@ def pick_proxy_uri(
 
     path = _substitute_vars(rng, path, data)
 
-    # Extension-based MIME inference overrides domain default
-    ext_lower = ""
-    clean_path = path.split("?")[0]  # Strip query string
-    if "." in clean_path.rsplit("/", 1)[-1]:
-        ext_lower = "." + clean_path.rsplit(".", 1)[-1].lower()
-    if ext_lower in _EXT_MIME:
-        content_type = _EXT_MIME[ext_lower]
+    content_type = normalize_mime_type_for_path(path, content_type)
 
     return path, content_type, method, user_agent

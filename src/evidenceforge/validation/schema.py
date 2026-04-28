@@ -615,7 +615,8 @@ class ScenarioValidator:
                     ),
                     suggestion=(
                         "Add a proxy system with roles: [forward_proxy] and an appropriate "
-                        "service such as squid, or remove proxy_access from output.logs"
+                        "proxy service label such as forward_proxy or remove proxy_access "
+                        "from output.logs"
                     ),
                 )
             )
@@ -649,7 +650,7 @@ class ScenarioValidator:
                     ),
                     suggestion=(
                         "Set environment.proxy.listener_port to the client-visible proxy "
-                        "port, such as 8080, 3128, or a product-specific value."
+                        "port, such as 8080 or a product-specific value."
                     ),
                 )
             )

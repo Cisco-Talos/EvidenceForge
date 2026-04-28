@@ -5,6 +5,8 @@
 
 import random
 
+import yaml
+
 
 class TestProxyUriOsFiltering:
     """Verify pick_proxy_uri() respects source_os for UA overrides."""
@@ -57,6 +59,46 @@ class TestProxyUriOsFiltering:
         rng = random.Random(42)
         _, _, _, ua_override = pick_proxy_uri(rng, "crl.microsoft.com", [], source_os="linux")
         assert ua_override is None
+
+    def test_overlay_path_extension_overrides_bad_content_type(self, tmp_path, monkeypatch):
+        """Overlay-defined paths should still get extension-coherent MIME types."""
+        from evidenceforge.generation.activity.proxy_uri import (
+            pick_proxy_uri,
+            reset_proxy_uri_templates_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "proxy_uri_templates.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "domains": {
+                        "updates.example.test": {
+                            "paths": ["/status.gif"],
+                            "content_type": "text/html",
+                            "methods": ["GET"],
+                        }
+                    }
+                },
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_proxy_uri_templates_cache()
+
+        try:
+            path, content_type, method, _ = pick_proxy_uri(
+                random.Random(42),
+                "updates.example.test",
+                [],
+                source_os="windows",
+            )
+        finally:
+            reset_proxy_uri_templates_cache()
+
+        assert path == "/status.gif"
+        assert method == "GET"
+        assert content_type == "image/gif"
 
     def test_connect_user_agent_uses_domain_override(self):
         """CONNECT proxy entries should still use destination-specific service UAs."""

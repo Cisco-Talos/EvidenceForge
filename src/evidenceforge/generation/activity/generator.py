@@ -41,11 +41,13 @@ from evidenceforge.events.contexts import (
     DnsContext,
     EdrContext,
     FileContext,
+    FileTransferContext,
     FirewallContext,
     HostContext,
     HttpContext,
     IdsContext,
     KerberosContext,
+    OcspContext,
     ProxyContext,
     RegistryContext,
 )
@@ -468,6 +470,7 @@ _SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
 # Proxy header overhead ranges (bytes)
 _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
+_AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 300
 
 # Kerberos TGS service name distribution (weighted)
@@ -957,19 +960,19 @@ class ActivityGenerator:
 
         domain_tags = get_domain_tags(proxy_hostname)
         proxy_ua_override = None
-        if explicit_mode and dst_port == 443:
-            proxy_method = "CONNECT"
-            url = f"{proxy_hostname}:443"
-            proxy_content_type = ""
-            proxy_referrer = ""
-            user_agent = http.user_agent if http is not None else ""
-        elif http is not None:
+        if http is not None:
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             proxy_method = http.method
             url = f"{scheme}://{proxy_hostname}{http.uri}"
             proxy_content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
             user_agent = http.user_agent
             proxy_referrer = http.referrer
+        elif explicit_mode and dst_port == 443:
+            proxy_method = "CONNECT"
+            url = f"{proxy_hostname}:443"
+            proxy_content_type = ""
+            proxy_referrer = ""
+            user_agent = ""
         else:
             source_os = _get_os_category(source_system.os) if source_system else None
             path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
@@ -1015,6 +1018,7 @@ class ActivityGenerator:
         else:
             cache_result = "DENIED"
 
+        response_bytes = http.response_body_len if http is not None else (resp_bytes or 0)
         cs_bytes = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
         if cache_result == "DENIED":
             sc_bytes = rng.randint(500, 2000)
@@ -1023,16 +1027,13 @@ class ActivityGenerator:
         elif cache_result == "GATEWAY_ERROR":
             sc_bytes = rng.randint(250, 1800)
         elif cache_result == "HIT":
-            response_bytes = max(1, resp_bytes or 0)
-            sc_bytes = rng.randint(
-                max(1, int(response_bytes * 0.4)), max(2, int(response_bytes * 1.1))
-            )
+            sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
         elif proxy_method == "CONNECT":
             host_len = len(proxy_hostname)
             cs_bytes = rng.randint(180 + host_len, 520 + host_len)
             sc_bytes = rng.randint(90, 260)
         else:
-            sc_bytes = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+            sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
 
         status_code = {
             "DENIED": 403,
@@ -1046,6 +1047,9 @@ class ActivityGenerator:
             url=url,
             host=proxy_hostname,
             status_code=status_code,
+            tunnel_status_code=200
+            if explicit_mode and dst_port == 443 and proxy_method != "CONNECT"
+            else status_code,
             sc_bytes=sc_bytes,
             cs_bytes=cs_bytes,
             time_taken=int((duration or 0) * 1000),
@@ -1276,9 +1280,10 @@ class ActivityGenerator:
         )
         event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
 
-        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses)
+        # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses).
+        # Zeek ocsp.log joins through a separate OCSP HTTP response file
+        # (`ocsp.id == files.fuid`), not through the encrypted TLS connection UID.
         if rng.random() < 0.18:
-            from evidenceforge.events.contexts import FileTransferContext, OcspContext
             from evidenceforge.generation.activity.tls_realism import ocsp_config
             from evidenceforge.utils.ids import generate_zeek_uid as _gen_uid
 
@@ -1311,7 +1316,7 @@ class ActivityGenerator:
                 self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
             this_update, next_update = ocsp_window
             ocsp_id = _gen_uid("F")
-            event.ocsp = OcspContext(
+            ocsp_ctx = OcspContext(
                 id=ocsp_id,
                 hash_algorithm="sha256",
                 issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[
@@ -1325,25 +1330,87 @@ class ActivityGenerator:
                 this_update=this_update,
                 next_update=next_update,
             )
-            if event.file_transfer is None:
-                ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp_id}")).randint(
-                    900, 2500
-                )
-                event.file_transfer = FileTransferContext(
-                    fuid=ocsp_id,
-                    source="HTTP",
-                    depth=0,
-                    analyzers=[],
-                    mime_type="application/ocsp-response",
-                    duration=rng.uniform(0.001, 0.02),
-                    local_orig=_is_private_ip(net.dst_ip) if net.src_ip != net.dst_ip else False,
-                    is_orig=False,
-                    seen_bytes=ocsp_size,
-                    total_bytes=ocsp_size,
-                    missing_bytes=0,
-                    overflow_bytes=0,
-                    timedout=False,
-                )
+            self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
+
+    def _emit_ocsp_http_response(
+        self,
+        tls_event: SecurityEvent,
+        *,
+        cert_name: str,
+        ocsp: OcspContext,
+        rng: random.Random,
+    ) -> None:
+        """Emit Zeek-native OCSP HTTP/file evidence for an OCSP response."""
+        net = tls_event.network
+        if net is None:
+            return
+        import hashlib
+
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+        from evidenceforge.generation.activity.tls_realism import pick_ocsp_responder
+
+        issuer_name = tls_event.x509.certificate_issuer if tls_event.x509 else ""
+        responder = pick_ocsp_responder(issuer_name, rng)
+        responder_ip = resolve_domain_ip(responder, src_host=net.src_ip)
+        ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp.id}")).randint(900, 2500)
+        ocsp_time = tls_event.timestamp + timedelta(
+            milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
+        )
+        uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
+        http_ctx = HttpContext(
+            method="GET",
+            host=responder,
+            uri=f"/{uri_seed}",
+            version="1.1",
+            user_agent="Microsoft-CryptoAPI/10.0",
+            request_body_len=0,
+            response_body_len=ocsp_size,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/ocsp-response"],
+            resp_fuids=[ocsp.id],
+            tags=["ocsp"],
+        )
+        file_ctx = FileTransferContext(
+            fuid=ocsp.id,
+            source="HTTP",
+            depth=0,
+            analyzers=[],
+            mime_type="application/ocsp-response",
+            duration=random.Random(_stable_seed(f"ocsp_file_duration:{ocsp.id}")).uniform(
+                0.001, 0.02
+            ),
+            local_orig=_is_private_ip(responder_ip),
+            is_orig=False,
+            seen_bytes=ocsp_size,
+            total_bytes=ocsp_size,
+            missing_bytes=0,
+            overflow_bytes=0,
+            timedout=False,
+        )
+        source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
+        self.generate_connection(
+            src_ip=net.src_ip,
+            dst_ip=responder_ip,
+            time=ocsp_time,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=random.Random(_stable_seed(f"ocsp_conn_duration:{ocsp.id}")).uniform(
+                0.02, 0.35
+            ),
+            orig_bytes=320,
+            resp_bytes=ocsp_size,
+            emit_dns=True,
+            pid=net.initiating_pid,
+            source_system=source_system,
+            conn_state="SF",
+            http=http_ctx,
+            file_transfer=file_ctx,
+            ocsp=ocsp,
+            hostname=responder,
+            proxy_bypass=True,
+        )
 
     def _pick_profiled_tls_destination(
         self,
@@ -2476,6 +2543,8 @@ class ActivityGenerator:
         dns: Optional["DnsContext"] = None,
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
+        file_transfer: FileTransferContext | None = None,
+        ocsp: OcspContext | None = None,
         proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
@@ -2510,6 +2579,8 @@ class ActivityGenerator:
             Zeek UID (18-character string)
         """
         from evidenceforge.events.contexts import NetworkContext
+
+        caller_provided_conn_state = conn_state is not None
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -2652,6 +2723,9 @@ class ActivityGenerator:
 
             client_http: HttpContext | None = None
             if dst_port == 443:
+                tunnel_status_code = proxy_context.tunnel_status_code
+                if tunnel_status_code is None:
+                    tunnel_status_code = proxy_context.status_code
                 connect_status_messages = {
                     200: "Connection Established",
                     403: "Forbidden",
@@ -2668,16 +2742,26 @@ class ActivityGenerator:
                     user_agent=proxy_context.user_agent,
                     request_body_len=0,
                     response_body_len=0,
-                    status_code=proxy_context.status_code,
+                    status_code=tunnel_status_code,
                     status_msg=connect_status_messages.get(
-                        proxy_context.status_code,
-                        "Connection Established"
-                        if proxy_context.status_code < 400
-                        else "Proxy Error",
+                        tunnel_status_code,
+                        "Connection Established" if tunnel_status_code < 400 else "Proxy Error",
                     ),
                     tags=[],
                 )
             elif http is not None:
+                status_messages = {
+                    200: "OK",
+                    301: "Moved Permanently",
+                    302: "Found",
+                    304: "Not Modified",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    500: "Internal Server Error",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
                 client_http = HttpContext(
                     method=http.method,
                     host=proxy_context.host,
@@ -2685,13 +2769,15 @@ class ActivityGenerator:
                     version=http.version,
                     user_agent=http.user_agent,
                     request_body_len=http.request_body_len,
-                    response_body_len=http.response_body_len,
-                    status_code=http.status_code,
-                    status_msg=http.status_msg,
+                    response_body_len=proxy_context.sc_bytes,
+                    status_code=proxy_context.status_code,
+                    status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
                     referrer=http.referrer,
                     trans_depth=http.trans_depth,
                     tags=list(http.tags),
-                    resp_mime_types=list(http.resp_mime_types),
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type
+                    else list(http.resp_mime_types),
                 )
             else:
                 request_body_len = 0
@@ -2746,20 +2832,28 @@ class ActivityGenerator:
 
             if proxy_context.status_code >= 400:
                 return client_uid
+            if proxy_context.cache_result == "HIT":
+                return client_uid
 
             egress_http = http if dst_port == 80 and service == "http" else None
+            egress_resp_bytes = resp_bytes
+            if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
+                egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
             egress_delay = timedelta(
                 milliseconds=random.Random(
                     _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
                 ).lognormvariate(3.0, 0.65)
             )
-            if hostname:
+            if proxy_context.host:
                 self._emit_dns_lookup(
                     proxy_sys.ip,
                     dst_ip,
                     time + egress_delay,
-                    hostname=hostname,
+                    hostname=proxy_context.host,
                 )
+            egress_conn_state = conn_state
+            if not caller_provided_conn_state and proxy_context.status_code < 400:
+                egress_conn_state = "SF"
             self.generate_connection(
                 src_ip=proxy_sys.ip,
                 dst_ip=dst_ip,
@@ -2769,14 +2863,16 @@ class ActivityGenerator:
                 service=service,
                 duration=duration,
                 orig_bytes=orig_bytes,
-                resp_bytes=resp_bytes,
+                resp_bytes=egress_resp_bytes,
                 emit_dns=False,
                 pid=-1,
                 source_system=proxy_sys,
-                conn_state=conn_state,
+                conn_state=egress_conn_state,
                 dns=dns,
                 ids=ids,
                 http=egress_http,
+                file_transfer=file_transfer,
+                ocsp=ocsp,
                 firewall=firewall,
                 hostname=hostname,
                 proxy_bypass=True,
@@ -3021,10 +3117,6 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
-            # Enforce consistency: resp_pkts > 0 requires resp_bytes > 0
-            # (orig always has at least the SYN, so orig_pkts stays from history)
-            if resp_pkts > 0 and resp_bytes == 0:
-                resp_pkts = 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -3059,6 +3151,13 @@ class ActivityGenerator:
         }
         if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
             service = _PORT_SERVICE[dst_port]
+        if (
+            proto == "tcp"
+            and conn_state in {"S0", "REJ", "SH", "SHR"}
+            and service in {"http", "ssl"}
+            and http is None
+        ):
+            service = ""
 
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
@@ -3120,6 +3219,10 @@ class ActivityGenerator:
             event.ids = ids
         if http is not None:
             event.http = http
+        if file_transfer is not None:
+            event.file_transfer = file_transfer
+        if ocsp is not None:
+            event.ocsp = ocsp
         if proxy is not None:
             event.proxy = proxy
         if firewall is not None:
@@ -3128,6 +3231,23 @@ class ActivityGenerator:
         # DNS context for Zeek dns.log fan-out
         if dns is not None:
             event.dns = dns
+            if (
+                event.firewall is not None
+                and event.firewall.action == "deny"
+                and proto in ("udp", "tcp")
+                and dst_port == 53
+            ):
+                event.dns.rcode = "NOERROR"
+                event.dns.rcode_num = 0
+                event.dns.answers = []
+                event.dns.TTLs = []
+                event.dns.rtt = None
+                event.network.conn_state = "S0"
+                event.network.history = "D" if proto == "udp" else "S"
+                event.network.duration = None
+                event.network.resp_bytes = 0
+                event.network.resp_pkts = 0
+                event.network.resp_ip_bytes = None
         elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
             event.dns = DnsContext(
@@ -3245,16 +3365,19 @@ class ActivityGenerator:
                     cache_result = "MISS"
                 else:
                     cache_result = "DENIED"
-                # Proxy byte counts differ from wire bytes: header overhead,
-                # cache effects, and proxy error pages.
+                # W3C sc-bytes/cs-bytes are proxy-side accounting fields:
+                # payload plus HTTP/proxy headers for allowed responses,
+                # or proxy-generated error pages for failures.
                 _cs = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+                _response_bytes = (
+                    event.http.response_body_len if event.http is not None else (resp_bytes or 0)
+                )
                 if cache_result == "DENIED":
                     _sc = rng.randint(500, 2000)  # proxy error page
                 elif cache_result == "HIT":
-                    _rb = max(1, resp_bytes or 0)
-                    _sc = rng.randint(max(1, int(_rb * 0.4)), max(2, int(_rb * 1.1)))
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 else:
-                    _sc = (resp_bytes or 0) + rng.randint(*_PROXY_SC_OVERHEAD)
+                    _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
                     method=proxy_method,
@@ -3283,6 +3406,14 @@ class ActivityGenerator:
                 rng=rng,
                 allow_failure=True,
             )
+        if (
+            proto == "tcp"
+            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
+            and event.network.service in {"http", "ssl"}
+            and event.http is None
+            and event.ssl is None
+        ):
+            event.network.service = ""
 
         elif (
             not local_only
@@ -3591,66 +3722,13 @@ class ActivityGenerator:
                 allow_failure=False,
             )
 
-        # Zeek weird.log: condition-driven network anomalies. Select after
-        # HTTP/TLS consistency adjustments so partial/reset weirds cannot remain
-        # attached to connections later normalized to clean SF application logs.
-        weird_candidates: list[tuple[str, str, float]] = []
-        final_state = event.network.conn_state
-        final_service = event.network.service
-        if event.network.protocol == "tcp":
-            if final_state in ("S0", "S1", "SH", "SHR"):
-                weird_candidates.extend(
-                    [
-                        ("connection_originator_SYN_ack", "TCP", 0.03),
-                        ("truncated_header", "TCP", 0.015),
-                    ]
-                )
-            elif final_state in ("RSTO", "RSTR"):
-                weird_candidates.extend(
-                    [
-                        ("inappropriate_FIN", "TCP", 0.035),
-                        ("above_hole_data_without_any_acks", "TCP", 0.02),
-                    ]
-                )
-            elif event.network.missed_bytes:
-                weird_candidates.append(("above_hole_data_without_any_acks", "TCP", 0.20))
-            elif (
-                final_state == "SF"
-                and event.network.duration
-                and event.network.duration > 60
-                and (event.network.orig_bytes or 0) + (event.network.resp_bytes or 0) > 500_000
-            ):
-                weird_candidates.append(("window_recision", "TCP", 0.003))
-            elif final_state != "SF" and final_service != "ssl":
-                weird_candidates.append(("bad_TCP_checksum", "TCP", 0.0015))
-        elif event.network.protocol == "udp":
-            if final_service == "dns":
-                weird_candidates.extend(
-                    [
-                        ("DNS_truncated_len_lt_hdr_len", "UDP", 0.002),
-                        ("DNS_RR_unknown_type", "UDP", 0.0015),
-                    ]
-                )
-            else:
-                weird_candidates.extend(
-                    [
-                        ("bad_UDP_checksum", "UDP", 0.001),
-                        ("UDP_datagram_length_mismatch", "UDP", 0.0008),
-                    ]
-                )
-
-        weird_roll = rng.random()
-        cumulative = 0.0
-        selected_weird: tuple[str, str] | None = None
-        for name, source, probability in weird_candidates:
-            cumulative += probability
-            if weird_roll < cumulative:
-                selected_weird = (name, source)
-                break
-        if not local_only and selected_weird is not None:
-            from evidenceforge.events.contexts import WeirdContext
-
-            event.weird = WeirdContext(name=selected_weird[0], source=selected_weird[1])
+        # Automatic weird.log synthesis is intentionally disabled for now. The
+        # Zeek weird type space is broad and state-sensitive; poorly matched
+        # weird rows are more damaging than sparse weird.log output. Explicit
+        # WeirdContext events still render through ZeekWeirdEmitter. Keep one
+        # RNG draw to avoid reshaping unrelated deterministic traffic choices.
+        if not _AUTO_WEIRD_ENABLED:
+            rng.random()
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
@@ -4278,15 +4356,17 @@ class ActivityGenerator:
         _src_os = "windows"
         if src_system is not None:
             _src_os = _get_os_category(src_system.os)
-        dns_time = time - timedelta(milliseconds=rng.randint(10, 50))
+        dns_time = time - timedelta(milliseconds=rng.randint(900, 1400))
         src_port = self._allocate_ephemeral_port(
             src_ip, dns_server_ip, 53, "udp", dns_time, _src_os
         )
 
         from evidenceforge.events.contexts import DnsContext
 
-        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures)
-        if rng.random() < 0.002:
+        # Phase 6.3: 0.2% chance of SERVFAIL (transient failures).
+        # Known internal names are served by authoritative internal DNS and
+        # should not randomly fail unless a scenario explicitly models DNS trouble.
+        if not is_internal and rng.random() < 0.002:
             dns_ctx = DnsContext(
                 query=hostname,
                 trans_id=rng.randint(1, 65535),

@@ -17,11 +17,16 @@ from evidenceforge.generation.activity.generator import (
     _ocsp_status_for_certificate,
     _tls_san_dns_names,
 )
-from evidenceforge.generation.activity.tls_issuers import load_tls_issuers, pick_issuer
+from evidenceforge.generation.activity.tls_issuers import (
+    load_tls_issuers,
+    pick_issuer,
+    pick_key_type,
+)
 from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     multi_label_public_suffixes,
     ocsp_config,
+    pick_ocsp_responder,
     pick_tls_destination,
     reset_tls_realism_cache,
     tls_destination_config,
@@ -127,6 +132,13 @@ class TestTlsIssuers:
                 f"Override '{pattern}' references '{ca_name}' which is not in issuers list"
             )
 
+    def test_lets_encrypt_r3_is_rsa_intermediate(self):
+        """Let's Encrypt R3 should not emit ECDSA certificate metadata."""
+        data = load_tls_issuers()
+        issuer = next(i for i in data["issuers"] if i["name"] == "CN=R3, O=Let's Encrypt, C=US")
+        observed = {pick_key_type(random.Random(seed), issuer) for seed in range(20)}
+        assert observed == {("rsa", 2048)}
+
     def test_san_dns_never_wildcards_public_suffix(self):
         """Generated SAN lists should not contain impossible public-suffix wildcards."""
         assert _tls_san_dns_names("stackoverflow.com") == [
@@ -156,6 +168,27 @@ class TestTlsIssuers:
             statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
             assert "revoked" not in statuses
 
+    def test_ocsp_responder_selection_is_issuer_aware(self):
+        """OCSP responders should come from issuer-specific config."""
+        assert pick_ocsp_responder("CN=R3, O=Let's Encrypt, C=US", random.Random(1)) in {
+            "r3.o.lencr.org",
+            "ocsp.int-x3.letsencrypt.org",
+        }
+        assert (
+            pick_ocsp_responder(
+                "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+                random.Random(1),
+            )
+            == "ocsp.globalsign.com"
+        )
+        assert (
+            pick_ocsp_responder(
+                "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US",
+                random.Random(1),
+            )
+            == "ocsp.example.com"
+        )
+
     def test_tls_realism_overlay_extends_lists_and_replaces_scalars(self, tmp_path, monkeypatch):
         """TLS realism config should support project-local overlays."""
         overlay_dir = tmp_path / ".eforge" / "config" / "activity"
@@ -164,7 +197,15 @@ class TestTlsIssuers:
             yaml.safe_dump(
                 {
                     "san": {"multi_label_public_suffixes": ["example.test"]},
-                    "ocsp": {"cache_bucket_seconds": 7200},
+                    "ocsp": {
+                        "cache_bucket_seconds": 7200,
+                        "responders": [
+                            {
+                                "issuer_patterns": ["*Custom*"],
+                                "domains": ["ocsp.custom.example.test"],
+                            }
+                        ],
+                    },
                     "certificate_chains": {
                         "templates": [
                             {
@@ -194,6 +235,10 @@ class TestTlsIssuers:
         try:
             assert "example.test" in multi_label_public_suffixes()
             assert ocsp_config()["cache_bucket_seconds"] == 7200
+            assert (
+                pick_ocsp_responder("CN=Custom TLS CA", random.Random(1))
+                == "ocsp.custom.example.test"
+            )
             assert any(
                 template.get("name") == "custom"
                 for template in certificate_chain_config()["templates"]

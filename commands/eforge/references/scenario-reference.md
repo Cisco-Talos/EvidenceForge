@@ -531,9 +531,9 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
-`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, set `environment.proxy.mode` explicitly; omitted config defaults to `transparent` with a warning.
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, set `environment.proxy.mode` explicitly; omitted config defaults to `transparent` with a warning. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
 ## Backward Compatibility
 

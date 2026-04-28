@@ -1,4 +1,4 @@
-# web_access format definition — W3C web server access logs (Apache/Nginx)
+# web_access format definition — Apache/Nginx combined web server access logs
 #
 # Category: application
 # Standalone: yes (no cross-file dependencies)
@@ -8,7 +8,7 @@
 
 name: web_access
 version: "1.0"
-description: "W3C web server access logs (Apache/Nginx)"
+description: "Apache/Nginx combined web server access logs"
 category: application
 
 fields:
@@ -32,7 +32,7 @@ fields:
     required: true
     description: "HTTP method"
     constraints:
-      allowed_values: [GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH]
+      allowed_values: [GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH, TRACE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK]
 
   - name: path
     type: string
