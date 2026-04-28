@@ -78,6 +78,23 @@ class TestForwardDNS:
             assert isinstance(ips, list), f"{domain}: expected list, got {type(ips)}"
             assert len(ips) >= 1, f"{domain}: empty IP list"
 
+    def test_curated_tls_and_site_domains_use_provider_coherent_ips(self):
+        """Curated TLS/site-map domains should not fall through to generic CDN IP hashing."""
+        fdns = get_forward_dns()
+        expectations = {
+            "dl.google.com": ("142.250.", "172.217."),
+            "www.gstatic.com": ("142.250.", "172.217."),
+            "static.xx.fbcdn.net": ("31.13.",),
+            "scontent.xx.fbcdn.net": ("31.13.",),
+            "res.cdn.office.net": ("13.107.",),
+            "a0.awsstatic.com": ("54.230.",),
+            "cdn.jsdelivr.net": ("151.101.",),
+        }
+
+        for domain, prefixes in expectations.items():
+            assert domain in fdns
+            assert all(ip.startswith(prefixes) for ip in fdns[domain]), (domain, fdns[domain])
+
 
 class TestTagQueries:
     """Tests for tag-based domain lookups."""

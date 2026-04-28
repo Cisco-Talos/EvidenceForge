@@ -29,6 +29,32 @@ ocsp:
     good: 90
     unknown: 7
     revoked: 3
+  suppress_revoked_suffixes:
+    - .amazon.com
+    - .awsstatic.com
+    - .bing.com
+    - .cloudflare.com
+    - .digicert.com
+    - .fbcdn.net
+    - .facebook.com
+    - .github.com
+    - .githubusercontent.com
+    - .google.com
+    - .googleapis.com
+    - .gstatic.com
+    - .lencr.org
+    - .linkedin.com
+    - .live.com
+    - .microsoft.com
+    - .microsoftonline.com
+    - .office.com
+    - .office.net
+    - .office365.com
+    - .pki.goog
+    - .salesforce.com
+    - .slack.com
+    - .windowsupdate.com
+    - .zoom.us
 
 certificate_chains:
   include_intermediate_probability: 0.86
@@ -91,6 +117,7 @@ destinations:
   profiles:
     - name: enterprise_heavy_hitters
       weight: 34
+      system_types: [workstation]
       dns_tags: [saas, outlook, teams, onedrive]
       domains:
         - login.microsoftonline.com
@@ -111,7 +138,6 @@ destinations:
         - na139.salesforce.com
     - name: certificate_infra
       weight: 14
-      dns_tags: [background]
       domains:
         - ocsp.digicert.com
         - crl.microsoft.com
@@ -143,6 +169,7 @@ destinations:
         - github-releases.githubusercontent.com
       os_overrides:
         windows:
+          dns_tags: [background, windows]
           domains:
             - download.windowsupdate.com
             - settings-win.data.microsoft.com
@@ -152,6 +179,7 @@ destinations:
             - dl.google.com
             - update.googleapis.com
         linux:
+          dns_tags: [background, linux]
           domains:
             - security.ubuntu.com
             - archive.ubuntu.com
@@ -163,6 +191,7 @@ destinations:
     - name: developer_tools
       weight: 12
       personas: [developer, sysadmin, security_analyst, analyst]
+      system_types: [workstation]
       dns_tags: [git, dev]
       domains:
         - github.com
@@ -181,6 +210,7 @@ destinations:
         - objects.githubusercontent.com
     - name: browsing_long_tail
       weight: 22
+      system_types: [workstation]
       dns_tags: [web, cdn, social]
       domains:
         - www.google.com

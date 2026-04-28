@@ -154,6 +154,30 @@ class TestIdsAlertCorrelation:
         assert event.ntp.rec_ts > event.ntp.org_ts
         assert event.ntp.xmt_ts >= event.ntp.rec_ts
 
+    def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
+        """NTP version and poll behavior should be stable per client/server pair."""
+        for minute in (0, 10):
+            activity_gen.generate_connection(
+                src_ip="10.0.1.50",
+                dst_ip="129.6.15.28",
+                time=timestamp.replace(minute=minute),
+                dst_port=123,
+                proto="udp",
+                service="ntp",
+                duration=0.02,
+                orig_bytes=48,
+                resp_bytes=48,
+            )
+
+        first = mock_emitters["zeek_ntp"].emit.call_args_list[-2][0][0].ntp
+        second = mock_emitters["zeek_ntp"].emit.call_args_list[-1][0][0].ntp
+
+        assert first.version == second.version
+        assert first.poll == second.poll
+        assert first.precision == second.precision
+        assert first.root_delay == second.root_delay
+        assert first.root_disp == second.root_disp
+
 
 class TestWebAccessCorrelation:
     """Web access logs should produce correlated Zeek conn + HTTP + web records."""

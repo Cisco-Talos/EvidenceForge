@@ -137,6 +137,9 @@ def validate_config() -> ValidationResult:
         "activity/proxy_uri_templates.yaml": {
             "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
+        "activity/proxy_user_agents.yaml": {
+            "dict_fields": {"domain_overrides", "workstation", "server"},
+        },
         "activity/site_maps.yaml": {
             "dict_fields": {"domains", "tags", "generic", "search_terms"},
         },
@@ -175,7 +178,7 @@ def validate_config() -> ValidationResult:
             "list_fields": {"mime_types": None, "analyzer_sets": None},
         },
         "activity/network_params.yaml": {
-            "list_fields": {"oui_prefixes": None},
+            "list_fields": {"oui_prefixes": None, "public_ntp_servers": "name"},
         },
         "activity/bash_commands.yaml": {
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
@@ -411,6 +414,7 @@ def validate_config() -> ValidationResult:
     )
     from evidenceforge.generation.activity.process_network import load_process_network_map
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
+    from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
@@ -425,6 +429,7 @@ def validate_config() -> ValidationResult:
     process_access_data = load_process_access_patterns()
     create_remote_thread_data = load_create_remote_thread_patterns()
     proxy_data = load_proxy_uri_templates()
+    proxy_ua_data = load_proxy_user_agents()
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
     tls_realism_data = load_tls_realism()
@@ -499,6 +504,21 @@ def validate_config() -> ValidationResult:
         if isinstance(site_data.get("domains"), dict)
         else set()
     )
+    site_referenced_hosts: set[str] = set()
+    if isinstance(site_data.get("domains"), dict):
+        for site_domain, site_config in site_data.get("domains", {}).items():
+            site_referenced_hosts.add(site_domain)
+            if not isinstance(site_config, dict):
+                continue
+            site_referenced_hosts.update(
+                str(host) for host in site_config.get("cdn_domains", []) if host
+            )
+            for page in site_config.get("pages", []):
+                if not isinstance(page, dict):
+                    continue
+                for subresource in page.get("subresources", []):
+                    if isinstance(subresource, dict) and subresource.get("host"):
+                        site_referenced_hosts.add(str(subresource["host"]))
 
     # Check 7: Orphaned proxy templates
     for domain in proxy_domains - dns_domain_set:
@@ -509,11 +529,33 @@ def validate_config() -> ValidationResult:
                 f'Domain "{domain}" not found in dns_registry',
             )
         )
+    proxy_ua_hosts: set[str] = set()
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        for override in proxy_ua_data.get("domain_overrides", {}).values():
+            if not isinstance(override, dict):
+                continue
+            proxy_ua_hosts.update(str(host) for host in override.get("hosts", []) if host)
+    for domain in proxy_ua_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "proxy_user_agents.yaml",
+                f'Domain override host "{domain}" not found in dns_registry',
+            )
+        )
 
     # Check 8: Orphaned site maps
     for domain in site_domains - dns_domain_set:
         result.issues.append(
             Issue("WARNING", "site_maps.yaml", f'Domain "{domain}" not found in dns_registry')
+        )
+    for domain in site_referenced_hosts - dns_domain_set:
+        result.issues.append(
+            Issue(
+                "WARNING",
+                "site_maps.yaml",
+                f'Referenced host "{domain}" not found in dns_registry',
+            )
         )
 
     # Checks 9-10: Missing proxy templates / site maps for web/saas domains
@@ -586,6 +628,19 @@ def validate_config() -> ValidationResult:
                         f'dns_tag "{tag}" not used by any domain in dns_registry',
                     )
                 )
+        for override in profile.get("os_overrides", {}).values():
+            if not isinstance(override, dict):
+                continue
+            for tag in override.get("dns_tags", []):
+                if tag not in all_dns_tags:
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            "tls_realism.yaml",
+                            f'tls destination profile "{profile.get("name", "")}" references '
+                            f'override dns_tag "{tag}" not used by any domain in dns_registry',
+                        )
+                    )
 
     # Check 12: Orphaned persona_traffic keys
     persona_names = _get_persona_names(personas_dir)
@@ -954,6 +1009,8 @@ def validate_config() -> ValidationResult:
         PersonaEntry,
         ProcessAccessPatternEntry,
         ProcessNetworkEntry,
+        ProxyUserAgentOverrideEntry,
+        PublicNtpServerEntry,
         ScheduledTaskEntry,
         SmbFileTransferConfig,
         SpawnRuleEntry,
@@ -1080,16 +1137,27 @@ def validate_config() -> ValidationResult:
         _SCHEMA_CHECKS.append((schedules, SystemdScheduleEntry, "systemd_schedules.yaml"))
 
     # network_params.yaml
-    from evidenceforge.generation.engine.emitter_setup import _merge_network_params
+    from evidenceforge.generation.activity.network_params import load_network_params
 
-    net_params_path = get_activity_directory() / "network_params.yaml"
-    from evidenceforge.config.overlay import load_with_overlay
-
-    net_params = load_with_overlay(
-        net_params_path, "activity/network_params.yaml", _merge_network_params
-    )
+    net_params = load_network_params()
     if net_params:
         _SCHEMA_CHECKS.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
+        _SCHEMA_CHECKS.append(
+            (
+                net_params.get("public_ntp_servers", []),
+                PublicNtpServerEntry,
+                "network_params.yaml (public_ntp_servers)",
+            )
+        )
+
+    if isinstance(proxy_ua_data.get("domain_overrides"), dict):
+        _SCHEMA_CHECKS.append(
+            (
+                list(proxy_ua_data.get("domain_overrides", {}).values()),
+                ProxyUserAgentOverrideEntry,
+                "proxy_user_agents.yaml (domain_overrides)",
+            )
+        )
 
     # Run all schema validations
     for entries, schema, file_name in _SCHEMA_CHECKS:

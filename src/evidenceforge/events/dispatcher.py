@@ -152,17 +152,24 @@ class EventDispatcher:
         # and annotate the event with observing sensor hostnames
         visible_formats: set[str] | None = None
         if event.network and self.visibility_engine:
-            # Denied connections only visible from the source side (packets
-            # never reach the destination — firewall blocks them)
-            is_fw_deny = event.firewall is not None and event.firewall.action == "deny"
-            if is_fw_deny:
+            is_link_local = event.network.link_local
+            if is_link_local:
+                visible_formats = self.visibility_engine.get_log_formats_for_link_local(
+                    event.network.src_ip
+                )
+                sensors = self.visibility_engine.get_link_local_sensors(event.network.src_ip)
+            else:
+                # Denied connections only visible from the source side (packets
+                # never reach the destination — firewall blocks them)
+                is_fw_deny = event.firewall is not None and event.firewall.action == "deny"
+            if not is_link_local and is_fw_deny:
                 visible_formats = self.visibility_engine.get_log_formats_for_source_only(
                     event.network.src_ip, event.network.dst_ip
                 )
                 sensors = self.visibility_engine.get_source_side_sensors(
                     event.network.src_ip, event.network.dst_ip
                 )
-            else:
+            elif not is_link_local:
                 visible_formats = self.visibility_engine.get_log_formats_for_connection(
                     event.network.src_ip, event.network.dst_ip
                 )
@@ -178,7 +185,7 @@ class EventDispatcher:
             event._sensor_hostnames_by_format = format_to_sensors
 
             # NAT computation: translate addresses for permitted connections
-            if not is_fw_deny and event.nat is None:
+            if not is_link_local and not is_fw_deny and event.nat is None:
                 nat_ctx = self.visibility_engine.compute_nat(
                     event.network.src_ip,
                     event.network.dst_ip,

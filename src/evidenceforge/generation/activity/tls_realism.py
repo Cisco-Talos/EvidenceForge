@@ -189,16 +189,27 @@ def _tls_profile_domains(
     """Build a profile domain pool from explicit domains, OS overrides, and DNS tags."""
     from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
 
-    domains: list[str] = [str(domain) for domain in profile.get("domains", []) if domain]
+    override: dict[str, Any] = {}
     os_overrides = profile.get("os_overrides", {})
     if isinstance(os_overrides, dict) and source_os in os_overrides:
-        override = os_overrides.get(source_os, {})
-        if isinstance(override, dict):
-            domains.extend(str(domain) for domain in override.get("domains", []) if domain)
+        configured_override = os_overrides.get(source_os, {})
+        if isinstance(configured_override, dict):
+            override = configured_override
 
-    dns_tags = [str(tag) for tag in profile.get("dns_tags", []) if tag]
+    if override.get("domains"):
+        domains = [str(domain) for domain in override.get("domains", []) if domain]
+    else:
+        domains = [str(domain) for domain in profile.get("domains", []) if domain]
+
+    override_dns_tags = False
+    if override and "dns_tags" in override:
+        override_dns_tags = True
+        dns_tags = [str(tag) for tag in override.get("dns_tags", []) if tag]
+    else:
+        dns_tags = [str(tag) for tag in profile.get("dns_tags", []) if tag]
     if dns_tags:
-        for entry in get_domains_by_tag(rng.choice(dns_tags)):
+        tag_query = tuple(dns_tags) if override_dns_tags else (rng.choice(dns_tags),)
+        for entry in get_domains_by_tag(*tag_query):
             domain = entry.get("domain")
             if domain:
                 domains.append(str(domain))

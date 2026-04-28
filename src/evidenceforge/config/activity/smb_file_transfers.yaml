@@ -32,3 +32,39 @@ analyzer_sets:
     weight: 7
   - analyzers: [MD5, SHA1]
     weight: 3
+
+filename_templates:
+  - mime_types: [application/vnd.openxmlformats-officedocument.wordprocessingml.document]
+    templates:
+      - "\\\\{server}\\{share}\\{department}\\{basename}.docx"
+      - "\\\\{server}\\{share}\\{project}\\{basename}.docx"
+      - "\\\\{server}\\Users\\{user}\\Documents\\{basename}.docx"
+    weight: 22
+  - mime_types: [application/vnd.openxmlformats-officedocument.spreadsheetml.sheet]
+    templates:
+      - "\\\\{server}\\{share}\\Finance\\{basename}.xlsx"
+      - "\\\\{server}\\{share}\\{department}\\Reports\\{basename}.xlsx"
+      - "\\\\{server}\\Users\\{user}\\Documents\\{basename}.xlsx"
+    weight: 22
+  - mime_types: [application/pdf]
+    templates:
+      - "\\\\{server}\\{share}\\Policies\\{basename}.pdf"
+      - "\\\\{server}\\{share}\\{department}\\{basename}.pdf"
+      - "\\\\{server}\\Users\\{user}\\Downloads\\{basename}.pdf"
+    weight: 18
+  - mime_types: [application/vnd.openxmlformats-officedocument.presentationml.presentation]
+    templates:
+      - "\\\\{server}\\{share}\\Presentations\\{basename}.pptx"
+      - "\\\\{server}\\{share}\\{project}\\{basename}.pptx"
+    weight: 10
+  - mime_types: [text/plain]
+    templates:
+      - "\\\\{server}\\{share}\\IT\\{basename}.txt"
+      - "\\\\{server}\\Users\\{user}\\Desktop\\{basename}.txt"
+    weight: 12
+  - mime_types: [application/octet-stream]
+    templates:
+      - "\\\\{server}\\{share}\\Installers\\{basename}.{ext}"
+      - "\\\\{server}\\{share}\\Backups\\{basename}.{ext}"
+      - "\\\\{server}\\{share}\\{department}\\{basename}.{ext}"
+    weight: 16

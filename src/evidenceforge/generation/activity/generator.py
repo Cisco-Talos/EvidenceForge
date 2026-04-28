@@ -50,7 +50,10 @@ from evidenceforge.events.contexts import (
     RegistryContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+from evidenceforge.generation.activity.proxy_user_agents import (
+    pick_proxy_domain_user_agent,
+    pick_proxy_user_agent,
+)
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -617,7 +620,19 @@ def _ocsp_status_for_certificate(cert_name: str, serial_number: str) -> str:
     """Pick a stable mostly-good OCSP status per certificate identity."""
     from evidenceforge.generation.activity.tls_realism import ocsp_config
 
-    weights = ocsp_config().get("status_weights", {"good": 90, "unknown": 7, "revoked": 3})
+    config = ocsp_config()
+    weights = config.get("status_weights", {"good": 90, "unknown": 7, "revoked": 3})
+    cert_name_lower = cert_name.rstrip(".").lower()
+    suppress_suffixes = {
+        str(suffix).lower()
+        for suffix in config.get("suppress_revoked_suffixes", [])
+        if str(suffix).strip()
+    }
+    if any(
+        cert_name_lower == suffix.lstrip(".") or cert_name_lower.endswith(suffix)
+        for suffix in suppress_suffixes
+    ):
+        weights = {**weights, "revoked": 0}
     ordered = ("good", "unknown", "revoked")
     total = sum(max(0, int(weights.get(status, 0))) for status in ordered)
     if total <= 0:
@@ -629,6 +644,62 @@ def _ocsp_status_for_certificate(cert_name: str, serial_number: str) -> str:
         if bucket < cumulative:
             return status
     return "good"
+
+
+def _ntp_stratum_and_ref_id(dst_ip: str) -> tuple[int, str]:
+    """Return stable NTP server metadata for a destination."""
+    from evidenceforge.generation.activity.network_params import public_ntp_servers
+
+    for server in public_ntp_servers():
+        if server.get("ip") == dst_ip:
+            stratum = int(server.get("stratum", 2))
+            ref_id = str(server.get("ref_id", ".GPS."))
+            return stratum, ref_id
+
+    rng = random.Random(_stable_seed(f"ntp_server_profile:{dst_ip}"))
+    if _is_private_ip(dst_ip):
+        return rng.choice([2, 2, 3, 3, 4]), rng.choice(
+            [
+                server.get("ip")
+                for server in public_ntp_servers()
+                if isinstance(server.get("ip"), str) and server.get("ip") != dst_ip
+            ]
+            or ["129.6.15.28", "132.163.97.1", "132.163.96.1", "192.5.41.40"]
+        )
+    return rng.choice([1, 1, 2]), rng.choice([".GPS.", ".PPS.", ".GOES.", ".ACTS."])
+
+
+def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
+    """Return deterministic Zeek files.log hashes for requested analyzers."""
+    import hashlib
+
+    analyzer_names = {analyzer.upper() for analyzer in analyzers}
+    hashes: dict[str, str] = {}
+    if "MD5" in analyzer_names:
+        hashes["md5"] = hashlib.md5(seed_material.encode()).hexdigest()
+    if "SHA1" in analyzer_names:
+        hashes["sha1"] = hashlib.sha1(seed_material.encode()).hexdigest()
+    if "SHA256" in analyzer_names:
+        hashes["sha256"] = hashlib.sha256(seed_material.encode()).hexdigest()
+    return hashes
+
+
+def _enterprise_tls_issuer() -> dict[str, Any]:
+    """Return the configured enterprise issuer for internal TLS certificates."""
+    from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
+
+    issuer_name = "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+    for issuer in load_tls_issuers().get("issuers", []):
+        if issuer.get("name") == issuer_name:
+            return issuer
+    return {
+        "name": issuer_name,
+        "weight": 0,
+        "validity_days_min": 180,
+        "validity_days_max": 825,
+        "not_before_max_days": 730,
+        "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+    }
 
 
 class ActivityGenerator:
@@ -697,11 +768,33 @@ class ActivityGenerator:
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
         self._tls_cert_validity: dict[str, tuple[int, int]] = {}
+        self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
+        self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
+
+    def _ntp_association_profile(self, src_ip: str, dst_ip: str) -> dict[str, float | int]:
+        """Return stable NTP client/server association fields."""
+        key = (src_ip, dst_ip)
+        profile = self._ntp_association_profiles.get(key)
+        if profile is not None:
+            return profile
+
+        profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
+        version = 3 if profile_rng.random() < 0.08 else 4
+        poll = float(profile_rng.choices([256, 512, 1024], weights=[25, 45, 30], k=1)[0])
+        profile = {
+            "version": version,
+            "poll": poll,
+            "precision": float(profile_rng.randint(-24, -19)),
+            "root_delay": profile_rng.uniform(0.001, 0.08),
+            "root_disp": profile_rng.uniform(0.001, 0.04),
+        }
+        self._ntp_association_profiles[key] = profile
+        return profile
 
     def _build_host_context(self, system: System) -> HostContext:
         """Build a HostContext from a System model object.
@@ -887,7 +980,14 @@ class ActivityGenerator:
             proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
             user_agent = ""
 
-        if not user_agent:
+        domain_user_agent = pick_proxy_domain_user_agent(
+            rng,
+            source_system,
+            hostname=proxy_hostname,
+        )
+        if domain_user_agent:
+            user_agent = domain_user_agent
+        elif not user_agent:
             if proxy_ua_override:
                 user_agent = proxy_ua_override
             else:
@@ -983,14 +1083,34 @@ class ActivityGenerator:
         if server_name == "":
             server_name = None
 
-        # For suppressed hostnames (raw-IP C2), use the IP as the cert subject.
-        cert_name = server_name or dst_ip
+        # For suppressed external hostnames (raw-IP C2), use the IP as the cert subject.
+        # For internal/private endpoints without explicit SNI, use the known
+        # internal hostname so x509.log does not show public-CA certificates
+        # issued to private IPs. If explicit internal SNI exists, it remains
+        # the certificate identity and SAN source of truth.
+        internal_cert_name = ""
+        if _is_private_ip(dst_ip):
+            if server_name:
+                internal_cert_name = server_name
+            else:
+                dst_host = event.dst_host
+                if dst_host is None and hasattr(self, "_ip_to_system"):
+                    dst_system = self._ip_to_system.get(dst_ip)
+                    if dst_system is not None:
+                        dst_host = self._build_host_context(dst_system)
+                if dst_host is not None:
+                    internal_cert_name = dst_host.fqdn or dst_host.hostname
+        cert_name = server_name or internal_cert_name or dst_ip
 
         # Issuer-aware certificate generation from YAML config.
         from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
 
         cert_rng = random.Random(_stable_seed(f"tls_cert_profile:{cert_name}"))
-        issuer_cfg = pick_issuer(cert_rng, server_name=cert_name)
+        issuer_cfg = (
+            _enterprise_tls_issuer()
+            if internal_cert_name
+            else pick_issuer(cert_rng, server_name=cert_name)
+        )
         key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
         is_ecdsa = key_type == "ecdsa"
 
@@ -1078,7 +1198,6 @@ class ActivityGenerator:
 
         if resumed:
             return
-        cert_hash = hashlib.sha256(f"cert_{cert_name}".encode()).hexdigest()
         cert_fuid_hash = hashlib.sha256(
             f"cert_fuid_{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}".encode()
         ).hexdigest()
@@ -1097,10 +1216,37 @@ class ActivityGenerator:
             not_valid_after = not_valid_before + validity_days * 86400
             validity = (not_valid_before, not_valid_after)
             self._tls_cert_validity[cert_name] = validity
-        san_dns_list = _tls_san_dns_names(cert_name)
-        serial_number = (
-            f"{random.Random(_stable_seed(f'tls_cert_serial:{cert_name}')).getrandbits(128):032X}"
+        if internal_cert_name:
+            short_name = internal_cert_name.split(".", 1)[0]
+            san_dns_list = list(dict.fromkeys([internal_cert_name, short_name]))
+        else:
+            san_dns_list = _tls_san_dns_names(cert_name)
+        serial_seed = "|".join(
+            [
+                "tls_cert_serial",
+                cert_name,
+                issuer_cfg["name"],
+                key_type,
+                str(key_length),
+                str(validity[0]),
+                str(validity[1]),
+            ]
         )
+        serial_number = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+        cert_hash = hashlib.sha256(
+            "|".join(
+                [
+                    "cert",
+                    cert_name,
+                    serial_number,
+                    issuer_cfg["name"],
+                    key_type,
+                    str(key_length),
+                    str(validity[0]),
+                    str(validity[1]),
+                ]
+            ).encode()
+        ).hexdigest()
         event.x509 = X509Context(
             fuid=cert_fuid,
             fingerprint=cert_hash,
@@ -1190,7 +1336,7 @@ class ActivityGenerator:
                     analyzers=[],
                     mime_type="application/ocsp-response",
                     duration=rng.uniform(0.001, 0.02),
-                    local_orig=_is_private_ip(net.src_ip),
+                    local_orig=_is_private_ip(net.dst_ip) if net.src_ip != net.dst_ip else False,
                     is_orig=False,
                     seen_bytes=ocsp_size,
                     total_bytes=ocsp_size,
@@ -1281,44 +1427,89 @@ class ActivityGenerator:
             )
             if idx == 0:
                 subject = issuer_name
-            serial_rng = random.Random(_stable_seed(f"tls_chain_serial:{subject}"))
-            serial = f"{serial_rng.getrandbits(128):032X}"
             fuid_hash = hashlib.sha256(
                 f"cert_chain_fuid:{subject}:{connection_uid}:{event_time.timestamp()}".encode()
             ).hexdigest()
-            cert_hash = hashlib.sha256(f"cert_chain:{subject}:{serial}".encode()).hexdigest()
-            validity = self._tls_cert_validity.get(subject)
-            if validity is None:
-                now_epoch = int(event_time.timestamp())
-                min_days = int(config.get("intermediate_validity_days_min", 1825))
-                max_days = int(config.get("intermediate_validity_days_max", 3650))
-                max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
-                validity_days = chain_rng.randint(min_days, max(max_days, min_days))
-                not_before_days = chain_rng.randint(30, min(max_not_before, validity_days - 1))
-                not_valid_before = now_epoch - not_before_days * 86400
-                not_valid_after = not_valid_before + validity_days * 86400
-                validity = (not_valid_before, not_valid_after)
-                self._tls_cert_validity[subject] = validity
+            resolved_issuer = certificate_issuer or parent_issuer
+            profile_key = (subject, resolved_issuer)
+            profile = self._tls_intermediate_profiles.get(profile_key)
+            if profile is None:
+                profile_rng = random.Random(
+                    _stable_seed(f"tls_intermediate_profile:{subject}:{resolved_issuer}")
+                )
+                validity = self._tls_cert_validity.get(subject)
+                if validity is None:
+                    now_epoch = int(event_time.timestamp())
+                    min_days = int(config.get("intermediate_validity_days_min", 1825))
+                    max_days = int(config.get("intermediate_validity_days_max", 3650))
+                    max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
+                    validity_days = profile_rng.randint(min_days, max(max_days, min_days))
+                    not_before_days = profile_rng.randint(
+                        30, min(max_not_before, validity_days - 1)
+                    )
+                    not_valid_before = now_epoch - not_before_days * 86400
+                    not_valid_after = not_valid_before + validity_days * 86400
+                    validity = (not_valid_before, not_valid_after)
+                    self._tls_cert_validity[subject] = validity
 
-            key_types = config.get(
-                "key_types",
-                [{"type": "rsa", "length": 2048, "weight": 100}],
-            )
-            weights = [int(entry.get("weight", 0)) for entry in key_types]
-            selected_key = chain_rng.choices(key_types, weights=weights, k=1)[0]
-            key_type = str(selected_key.get("type", "rsa"))
-            key_length = int(selected_key.get("length", 2048))
+                key_types = config.get(
+                    "key_types",
+                    [{"type": "rsa", "length": 2048, "weight": 100}],
+                )
+                weights = [int(entry.get("weight", 0)) for entry in key_types]
+                selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
+                key_type = str(selected_key.get("type", "rsa"))
+                key_length = int(selected_key.get("length", 2048))
+                serial_seed = "|".join(
+                    [
+                        "tls_chain_serial",
+                        subject,
+                        resolved_issuer,
+                        key_type,
+                        str(key_length),
+                        str(validity[0]),
+                        str(validity[1]),
+                    ]
+                )
+                serial = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+                cert_hash = hashlib.sha256(
+                    "|".join(
+                        [
+                            "cert_chain",
+                            subject,
+                            serial,
+                            resolved_issuer,
+                            key_type,
+                            str(key_length),
+                            str(validity[0]),
+                            str(validity[1]),
+                        ]
+                    ).encode()
+                ).hexdigest()
+                profile = {
+                    "fingerprint": cert_hash,
+                    "certificate_serial": serial,
+                    "certificate_subject": subject,
+                    "certificate_issuer": resolved_issuer,
+                    "certificate_not_valid_before": validity[0],
+                    "certificate_not_valid_after": validity[1],
+                    "certificate_key_type": key_type,
+                    "certificate_key_length": key_length,
+                }
+                self._tls_intermediate_profiles[profile_key] = profile
+            key_type = str(profile["certificate_key_type"])
+            key_length = int(profile["certificate_key_length"])
             is_ecdsa = key_type == "ecdsa"
             chain.append(
                 X509Context(
                     fuid=f"F{fuid_hash[:16]}",
-                    fingerprint=cert_hash,
+                    fingerprint=str(profile["fingerprint"]),
                     certificate_version=3,
-                    certificate_serial=serial,
-                    certificate_subject=subject,
-                    certificate_issuer=certificate_issuer or parent_issuer,
-                    certificate_not_valid_before=validity[0],
-                    certificate_not_valid_after=validity[1],
+                    certificate_serial=str(profile["certificate_serial"]),
+                    certificate_subject=str(profile["certificate_subject"]),
+                    certificate_issuer=str(profile["certificate_issuer"]),
+                    certificate_not_valid_before=int(profile["certificate_not_valid_before"]),
+                    certificate_not_valid_after=int(profile["certificate_not_valid_after"]),
                     certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
                     certificate_sig_alg="ecdsa-with-SHA256"
                     if is_ecdsa
@@ -3040,6 +3231,13 @@ class ActivityGenerator:
                             hostname=proxy_hostname,
                             domain_tags=domain_tags,
                         )
+                domain_user_agent = pick_proxy_domain_user_agent(
+                    rng,
+                    source_system,
+                    hostname=proxy_hostname,
+                )
+                if domain_user_agent:
+                    user_agent = domain_user_agent
                 cache_roll = rng.random()
                 if cache_roll < 0.30:
                     cache_result = "HIT"
@@ -3165,6 +3363,12 @@ class ActivityGenerator:
                 from evidenceforge.utils.ids import generate_zeek_uid
 
                 fuid = generate_zeek_uid("F")
+                file_hashes = _file_transfer_hashes(
+                    f"http:{host}:{uri}:{resp_body_len}:{fuid}",
+                    ["SHA1"]
+                    if mime_type in {"application/x-dosexec", "application/octet-stream"}
+                    else [],
+                )
                 event.file_transfer = FileTransferContext(
                     fuid=fuid,
                     source="HTTP",
@@ -3179,6 +3383,7 @@ class ActivityGenerator:
                     missing_bytes=0,
                     overflow_bytes=0,
                     timedout=False,
+                    **file_hashes,
                 )
                 event.http.resp_fuids = [fuid]
                 event.http.resp_mime_types = [event.file_transfer.mime_type]
@@ -3217,6 +3422,7 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import FileTransferContext
             from evidenceforge.generation.activity.smb_file_transfers import (
                 load_smb_file_transfers,
+                pick_smb_filename,
             )
             from evidenceforge.utils.ids import generate_zeek_uid
 
@@ -3256,10 +3462,29 @@ class ActivityGenerator:
                     if rng.random() < missing_probability
                     else 0
                 )
+                fuid = generate_zeek_uid("F")
+                file_hashes = _file_transfer_hashes(
+                    f"smb:{event.network.src_ip}:{event.network.dst_ip}:{transfer_bytes}:{fuid}",
+                    analyzers,
+                )
+                smb_server = ""
+                if event.dst_host is not None:
+                    smb_server = event.dst_host.hostname or event.dst_host.fqdn
+                if not smb_server:
+                    smb_server = REVERSE_DNS.get(event.network.dst_ip, event.network.dst_ip)
+                smb_user = getattr(resolved_source_system, "assigned_user", "") or "Public"
+                filename = pick_smb_filename(
+                    rng,
+                    smb_config,
+                    mime_type=mime_type,
+                    server=smb_server,
+                    user=smb_user,
+                )
                 event.file_transfer = FileTransferContext(
-                    fuid=generate_zeek_uid("F"),
+                    fuid=fuid,
                     source="SMB",
                     depth=0,
+                    filename=filename,
                     analyzers=analyzers,
                     mime_type=mime_type,
                     duration=max(0.0, (event.network.duration or 0.0) * rng.uniform(0.6, 0.98)),
@@ -3270,6 +3495,7 @@ class ActivityGenerator:
                     missing_bytes=missing_bytes,
                     overflow_bytes=0,
                     timedout=rng.random() < timeout_probability,
+                    **file_hashes,
                 )
 
         # NTP context for Zeek ntp.log fan-out
@@ -3279,23 +3505,22 @@ class ActivityGenerator:
             ntp_rng = _get_rng()
             ntp_epoch = time.timestamp()
             # Stratum-aware timing via log-normal distribution
-            stratum = (_stable_seed(f"ntp_stratum_{dst_ip}") % 3) + 1
+            stratum, ref_id = _ntp_stratum_and_ref_id(dst_ip)
+            association = self._ntp_association_profile(event.network.src_ip, dst_ip)
             _ntp_mean_ms, _ntp_sigma = _NTP_STRATUM_TIMING.get(stratum, (10.0, 0.7))
             _ntp_mu = math.log(_ntp_mean_ms) - (_ntp_sigma**2) / 2
             rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
             proc_sec = ntp_rng.lognormvariate(math.log(0.5) - 0.3**2 / 2, 0.3) / 1000.0
             ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
             event.ntp = NtpContext(
-                version=ntp_rng.choice([3, 4]),
+                version=int(association["version"]),
                 mode=4,  # server response
                 stratum=stratum,
-                poll=float(ntp_rng.choice([64, 128, 256, 512, 1024])),
-                precision=float(ntp_rng.randint(-25, -18)),
-                root_delay=ntp_rng.uniform(0.0, 0.1),
-                root_disp=ntp_rng.uniform(0.0, 0.05),
-                ref_id=random.Random(_stable_seed(f"ntp_refid_{dst_ip}")).choice(
-                    [".GPS.", ".PPS.", ".GOES.", ".DCFa.", ".ACTS."]
-                ),
+                poll=float(association["poll"]),
+                precision=float(association["precision"]),
+                root_delay=float(association["root_delay"]),
+                root_disp=float(association["root_disp"]),
+                ref_id=ref_id,
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
                 org_ts=round(ntp_epoch + ntp_jitter, 6),
                 rec_ts=round(ntp_epoch + ntp_jitter + rtt_sec, 6),
@@ -5745,6 +5970,7 @@ class ActivityGenerator:
                 local_orig=True,
                 local_resp=True,
                 ip_proto=17,
+                link_local=True,
             ),
             dhcp=DhcpContext(
                 client_addr=system.ip,

@@ -220,6 +220,13 @@ class NetworkVisibilityEngine:
         if sensor.placement == "tap":
             if src_segments and dst_segments and src_segments == dst_segments:
                 return False
+            if (
+                len(monitored) > 1
+                and src_segments
+                and dst_segments
+                and not (monitored & src_segments and monitored & dst_segments)
+            ):
+                return False
 
         return True
 
@@ -238,7 +245,8 @@ class NetworkVisibilityEngine:
 
         Placement logic:
         - "span": sees all traffic including intra-segment (SPAN port on switch)
-        - "tap": only sees cross-segment traffic (inline TAP on uplink)
+        - "tap": sees external/boundary traffic for monitored segments, and internal
+          cross-segment traffic only when both endpoint segments are monitored
         """
         if not self._enabled:
             return True
@@ -266,6 +274,42 @@ class NetworkVisibilityEngine:
             for sensor in self._sensors
             if self._sensor_can_observe(sensor, src_segments, dst_segments)
         ]
+
+    def get_link_local_sensors(self, src_ip: str) -> list[NetworkSensor]:
+        """Return sensors that can observe source-segment link-local traffic.
+
+        DHCP broadcast and similar L2-local exchanges do not traverse routed
+        boundaries. A SPAN sensor monitoring the client segment can see them;
+        TAP/firewall boundary sensors cannot unless a separate relay/unicast
+        transaction is explicitly modeled.
+        """
+        if not self._enabled:
+            return []
+
+        src_segments = self._resolve_ip_segments(src_ip)
+        if not src_segments:
+            return []
+
+        return [
+            sensor
+            for sensor in self._sensors
+            if sensor.placement == "span"
+            and sensor.type != "firewall"
+            and set(sensor.monitoring_segments) & src_segments
+            and sensor.direction in {"bidirectional", "outbound"}
+        ]
+
+    def get_log_formats_for_link_local(self, src_ip: str) -> set[str]:
+        """Return expanded log formats for source-segment link-local traffic."""
+        from evidenceforge.events.dispatcher import FORMAT_GROUPS, expand_formats
+
+        if not self._enabled:
+            return set(FORMAT_GROUPS["zeek"])
+
+        formats: set[str] = set()
+        for sensor in self.get_link_local_sensors(src_ip):
+            formats.update(sensor.log_formats)
+        return expand_formats(formats)
 
     def get_source_side_sensors(self, src_ip: str, dst_ip: str = "") -> list[NetworkSensor]:
         """Return sensors that can observe denied traffic originating from src_ip.

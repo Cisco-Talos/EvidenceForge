@@ -24,32 +24,20 @@ fields:
     constraints:
       pattern: "^F[A-Za-z0-9]{16,18}$"
 
-  - name: uid
+  - name: tx_hosts
     type: string
     required: true
-    description: "Connection UID (shared with conn.log)"
-    constraints:
-      pattern: "^[A-Za-z0-9]{17,19}$"
+    description: "Hosts that transmitted the file, rendered as a JSON array"
 
-  - name: id.orig_h
-    type: ip_address
+  - name: rx_hosts
+    type: string
     required: true
-    description: "Source IP address"
+    description: "Hosts that received the file, rendered as a JSON array"
 
-  - name: id.orig_p
-    type: port
+  - name: conn_uids
+    type: string
     required: true
-    description: "Source port"
-
-  - name: id.resp_h
-    type: ip_address
-    required: true
-    description: "Destination IP address"
-
-  - name: id.resp_p
-    type: port
-    required: true
-    description: "Destination port"
+    description: "Connection UIDs that carried the file, rendered as a JSON array"
 
   - name: source
     type: string
@@ -60,6 +48,11 @@ fields:
     type: integer
     required: true
     description: "Directory depth"
+
+  - name: filename
+    type: string
+    required: false
+    description: "Filename or share path observed for protocols that expose it, such as SMB"
 
   - name: analyzers
     type: string
@@ -111,6 +104,21 @@ fields:
     required: true
     description: "Did transfer timeout?"
 
+  - name: md5
+    type: string
+    required: false
+    description: "MD5 digest when the MD5 analyzer ran"
+
+  - name: sha1
+    type: string
+    required: false
+    description: "SHA1 digest when the SHA1 analyzer ran"
+
+  - name: sha256
+    type: string
+    required: false
+    description: "SHA256 digest when the SHA256 analyzer ran"
+
 output:
   format: json
   file_extension: ".json"
@@ -119,13 +127,14 @@ output:
     {
       "ts": {{ ts | tojson }},
       "fuid": {{ fuid | tojson }},
-      "uid": {{ uid | tojson }},
-      "id.orig_h": {{ data['id.orig_h'] | tojson }},
-      "id.orig_p": {{ data['id.orig_p'] | tojson }},
-      "id.resp_h": {{ data['id.resp_h'] | tojson }},
-      "id.resp_p": {{ data['id.resp_p'] | tojson }},
+      "tx_hosts": {{ tx_hosts | tojson }},
+      "rx_hosts": {{ rx_hosts | tojson }},
+      "conn_uids": {{ conn_uids | tojson }},
       "source": {{ source | tojson }},
       "depth": {{ depth | tojson }}
+      {%- if filename is not none %},
+      "filename": {{ filename | tojson }}
+      {%- endif %}
       {%- if analyzers is not none %},
       "analyzers": {{ analyzers | tojson }}
       {%- endif %}
@@ -146,4 +155,13 @@ output:
       "missing_bytes": {{ missing_bytes | tojson }},
       "overflow_bytes": {{ overflow_bytes | tojson }},
       "timedout": {{ timedout | tojson }}
+      {%- if md5 is not none %},
+      "md5": {{ md5 | tojson }}
+      {%- endif %}
+      {%- if sha1 is not none %},
+      "sha1": {{ sha1 | tojson }}
+      {%- endif %}
+      {%- if sha256 is not none %},
+      "sha256": {{ sha256 | tojson }}
+      {%- endif %}
     }

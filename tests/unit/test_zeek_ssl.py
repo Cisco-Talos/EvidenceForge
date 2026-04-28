@@ -416,5 +416,9 @@ class TestSslUidCorrelation:
         assert "id.orig_h" not in ocsp_row
         assert "id.resp_h" not in ocsp_row
         assert files_row["fuid"] == ocsp_row["id"]
-        assert files_row["uid"] == "CMySpecificUID123"
+        assert files_row["conn_uids"] == ["CMySpecificUID123"]
+        assert files_row["tx_hosts"] == ["8.8.8.8"]
+        assert files_row["rx_hosts"] == ["10.0.0.1"]
+        assert "uid" not in files_row
+        assert "id.orig_h" not in files_row
         assert files_row["mime_type"] == "application/ocsp-response"

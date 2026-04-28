@@ -7,6 +7,31 @@
 # generic agents, server roles, package-manager destinations, or OS families
 # without copying this whole file.
 
+domain_overrides:
+  windows_update:
+    os_keywords: ["windows"]
+    hosts:
+      - download.windowsupdate.com
+      - ctldl.windowsupdate.com
+      - packages.microsoft.com
+    user_agents:
+      - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+  windows_cryptoapi:
+    os_keywords: ["windows"]
+    hosts:
+      - crl.microsoft.com
+      - ocsp.digicert.com
+    user_agents:
+      - "Microsoft-CryptoAPI/10.0"
+  windows_telemetry:
+    os_keywords: ["windows"]
+    hosts:
+      - settings-win.data.microsoft.com
+      - arc.msn.com
+    user_agents:
+      - "Windows-Device-Management/10.0"
+      - "Microsoft-WNS/10.0"
+
 workstation:
   windows:
     # Browser UAs only. System-level Windows UAs are modeled as domain-specific

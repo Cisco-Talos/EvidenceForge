@@ -4,11 +4,16 @@
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
 import random
+from datetime import UTC, datetime
 
 import yaml
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import NetworkContext, X509Context
 from evidenceforge.generation.activity.generator import (
+    ActivityGenerator,
     _dns_rtt,
+    _ntp_stratum_and_ref_id,
     _ocsp_status_for_certificate,
     _tls_san_dns_names,
 )
@@ -21,6 +26,8 @@ from evidenceforge.generation.activity.tls_realism import (
     reset_tls_realism_cache,
     tls_destination_config,
 )
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.models.scenario import System
 
 # ---------------------------------------------------------------------------
 # Theme 4: Certificate realism tests
@@ -59,6 +66,16 @@ class TestTlsIssuers:
         rng = random.Random(42)
         issuer = pick_issuer(rng, "www.icloud.com")
         assert "Apple" in issuer["name"]
+
+    def test_google_pki_uses_google_ca(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "ocsp.pki.goog")
+        assert "Google Trust Services" in issuer["name"]
+
+    def test_github_assets_use_digicert_ca(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "github.githubassets.com")
+        assert "DigiCert" in issuer["name"]
 
     def test_linkedin_uses_digicert_ev(self):
         rng = random.Random(42)
@@ -131,6 +148,13 @@ class TestTlsIssuers:
         }
         assert "good" in statuses
         assert statuses & {"unknown", "revoked"}
+
+    def test_ocsp_does_not_mark_mainstream_domains_revoked(self):
+        """Ordinary mainstream browsing certificates should not produce revoked OCSP."""
+        domains = ["zoom.us", "www.bing.com", "slack.com", "a0.awsstatic.com", "www.google.com"]
+        for domain in domains:
+            statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
+            assert "revoked" not in statuses
 
     def test_tls_realism_overlay_extends_lists_and_replaces_scalars(self, tmp_path, monkeypatch):
         """TLS realism config should support project-local overlays."""
@@ -210,6 +234,251 @@ class TestTlsIssuers:
         assert len(set(host_a)) >= 12
         assert len(set(host_b)) >= 12
         assert set(host_a) != set(host_b)
+
+    def test_tls_destination_os_overrides_replace_generic_package_domains(self):
+        """OS-specific package profiles should not mix Windows and Linux update domains."""
+        windows_domains = {
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-01",
+                source_os="windows",
+                system_type="workstation",
+                purpose_tags=("background",),
+            )[0]
+            for seed in range(400)
+        }
+        linux_domains = {
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="LINUX-01",
+                source_os="linux",
+                system_type="server",
+                purpose_tags=("background",),
+            )[0]
+            for seed in range(400)
+        }
+
+        assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
+        assert "download.windowsupdate.com" not in linux_domains
+
+    def test_tls_destination_servers_avoid_human_saas_profiles(self):
+        """Server-origin TLS background should not pick browser/SaaS-heavy destinations."""
+        server_domains = {
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="web01",
+                source_os="linux",
+                system_type="server",
+            )[0]
+            for seed in range(600)
+        }
+
+        human_saas = {
+            "teams.microsoft.com",
+            "slack.com",
+            "portal.azure.com",
+            "console.aws.amazon.com",
+        }
+        assert not server_domains & human_saas
+
+    def test_private_ntp_servers_do_not_claim_primary_stratum(self):
+        """Internal NTP servers should look like upstream-synchronized infrastructure."""
+        stratum, ref_id = _ntp_stratum_and_ref_id("10.30.10.10")
+
+        assert stratum in {2, 3, 4}
+        assert ref_id.count(".") == 3
+        assert ref_id not in {".GPS.", ".PPS.", ".GOES.", ".ACTS.", ".DCFa."}
+
+    def test_public_ntp_servers_are_loaded_from_network_params_overlay(self, tmp_path, monkeypatch):
+        """Public NTP defaults should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import reset_network_params_cache
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "public_ntp_servers": [
+                        {
+                            "name": "time.example.net",
+                            "ip": "198.51.100.123",
+                            "operator": "Example",
+                            "stratum": 2,
+                            "ref_id": ".GPS.",
+                            "weight": 1,
+                        }
+                    ]
+                },
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert _ntp_stratum_and_ref_id("198.51.100.123") == (2, ".GPS.")
+        finally:
+            reset_network_params_cache()
+
+    def test_internal_tls_certificates_use_enterprise_identity(self):
+        """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
+        generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "example.com"
+        web_system = System(
+            hostname="web01",
+            ip="10.30.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        generator._ip_to_system[web_system.ip] = web_system
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip=web_system.ip,
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestInternalTls1",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname=None,
+            dns=None,
+            dst_ip=web_system.ip,
+            rng=random.Random(42),
+            allow_failure=False,
+        )
+
+        assert event.x509 is not None
+        assert event.x509.certificate_subject == "CN=web01.example.com"
+        assert event.x509.certificate_issuer == "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+        assert event.x509.san_dns == ["web01.example.com", "web01"]
+
+    def test_internal_tls_explicit_sni_controls_enterprise_sans(self):
+        """Explicit internal SNI should not get overwritten by dst host canonical name."""
+        generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "example.com"
+        dc_system = System(
+            hostname="dc01",
+            ip="10.30.10.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        generator._ip_to_system[dc_system.ip] = dc_system
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip=dc_system.ip,
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestInternalTls2",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname="srv-05.example.com",
+            dns=None,
+            dst_ip=dc_system.ip,
+            rng=random.Random(42),
+            allow_failure=False,
+        )
+
+        assert event.ssl is not None
+        assert event.ssl.server_name == "srv-05.example.com"
+        assert event.x509 is not None
+        assert event.x509.certificate_subject == "CN=srv-05.example.com"
+        assert event.x509.certificate_issuer == "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+        assert event.x509.san_dns == ["srv-05.example.com", "srv-05"]
+
+    def test_same_certificate_fingerprint_has_same_metadata(self):
+        """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""
+        generator = ActivityGenerator(StateManager(), {})
+        first = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip="142.250.190.99",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestExternalTls1",
+            ),
+        )
+        second = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 5, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.102",
+                src_port=50124,
+                dst_ip="142.250.190.99",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestExternalTls2",
+            ),
+        )
+
+        for event in (first, second):
+            generator._attach_ssl_context(
+                event,
+                hostname="ocsp.pki.goog",
+                dns=None,
+                dst_ip="142.250.190.99",
+                rng=random.Random(43),
+                allow_failure=False,
+            )
+
+        assert first.x509 is not None
+        assert second.x509 is not None
+        assert first.x509.fingerprint == second.x509.fingerprint
+        assert first.x509.certificate_issuer == second.x509.certificate_issuer
+        assert first.x509.certificate_key_type == second.x509.certificate_key_type
+        assert first.x509.certificate_key_length == second.x509.certificate_key_length
+
+    def test_intermediate_ca_profile_is_stable_across_leaf_certificates(self):
+        """The same intermediate CA subject/issuer should not get many cert identities."""
+        generator = ActivityGenerator(StateManager(), {})
+        issuer_name = "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
+        first_chain = generator._build_tls_certificate_chain(
+            leaf=X509Context(fuid="FLeafOne", certificate_subject="CN=one.example"),
+            cert_name="one.example",
+            issuer_name=issuer_name,
+            event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            connection_uid="COne",
+            rng=random.Random(1),
+        )
+        second_chain = generator._build_tls_certificate_chain(
+            leaf=X509Context(fuid="FLeafTwo", certificate_subject="CN=two.example"),
+            cert_name="two.example",
+            issuer_name=issuer_name,
+            event_time=datetime(2024, 10, 14, 12, 5, tzinfo=UTC),
+            connection_uid="CTwo",
+            rng=random.Random(1),
+        )
+
+        first_intermediate = first_chain[1]
+        second_intermediate = second_chain[1]
+
+        assert first_intermediate.fuid != second_intermediate.fuid
+        assert first_intermediate.certificate_subject == second_intermediate.certificate_subject
+        assert first_intermediate.certificate_issuer == second_intermediate.certificate_issuer
+        assert first_intermediate.certificate_serial == second_intermediate.certificate_serial
+        assert first_intermediate.fingerprint == second_intermediate.fingerprint
+        assert (
+            first_intermediate.certificate_not_valid_before
+            == second_intermediate.certificate_not_valid_before
+        )
+        assert (
+            first_intermediate.certificate_not_valid_after
+            == second_intermediate.certificate_not_valid_after
+        )
 
 
 class TestDnsRtt:

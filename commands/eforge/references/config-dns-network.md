@@ -243,6 +243,13 @@ Proxy User-Agent pools for `proxy_access.log` generation. This file is overlay-s
 ### Structure
 
 ```yaml
+domain_overrides:
+  windows_update:
+    os_keywords: ["windows"]
+    hosts: ["download.windowsupdate.com", "ctldl.windowsupdate.com"]
+    user_agents:
+      - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+
 workstation:
   windows:
     - "Mozilla/5.0 ..."
@@ -264,6 +271,7 @@ server:
 
 - Keep package-manager UAs bound to package/update repository hostnames.
 - Keep OS-specific package UAs matched to `os_keywords`; do not use Fedora `libdnf` for Ubuntu hosts.
+- Use `domain_overrides` for update, telemetry, certificate, OCSP, and CRL endpoints that have a service-specific User-Agent even when the proxy request is HTTPS CONNECT.
 - Use `server.generic` for SaaS/API/CDN destinations from servers.
 
 ---
@@ -322,7 +330,7 @@ Minimal single-page structure for domains with no curated or tag-based match.
 
 ## network_params.yaml
 
-MAC OUI (vendor) prefixes with frequency weights for realistic DHCP and MAC address generation. Standalone — no cross-file dependencies.
+MAC OUI (vendor) prefixes and public NTP server defaults with frequency weights. Scenario-defined internal/domain NTP servers are preferred at generation time; `public_ntp_servers` is the fallback pool for non-domain environments and for upstream refids on internal NTP servers.
 
 ### Structure
 
@@ -331,6 +339,14 @@ oui_prefixes:
   - prefix: "D4:BE:D9"    # First 3 octets of MAC address
     vendor: "Dell"          # Hardware vendor name
     weight: 25              # Relative frequency weight
+
+public_ntp_servers:
+  - name: "time-a-g.nist.gov"
+    ip: "129.6.15.28"
+    operator: "NIST"
+    stratum: 1
+    ref_id: ".NIST."
+    weight: 20
 ```
 
 ---
@@ -369,6 +385,7 @@ san:
 ocsp:
   cache_bucket_seconds: 14400
   status_weights: {good: 90, unknown: 7, revoked: 3}
+  suppress_revoked_suffixes: [.microsoft.com, .google.com, .zoom.us]
 certificate_chains:
   include_intermediate_probability: 0.86
   include_second_intermediate_probability: 0.08
@@ -384,11 +401,14 @@ destinations:
   profiles:
     - name: enterprise_heavy_hitters
       weight: 34
+      system_types: [workstation]
       dns_tags: [saas, outlook, teams, onedrive]
       domains: [login.microsoftonline.com, graph.microsoft.com]
 ```
 
-`destinations.profiles` keeps TLS volume heavy-tailed without collapsing all hosts onto the same few SNI values. Profiles can list explicit `domains`, pull from `dns_registry.yaml` through `dns_tags`, limit by `os`, `personas`, `system_types`, or `purpose_tags`, and add `os_overrides` for OS-specific update/package endpoints. Overlays merge nested dicts and extend lists, so project-local profiles can add domains without replacing the default pool.
+`ocsp.suppress_revoked_suffixes` prevents routine mainstream browsing certificates from being marked revoked while still allowing rare revoked statuses for uncategorized or intentionally suspicious certificate identities.
+
+`destinations.profiles` keeps TLS volume heavy-tailed without collapsing all hosts onto the same few SNI values. Profiles can list explicit `domains`, pull from `dns_registry.yaml` through `dns_tags`, limit by `os`, `personas`, `system_types`, or `purpose_tags`, and add `os_overrides` for OS-specific update/package endpoints. When an OS override provides domains or DNS tags, that override replaces the profile's generic pool for that OS so Windows update traffic does not drift into Linux package mirrors, and vice versa. Overlays merge nested dicts and extend lists, so project-local profiles can add domains without replacing the default pool.
 
 ## smb_file_transfers.yaml
 
@@ -408,6 +428,11 @@ mime_types:
 analyzer_sets:
   - {analyzers: [], weight: 75}
   - {analyzers: [MD5], weight: 15}
+filename_templates:
+  - mime_types: [application/pdf]
+    templates:
+      - "\\\\{server}\\{share}\\{department}\\{basename}.pdf"
+    weight: 18
 ```
 
 | Field | Type | Description |
@@ -417,6 +442,7 @@ analyzer_sets:
 | `timeout_probability` | float | Probability that the Zeek file-analysis row has `timedout: true` |
 | `mime_types` | weighted list | MIME type mix for SMB file observations |
 | `analyzer_sets` | weighted list | Zeek file analyzers attached to the observation, such as `MD5` or `SHA1` |
+| `filename_templates` | weighted list | Optional SMB share/path templates for `files.log` `filename`. Supported placeholders include `{server}`, `{share}`, `{department}`, `{project}`, `{basename}`, `{ext}`, and `{user}` |
 
 ## traffic_rates.yaml
 

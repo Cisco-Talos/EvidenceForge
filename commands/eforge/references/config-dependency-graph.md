@@ -58,8 +58,8 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### proxy_user_agents.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | `dns_registry.yaml` | Package-manager hostnames should exist in dns_registry when used as generated destinations |
-| **depended on by** | Engine (runtime) | Selects workstation/server proxy User-Agent values for proxy log generation |
+| depends on | `dns_registry.yaml` | Package-manager and domain-override hostnames should exist in dns_registry when used as generated destinations |
+| **depended on by** | Engine (runtime) | Selects workstation/server and domain-specific proxy User-Agent values for proxy log generation |
 
 ### site_maps.yaml
 | Direction | File | Relationship |
@@ -126,8 +126,8 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | nothing | Standalone MAC OUI data |
-| **depended on by** | Engine (runtime) | Generates realistic MAC addresses |
+| depends on | nothing | Standalone MAC OUI and public NTP server data |
+| **depended on by** | Engine (runtime) | Generates realistic MAC addresses and fallback public NTP server metadata |
 
 ### tls_issuers.yaml
 | Direction | File | Relationship |
@@ -145,7 +145,7 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | nothing | Standalone SMB file-analysis tuning |
-| **depended on by** | Engine (runtime) | Controls when SMB connections generate Zeek files.log rows and their MIME/analyzer mix |
+| **depended on by** | Engine (runtime) | Controls when SMB connections generate Zeek files.log rows and their filename/MIME/analyzer mix |
 
 ### sysmon_filters.yaml
 | Direction | File | Relationship |

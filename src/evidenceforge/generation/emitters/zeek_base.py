@@ -314,9 +314,11 @@ class SensorMultiplexEmitter(LogEmitter):
                 if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
-                uid_values = render_data.get("uids")
-                if isinstance(uid_values, list):
-                    render_data["uids"] = [
+                for uid_list_field in ("uids", "conn_uids"):
+                    uid_values = render_data.get(uid_list_field)
+                    if not isinstance(uid_values, list):
+                        continue
+                    render_data[uid_list_field] = [
                         self._derive_sensor_uid(uid, hostname)
                         if isinstance(uid, str) and uid.startswith("C")
                         else uid

@@ -156,9 +156,11 @@ network:
       hostname: zeek01          # Output directory name (falls back to name)
       monitoring_segments: [corporate_lan, server_vlan]
       direction: bidirectional  # bidirectional | inbound | outbound
-      placement: span           # span (sees intra-segment) | tap (cross-segment only)
+      placement: span           # span mirrors segment traffic | tap observes uplink/boundary traffic
       log_formats: [zeek]       # Format groups or individual formats
 ```
+
+`span` sensors can see traffic where either endpoint belongs to a monitored segment, including same-segment traffic. `tap` sensors do not see same-segment traffic. When a TAP monitors multiple internal segments, internal cross-segment traffic is visible only if both endpoint segments are monitored; external/boundary traffic remains visible when either side is monitored.
 
 #### Firewall Sensors
 
@@ -547,7 +549,7 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing — they will only appear on sensors monitoring the client's network segment.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
 
 ### Port Scan Events
 

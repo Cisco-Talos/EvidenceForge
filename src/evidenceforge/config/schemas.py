@@ -165,6 +165,7 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     next_update_min_seconds: int
     next_update_max_seconds: int
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
+    suppress_revoked_suffixes: list[str] = Field(default_factory=list)
 
     @field_validator(
         "cache_bucket_seconds",
@@ -239,9 +240,10 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
 
 
 class TlsDestinationOsOverride(BaseModel, extra="forbid"):
-    """OS-specific TLS destination additions."""
+    """OS-specific TLS destination pool override."""
 
     domains: list[str] = Field(default_factory=list)
+    dns_tags: list[str] = Field(default_factory=list)
 
 
 class TlsDestinationProfile(BaseModel, extra="forbid"):
@@ -342,6 +344,28 @@ class SmbAnalyzerSetEntry(BaseModel, extra="forbid"):
         return v
 
 
+class SmbFilenameTemplateEntry(BaseModel, extra="forbid"):
+    """A weighted SMB filename template set in smb_file_transfers.yaml."""
+
+    mime_types: list[str] = Field(default_factory=list)
+    templates: list[str]
+    weight: int
+
+    @field_validator("templates")
+    @classmethod
+    def templates_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("templates must not be empty")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
 class SmbFileTransferConfig(BaseModel, extra="forbid"):
     """Root schema for smb_file_transfers.yaml."""
 
@@ -350,6 +374,7 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
     timeout_probability: float
     mime_types: list[SmbMimeTypeEntry]
     analyzer_sets: list[SmbAnalyzerSetEntry]
+    filename_templates: list[SmbFilenameTemplateEntry] = Field(default_factory=list)
 
     @field_validator("min_transfer_bytes")
     @classmethod
@@ -382,6 +407,32 @@ class OuiEntry(BaseModel, extra="forbid"):
     prefix: str
     vendor: str
     weight: int
+
+
+class PublicNtpServerEntry(BaseModel, extra="forbid"):
+    """A public NTP server profile in network_params.yaml."""
+
+    name: str
+    ip: str
+    operator: str
+    stratum: int = Field(ge=1, le=4)
+    ref_id: str
+    weight: int = Field(gt=0)
+
+
+class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
+    """A domain-specific proxy User-Agent profile."""
+
+    os_keywords: list[str]
+    hosts: list[str]
+    user_agents: list[str]
+
+    @field_validator("os_keywords", "hosts", "user_agents")
+    @classmethod
+    def non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("list must not be empty")
+        return v
 
 
 # --- Process Network Map ---

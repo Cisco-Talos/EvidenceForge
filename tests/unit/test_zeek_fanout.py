@@ -263,7 +263,7 @@ class TestHttpFilesFanOut:
                 files_data = json.loads(f.readline())
 
             # UID consistency
-            assert conn_data["uid"] == http_data["uid"] == files_data["uid"]
+            assert conn_data["uid"] == http_data["uid"] == files_data["conn_uids"][0]
             assert conn_data["uid"] != "CTestHttpFiles01"
             assert conn_data["uid"].startswith("C")
 
