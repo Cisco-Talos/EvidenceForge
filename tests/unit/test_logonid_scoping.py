@@ -22,7 +22,7 @@
 
 """Tests for LogonID system scoping — processes use the correct host's session."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -212,3 +212,87 @@ class TestLogonIdSystemScoping:
         sessions = state_manager.get_sessions_for_user("attacker")
         remaining_systems = {s.system for s in sessions}
         assert "WKS-A" in remaining_systems
+
+
+class _FixedRng:
+    def uniform(self, a: float, b: float) -> float:
+        return 0.0
+
+    def randint(self, a: int, b: int) -> int:
+        return max(a, 1000)
+
+
+def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering(
+    state_manager, mock_emitters, system_a, attacker, monkeypatch
+):
+    """Later storyline steps should be scheduled after prior step cadence offsets."""
+    ag = ActivityGenerator(state_manager, mock_emitters)
+    engine = type("FakeEngine", (StorylineMixin,), {}).__new__(
+        type("FakeEngine", (StorylineMixin,), {})
+    )
+    engine.state_manager = state_manager
+    engine.activity_generator = ag
+    engine.dispatcher = ag.dispatcher
+    engine.malicious_events = []
+    engine._created_account_sids = {}
+    engine.scenario = Mock()
+    engine.scenario.environment.systems = [system_a]
+    engine.scenario.environment.users = [attacker]
+    engine._system_pids = {}
+    ag._system_pids = {}
+    engine._report_progress = lambda *args, **kwargs: None
+    engine._barrier_flush_all_emitters = lambda: None
+    engine._find_actor = lambda actor_name: attacker if actor_name == attacker.username else None
+    engine._find_system = lambda hostname: system_a if hostname == system_a.hostname else None
+
+    step_1 = Mock()
+    step_1.time = "2024-03-15T10:00:00Z"
+    step_1.actor = attacker.username
+    step_1.system = system_a.hostname
+    step_1.activity = "step one"
+    step_1.events = [Mock(type="process"), Mock(type="process")]
+
+    step_2 = Mock()
+    step_2.time = "2024-03-15T10:00:05Z"
+    step_2.actor = attacker.username
+    step_2.system = system_a.hostname
+    step_2.activity = "step two"
+    step_2.events = [Mock(type="process")]
+
+    engine.scenario.storyline = [step_1, step_2]
+
+    parsed_times = {
+        step_1.time: datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        step_2.time: datetime(2024, 3, 15, 10, 0, 5, tzinfo=UTC),
+    }
+    monkeypatch.setattr(engine, "_parse_storyline_time", lambda t: parsed_times[t])
+    monkeypatch.setattr("evidenceforge.generation.engine.storyline._get_rng", lambda: _FixedRng())
+
+    def fake_typing_cadence(count: int, _rng: _FixedRng) -> list[float]:
+        if count == 2:
+            return [0.0, 10.0]
+        return [0.0]
+
+    monkeypatch.setattr("evidenceforge.utils.timing.typing_cadence", fake_typing_cadence)
+
+    observed_times: list[datetime] = []
+
+    def fake_execute_typed_event(
+        *,
+        spec,
+        actor,
+        system,
+        time: datetime,
+        activity: str,
+        explicit_types: set[str],
+    ):
+        observed_times.append(time)
+        return None
+
+    monkeypatch.setattr(engine, "_execute_typed_event", fake_execute_typed_event)
+
+    engine._execute_storyline()
+
+    assert observed_times == sorted(observed_times)
+    assert observed_times[1] == observed_times[0] + timedelta(seconds=10)
+    assert observed_times[2] > observed_times[1]

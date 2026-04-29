@@ -54,6 +54,7 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
             "server_addr": dhcp.server_addr,
             "mac": dhcp.mac,
             "host_name": dhcp.host_name,
+            "domain": dhcp.domain or None,
             "assigned_addr": dhcp.assigned_addr,
             "lease_time": dhcp.lease_time,
             "msg_types": dhcp.msg_types,

@@ -40,7 +40,10 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
-from evidenceforge.generation.emitters.windows import _subject_domain
+from evidenceforge.generation.emitters.windows import (
+    _normalize_windows_time_created,
+    _subject_domain,
+)
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -81,31 +84,6 @@ _DNS_STATUS_MAP: dict[str, str] = {
     "NXDOMAIN": "9003",
     "NOTIMP": "9501",
     "REFUSED": "9005",
-}
-
-_REMOTE_THREAD_STARTS: dict[str, list[tuple[str, str]]] = {
-    "msmpeng.exe": [
-        (
-            r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpClient.dll",
-            "MpCreateRemoteThread",
-        ),
-        (r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpOav.dll", "AmsiScanBuffer"),
-        (r"C:\Windows\System32\ntdll.dll", "TppWorkerThread"),
-    ],
-    "csrss.exe": [
-        (r"C:\Windows\System32\winsrv.dll", "SrvCreateSystemThreads"),
-        (r"C:\Windows\System32\csrsrv.dll", "CsrApiRequestThread"),
-        (r"C:\Windows\System32\ntdll.dll", "RtlUserThreadStart"),
-    ],
-    "svchost.exe": [
-        (r"C:\Windows\System32\sechost.dll", "ScServiceMain"),
-        (r"C:\Windows\System32\rpcrt4.dll", "LRPC_ADDRESS::ReceiveLotsaCalls"),
-        (r"C:\Windows\System32\ntdll.dll", "TppWorkerThread"),
-    ],
-    "default": [
-        (r"C:\Windows\System32\kernel32.dll", "BaseThreadInitThunk"),
-        (r"C:\Windows\System32\ntdll.dll", "RtlUserThreadStart"),
-    ],
 }
 
 
@@ -594,22 +572,6 @@ class SysmonEventEmitter(LogEmitter):
             if event.image_load and self._passes_event7_filter(event):
                 self._render_sysmon_image_loaded(event)
 
-    # Processes that always run in user session context, never as SYSTEM.
-    # When the generator seeds these as SYSTEM (boot-time process tree),
-    # the emitter overrides to the host's assigned user.
-    _USER_SESSION_PROCESSES = {
-        "sihost.exe",
-        "searchhost.exe",
-        "searchprotocolhost.exe",
-        "searchfilterhost.exe",
-        "searchindexer.exe",
-        "runtimebroker.exe",
-        "textinputhost.exe",
-        "startmenuexperiencehost.exe",
-        "shellexperiencehost.exe",
-        "applicationframehost.exe",
-    }
-
     @staticmethod
     def _format_user(username: str, netbios_domain: str) -> str:
         """Format Sysmon User field with correct domain for well-known accounts.
@@ -676,11 +638,28 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
+        render_time = event.timestamp + self._source_offset(
+            "process_create",
+            host.hostname,
+            proc.pid,
+            event.timestamp,
+            minimum_ms=3,
+            maximum_ms=85,
+        )
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
-        # Use per-host boot time for parent GUID (not Jan 1 hardcode)
-        _parent_ts = self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        process_guid = self._get_stable_process_guid(
+            host.hostname, proc.pid, proc.start_time or event.timestamp
+        )
+        parent_proc = None
+        sm = getattr(self, "_state_manager", None)
+        if sm and proc.parent_pid > 0:
+            parent_proc = sm.get_process(host.hostname, proc.parent_pid)
+        _parent_ts = (
+            parent_proc.start_time
+            if parent_proc is not None
+            else self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
+        )
         parent_guid = self._generate_process_guid(
             host.hostname,
             proc.parent_pid,
@@ -697,38 +676,9 @@ class SysmonEventEmitter(LogEmitter):
 
         integrity = proc.integrity_level if proc.integrity_level else "Medium"
 
-        # Override SYSTEM for user-session processes (sihost, SearchHost, etc.)
-        # These always run under the logged-in user at Medium integrity, never SYSTEM.
-        _img_basename = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
-        if _img_basename in self._USER_SESSION_PROCESSES:
-            # Force Medium integrity regardless of what the generator set
-            integrity = "Medium"
-            if (
-                "NT AUTHORITY" in user
-                or auth is None
-                or (auth and auth.username in _SYSTEM_ACCOUNTS)
-            ):
-                # Also override the username from StateManager sessions
-                sm = getattr(self, "_state_manager", None)
-                _session_user = None
-                if sm:
-                    for sess in sm.state.active_sessions.values():
-                        if (
-                            sess.system == host.hostname
-                            and sess.username not in _SYSTEM_ACCOUNTS
-                            and sess.logon_type in (2, 10, 11)
-                        ):
-                            _session_user = sess.username
-                            break
-                if _session_user:
-                    user = self._format_user(_session_user, host.netbios_domain)
-                    _lid = _stable_seed(f"interactive_logon_{host.hostname}_{_session_user}")
-                    logon_id = f"0x{(_lid & 0xFFFFFFFF) | 0x10000:x}"
-
         event_data = {
             "EventID": 1,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -766,6 +716,23 @@ class SysmonEventEmitter(LogEmitter):
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
 
+    @staticmethod
+    def _source_offset(
+        event_type: str,
+        hostname: str,
+        pid: int,
+        timestamp: datetime,
+        *,
+        minimum_ms: int,
+        maximum_ms: int,
+    ) -> timedelta:
+        """Deterministic Sysmon collection latency for cross-source events."""
+        span = maximum_ms - minimum_ms
+        offset = minimum_ms + (
+            _stable_seed(f"sysmon:{event_type}:{hostname}:{pid}:{timestamp}") % span
+        )
+        return timedelta(milliseconds=offset)
+
     def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""
         random.Random()
@@ -774,29 +741,14 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, proc.pid, proc.start_time or event.timestamp
+        )
 
         if auth and auth.username:
             user = self._format_user(auth.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
-
-        # Override SYSTEM for user-session processes (same logic as Event 1)
-        _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
-        _img_base = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if _img_base in self._USER_SESSION_PROCESSES and (
-            "NT AUTHORITY" in user or auth is None or (auth and auth.username in _SYSTEM_ACCOUNTS)
-        ):
-            sm = getattr(self, "_state_manager", None)
-            if sm:
-                for sess in sm.state.active_sessions.values():
-                    if (
-                        sess.system == host.hostname
-                        and sess.username not in _SYSTEM_ACCOUNTS
-                        and sess.logon_type in (2, 10, 11)
-                    ):
-                        user = self._format_user(sess.username, host.netbios_domain)
-                        break
 
         event_data = {
             "EventID": 5,
@@ -832,29 +784,31 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
-        rng = random.Random(
-            _stable_seed(
-                f"sysmon8_{event.src_host.hostname}_{event.process.pid}_{event.timestamp.isoformat()}"
-            )
-        )
         host = event.src_host
         proc = event.process  # Source process
-        # Target info passed via network context fields or extra context
-        # For simplicity, we use process context for source and auth for target hints
         auth = event.auth
+        remote_thread = event.remote_thread
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        source_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
 
-        # Target process info from auth context (target_server=target_image, process_name=unused)
-        target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
+        target_pid = (
+            remote_thread.target_pid
+            if remote_thread is not None
+            else int(auth.source_port)
+            if auth and auth.source_port
+            else 0
+        )
         target_username = auth.username if auth else ""
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe",
+            remote_thread.target_image
+            if remote_thread is not None
+            else auth.target_server
+            if auth and auth.target_server
+            else r"C:\Windows\explorer.exe",
             username=target_username,
         )
-        target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
-        start_module, start_function = self._pick_remote_thread_start(proc.image, target_image, rng)
+        target_guid = self._get_stable_process_guid(host.hostname, target_pid, event.timestamp)
 
         event_data = {
             "EventID": 8,
@@ -871,31 +825,12 @@ class SysmonEventEmitter(LogEmitter):
             "TargetProcessGuid": target_guid,
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
-            "NewThreadId": rng.randint(100, 9999),
-            "StartAddress": f"0x{rng.randint(0x01000000, 0x7FFFFFFF):08X}",
-            "StartModule": start_module,
-            "StartFunction": start_function,
+            "NewThreadId": remote_thread.new_thread_id if remote_thread else 0,
+            "StartAddress": f"0x{remote_thread.start_address:08X}" if remote_thread else "0x0",
+            "StartModule": remote_thread.start_module if remote_thread else "",
+            "StartFunction": remote_thread.start_function if remote_thread else "",
         }
         self.emit_event(event_data)
-
-    def _pick_remote_thread_start(
-        self,
-        source_image: str,
-        target_image: str,
-        rng: random.Random,
-    ) -> tuple[str, str]:
-        """Pick realistic Event 8 StartModule/StartFunction values."""
-        source_exe = source_image.rsplit("\\", 1)[-1].lower()
-        target_exe = target_image.rsplit("\\", 1)[-1].lower()
-        candidates = list(_REMOTE_THREAD_STARTS.get(source_exe, _REMOTE_THREAD_STARTS["default"]))
-        if target_exe == "lsass.exe":
-            candidates.extend(
-                [
-                    (r"C:\Windows\System32\sechost.dll", "LsaICLookupNamesWithCreds"),
-                    (r"C:\Windows\System32\ntdll.dll", "NtCreateThreadEx"),
-                ]
-            )
-        return rng.choice(candidates)
 
     def _render_sysmon_process_access(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 10 (ProcessAccess).
@@ -906,23 +841,23 @@ class SysmonEventEmitter(LogEmitter):
         rng = random.Random()
         host = event.src_host
         proc = event.process  # Source process
-        auth = event.auth
+        access = event.process_access
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        source_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
 
-        # Target process info from auth context (same pattern as create_remote_thread)
-        target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
-        target_username = auth.username if auth else ""
+        target_pid = access.target_pid if access else rng.randint(500, 800)
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe",
-            username=target_username,
+            access.target_image if access else r"C:\Windows\System32\lsass.exe",
+            username=proc.username,
         )
-        target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
+        target_guid = self._get_stable_process_guid(host.hostname, target_pid, event.timestamp)
 
         # Determine user string
-        if auth and auth.username:
-            user = self._format_user(auth.username, host.netbios_domain)
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
 
@@ -930,7 +865,7 @@ class SysmonEventEmitter(LogEmitter):
         # 0x1010 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
         # 0x1FFFFF = PROCESS_ALL_ACCESS
         # 0x1438 = typical mimikatz access mask
-        granted_access = auth.failure_status if auth and auth.failure_status else "0x1010"
+        granted_access = access.granted_access if access else "0x1010"
 
         event_data = {
             "EventID": 10,
@@ -944,14 +879,16 @@ class SysmonEventEmitter(LogEmitter):
             "SourceProcessGUID": source_guid,
             "SourceProcessId": proc.pid,
             "SourceImage": proc.image,
-            "SourceThreadId": rng.randint(100, 9999),
+            "SourceThreadId": access.source_thread_id if access else -1,
             "SourceUser": user,
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
-            "TargetUser": "NT AUTHORITY\\SYSTEM",
+            "TargetUser": access.target_user if access else "NT AUTHORITY\\SYSTEM",
             "GrantedAccess": granted_access,
-            "CallTrace": self._get_call_trace(host.hostname),
+            "CallTrace": access.call_trace
+            if access and access.call_trace
+            else self._get_call_trace(host.hostname),
         }
         self.emit_event(event_data)
 
@@ -1409,6 +1346,7 @@ class SysmonEventEmitter(LogEmitter):
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_counters: dict[str, int] = {}
         self._erid_rngs: dict[str, random.Random] = {}
+        self._last_time_created_by_computer: dict[str, datetime] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1450,13 +1388,6 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                # Sysmon events arrive via a separate kernel callback,
-                # typically tens to hundreds of microseconds after the
-                # corresponding Security event.
-                if ts.microsecond == 0:
-                    ts = ts.replace(microsecond=random.randint(100000, 999999))
-                else:
-                    ts = ts + timedelta(microseconds=random.randint(50, 500))
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -1490,7 +1421,14 @@ class SysmonEventEmitter(LogEmitter):
 
         self._event_dicts.sort(key=_sort_key)
 
-        for event in self._event_dicts:
+        for sequence, event in enumerate(self._event_dicts):
+            _normalize_windows_time_created(
+                event,
+                self._last_time_created_by_computer,
+                sequence,
+                "sysmon_time_created",
+                jitter_existing_microseconds=True,
+            )
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:

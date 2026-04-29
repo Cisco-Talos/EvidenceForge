@@ -30,6 +30,7 @@ All use @dataclass(slots=True) for memory efficiency.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -93,6 +94,42 @@ class ProcessContext:
     parent_command_line: str = ""  # ParentCommandLine (Sysmon Event 1)
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
+    start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
+
+
+@dataclass(slots=True)
+class RemoteThreadContext:
+    """Cross-source details for remote thread creation."""
+
+    target_pid: int
+    target_image: str
+    new_thread_id: int
+    start_address: int
+    start_module: str = ""
+    start_function: str = ""
+    source_thread_id: int = 0
+    target_thread_id: int = 0
+    target_process_object_id: str = ""
+    thread_object_id: str = ""
+    stack_base: int = 0
+    stack_limit: int = 0
+    user_stack_base: int = 0
+    user_stack_limit: int = 0
+
+
+@dataclass(slots=True)
+class ProcessAccessContext:
+    """Cross-source details for one process opening another process."""
+
+    source_pid: int
+    source_image: str
+    target_pid: int
+    target_image: str
+    granted_access: str
+    source_thread_id: int = -1
+    target_user: str = "NT AUTHORITY\\SYSTEM"
+    target_process_object_id: str = ""
+    call_trace: str = ""
 
 
 @dataclass(slots=True)
@@ -290,7 +327,6 @@ class ShellContext:
     """Shell command execution details (bash_history)."""
 
     command: str
-    exit_code: int = 0
 
 
 # --- Zeek protocol-layer contexts (Phase: Zeek expansion) ---

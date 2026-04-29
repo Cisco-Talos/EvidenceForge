@@ -22,7 +22,7 @@
 
 """Unit tests for Phase 5.2.3: Process termination events."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -85,7 +85,12 @@ class TestProcessTermination:
         mock_emitters["windows_event_security"].reset_mock()
 
         activity_gen.generate_process_termination(
-            test_user, win_system, timestamp, pid, "C:\\Windows\\System32\\cmd.exe", logon_id
+            test_user,
+            win_system,
+            timestamp + timedelta(seconds=30),
+            pid,
+            "C:\\Windows\\System32\\cmd.exe",
+            logon_id,
         )
 
         assert mock_emitters["windows_event_security"].emit.called
@@ -93,6 +98,7 @@ class TestProcessTermination:
         assert event.event_type == "process_terminate"
         assert event.process.pid == pid
         assert event.process.image == "C:\\Windows\\System32\\cmd.exe"
+        assert event.process.start_time == timestamp
 
     def test_removes_process_from_state(
         self, activity_gen, test_user, win_system, timestamp, state_manager

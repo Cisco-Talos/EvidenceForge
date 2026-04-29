@@ -4,9 +4,10 @@
 """Tests for proxy emitter referrer field and CONNECT tunnel behavior."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, ProxyContext
+from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
 
 
 class TestProxyContextReferrer:
@@ -144,6 +145,73 @@ class TestProxyEmitterReferrer:
 
 class TestConnectTunnelBehavior:
     """Verify CONNECT is emitted once per tunnel, not per request."""
+
+    def test_dynamic_https_api_request_is_not_cached(self):
+        """TLS-inspected dynamic API requests should reach origin even when cache roll is low."""
+        from evidenceforge.generation.activity import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System
+
+        class LowCacheRollRandom:
+            def random(self):
+                return 0.1
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def choice(self, values):
+                return values[0]
+
+        generator = ActivityGenerator(StateManager(), {})
+        source_system = System(
+            hostname="ws01",
+            ip="10.0.10.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        proxy_system = System(
+            hostname="proxy01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+
+        with (
+            patch("evidenceforge.generation.activity.generator._get_rng", LowCacheRollRandom),
+            patch(
+                "evidenceforge.generation.activity.generator.pick_proxy_domain_user_agent",
+                return_value="",
+            ),
+            patch(
+                "evidenceforge.generation.activity.generator.pick_proxy_user_agent",
+                return_value="Mozilla/5.0",
+            ),
+        ):
+            proxy_context = generator._build_proxy_context(
+                src_ip="10.0.10.10",
+                dst_ip="45.33.49.112",
+                dst_port=443,
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=1000,
+                hostname="telemetry-sync.example.net",
+                source_system=source_system,
+                proxy_sys=proxy_system,
+                http=HttpContext(
+                    method="GET",
+                    host="telemetry-sync.example.net",
+                    uri="/v1/checkin",
+                    user_agent="FixtureBeacon/1.0",
+                    response_body_len=1000,
+                    status_code=200,
+                    resp_mime_types=["text/html"],
+                ),
+                explicit_mode=True,
+            )
+
+        assert proxy_context.cache_result == "MISS"
 
     def test_first_https_request_emits_connect(self):
         from pathlib import Path
@@ -440,3 +508,42 @@ class TestConnectTunnelBehavior:
 
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
         assert connect_count == 3, f"Expected 3 CONNECTs (one per host), got {connect_count}"
+
+    def test_same_host_on_different_proxy_gets_separate_connect(self):
+        """CONNECT tunnel reuse is scoped to the proxy that owns the tunnel."""
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        all_lines: list[str] = []
+        emitter.emit_to_host = lambda line, fqdn: all_lines.append(line)
+
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        for proxy_fqdn in ["PROXY-01", "PROXY-02"]:
+            event = SecurityEvent(
+                timestamp=ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=443,
+                    protocol="tcp",
+                ),
+                proxy=ProxyContext(
+                    client_ip="10.0.10.50",
+                    method="GET",
+                    url="https://example.com/",
+                    host="example.com",
+                    proxy_fqdn=proxy_fqdn,
+                ),
+            )
+            emitter.emit(event)
+            ts += timedelta(seconds=1)
+
+        connect_count = sum(1 for line in all_lines if "CONNECT" in line)
+        assert connect_count == 2, f"Expected 2 CONNECTs (one per proxy), got {connect_count}"

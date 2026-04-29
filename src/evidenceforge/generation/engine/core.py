@@ -361,6 +361,8 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             _sysmon._host_boot_times = _boot_times
             _sysmon._state_manager = self.state_manager
             _sysmon._system_pids = self._system_pids
+        if "windows_event_security" in self.emitters:
+            self.emitters["windows_event_security"]._state_manager = self.state_manager
 
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
         self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)

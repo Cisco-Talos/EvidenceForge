@@ -193,6 +193,31 @@ def _generate_typo(rng: random.Random, username: str, commands: dict[str, Any]) 
     return "sl"
 
 
+def _typo_rate(username: str, commands: dict[str, Any]) -> float:
+    """Return deterministic per-user typo rate bounded by YAML config."""
+    typo_model = commands.get("typo_model", {})
+    max_rate = float(typo_model.get("max_rate", 0.08))
+    max_bucket = max(0, int(round(max_rate * 100)))
+    if max_bucket <= 0:
+        return 0.0
+    return (_stable_seed(f"typo_rate_{username}") % (max_bucket + 1)) / 100.0
+
+
+def _typo_allowed(
+    commands: dict[str, Any],
+    *,
+    session_command_count: int | None,
+    prior_typo_count: int,
+) -> bool:
+    """Return whether another typo is plausible for the current history length."""
+    typo_model = commands.get("typo_model", {})
+    short_threshold = int(typo_model.get("short_history_threshold", 8))
+    short_max = int(typo_model.get("short_history_max_typos", 1))
+    if session_command_count is not None and session_command_count <= short_threshold:
+        return prior_typo_count < short_max
+    return True
+
+
 _USER_TOOL_AFFINITY: dict[str, list[str]] = {}
 
 
@@ -245,6 +270,8 @@ def pick_bash_command(
     system_hostname: str,
     system_services: list[str],
     username: str = "",
+    session_command_count: int | None = None,
+    prior_typo_count: int = 0,
 ) -> str:
     """Pick a bash command appropriate for the user's role on this server.
 
@@ -252,16 +279,41 @@ def pick_bash_command(
     Role-specific commands use per-user tool affinity (80% primary tools,
     20% full pool) for consistent user behavior.
     """
+    command, _is_typo = pick_bash_command_entry(
+        rng,
+        persona,
+        system_hostname,
+        system_services,
+        username=username,
+        session_command_count=session_command_count,
+        prior_typo_count=prior_typo_count,
+    )
+    return command
+
+
+def pick_bash_command_entry(
+    rng: random.Random,
+    persona: str,
+    system_hostname: str,
+    system_services: list[str],
+    username: str = "",
+    session_command_count: int | None = None,
+    prior_typo_count: int = 0,
+) -> tuple[str, bool]:
+    """Pick a bash command and return whether it is a generated typo."""
     commands = load_bash_commands()
     params = commands.get("params", {})
     server_role = _resolve_server_role(system_hostname, system_services)
 
     roll = rng.random()
 
-    # Per-user typo rate (0-15%) seeded from username for consistency
-    _user_typo_rate = (_stable_seed(f"typo_rate_{username}") % 16) / 100.0
-    if roll < _user_typo_rate:
-        return _generate_typo(rng, username, commands)
+    _user_typo_rate = _typo_rate(username, commands)
+    if roll < _user_typo_rate and _typo_allowed(
+        commands,
+        session_command_count=session_command_count,
+        prior_typo_count=prior_typo_count,
+    ):
+        return _generate_typo(rng, username, commands), True
 
     # Scale remaining thresholds into the non-typo portion
     _remaining = 1.0 - _user_typo_rate
@@ -272,9 +324,9 @@ def pick_bash_command(
         if username and rng.random() < 0.80:
             pool = _get_user_pool(username, pool)
         template = rng.choice(pool)
-        return _resolve_template(template, rng, params)
+        return _resolve_template(template, rng, params), False
 
     # Common command (60%)
     common = commands.get("common", ["ls"])
     template = rng.choice(common)
-    return _resolve_template(template, rng, params)
+    return _resolve_template(template, rng, params), False

@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import (
     BaselineActivity,
@@ -270,6 +272,7 @@ class TestStorylineBeaconExplicitProxy:
         assert len(inspected_lines) == 3
         assert all(custom_ua.replace(" ", "+") in line for line in beacon_lines)
 
+    @pytest.mark.slow
     def test_explicit_proxy_fixture_includes_zeek_proxy_and_firewall_visibility(self, tmp_path):
         """Review fixtures should exercise proxy, Zeek, and ASA correlation together."""
         allowed_host = "telemetry-sync.example.net"

@@ -148,17 +148,17 @@ class TestEdrModuleEvent:
     ):
         """MODULE events are now dispatched via SecurityEvent canonical path (Phase 8.2)."""
         from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import AuthContext, FileContext
+        from evidenceforge.events.contexts import AuthContext, ImageLoadContext
 
         event = SecurityEvent(
             timestamp=timestamp,
-            event_type="module_load",
+            event_type="image_load",
             src_host=activity_gen._build_host_context(win_system),
             auth=AuthContext(username="alice.smith"),
-            file=FileContext(path="C:\\Windows\\System32\\ntdll.dll", action="load", pid=1234),
+            image_load=ImageLoadContext(image_loaded="C:\\Windows\\System32\\ntdll.dll"),
         )
-        assert event.event_type == "module_load"
-        assert event.file.path.endswith(".dll")
+        assert event.event_type == "image_load"
+        assert event.image_load.image_loaded.endswith(".dll")
 
 
 class TestEdrDiversityInProcessCreation:
@@ -191,7 +191,7 @@ class TestEdrDiversityInProcessCreation:
             "file_modify": "FILE",
             "file_delete": "FILE",
             "registry_modify": "REGISTRY",
-            "module_load": "MODULE",
+            "image_load": "MODULE",
         }
         object_types = set()
         for call in mock_emitters["ecar"].emit.call_args_list:

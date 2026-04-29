@@ -36,7 +36,14 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, FileContext, HostContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    EdrContext,
+    FileContext,
+    HostContext,
+    ProcessContext,
+    RemoteThreadContext,
+)
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 
 
@@ -121,6 +128,89 @@ class TestFileEventActions:
 
         actions = [call.args[0]["action"] for call in emitter.emit_event.call_args_list]
         assert actions == ["READ", "WRITE"]
+
+
+class TestRemoteThreadRendering:
+    def test_remote_thread_uses_canonical_context_values(self, emitter, ts):
+        """THREAD/REMOTE_CREATE should render the same values Sysmon receives."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="create_remote_thread",
+            src_host=host,
+            process=ProcessContext(
+                pid=4321,
+                parent_pid=1234,
+                image=r"C:\Temp\inject.exe",
+                command_line=r"C:\Temp\inject.exe",
+                username="jsmith",
+            ),
+            remote_thread=RemoteThreadContext(
+                target_pid=688,
+                target_image=r"C:\Windows\System32\lsass.exe",
+                new_thread_id=840,
+                start_address=0x02060000,
+                start_module=r"C:\Windows\System32\ntdll.dll",
+                start_function="NtCreateThreadEx",
+                source_thread_id=2222,
+                target_thread_id=840,
+                target_process_object_id="target-process-id",
+                thread_object_id="thread-object-id",
+                stack_base=0xFFFFF80000100000,
+                stack_limit=0xFFFFF800000FA000,
+                user_stack_base=0x000000C0001000,
+                user_stack_limit=0x000000BFF01000,
+            ),
+            edr=EdrContext(object_id="thread-object-id", actor_id="source-process-id"),
+        )
+
+        emitter._render_create_remote_thread(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["tgt_pid"] == "688"
+        assert rendered["tgt_tid"] == "840"
+        assert rendered["tgt_pid_uuid"] == "target-process-id"
+        assert rendered["start_address"] == "0000000002060000"
+
+
+class TestSessionOutcomeRendering:
+    def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
+        """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jdoe",
+                source_ip="10.0.0.20",
+                failure_status="0xC000006D",
+                failure_substatus="0xC000006A",
+            ),
+        )
+
+        emitter._render_failed_logon(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["outcome"] == "failure"
+        assert rendered["status_code"] == "0xC000006D"
+        assert rendered["sub_status"] == "0xC000006A"
 
 
 class TestChronologicalOutput:

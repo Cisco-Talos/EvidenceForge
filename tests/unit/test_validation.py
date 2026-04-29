@@ -143,7 +143,12 @@ class TestScenarioValidator:
                     actor="testuser",
                     system="TEST-01",
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "C:\\Windows\\System32\\cmd.exe",
+                        }
+                    ],
                 )
             ],
             output=OutputSpec(
@@ -300,7 +305,12 @@ class TestScenarioValidator:
                     actor="nonexistent_actor",  # Invalid
                     system="TEST-01",
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "C:\\Windows\\System32\\cmd.exe",
+                        }
+                    ],
                 )
             ],
             output=OutputSpec(
@@ -341,7 +351,12 @@ class TestScenarioValidator:
                     actor="attacker",  # Not in users list — should fail
                     system="TEST-01",
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "C:\\Windows\\System32\\cmd.exe",
+                        }
+                    ],
                 )
             ],
             output=OutputSpec(
@@ -381,7 +396,12 @@ class TestScenarioValidator:
                     actor="testuser",
                     system="NONEXISTENT-01",  # Invalid
                     activity="malicious activity",
-                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "C:\\Windows\\System32\\cmd.exe",
+                        }
+                    ],
                 )
             ],
             output=OutputSpec(
@@ -859,7 +879,12 @@ class TestScenarioValidator:
                     actor="testuser",
                     system="TEST-01",
                     activity="simple attack",
-                    events=[{"type": "process", "process_name": "cmd.exe"}],
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": "C:\\Windows\\System32\\cmd.exe",
+                        }
+                    ],
                 ),
             ],
             output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
@@ -1948,6 +1973,87 @@ class TestStorylineOsPlausibility:
 
         warnings = [i for i in issues if "powershell.exe" in i.message]
         assert len(warnings) >= 1
+
+    def test_bare_process_name_info(self):
+        """Bare process names should be accepted with normalization guidance."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-bare-process",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
+                    activity="run powershell",
+                    events=[{"type": "process", "process_name": "powershell.exe"}],
+                ),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "info"
+            and "will normalize it to a canonical full path" in issue.message
+            for issue in issues
+        )
+
+    def test_noncanonical_full_process_path_warning(self):
+        """Full paths that differ from config should warn instead of silently diverging."""
+        scenario = Scenario(
+            version="1.0",
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test env",
+                users=[User(username="jdoe", full_name="J", email="j@test.com")],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.0.1", os="Windows 10", type="workstation"),
+                ],
+            ),
+            storyline=[
+                StorylineEvent(
+                    id="evt-val-noncanonical-process",
+                    time="2024-01-15T10:00:00Z",
+                    actor="jdoe",
+                    system="WS-01",
+                    activity="run powershell",
+                    events=[
+                        {
+                            "type": "process",
+                            "process_name": r"C:\Tools\powershell.exe",
+                        }
+                    ],
+                ),
+            ],
+            time_window=TimeWindow(start=datetime(2024, 1, 15, 10, 0, 0), duration="1h"),
+            baseline_activity=BaselineActivity(
+                description="Test", intensity="medium", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows"}], destination="./output"),
+        )
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "warning"
+            and "differs from configured canonical path" in issue.message
+            for issue in issues
+        )
 
     def test_linux_path_on_windows_warning(self):
         """Process with /usr/ path on Windows should warn."""

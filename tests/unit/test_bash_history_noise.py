@@ -176,6 +176,43 @@ class TestBaselineLinuxBashHistory:
         adjacency = commands.get("keyboard_adjacency", {})
         assert len(adjacency) >= 20, f"Keyboard adjacency map has only {len(adjacency)} keys"
 
+        typo_model = commands.get("typo_model", {})
+        assert 0 <= typo_model.get("max_rate", -1) <= 1
+        assert typo_model.get("short_history_max_typos", -1) <= 1
+
+    def test_short_history_typo_cap_suppresses_extra_typos(self, monkeypatch):
+        """Short bash histories should not accumulate multiple generated typos."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = bash_commands.load_bash_commands()
+        monkeypatch.setattr(bash_commands, "_typo_rate", lambda _username, _commands: 1.0)
+
+        class TypoRng:
+            def random(self):
+                return 0.0
+
+            def choice(self, values):
+                return values[0]
+
+            def choices(self, values, weights=None, k=1):
+                return [values[0] for _ in range(k)]
+
+            def randint(self, lower, _upper):
+                return lower
+
+        command, is_typo = bash_commands.pick_bash_command_entry(
+            TypoRng(),
+            "sysadmin",
+            "WEB-01",
+            ["nginx"],
+            username="deploy",
+            session_command_count=commands["typo_model"]["short_history_threshold"],
+            prior_typo_count=commands["typo_model"]["short_history_max_typos"],
+        )
+
+        assert is_typo is False
+        assert command
+
 
 class TestBashHistoryChronological:
     """Bash history entries should be chronologically sorted."""

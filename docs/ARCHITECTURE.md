@@ -147,7 +147,8 @@ SecurityEvent
 ├── src_host: HostContext (originating system — hostname, IP, OS, domain, FQDN)
 ├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
-├── process: ProcessContext (pid, parent_pid, image, command_line)
+├── process: ProcessContext (pid, parent_pid, image, command_line, start_time)
+├── remote_thread: RemoteThreadContext (target_pid, new_thread_id, start_address)
 ├── network: NetworkContext (src/dst IP/port, protocol, zeek_uid, bytes)
 ├── dns: DnsContext (query, type, response, TTL)
 ├── file: FileContext (path, hash, operation)
@@ -156,7 +157,7 @@ SecurityEvent
 ├── syslog: SyslogContext (app_name, message, pid, facility, severity)
 ├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
-├── shell: ShellContext (command, exit_code)
+├── shell: ShellContext (command)
 ├── ... (27 context types total)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```

@@ -18,6 +18,14 @@ from evidenceforge.generation.activity.http_content import normalize_mime_type_f
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_NON_BROWSER_DOMAIN_CLASSES = {
+    "crl",
+    "ocsp",
+    "software_update",
+    "telemetry",
+    "windows_trust_list",
+    "windows_update",
+}
 _SLUGS = [
     "getting-started",
     "best-practices",
@@ -55,6 +63,21 @@ def reset_proxy_uri_templates_cache() -> None:
     _CACHED_DATA = None
 
 
+def get_proxy_domain_class(hostname: str) -> str | None:
+    """Return the configured proxy behavior class for an exact hostname."""
+    entry = load_proxy_uri_templates().get("domains", {}).get(hostname, {})
+    if not isinstance(entry, dict):
+        return None
+    domain_class = entry.get("domain_class")
+    return str(domain_class) if domain_class else None
+
+
+def is_browser_like_proxy_domain(hostname: str) -> bool:
+    """Return whether hostname should be eligible for browser-style site visits."""
+    domain_class = get_proxy_domain_class(hostname)
+    return domain_class not in _NON_BROWSER_DOMAIN_CLASSES
+
+
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
     """Replace template variables in a URI path."""
     while "{guid}" in path:
@@ -81,8 +104,8 @@ def pick_proxy_uri(
     hostname: str,
     domain_tags: list[str],
     source_os: str | None = None,
-) -> tuple[str, str, str, str | None]:
-    """Pick a URI path, content type, HTTP method, and optional user-agent override.
+) -> tuple[str, str, str, str | None, str]:
+    """Pick URI path, content type, HTTP method, optional UA override, and referrer policy.
 
     Lookup order: exact domain match -> first matching tag -> generic fallback.
     MIME type is inferred from path extension when possible, overriding the
@@ -95,8 +118,9 @@ def pick_proxy_uri(
             UAs (e.g. Windows-Update-Agent) from being applied to Linux hosts.
 
     Returns:
-        (path, content_type, method, user_agent_override) tuple.
+        (path, content_type, method, user_agent_override, referrer_policy) tuple.
         user_agent_override is None for normal browser traffic.
+        referrer_policy is "normal" or "none".
     """
     data = load_proxy_uri_templates()
 
@@ -120,6 +144,7 @@ def pick_proxy_uri(
     content_type = entry.get("content_type", "text/html")
     methods = entry.get("methods", ["GET"])
     user_agent = entry.get("user_agent")
+    referrer_policy = entry.get("referrer_policy", "normal")
 
     # OS-aware UA filtering: suppress OS-specific UA overrides when source
     # OS doesn't match (e.g., don't assign Windows-Update-Agent to Linux hosts)
@@ -142,4 +167,4 @@ def pick_proxy_uri(
 
     content_type = normalize_mime_type_for_path(path, content_type)
 
-    return path, content_type, method, user_agent
+    return path, content_type, method, user_agent, referrer_policy

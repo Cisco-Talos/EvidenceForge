@@ -19,6 +19,7 @@ from evidenceforge.generation.activity.http_content import (
     normalize_mime_type_for_path,
     response_size_for_mime,
 )
+from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.site_maps import (
     PageDef,
     SiteMap,
@@ -134,6 +135,9 @@ def generate_browsing_session(
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
     """
+    if not is_browser_like_proxy_domain(hostname):
+        return []
+
     site_map = get_site_map(hostname, domain_tags, rng)
     params = _INTENSITY_PARAMS.get(browsing_intensity, _INTENSITY_PARAMS["normal"])
 

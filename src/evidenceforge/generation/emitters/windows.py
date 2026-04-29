@@ -29,7 +29,7 @@ order), then renders to XML and writes to per-host FQDN directories.
 
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -48,6 +48,38 @@ win_logger = logging.getLogger(__name__)
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+
+
+def _normalize_windows_time_created(
+    event: dict[str, Any],
+    last_by_computer: dict[str, datetime],
+    sequence: int,
+    seed_prefix: str,
+    *,
+    jitter_existing_microseconds: bool = False,
+) -> None:
+    """Apply deterministic jitter while preserving per-computer chronological order."""
+    ts = event.get("TimeCreated")
+    if not isinstance(ts, datetime):
+        return
+
+    computer = str(event.get("Computer", ""))
+    normalized = ensure_utc(ts)
+    seed = (
+        f"{seed_prefix}_{computer}_{sequence}_{event.get('EventID', '')}_"
+        f"{event.get('ExecutionProcessID', '')}_{event.get('ExecutionThreadID', '')}"
+    )
+    rng = random.Random(_stable_seed(seed))
+    if normalized.microsecond == 0:
+        normalized = normalized.replace(microsecond=rng.randint(100_000, 999_999))
+    elif jitter_existing_microseconds:
+        normalized = normalized + timedelta(microseconds=rng.randint(50, 500))
+
+    previous = last_by_computer.get(computer)
+    if previous is not None and normalized <= previous:
+        normalized = previous + timedelta(microseconds=1)
+    last_by_computer[computer] = normalized
+    event["TimeCreated"] = normalized
 
 
 def _subject_domain(username: str, netbios_domain: str) -> str:
@@ -744,6 +776,19 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         proc = event.process
         is_outbound = net.src_ip == host.ip
+        pid = net.initiating_pid if net.initiating_pid > 0 else 4
+        image = proc.image if proc else ""
+        if not image and pid > 0:
+            sm = getattr(self, "_state_manager", None)
+            if sm is not None:
+                running = sm.get_process(host.hostname, pid)
+                if running is not None:
+                    image = running.image
+        if not image:
+            if pid == 4:
+                image = "System"
+            else:
+                return
 
         event_data = {
             "EventID": 5156,
@@ -753,10 +798,8 @@ class WindowsEventEmitter(LogEmitter):
             "Level": 0,
             "ExecutionProcessID": 4,
             "ExecutionThreadID": rng.randint(50, 200),
-            "ProcessID": net.initiating_pid if net.initiating_pid > 0 else 4,
-            "Application": self._to_device_path(
-                proc.image if proc else r"C:\Windows\System32\svchost.exe"
-            ),
+            "ProcessID": pid,
+            "Application": self._to_device_path(image),
             "Direction": "%%14593" if is_outbound else "%%14592",
             "SourceAddress": net.src_ip,
             "SourcePort": net.src_port,
@@ -774,6 +817,8 @@ class WindowsEventEmitter(LogEmitter):
     @staticmethod
     def _to_device_path(path: str) -> str:
         """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
+        if path == "System":
+            return path
         if path and len(path) > 2 and path[1] == ":":
             return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
         return path.lower()
@@ -1037,6 +1082,7 @@ class WindowsEventEmitter(LogEmitter):
         self._event_dicts: list[dict[str, Any]] = []
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
+        self._last_time_created_by_computer: dict[str, datetime] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -1082,10 +1128,6 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                # Add microsecond jitter if timestamp has zero microseconds
-                # (prevents .000000Z tell that reveals generation pipeline seams)
-                if ts.microsecond == 0:
-                    ts = ts.replace(microsecond=random.randint(100000, 999999))
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():
@@ -1127,7 +1169,13 @@ class WindowsEventEmitter(LogEmitter):
         self._event_dicts.sort(key=_sort_key)
 
         # Assign per-computer EventRecordIDs in sorted order
-        for event in self._event_dicts:
+        for sequence, event in enumerate(self._event_dicts):
+            _normalize_windows_time_created(
+                event,
+                self._last_time_created_by_computer,
+                sequence,
+                "windows_time_created",
+            )
             computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:

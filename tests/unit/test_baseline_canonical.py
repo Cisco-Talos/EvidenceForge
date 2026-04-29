@@ -541,6 +541,29 @@ class TestDhcpLease:
         assert dhcp_events[0].dhcp is not None
         assert dhcp_events[0].dhcp.mac == "00:50:56:ab:cd:ef"
 
+    def test_generate_dhcp_lease_uses_ad_domain_when_unspecified(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """DHCP option-domain data defaults to the configured AD domain when present."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen._ad_domain = "corp.local"
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            uid="CTest123456789ab",
+        )
+
+        all_calls = [
+            call[0][0]
+            for emitter in mock_emitters.values()
+            if emitter.emit.called
+            for call in emitter.emit.call_args_list
+        ]
+        dhcp_events = [e for e in all_calls if e.event_type == "dhcp_lease"]
+        assert dhcp_events[-1].dhcp.domain == "corp.local"
+
 
 class TestAnonymousLogon:
     """Anonymous logon events dispatch without creating sessions."""

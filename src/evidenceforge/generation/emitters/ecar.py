@@ -24,7 +24,7 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -88,6 +88,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "file_delete",
         "registry_modify",
         "module_load",
+        "image_load",
         "create_remote_thread",
         "process_access",
         "service_installed",
@@ -120,6 +121,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_delete": self._render_file_event,
             "registry_modify": self._render_registry_event,
             "module_load": self._render_module_event,
+            "image_load": self._render_module_event,
             "create_remote_thread": self._render_create_remote_thread,
             "process_access": self._render_process_access,
             "service_installed": self._render_service_installed,
@@ -161,6 +163,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "action": "LOGIN",
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
+            "outcome": "success",
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
@@ -190,7 +193,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "action": "LOGIN",
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
+            "outcome": "failure",
             "failure_reason": "bad_password",
+            "status_code": event.auth.failure_status,
+            "sub_status": event.auth.failure_substatus,
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
@@ -200,8 +206,16 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
         host = event.src_host
         proc = event.process
+        event_ts = event.timestamp + self._source_offset(
+            "process_create",
+            host.hostname,
+            proc.pid,
+            event.timestamp,
+            minimum_ms=12,
+            maximum_ms=250,
+        )
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": event_ts,
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "CREATE",
@@ -274,18 +288,26 @@ class EcarEmitter(HostMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
-        """Render eCAR MODULE/LOAD event from canonical FileContext (logged on src_host)."""
+        """Render eCAR MODULE/LOAD event from canonical ImageLoadContext."""
         host = event.src_host
+        proc = event.process
+        module_path = ""
+        if event.image_load is not None:
+            module_path = event.image_load.image_loaded
+        elif event.file is not None:
+            module_path = event.file.path
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
-            "pid": event.file.pid if event.file else -1,
+            "pid": proc.pid if proc else (event.file.pid if event.file else -1),
             "principal": event.auth.username if event.auth else "",
-            "file_path": event.file.path if event.file else "",
+            "file_path": module_path,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if proc:
+            event_data["image_path"] = proc.image
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -349,17 +371,17 @@ class EcarEmitter(HostMultiplexEmitter):
         OpTC field structure: objectID = new thread UUID, actorID = source
         process UUID, tgt_pid_uuid = target process UUID in properties.
         """
-        import random as rng_mod
-
         host = event.src_host
         proc = event.process
         auth = event.auth
-        target_pid = int(auth.source_port) if auth and auth.source_port else -1
-        src_tid = rng_mod.randint(1000, 9999)
-        tgt_tid = rng_mod.randint(1000, 9999)
-        # x86-64 canonical addresses: page-aligned, proper ranges
-        _kstack_base = 0xFFFFF80000000000 + (rng_mod.randint(0, 0xFFFFF) << 12)
-        _ustack_base = 0x000000C0000000 + (rng_mod.randint(0, 0xFFF) << 12)
+        remote_thread = event.remote_thread
+        target_pid = (
+            remote_thread.target_pid
+            if remote_thread is not None
+            else int(auth.source_port)
+            if auth and auth.source_port
+            else -1
+        )
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
@@ -367,19 +389,21 @@ class EcarEmitter(HostMultiplexEmitter):
             "action": "REMOTE_CREATE",
             "pid": proc.pid,
             "ppid": proc.parent_pid,
-            "tid": src_tid,
+            "tid": remote_thread.source_thread_id if remote_thread else 0,
             "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
             "image_path": proc.image,
             "src_pid": str(proc.pid),
-            "src_tid": str(src_tid),
+            "src_tid": str(remote_thread.source_thread_id if remote_thread else 0),
             "tgt_pid": str(target_pid),
-            "tgt_pid_uuid": str(uuid.uuid4()),
-            "tgt_tid": str(tgt_tid),
-            "start_address": f"00007ff{rng_mod.randint(0x0, 0xF):x}{rng_mod.randint(0x0000, 0xFFFF):04x}0000",
-            "stack_base": f"{_kstack_base:016x}",
-            "stack_limit": f"{_kstack_base - 0x6000:016x}",
-            "user_stack_base": f"{_ustack_base:016x}",
-            "user_stack_limit": f"{_ustack_base - 0x100000:016x}",
+            "tgt_pid_uuid": remote_thread.target_process_object_id
+            if remote_thread
+            else str(uuid.uuid4()),
+            "tgt_tid": str(remote_thread.new_thread_id if remote_thread else 0),
+            "start_address": f"{remote_thread.start_address:016x}" if remote_thread else "",
+            "stack_base": f"{remote_thread.stack_base:016x}" if remote_thread else "",
+            "stack_limit": f"{remote_thread.stack_limit:016x}" if remote_thread else "",
+            "user_stack_base": f"{remote_thread.user_stack_base:016x}" if remote_thread else "",
+            "user_stack_limit": f"{remote_thread.user_stack_limit:016x}" if remote_thread else "",
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
@@ -395,31 +419,52 @@ class EcarEmitter(HostMultiplexEmitter):
         actorID = source process UUID, image_path = source image,
         command_line = target command line.
         """
-        import random as rng_mod
-
         host = event.src_host
         proc = event.process
-        auth = event.auth
-        target_image = auth.target_server if auth and auth.target_server else ""
-        granted_access = auth.failure_status if auth and auth.failure_status else "0x0"
+        access = event.process_access
+        target_image = access.target_image if access else ""
+        target_pid = access.target_pid if access else -1
+        granted_access = access.granted_access if access else "0x0"
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "OPEN",
-            "objectID": str(uuid.uuid4()),  # Target process UUID
-            "actorID": str(uuid.uuid4()),  # Source process UUID
+            "objectID": event.edr.object_id if event.edr else str(uuid.uuid4()),
+            "actorID": event.edr.actor_id if event.edr else str(uuid.uuid4()),
             "pid": proc.pid,
             "ppid": proc.parent_pid,
-            "tid": rng_mod.randint(1000, 9999),
+            "tid": access.source_thread_id if access else -1,
             "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
             "image_path": proc.image,
-            "command_line": target_image,  # OpTC puts target command_line here
+            "command_line": proc.command_line,
             "parent_image_path": proc.parent_image or proc.image,
+            "target_pid": target_pid,
+            "target_image_path": target_image,
+            "target_process_uuid": access.target_process_object_id if access else "",
             "granted_access": granted_access,
             "_host_fqdn": self._host_fqdn(host),
         }
         self.emit_event(event_data)
+
+    @staticmethod
+    def _source_offset(
+        event_type: str,
+        hostname: str,
+        pid: int,
+        timestamp: datetime,
+        *,
+        minimum_ms: int,
+        maximum_ms: int,
+    ) -> timedelta:
+        """Deterministic EDR collection latency for cross-source events."""
+        from evidenceforge.utils.rng import _stable_seed
+
+        span = maximum_ms - minimum_ms
+        offset = minimum_ms + (
+            _stable_seed(f"ecar:{event_type}:{hostname}:{pid}:{timestamp}") % span
+        )
+        return timedelta(milliseconds=offset)
 
     def _render_service_installed(self, event: SecurityEvent) -> None:
         """Render eCAR SERVICE/CREATE event (logged on src_host)."""
@@ -464,6 +509,9 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_key",
         "registry_value",
         "failure_reason",
+        "outcome",
+        "status_code",
+        "sub_status",
         "src_pid",
         "src_tid",
         "tgt_pid",
@@ -475,6 +523,9 @@ class EcarEmitter(HostMultiplexEmitter):
         "user_stack_base",
         "user_stack_limit",
         "granted_access",
+        "target_pid",
+        "target_image_path",
+        "target_process_uuid",
         "service_name",
         "service_account",
     )

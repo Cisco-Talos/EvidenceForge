@@ -379,8 +379,9 @@ class TestOsAwareDomainFiltering:
             all_bg = get_domains_by_tag("background")
             entry = next((e for e in all_bg if e["domain"] == domain), None)
             if entry:
-                assert "windows" not in entry.get("tags", []), (
-                    f"Linux host got Windows domain: {domain}"
+                tags = set(entry.get("tags", []))
+                assert "windows" not in tags or "linux" in tags, (
+                    f"Linux host got Windows-only domain: {domain}"
                 )
 
     def test_include_os_windows_can_return_windows_domains(self):

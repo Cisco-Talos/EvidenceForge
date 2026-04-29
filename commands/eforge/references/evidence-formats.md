@@ -97,7 +97,7 @@ output/
 | 22 | DNSQuery | Discovery | DNS lookups as seen by the Windows DNS Client service (svchost.exe). QueryName, QueryStatus, and resolved addresses. |
 
 **Known Limitations:**
-- ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
+- ProcessGuid is deterministic from (hostname, PID, process creation time), so Events 1/3/5/7/8/10/11/12/13/22 agree for the same known process — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
 - Events 1, 3, 5, 7, 8, 10, 11, 12/13, and 22 are implemented; real Sysmon has 30+ event types
@@ -149,12 +149,13 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
-| PROCESS | CREATE, TERMINATE | Includes pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. |
+| PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) and includes granted_access, target_pid, target_image_path, and target_process_uuid in properties. |
+| THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Thread ID, target PID, start address, target process UUID, and stack properties come from shared canonical remote-thread context. |
 | FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity and baseline SMB file-server access. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
-| MODULE | LOAD | DLL loads for Windows processes. |
-| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. |
+| MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
+| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); failed attempts include failure_reason/status fields and do not imply an established session. |
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account. |
 
 **Known Limitations:**

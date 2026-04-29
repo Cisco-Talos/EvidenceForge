@@ -119,3 +119,36 @@ class TestValidateConfig:
             and "PreAuthType 0/no-preauth weight must not exceed 5%" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_browser_like_proxy_infra_template(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_uri
+
+        real_loader = proxy_uri.load_proxy_uri_templates
+
+        def load_invalid_proxy_templates():
+            data = real_loader()
+            domains = dict(data.get("domains", {}))
+            domains["ocsp.pki.goog"] = {
+                "domain_class": "ocsp",
+                "paths": ["/login"],
+                "content_type": "text/html",
+                "methods": ["GET"],
+            }
+            return {**data, "domains": domains}
+
+        monkeypatch.setattr(proxy_uri, "load_proxy_uri_templates", load_invalid_proxy_templates)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_uri_templates.yaml"
+            and "browser-like path" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_uri_templates.yaml"
+            and "unsuitable content type" in issue.message
+            for issue in result.issues
+        )

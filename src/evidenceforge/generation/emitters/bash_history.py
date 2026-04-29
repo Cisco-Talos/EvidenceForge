@@ -160,7 +160,6 @@ class BashHistoryEmitter(LogEmitter):
             "hostname": host.hostname if host else "unknown",
             "host_fqdn": (host.fqdn or host.hostname) if host else "unknown",
             "command": event.shell.command if event.shell else "",
-            "exit_code": event.shell.exit_code if event.shell else 0,
         }
         self.emit_event(event_data)
 

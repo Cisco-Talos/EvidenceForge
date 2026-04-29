@@ -15,8 +15,10 @@
 domains:
   # --- Windows Update / Delivery Optimization ---
   download.windowsupdate.com:
+    domain_class: windows_update
     user_agent: "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
     os: windows
+    referrer_policy: none
     paths:
       - "/msdownload/update/v3/static/trustedr/en/{guid}.cab"
       - "/msdownload/update/software/secu/{guid}/{guid}.cab"
@@ -27,8 +29,10 @@ domains:
     methods: ["GET"]
 
   ctldl.windowsupdate.com:
+    domain_class: windows_trust_list
     user_agent: "Microsoft-CryptoAPI/10.0"
     os: windows
+    referrer_policy: none
     paths:
       - "/msdownload/update/v3/static/trustedr/en/authrootstl.cab"
       - "/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab"
@@ -36,10 +40,37 @@ domains:
     content_type: "application/vnd.ms-cab-compressed"
     methods: ["GET"]
 
+  dl.google.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
+      - "/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+      - "/edgedl/chrome/chrome-for-testing/{hex8}/win64/chrome-win64.zip"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
+  update.googleapis.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/service/update2/json"
+      - "/service/update2/crx"
+      - "/service/update2"
+    content_types:
+      - "application/json"
+      - "application/octet-stream"
+      - "application/json"
+    methods: ["POST", "GET", "POST"]
+
   # --- Certificate / OCSP / CRL ---
   crl.microsoft.com:
+    domain_class: crl
     user_agent: "Microsoft-CryptoAPI/10.0"
     os: windows
+    referrer_policy: none
     paths:
       - "/pki/crl/products/MicRooCerAut2011_2011_03_22.crl"
       - "/pki/crl/products/MicTimStaPCA_2010-07-01.crl"
@@ -50,15 +81,104 @@ domains:
     methods: ["GET"]
 
   ocsp.digicert.com:
+    domain_class: ocsp
     user_agent: "Microsoft-CryptoAPI/10.0"
     os: windows
+    referrer_policy: none
     paths:
       - "/"
     content_type: "application/ocsp-response"
     methods: ["POST"]
 
+  crl3.digicert.com:
+    domain_class: crl
+    referrer_policy: none
+    paths:
+      - "/DigiCertGlobalRootG2.crl"
+      - "/DigiCertTLSRSASHA2562020CA1-4.crl"
+      - "/DigiCertGlobalRootCA.crl"
+    content_type: "application/pkix-crl"
+    methods: ["GET"]
+
+  crl4.digicert.com:
+    domain_class: crl
+    referrer_policy: none
+    paths:
+      - "/DigiCertGlobalRootG2.crl"
+      - "/DigiCertTLSRSASHA2562020CA1-4.crl"
+      - "/DigiCertGlobalRootCA.crl"
+    content_type: "application/pkix-crl"
+    methods: ["GET"]
+
+  ocsp.pki.goog:
+    domain_class: ocsp
+    referrer_policy: none
+    paths:
+      - "/gts1c3"
+      - "/gts1o1core"
+      - "/gtsr1"
+    content_type: "application/ocsp-response"
+    methods: ["POST"]
+
+  crls.pki.goog:
+    domain_class: crl
+    referrer_policy: none
+    paths:
+      - "/gts1c3/{hex8}.crl"
+      - "/gts1o1core/{hex8}.crl"
+      - "/gtsr1/{hex8}.crl"
+    content_type: "application/pkix-crl"
+    methods: ["GET"]
+
+  ocsp.globalsign.com:
+    domain_class: ocsp
+    referrer_policy: none
+    paths:
+      - "/gsorganizationvalsha2g2"
+      - "/rootr3"
+      - "/alphasslrootsha256g4"
+    content_type: "application/ocsp-response"
+    methods: ["POST"]
+
+  ocsp.sectigo.com:
+    domain_class: ocsp
+    referrer_policy: none
+    paths:
+      - "/"
+      - "/SectigoRSADomainValidationSecureServerCA"
+      - "/SectigoRSAOrganizationValidationSecureServerCA"
+    content_type: "application/ocsp-response"
+    methods: ["POST"]
+
+  ocsp.int-x3.letsencrypt.org:
+    domain_class: ocsp
+    referrer_policy: none
+    paths:
+      - "/"
+    content_type: "application/ocsp-response"
+    methods: ["POST"]
+
+  r3.o.lencr.org:
+    domain_class: ocsp
+    referrer_policy: none
+    paths:
+      - "/"
+    content_type: "application/ocsp-response"
+    methods: ["POST"]
+
+  x1.c.lencr.org:
+    domain_class: crl
+    referrer_policy: none
+    paths:
+      - "/"
+      - "/x1.crl"
+    content_type: "application/pkix-crl"
+    methods: ["GET"]
+
   # --- Microsoft Telemetry / Settings ---
   settings-win.data.microsoft.com:
+    domain_class: telemetry
+    referrer_policy: none
     paths:
       - "/OneCollector/1.0/"
       - "/settings/v2.0/global"
@@ -67,6 +187,8 @@ domains:
     methods: ["POST", "POST", "GET"]
 
   arc.msn.com:
+    domain_class: telemetry
+    referrer_policy: none
     paths:
       - "/v3/Delivery/Placement"
       - "/v3/Delivery/Cache"

@@ -204,6 +204,12 @@ security:
 
 # QWERTY keyboard adjacency map for generative typo model.
 # Each key maps to its physical neighbors on a standard US keyboard.
+typo_model:
+  max_rate: 0.08
+  short_history_threshold: 8
+  short_history_max_typos: 1
+  correction_probability: 0.85
+
 keyboard_adjacency:
   q: [w, a, "1", "2"]
   w: [q, e, a, s, "2", "3"]

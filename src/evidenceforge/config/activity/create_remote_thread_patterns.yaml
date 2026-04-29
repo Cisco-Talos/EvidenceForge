@@ -67,3 +67,52 @@ baseline_pairs:
     target_pid_key: svchost_wusvcs
     target_image: 'C:\Windows\System32\svchost.exe'
     weight: 4
+
+start_locations:
+  msmpeng.exe:
+    - module: 'C:\ProgramData\Microsoft\Windows Defender\Platform\MpClient.dll'
+      function: MpCreateRemoteThread
+      weight: 4
+    - module: 'C:\ProgramData\Microsoft\Windows Defender\Platform\MpOav.dll'
+      function: AmsiScanBuffer
+      weight: 3
+    - module: 'C:\Windows\System32\ntdll.dll'
+      function: TppWorkerThread
+      weight: 2
+  csrss.exe:
+    - module: 'C:\Windows\System32\winsrv.dll'
+      function: SrvCreateSystemThreads
+      weight: 3
+    - module: 'C:\Windows\System32\csrsrv.dll'
+      function: CsrApiRequestThread
+      weight: 3
+    - module: 'C:\Windows\System32\ntdll.dll'
+      function: RtlUserThreadStart
+      weight: 2
+  svchost.exe:
+    - module: 'C:\Windows\System32\sechost.dll'
+      function: ScServiceMain
+      weight: 3
+    - module: 'C:\Windows\System32\rpcrt4.dll'
+      function: LRPC_ADDRESS::ReceiveLotsaCalls
+      weight: 3
+    - module: 'C:\Windows\System32\ntdll.dll'
+      function: TppWorkerThread
+      weight: 2
+  default:
+    - module: 'C:\Windows\System32\kernel32.dll'
+      function: BaseThreadInitThunk
+      weight: 3
+    - module: 'C:\Windows\System32\ntdll.dll'
+      function: RtlUserThreadStart
+      weight: 3
+
+target_overrides:
+  lsass.exe:
+    start_locations:
+      - module: 'C:\Windows\System32\sechost.dll'
+        function: LsaICLookupNamesWithCreds
+        weight: 2
+      - module: 'C:\Windows\System32\ntdll.dll'
+        function: NtCreateThreadEx
+        weight: 3

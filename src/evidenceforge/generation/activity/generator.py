@@ -46,10 +46,14 @@ from evidenceforge.events.contexts import (
     HostContext,
     HttpContext,
     IdsContext,
+    ImageLoadContext,
     KerberosContext,
     OcspContext,
+    ProcessAccessContext,
+    ProcessContext,
     ProxyContext,
     RegistryContext,
+    RemoteThreadContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.proxy_user_agents import (
@@ -79,6 +83,20 @@ from .network import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_WINDOWS_USER_SESSION_PROCESSES = {
+    "sihost.exe",
+    "searchhost.exe",
+    "searchprotocolhost.exe",
+    "searchfilterhost.exe",
+    "searchindexer.exe",
+    "runtimebroker.exe",
+    "textinputhost.exe",
+    "startmenuexperiencehost.exe",
+    "shellexperiencehost.exe",
+    "applicationframehost.exe",
+}
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -818,6 +836,38 @@ class ActivityGenerator:
             roles=list(system.roles),
         )
 
+    def _resolve_process_identity(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+    ) -> tuple[str, str]:
+        """Resolve process owner/logon before emitters render cross-source evidence."""
+        if _get_os_category(system.os) != "windows":
+            return username, logon_id
+
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_USER_SESSION_PROCESSES or username not in _SYSTEM_ACCOUNTS:
+            return username, logon_id
+
+        candidates = [
+            session
+            for session in self.state_manager.list_active_sessions()
+            if (
+                session.system == system.hostname
+                and session.username not in _SYSTEM_ACCOUNTS
+                and session.logon_type in (2, 10, 11)
+            )
+        ]
+        if not candidates:
+            return username, logon_id
+
+        candidates.sort(key=lambda session: session.start_time, reverse=True)
+        session = candidates[0]
+        return session.username, session.logon_id
+
     def _remember_connection_tuple(
         self,
         src_ip: str,
@@ -975,12 +1025,20 @@ class ActivityGenerator:
             user_agent = ""
         else:
             source_os = _get_os_category(source_system.os) if source_system else None
-            path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                rng, proxy_hostname, domain_tags, source_os=source_os
-            )
+            (
+                path,
+                proxy_content_type,
+                proxy_method,
+                proxy_ua_override,
+                referrer_policy,
+            ) = pick_proxy_uri(rng, proxy_hostname, domain_tags, source_os=source_os)
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             url = f"{scheme}://{proxy_hostname}{path}"
-            proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
+            proxy_referrer = (
+                ""
+                if referrer_policy == "none"
+                else pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
+            )
             user_agent = ""
 
         domain_user_agent = pick_proxy_domain_user_agent(
@@ -1001,6 +1059,22 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
 
+        proxy_cacheable = proxy_method in {"GET", "HEAD"}
+        if http is not None:
+            from evidenceforge.generation.activity.http_content import infer_mime_type_from_path
+
+            response_mime = proxy_content_type or infer_mime_type_from_path(url)
+            proxy_cacheable = proxy_cacheable and (
+                response_mime.startswith(("image/", "font/"))
+                or response_mime
+                in {
+                    "application/javascript",
+                    "text/css",
+                    "application/json",
+                    "application/octet-stream",
+                }
+            )
+
         cache_roll = rng.random()
         if explicit_mode and proxy_method == "CONNECT":
             if cache_roll < 0.975:
@@ -1011,7 +1085,7 @@ class ActivityGenerator:
                 cache_result = "AUTH_REQUIRED"
             else:
                 cache_result = "GATEWAY_ERROR"
-        elif cache_roll < 0.30:
+        elif proxy_cacheable and cache_roll < 0.30:
             cache_result = "HIT"
         elif cache_roll < 0.95:
             cache_result = "MISS"
@@ -2276,18 +2350,37 @@ class ActivityGenerator:
                     rng = _get_rng()
                     _integrity = "Low" if rng.random() < 0.65 else "Medium"
 
+        process_username, process_logon_id = self._resolve_process_identity(
+            system=system,
+            username=user.username,
+            logon_id=logon_id,
+            process_name=process_name,
+        )
+        if process_username != user.username:
+            _integrity = "Medium"
+        parent_pid = self._sanitize_user_parent_pid(
+            system=system,
+            user=user,
+            time=time,
+            logon_id=process_logon_id,
+            process_name=process_name,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
+
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
             image=process_name,
             command_line=command_line,
-            username=user.username,
+            username=process_username,
             integrity_level=_integrity,
-            logon_id=logon_id,
+            logon_id=process_logon_id,
         )
 
         # Phase 2: Build SecurityEvent
+        running_proc = self.state_manager.get_process(system.hostname, pid)
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
@@ -2295,24 +2388,25 @@ class ActivityGenerator:
             event_type="process_create",
             src_host=self._build_host_context(system),
             auth=AuthContext(
-                username=user.username,
-                user_sid=self._get_sid(user.username),
-                logon_id=logon_id,
+                username=process_username,
+                user_sid=self._get_sid(process_username),
+                logon_id=process_logon_id,
             ),
             process=ProcessContext(
                 pid=pid,
                 parent_pid=parent_pid,
                 image=process_name,
                 command_line=command_line,
-                username=user.username,
+                username=process_username,
                 integrity_level=_integrity,
-                logon_id=logon_id,
+                logon_id=process_logon_id,
                 parent_image=self._lookup_process_name(
                     system.hostname, parent_pid, _get_os_category(system.os)
                 ),
                 parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
+                start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
@@ -2334,16 +2428,16 @@ class ActivityGenerator:
             if not _is_system_binary:
                 self.dispatcher.dispatch(
                     SecurityEvent(
-                        timestamp=time,
+                        timestamp=time + timedelta(milliseconds=120),
                         event_type="file_create",
                         src_host=self._build_host_context(system),
-                        auth=AuthContext(username=user.username),
+                        auth=AuthContext(username=process_username),
                         process=ProcessContext(
                             pid=pid,
                             parent_pid=parent_pid,
                             image=process_name,
                             command_line=command_line,
-                            username=user.username,
+                            username=process_username,
                         ),
                         file=FileContext(path=process_name, action="create", pid=pid),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -2354,7 +2448,7 @@ class ActivityGenerator:
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
-        auth_ctx = AuthContext(username=user.username)
+        auth_ctx = AuthContext(username=process_username)
         if rng.random() < 0.40:
             action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
             from evidenceforge.generation.activity.edr_pools import get_file_paths
@@ -2372,7 +2466,7 @@ class ActivityGenerator:
             }[action]
             self.dispatcher.dispatch(
                 SecurityEvent(
-                    timestamp=time,
+                    timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
                     event_type=event_type,
                     src_host=host_ctx,
                     auth=auth_ctx,
@@ -2381,23 +2475,32 @@ class ActivityGenerator:
                         parent_pid=parent_pid,
                         image=process_name,
                         command_line=command_line,
-                        username=user.username,
+                        username=process_username,
                     ),
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
-            from evidenceforge.generation.activity.edr_pools import get_dll_pool
+            from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 
-            dll_path = rng.choice(get_dll_pool())
+            dll_profiles = get_dlls_for_process(_exe_lower)
+            dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
+            module_delay_ms = rng.randint(120, 1500)
             self.dispatcher.dispatch(
                 SecurityEvent(
-                    timestamp=time,
-                    event_type="module_load",
+                    timestamp=time + timedelta(milliseconds=module_delay_ms),
+                    event_type="image_load",
                     src_host=host_ctx,
                     auth=auth_ctx,
-                    file=FileContext(path=dll_path, action="load", pid=pid),
+                    process=ProcessContext(
+                        pid=pid,
+                        parent_pid=parent_pid,
+                        image=process_name,
+                        command_line=command_line,
+                        username=process_username,
+                    ),
+                    image_load=ImageLoadContext(image_loaded=dll_path),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
@@ -2445,7 +2548,7 @@ class ActivityGenerator:
                 reg_action = "delete" if rng.random() < 0.15 else "modify"
                 self.dispatcher.dispatch(
                     SecurityEvent(
-                        timestamp=time,
+                        timestamp=time + timedelta(milliseconds=rng.randint(120, 950)),
                         event_type="registry_modify",
                         src_host=host_ctx,
                         auth=auth_ctx,
@@ -2483,23 +2586,39 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        running_proc = self.state_manager.get_process(system.hostname, pid)
+        process_username = running_proc.username if running_proc is not None else user.username
+        process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
+        if not process_logon_id:
+            if process_username in _SYSTEM_ACCOUNTS:
+                process_logon_id = "0x3e7"
+            else:
+                resolved_username, resolved_logon_id = self._resolve_process_identity(
+                    system=system,
+                    username=process_username,
+                    logon_id=logon_id,
+                    process_name=process_name,
+                )
+                process_username = resolved_username
+                process_logon_id = resolved_logon_id or logon_id
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
             src_host=self._build_host_context(system),
             auth=AuthContext(
-                username=user.username,
-                user_sid=self._get_sid(user.username),
-                logon_id=logon_id,
+                username=process_username,
+                user_sid=self._get_sid(process_username),
+                logon_id=process_logon_id,
             ),
             process=ProcessContext(
                 pid=pid,
                 parent_pid=0,
                 image=process_name,
                 command_line="",
-                username=user.username,
-                logon_id=logon_id,
+                username=process_username,
+                logon_id=process_logon_id,
+                start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id),
         )
@@ -2535,6 +2654,7 @@ class ActivityGenerator:
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
         proxy_bypass: bool = False,
+        process_image: str | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -2567,6 +2687,12 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import NetworkContext
 
         caller_provided_conn_state = conn_state is not None
+        caller_provided_payload = (
+            service is not None
+            and duration is not None
+            and (orig_bytes or 0) > 0
+            and (resp_bytes or 0) > 0
+        )
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -2579,13 +2705,16 @@ class ActivityGenerator:
         hostname_was_explicit = hostname not in (None, "")
         hostname_from_reverse_dns = False
         if hostname is None:
-            if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
+            reverse_hostname = REVERSE_DNS.get(dst_ip)
+            if reverse_hostname is not None:
+                hostname = reverse_hostname
+                hostname_from_reverse_dns = True
+            elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
                     _get_rng(), dst_ip, getattr(self, "_ad_domain", "corp.local")
                 )
             else:
-                hostname = REVERSE_DNS.get(dst_ip)
-                hostname_from_reverse_dns = hostname is not None
+                hostname = None
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
             if not _is_private_ip(dst_ip):
                 hostname = _generate_random_hostname(_get_rng(), dst_ip)
@@ -2814,6 +2943,7 @@ class ActivityGenerator:
                 proxy=proxy_context,
                 hostname=self._proxy_fqdn(proxy_sys),
                 proxy_bypass=True,
+                process_image=process_image,
             )
 
             if proxy_context.status_code >= 400:
@@ -3040,7 +3170,18 @@ class ActivityGenerator:
                 resp_bytes = 0
         else:
             if duration is not None:
-                entry = rng.choices(_TCP_CONN_ENTRIES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
+                tcp_entries = _TCP_CONN_ENTRIES
+                tcp_weights = _TCP_CONN_WEIGHTS
+                if caller_provided_payload:
+                    candidates = [
+                        entry
+                        for entry in _TCP_CONN_ENTRIES
+                        if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
+                    ]
+                    if candidates:
+                        tcp_entries = candidates
+                        tcp_weights = [entry[1] for entry in candidates]
+                entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
                 conn_state, _, history = entry
             else:
                 conn_state = "S0"
@@ -3162,10 +3303,28 @@ class ActivityGenerator:
 
         # Resolve eCAR actor_id from initiating process (if pid is known)
         conn_actor_id = ""
+        process_ctx = None
         if pid > 0 and resolved_source_system:
             conn_actor_id = self.state_manager.get_process_object_id(
                 resolved_source_system.hostname, pid
             )
+            running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if running is not None:
+                process_ctx = ProcessContext(
+                    pid=pid,
+                    parent_pid=running.parent_pid,
+                    image=running.image,
+                    command_line=running.command_line,
+                    username=running.username,
+                )
+            elif process_image:
+                process_ctx = ProcessContext(
+                    pid=pid,
+                    parent_pid=0,
+                    image=process_image,
+                    command_line="",
+                    username="",
+                )
 
         event = SecurityEvent(
             timestamp=time,
@@ -3173,6 +3332,7 @@ class ActivityGenerator:
             src_host=src_host_ctx,
             dst_host=dst_host_ctx,
             local_only=local_only,
+            process=process_ctx,
             network=NetworkContext(
                 src_ip=src_ip,
                 src_port=src_port,
@@ -3310,22 +3470,48 @@ class ActivityGenerator:
                 elif dst_port == 443:
                     # Legacy single-connection HTTPS path
                     _src_os = _get_os_category(source_system.os) if source_system else None
-                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
+                    (
+                        path,
+                        proxy_content_type,
+                        proxy_method,
+                        proxy_ua_override,
+                        referrer_policy,
+                    ) = pick_proxy_uri(
+                        _get_rng(),
+                        proxy_hostname,
+                        domain_tags,
+                        source_os=_src_os,
                     )
                     url = f"https://{proxy_hostname}{path}"
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
-                    proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=443)
+                    proxy_referrer = (
+                        ""
+                        if referrer_policy == "none"
+                        else pick_referrer(rng, proxy_hostname, context="general", port=443)
+                    )
                 else:
                     _src_os = _get_os_category(source_system.os) if source_system else None
-                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
+                    (
+                        path,
+                        proxy_content_type,
+                        proxy_method,
+                        proxy_ua_override,
+                        referrer_policy,
+                    ) = pick_proxy_uri(
+                        _get_rng(),
+                        proxy_hostname,
+                        domain_tags,
+                        source_os=_src_os,
                     )
                     url = f"http://{proxy_hostname}{path}"
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
-                    proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=80)
+                    proxy_referrer = (
+                        ""
+                        if referrer_policy == "none"
+                        else pick_referrer(rng, proxy_hostname, context="general", port=80)
+                    )
                 # OS-aware proxy User-Agent selection (skip when session set it)
                 if event.http is None:
                     if proxy_ua_override:
@@ -3446,7 +3632,7 @@ class ActivityGenerator:
                 web_host = dst_ip
             web_domain_tags = get_domain_tags(web_host)
             _src_os_http = _get_os_category(source_system.os) if source_system else None
-            uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
+            uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
                 rng, web_host, web_domain_tags, source_os=_src_os_http
             )
             if http_ua_override:
@@ -3459,7 +3645,11 @@ class ActivityGenerator:
                 resp_body_len = 0
             from evidenceforge.generation.activity.referrer import pick_referrer
 
-            _http_referer = pick_referrer(rng, host, context="general", port=dst_port)
+            _http_referer = (
+                ""
+                if http_referrer_policy == "none"
+                else pick_referrer(rng, host, context="general", port=dst_port)
+            )
             event.http = HttpContext(
                 method=http_method,
                 host=host,
@@ -3731,6 +3921,7 @@ class ActivityGenerator:
                 dst_port=dst_port,
                 protocol=proto,
                 pid=pid if pid > 0 else 4,
+                application=event.process.image if event.process is not None else None,
             )
 
         return uid
@@ -4079,10 +4270,11 @@ class ActivityGenerator:
         self.generate_bash_command(user, system, time, command)
 
         # Probabilistically emit 0-3 noise commands (role-aware)
-        from evidenceforge.generation.activity.bash_commands import pick_bash_command
+        from evidenceforge.generation.activity.bash_commands import pick_bash_command_entry
 
         rng = _get_rng()
         n_noise = rng.choices([0, 1, 1, 2, 2, 3], k=1)[0]
+        typo_count = 0
         # Complexity-aware inter-command delays
         _COMPLEX_PREFIXES = ("nmap", "find ", "tar ", "rsync", "make", "docker", "ansible")
         _MEDIUM_PREFIXES = ("curl", "wget", "scp", "ssh ", "mysql", "psql", "pip", "apt", "yum")
@@ -4098,9 +4290,17 @@ class ActivityGenerator:
                 delay = rng.uniform(1.0, 5.0)
             cumulative_delay += delay
             noise_time = time + timedelta(seconds=cumulative_delay)
-            noise_cmd = pick_bash_command(
-                rng, user.persona or "", system.hostname, system.services, username=user.username
+            noise_cmd, is_typo = pick_bash_command_entry(
+                rng,
+                user.persona or "",
+                system.hostname,
+                system.services,
+                username=user.username,
+                session_command_count=n_noise + 1,
+                prior_typo_count=typo_count,
             )
+            if is_typo:
+                typo_count += 1
             self.generate_bash_command(user, system, noise_time, noise_cmd)
             prev_cmd = noise_cmd
 
@@ -4538,11 +4738,13 @@ class ActivityGenerator:
             nx_src_port = self._allocate_ephemeral_port(
                 src_ip, nx_dns_server_ip, 53, "udp", nx_time, _src_os
             )
+            nx_qtype = 33 if nx_query.startswith("_") else 1
+            nx_qtype_name = "SRV" if nx_qtype == 33 else "A"
             nx_ctx = DnsContext(
                 query=nx_query,
                 trans_id=rng.randint(1, 65535),
-                qtype=1,
-                query_type="A",
+                qtype=nx_qtype,
+                query_type=nx_qtype_name,
                 rcode="NXDOMAIN",
                 rcode_num=3,
                 rtt=_dns_rtt(rng, nx_dns_server_ip),
@@ -4683,12 +4885,24 @@ class ActivityGenerator:
 
             dns_tags = conn_info.get("dns_tags") or []
             if conn_info["service"] == "ssl":
-                ext_hostname, dst_ip = self._pick_profiled_tls_destination(
-                    rng,
-                    src_ip=system.ip,
-                    source_system=system,
-                    purpose_tags=tuple(dns_tags) if dns_tags else ("web", "saas"),
-                )
+                if hasattr(self, "_pick_profiled_tls_destination"):
+                    ext_hostname, dst_ip = self._pick_profiled_tls_destination(
+                        rng,
+                        src_ip=system.ip,
+                        source_system=system,
+                        purpose_tags=tuple(dns_tags) if dns_tags else ("web", "saas"),
+                    )
+                elif dns_tags:
+                    tag = rng.choice(dns_tags)
+                    ext_hostname, dst_ip = _pick_domain_and_ip(
+                        rng,
+                        tag,
+                        src_host=system.hostname,
+                        include_os=_get_os_category(system.os),
+                    )
+                else:
+                    ext_hostname = _gen_lt_domain(rng)
+                    dst_ip = _d2ip(ext_hostname)
             elif dns_tags:
                 tag = rng.choice(dns_tags)
                 ext_hostname, dst_ip = _pick_domain_and_ip(
@@ -5384,7 +5598,7 @@ class ActivityGenerator:
         dst_port: int,
         protocol: str,
         pid: int = 4,
-        application: str = r"C:\Windows\System32\svchost.exe",
+        application: str | None = None,
     ) -> None:
         """Generate WFP connection permitted event (5156) on Windows host.
 
@@ -5393,6 +5607,32 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import NetworkContext, ProcessContext
 
         ip_proto = 6 if protocol == "tcp" else 17 if protocol == "udp" else 1
+        process = None
+        if application:
+            process = ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=application,
+                command_line="",
+                username="",
+            )
+        elif pid > 0:
+            running = self.state_manager.get_process(system.hostname, pid)
+            if running is not None:
+                process = ProcessContext(
+                    pid=pid,
+                    parent_pid=running.parent_pid,
+                    image=running.image,
+                    command_line=running.command_line,
+                    username=running.username,
+                )
+        if process is None and pid > 0 and pid != 4:
+            logger.debug(
+                "Skipping WFP 5156 for unresolved process image: host=%s pid=%s",
+                system.hostname,
+                pid,
+            )
+            return
         event = SecurityEvent(
             timestamp=time,
             event_type="wfp_connection",
@@ -5406,13 +5646,7 @@ class ActivityGenerator:
                 ip_proto=ip_proto,
                 initiating_pid=pid,
             ),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=0,
-                image=application,
-                command_line="",
-                username="",
-            ),
+            process=process,
         )
         self.dispatcher.dispatch(event)
 
@@ -5857,22 +6091,64 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import ProcessContext
 
+        rng = random.Random(
+            _stable_seed(
+                "remote_thread:"
+                f"{system.hostname}:{source_pid}:{target_pid}:{time.isoformat()}:{target_image}"
+            )
+        )
+        from evidenceforge.generation.activity.create_remote_thread_patterns import (
+            pick_remote_thread_start,
+        )
+
+        start_module, start_function = pick_remote_thread_start(source_image, target_image, rng)
+        start_address = rng.randint(0x01000000, 0x7FFFFFFF)
+        source_proc = self.state_manager.get_process(system.hostname, source_pid)
+        source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
+        target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
+        thread_obj_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_DNS,
+                f"{system.hostname}:{source_pid}:{target_pid}:{time.isoformat()}:{start_address}",
+            )
+        )
+        stack_base = 0xFFFFF80000000000 + (rng.randint(0, 0xFFFFF) << 12)
+        user_stack_base = 0x000000C0000000 + (rng.randint(0, 0xFFF) << 12)
         event = SecurityEvent(
             timestamp=time,
             event_type="create_remote_thread",
             src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=source_pid,
-                parent_pid=0,
+                parent_pid=source_proc.parent_pid if source_proc is not None else 0,
                 image=source_image,
-                command_line="",
-                username=user.username,
+                command_line=source_proc.command_line if source_proc is not None else "",
+                username=source_proc.username if source_proc is not None else user.username,
+                logon_id=source_proc.logon_id if source_proc is not None else "",
+                start_time=source_proc.start_time if source_proc is not None else None,
             ),
             auth=AuthContext(
-                username=user.username,
+                username=source_proc.username if source_proc is not None else user.username,
                 target_server=target_image,
                 source_port=target_pid,  # Pack target PID into source_port for emitter
             ),
+            remote_thread=RemoteThreadContext(
+                target_pid=target_pid,
+                target_image=target_image,
+                new_thread_id=rng.randint(100, 9999),
+                start_address=start_address,
+                start_module=start_module,
+                start_function=start_function,
+                source_thread_id=rng.randint(1000, 9999),
+                target_thread_id=rng.randint(1000, 9999),
+                target_process_object_id=target_obj_id,
+                thread_object_id=thread_obj_id,
+                stack_base=stack_base,
+                stack_limit=stack_base - 0x6000,
+                user_stack_base=user_stack_base,
+                user_stack_limit=user_stack_base - 0x100000,
+            ),
+            edr=EdrContext(object_id=thread_obj_id, actor_id=source_obj_id),
         )
         self.dispatcher.dispatch(event)
 
@@ -5905,25 +6181,41 @@ class ActivityGenerator:
         # Entity lifecycle: validate target PID exists
         self.state_manager.validate_target_pid(system.hostname, target_pid)
 
-        from evidenceforge.events.contexts import ProcessContext
-
+        source_proc = self.state_manager.get_process(system.hostname, source_pid)
+        source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
+        target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
+        source_thread_id = -1
+        if source_proc is not None:
+            source_thread_rng = random.Random(
+                _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
+            )
+            source_thread_id = source_thread_rng.randint(1000, 9999)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
             src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=source_pid,
-                parent_pid=0,
+                parent_pid=source_proc.parent_pid if source_proc is not None else 0,
                 image=source_image,
-                command_line="",
-                username=user.username,
+                command_line=source_proc.command_line if source_proc is not None else "",
+                username=source_proc.username if source_proc is not None else user.username,
+                logon_id=source_proc.logon_id if source_proc is not None else "",
+                start_time=source_proc.start_time if source_proc is not None else None,
             ),
             auth=AuthContext(
-                username=user.username,
-                target_server=target_image,
-                source_port=target_pid,  # Pack target PID (same pattern as create_remote_thread)
-                failure_status=granted_access,  # Pack access mask into failure_status
+                username=source_proc.username if source_proc is not None else user.username,
             ),
+            process_access=ProcessAccessContext(
+                source_pid=source_pid,
+                source_image=source_image,
+                source_thread_id=source_thread_id,
+                target_pid=target_pid,
+                target_image=target_image,
+                target_process_object_id=target_obj_id,
+                granted_access=granted_access,
+            ),
+            edr=EdrContext(object_id=target_obj_id, actor_id=source_obj_id),
         )
         self.dispatcher.dispatch(event)
 
@@ -6017,12 +6309,15 @@ class ActivityGenerator:
         lease_time: float = 3600.0,
         uid: str = "",
         msg_types: list[str] | None = None,
+        domain: str | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         from evidenceforge.events.contexts import DhcpContext
 
         if msg_types is None:
             msg_types = ["DISCOVER", "OFFER", "REQUEST", "ACK"]
+        if domain is None:
+            domain = getattr(self, "_ad_domain", "") or ""
 
         from evidenceforge.events.contexts import NetworkContext
 
@@ -6057,6 +6352,7 @@ class ActivityGenerator:
                 server_addr=server_addr,
                 mac=mac,
                 host_name=system.hostname,
+                domain=domain,
                 assigned_addr=system.ip,
                 lease_time=lease_time,
                 uids=[uid] if uid else [],
@@ -6627,6 +6923,44 @@ class ActivityGenerator:
 
         # No valid parent alive — auto-create the chain
         return self._ensure_parent_chain(system, user, time, logon_id, exe_name, os_cat, depth=0)
+
+    def _sanitize_user_parent_pid(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int:
+        """Prevent user-context Windows processes from being parented by PID 4/System."""
+        if _get_os_category(system.os) != "windows":
+            return parent_pid
+        if process_username in _SYSTEM_ACCOUNTS or process_username.endswith("$"):
+            return parent_pid
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        parent_image = (parent_proc.image if parent_proc is not None else "").lower()
+        if parent_pid != 4 and parent_image not in {"system", "ntoskrnl.exe"}:
+            return parent_pid
+
+        resolved = self._resolve_parent(system, user, time, logon_id, process_name)
+        resolved_proc = self.state_manager.get_process(system.hostname, resolved)
+        resolved_image = (resolved_proc.image if resolved_proc is not None else "").lower()
+        if resolved != 4 and resolved_image not in {"system", "ntoskrnl.exe"}:
+            return resolved
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("explorer", "winlogon", "services", "svchost_dcom"):
+            candidate = sys_pids.get(role)
+            if (
+                candidate
+                and candidate != 4
+                and self.state_manager.get_process(system.hostname, candidate)
+            ):
+                return candidate
+        return parent_pid
 
     def _ensure_parent_chain(
         self,

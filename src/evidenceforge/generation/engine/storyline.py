@@ -36,6 +36,8 @@ import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from evidenceforge.generation.activity.application_catalog import resolve_image_path
+from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
@@ -146,6 +148,17 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     if count is None:
         effective_rate *= rng.uniform(0.82, 1.18)
     return 1.0 / effective_rate
+
+
+def _normalize_storyline_process_image(
+    process_name: str,
+    os_category: str,
+    username: str = "",
+) -> str:
+    """Normalize a storyline executable to the canonical full path when possible."""
+    if "\\" in process_name or "/" in process_name:
+        return process_name
+    return resolve_image_path(process_name, os_category, username=username)
 
 
 # Realistic decoded PowerShell commands for base64 encoding
@@ -358,6 +371,31 @@ class StorylineMixin:
         if not hasattr(self, "_created_account_sids"):
             self._created_account_sids: dict[str, str] = {}
 
+    def _record_last_storyline_process(self, system: System, pid: int, image: str) -> None:
+        """Record the last storyline process by host for later network provenance."""
+        if not hasattr(self, "_last_storyline_process_by_system"):
+            self._last_storyline_process_by_system: dict[str, tuple[int, str]] = {}
+        self._last_storyline_process_by_system[system.hostname] = (pid, image)
+        self._last_storyline_pid = pid
+        self._last_storyline_image = image
+        self._last_storyline_system = system.hostname
+
+    def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
+        """Return last storyline process only when it belongs to the same source host."""
+        if system is None:
+            return -1, None
+        processes = getattr(self, "_last_storyline_process_by_system", {})
+        pid, image = processes.get(system.hostname, (-1, ""))
+        if pid <= 0 or not image:
+            return -1, None
+
+        os_category = _get_os_category(system.os)
+        if os_category == "windows" and image.startswith("/"):
+            return -1, None
+        if os_category == "linux" and re.match(r"^[A-Za-z]:\\", image):
+            return -1, None
+        return pid, image
+
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
 
@@ -384,7 +422,6 @@ class StorylineMixin:
             event_time = event_time + jitter
             if _prev_event_time and event_time <= _prev_event_time:
                 event_time = _prev_event_time + timedelta(milliseconds=rng.randint(100, 5000))
-            _prev_event_time = event_time
 
             actor = self._find_actor(storyline_event.actor)
             system = self._find_system(storyline_event.system)
@@ -433,6 +470,11 @@ class StorylineMixin:
                 )
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
+
+            if cadence_offsets:
+                _prev_event_time = event_time + timedelta(seconds=cadence_offsets[-1])
+            else:
+                _prev_event_time = event_time
 
             self._barrier_flush_all_emitters()
 
@@ -677,7 +719,11 @@ class StorylineMixin:
             from evidenceforge.generation.activity import _get_os_category
 
             os_category = _get_os_category(system.os)
-            process_name = spec.process_name
+            process_name = _normalize_storyline_process_image(
+                spec.process_name,
+                os_category,
+                username=actor.username,
+            )
             command_line = spec.command_line or process_name
 
             if os_category == "linux":
@@ -707,9 +753,7 @@ class StorylineMixin:
                 ensure_file_event=True,
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
-            self._last_storyline_pid = pid
-            self._last_storyline_image = process_name
-            self._last_storyline_system = system.hostname
+            self._record_last_storyline_process(system, pid, process_name)
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
@@ -856,6 +900,7 @@ class StorylineMixin:
                 src_sys = ip_map[source_ip]
             elif source_ip == system.ip:
                 src_sys = system
+            story_pid, story_image = self._last_storyline_process_for_system(src_sys)
             # Only use explicit hostname from scenario.  Do NOT fall back to
             # Hostname resolution for storyline connections:
             # - Explicit hostname → use it, emit DNS
@@ -887,7 +932,8 @@ class StorylineMixin:
                 emit_dns=emit_dns,
                 source_system=src_sys,
                 http=http_ctx,
-                pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                pid=story_pid,
+                process_image=story_image,
                 hostname=conn_hostname,
             )
             malicious_event["dst_ip"] = dst_ip
@@ -1112,8 +1158,10 @@ class StorylineMixin:
             self.activity_generator.generate_log_cleared(user=actor, system=system, time=time)
 
         elif spec.type == "create_remote_thread":
-            source_pid = getattr(self, "_last_storyline_pid", 0) or 0
-            source_image = getattr(self, "_last_storyline_image", "") or "unknown"
+            source_pid, source_image = self._last_storyline_process_for_system(system)
+            if source_pid <= 0:
+                source_pid = 0
+                source_image = "unknown"
             # Use a realistic target PID — look up the process name from
             # system PIDs or use a plausible default (not 4 = System kernel)
             target_name = spec.target_process.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
@@ -1349,6 +1397,7 @@ class StorylineMixin:
                 src_sys = ip_map[beacon_src_ip]
             elif beacon_src_ip == system.ip:
                 src_sys = system
+            story_pid, story_image = self._last_storyline_process_for_system(src_sys)
 
             attempt_count = 0
             for tick_time in _iter_periodic_ticks(
@@ -1407,7 +1456,8 @@ class StorylineMixin:
                             http=http_ctx,
                             proxy=proxy_ctx,
                             hostname=conn_hostname if conn_hostname is not None else spec.hostname,
-                            pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                            pid=story_pid,
+                            process_image=story_image,
                         )
                     else:
                         self.activity_generator.generate_connection(
@@ -1437,7 +1487,8 @@ class StorylineMixin:
                         source_system=src_sys,
                         http=http_ctx,
                         hostname=conn_hostname,
-                        pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                        pid=story_pid,
+                        process_image=story_image,
                     )
                 attempt_count += 1
 
@@ -1569,6 +1620,7 @@ class StorylineMixin:
                 src_sys = ip_map[scan_src_ip]
             elif scan_src_ip == system.ip:
                 src_sys = system
+            story_pid, _story_image = self._last_storyline_process_for_system(src_sys)
 
             from evidenceforge.events.contexts import IdsContext
             from evidenceforge.generation.activity.referrer import pick_scan_referrer
@@ -1683,7 +1735,7 @@ class StorylineMixin:
                     source_system=src_sys,
                     http=http_ctx,
                     hostname=scan_host if spec.hostname else None,
-                    pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                    pid=story_pid,
                     ids=ids_ctx,
                 )
                 request_count += 1
@@ -2000,6 +2052,7 @@ class StorylineMixin:
             malicious_event["bytes_exfiltrated"] = total_bytes
 
         elif spec.type == "explicit_credentials":
+            story_pid, _story_image = self._last_storyline_process_for_system(system)
             self.activity_generator.generate_explicit_credentials(
                 user=actor,
                 system=system,
@@ -2007,7 +2060,7 @@ class StorylineMixin:
                 target_username=spec.target_username,
                 target_server=spec.target_server or system.hostname,
                 process_name=spec.process_name or r"C:\Windows\System32\runas.exe",
-                process_pid=getattr(self, "_last_storyline_pid", -1) or 0,
+                process_pid=story_pid if story_pid > 0 else 0,
                 source_ip=spec.source_ip or system.ip,
             )
             malicious_event["target_username"] = spec.target_username

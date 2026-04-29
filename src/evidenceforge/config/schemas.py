@@ -697,6 +697,28 @@ class CreateRemoteThreadPatternEntry(BaseModel, extra="forbid"):
         return v
 
 
+class RemoteThreadStartLocationEntry(BaseModel, extra="forbid"):
+    """A remote thread start module/function entry."""
+
+    module: str
+    function: str
+    weight: int = 1
+
+    @field_validator("module")
+    @classmethod
+    def module_windows_path(cls, v: str) -> str:
+        if "\\" not in v:
+            raise ValueError("module must look like a Windows path")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def start_weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
 # --- Traffic Profile Connection ---
 
 

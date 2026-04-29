@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-24
+**Last Updated:** 2026-04-29
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -38,6 +38,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
+### P0 Cross-Source Timing Audit
+
+- [ ] **P0** Comprehensive correlated-event timing audit — after the current 78% synthetic blind-review fixes, perform a full audit similar to the emitter field-provenance audit, but focused on timing relationships between correlated events. Inventory all generated event clusters that are expected to correlate across Security/Sysmon/eCAR/Zeek/proxy/ASA/syslog/baseline/storyline outputs; identify where timestamps are source-native exact, realistically offset, impossible, or accidentally reordered; verify same-source ordering invariants such as process-create before process follow-on artifacts; verify cross-source offsets such as DNS before TCP, proxy client leg before proxy egress, firewall deny before absent downstream evidence, process create before WFP/Sysmon network evidence, auth before process, module/file/registry after process, and teardown after build/start; then implement root-cause fixes with tests and generated-output probes.
+
 ### World Model Refactor
 
 - [x] Open the draft PR from `world-model` into `dev`
@@ -46,6 +50,30 @@ Runtime ownership state was expanded to track exact session/process/connection p
 Verification is complete: dedicated `tests/unit/test_world_model.py` coverage was added and `uv run pytest -v --include-slow` passed (`1483 passed`).
 
 ### Recently Resolved
+
+- [x] Blind Windows process/Sysmon/eCAR realism evaluation — separate evaluator scored the regenerated focused dataset 90% synthetic. Highest-impact findings: eCAR THREAD/REMOTE_CREATE disagrees with Sysmon Event 8 on thread IDs/start addresses, process create user/logon identity can disagree across Security/Sysmon/eCAR, and process-create timestamps are too exact across sources. Medium findings covered unmatched terminations, templated process distributions, and pre-seeded process GUID references.
+
+- [x] Pytest stabilization after Windows process/Sysmon/eCAR review — fixed the explicit-proxy storyline integration failure by preventing dynamic HTTPS API-style proxy requests from being modeled as cache HITs, then reran `uv run pytest --include-slow --durations=50 --durations-min=1.0` successfully (`2329 passed, 1 skipped` in 737.74s). Duration data shows runtime is dominated by the medium dataset memory test (410.68s), explicit proxy storyline fixture (139.43s), and medium dataset generation setup (107.60s); the medium/parallel tests were already marked slow, and the explicit proxy correlation fixture is now marked slow too.
+
+- [x] Windows process/Sysmon/eCAR source review — generated a focused Windows-heavy dataset with Windows Security, Sysmon, eCAR, and Zeek. Fixed Sysmon Event 5 `ProcessGuid` mismatches by carrying process start time on termination events, and fixed Windows Security/Sysmon same-second timestamp jitter so rendered XML stays chronological per host. Focused tests and regenerated-output probes passed.
+
+- [x] Windows process/Sysmon/eCAR blind-review follow-up — implemented shared canonical `RemoteThreadContext` evidence for Sysmon Event 8 and eCAR `THREAD/REMOTE_CREATE`, moved user-session process identity correction into generation before Windows Security/Sysmon/eCAR rendering, and switched eCAR module-load generation to the same process-aware DLL profile data used by Sysmon ImageLoaded events. Remote-thread start locations are now data-driven/overlay-aware and covered by `eforge validate-config`. Existing Windows/Sysmon render-time timestamp normalization already prevents exact XML timestamp ties, so no additional timestamp offset was needed in this pass. Verification: focused tests passed, full unit suite passed (`2278 passed, 1 skipped`), Ruff passed, and `uv run eforge validate-config` passed.
+
+- [x] Windows process/Sysmon/eCAR blind-eval cleanup — fixed approved follow-up findings from the 82% synthetic blind eval: eCAR remote-thread `tgt_tid` now matches Sysmon Event 8 `NewThreadId`, Security 4689 avoids blank `SubjectLogonId` for system-owned process exits, process-create render timestamps have deterministic source offsets across Security/Sysmon/eCAR, eCAR `PROCESS/OPEN` uses explicit target fields instead of overloading `command_line`, eCAR module-load timing no longer exactly ties process creation, and failed logons carry explicit eCAR failure outcome/status fields. Focused tests, full unit tests, full non-slow tests, Ruff, and `eforge validate-config` passed.
+
+- [ ] Windows process/Sysmon/eCAR blind-eval follow-up from 88% synthetic review — remaining review item is remote-thread join ambiguity when repeated source/target PID pairs appear. Process lifecycle joins are deferred to the source-specific telemetry coverage/profile design below. The 5156 PID/image attribution, 4688 PID 4 parent fallback, Sysmon/eCAR module-load correlation, and process-access provenance findings were fixed in the canonical emitter field provenance item.
+
+- [x] Canonical emitter field provenance fixes — implemented the approved emitter audit fixes: Windows 5156 process attribution resolves from canonical process state, Sysmon/eCAR share canonical image-load data, Sysmon Event 10 and eCAR `PROCESS/OPEN` use `ProcessAccessContext`, Sysmon parent GUIDs use parent process start time, user process parentage no longer falls back to PID 4, Zeek dhcp.log receives DHCP option-domain data when available, bash history no longer carries non-native `exit_code`, ASA/proxy context-owned fields are honored, and deferred source-specific process lifecycle completeness modeling is documented below.
+
+- [x] Canonical emitter field provenance generated-output evaluation — generated a targeted multi-source dataset under `/private/tmp/eforge-provenance-output` and ran deterministic rendered-output probes for: 5156 PID/image attribution from process state, 4688 parent PID sanity, Sysmon/eCAR image-load agreement, Sysmon/eCAR process-access target/thread provenance, Zeek DHCP option-domain rendering, bash history without `exit_code`, ASA context-owned fields, and proxy CONNECT tunnel scoping. The first probe caught a real WFP process-image propagation bug on explicit proxy client legs; fixed it and reran the probes successfully. Next: targeted blind provenance review, then broad all-data blind review.
+
+- [x] Canonical emitter field provenance blind-review follow-up — targeted blind review scored the focused dataset 88% synthetic. Fixed confirmed actionable findings: Windows 5156 no longer inherits a storyline process from the wrong host/OS, unresolved non-system WFP process images are suppressed instead of rendering `-`, PID 4 WFP fallback renders as `System`, internal DNS preserves scenario IP→FQDN registrations before generated aliases, and `_ldap._tcp...` NXDOMAIN companion probes use SRV. Regenerated-output probes passed. The proxy CONNECT+GET finding was a prompt artifact because the blind prompt omitted the current TLS-inspection assumption; rerun the blind review with that assumption stated.
+
+- [ ] Canonical emitter field provenance blind-review remaining findings from 78% synthetic review — fix Sysmon intra-log causality where file/registry/module follow-on events can render before Event 1 for the same process GUID/PID; normalize bare storyline executable names (e.g. `powershell.exe`) to OS-appropriate full image paths before process creation so Security/Sysmon/eCAR/WFP all receive complete canonical paths; make proxy baseline HTTP path/content-type selection domain-class aware so OS/update/OCSP/CRL hosts do not receive generic browser paths like `/login`, `/favicon.ico`, CSS, image assets, or `text/html`; tune bash typo injection density for short histories.
+
+- [ ] Source-specific process lifecycle completeness modeling — deferred design item. Add a configurable telemetry coverage/profile layer that can model realistic Security/Sysmon/eCAR missingness, ingestion delay, audit-policy gaps, and endpoint coverage variance without ad hoc omissions in individual emitters. This should be part of the broader cross-source distribution realism layer, not a Windows-only workaround.
+
+- [x] Open PR consolidation into `dev` — re-applied the storyline typing-cadence monotonicity fix from PR #81, folded Dependabot pytest/Pygments updates into the dev workflow, and added Dependabot configuration so future dependency PRs target `dev`.
 
 - [ ] **IN PROGRESS** Windows Security/authentication source review — focused baseline eval is complete; fixing high-signal Windows auth realism findings first (4672/session semantics and sparse 4800/4801 rendering), then rerunning focused generation/eval before moving deeper.
 
