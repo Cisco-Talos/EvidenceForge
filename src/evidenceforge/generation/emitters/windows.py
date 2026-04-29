@@ -48,7 +48,7 @@ from evidenceforge.utils.time import ensure_utc
 win_logger = logging.getLogger(__name__)
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
-_NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
 
 
 def _normalize_windows_time_created(
@@ -244,7 +244,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        workstation_name = (
+        workstation_name = auth.workstation_name or (
             event.src_host.hostname
             if auth.logon_type in (3, 10) and event.src_host is not None
             else host.hostname
@@ -277,6 +277,8 @@ class WindowsEventEmitter(LogEmitter):
             "LmPackageName": auth.lm_package,
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "LogonGuid": auth.logon_guid,
+            "VirtualAccount": "%%1843",
+            "ElevatedToken": "%%1842" if auth.elevated else "%%1843",
         }
         self.emit_event(event_data)
 

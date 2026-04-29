@@ -133,6 +133,93 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert '<Data Name="WorkstationName">WS-01</Data>' in content
         assert "<Computer>FS-01.example.com</Computer>" in content
+        assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+
+    def test_logon_elevated_token_reflects_auth_context(self, format_def, temp_output):
+        """4624 ElevatedToken should vary with canonical auth.elevated."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+
+        for username, elevated, logon_id in [
+            ("jsmith", False, "0x111"),
+            ("admin", True, "0x222"),
+        ]:
+            emitter.emit(
+                SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+                    event_type="logon",
+                    dst_host=host,
+                    auth=AuthContext(
+                        username=username,
+                        user_sid="S-1-5-21-1-2-3-1001",
+                        logon_id=logon_id,
+                        logon_type=2,
+                        elevated=elevated,
+                        subject_sid="S-1-5-18",
+                        subject_username="SYSTEM",
+                        subject_domain="NT AUTHORITY",
+                        subject_logon_id="0x3e7",
+                    ),
+                )
+            )
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+        assert '<Data Name="ElevatedToken">%%1842</Data>' in content
+
+    def test_anonymous_logon_uses_nt_authority_domain_and_source_workstation(
+        self, format_def, temp_output
+    ):
+        """ANONYMOUS LOGON should not inherit the AD domain or local workstation."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="FS-01",
+            ip="10.0.2.20",
+            fqdn="FS-01.example.com",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="ANONYMOUS LOGON",
+                user_sid="S-1-5-7",
+                logon_id="0x12345",
+                logon_type=3,
+                source_ip="10.0.1.10",
+                source_port=52222,
+                workstation_name="WS-01",
+                auth_package="NTLM",
+                logon_process="NtLmSsp",
+                lm_package="NTLM V2",
+                subject_sid="S-1-0-0",
+                subject_username="-",
+                subject_domain="-",
+                subject_logon_id="0x0",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="TargetDomainName">NT AUTHORITY</Data>' in content
+        assert '<Data Name="WorkstationName">WS-01</Data>' in content
+        assert '<Data Name="IpAddress">::ffff:10.0.1.10</Data>' in content
+        assert '<Data Name="ElevatedToken">%%1843</Data>' in content
 
     def test_emit_logoff_event(self, format_def, temp_output):
         """Test emitting a logoff event (4634)."""

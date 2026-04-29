@@ -588,6 +588,35 @@ class TestAnonymousLogon:
         assert event.auth.user_sid == "S-1-5-7"
         assert event.auth.logon_type == 3
         assert event.auth.auth_package == "NTLM"
+        assert event.auth.source_ip == "-"
+        assert event.auth.workstation_name == "-"
+
+    def test_generate_anonymous_logon_uses_available_source_host(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Anonymous network logons should carry realistic remote source metadata."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        ws = System(
+            hostname="WS-01",
+            ip="10.0.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._all_system_ips = [dc.ip, ws.ip]
+        activity_gen._ip_to_system = {ws.ip: ws, dc.ip: dc}
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        win = mock_emitters["windows_event_security"]
+        event = win.emit.call_args[0][0]
+        assert event.auth.source_ip == ws.ip
+        assert event.auth.source_port > 0
+        assert event.auth.workstation_name == ws.hostname
 
     def test_anonymous_logon_no_session_created(
         self, activity_gen, state_manager, mock_emitters, timestamp

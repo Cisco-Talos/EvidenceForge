@@ -6734,6 +6734,19 @@ class ActivityGenerator:
         Used for Windows server/DC background SMB enumeration traffic.
         """
         rng = _get_rng()
+        source_ip = "-"
+        workstation_name = "-"
+        source_port = 0
+        candidate_ips = [
+            ip
+            for ip in getattr(self, "_all_system_ips", [])
+            if ip != system.ip and _is_private_ip(ip)
+        ]
+        if candidate_ips:
+            source_ip = rng.choice(candidate_ips)
+            source_port = _ephemeral_port(rng, "windows")
+            source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
+            workstation_name = source_system.hostname if source_system else "-"
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -6751,7 +6764,9 @@ class ActivityGenerator:
                 subject_username="-",
                 subject_domain="-",
                 subject_logon_id="0x0",
-                source_ip="-",
+                source_ip=source_ip,
+                source_port=source_port,
+                workstation_name=workstation_name,
             ),
         )
         self.dispatcher.dispatch(event)
