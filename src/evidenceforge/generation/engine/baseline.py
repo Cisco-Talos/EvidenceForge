@@ -85,6 +85,33 @@ def _session_started_by(session: Any, time: datetime) -> bool:
     return session_start <= activity_time
 
 
+def _session_logoff_time(
+    session: Any,
+    current_hour: datetime,
+    planned_logoffs: dict[tuple[str, str], float] | None,
+) -> datetime | None:
+    """Return the planned visible logoff time for a session in this hour."""
+    if not planned_logoffs:
+        return None
+    offset = planned_logoffs.get((session.system, session.logon_id))
+    if offset is None:
+        return None
+    return current_hour + timedelta(seconds=offset)
+
+
+def _session_active_at(
+    session: Any,
+    time: datetime,
+    current_hour: datetime,
+    planned_logoffs: dict[tuple[str, str], float] | None,
+) -> bool:
+    """Return whether a session should be used for activity at ``time``."""
+    if not _session_started_by(session, time):
+        return False
+    logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
+    return logoff_time is None or time < logoff_time
+
+
 # Day-of-week intensity multipliers (0=Monday, 6=Sunday).
 # Models weekly rhythm: Monday login storms, Friday early departures,
 # weekend near-zero (only sysadmin/oncall personas active).
@@ -654,6 +681,11 @@ class BaselineMixin:
         local_weekday = local_dt.weekday()  # 0=Monday..6=Sunday
         is_weekend = local_weekday >= 5
 
+        # Pre-decide logoffs before scheduling this hour's user/system activity
+        # so no dependent activity is timestamped after a visible 4634 for the
+        # same session.
+        planned_logoffs = self._plan_logoffs_for_hour(enabled_users, current_hour)
+
         for user in enabled_users:
             persona = self._get_user_persona(user)
             user_offsets = self._user_time_offsets.get(user.username)
@@ -687,13 +719,12 @@ class BaselineMixin:
                 )
 
                 for event_time in event_times:
-                    self._generate_user_activity(user, event_time)
+                    self._generate_user_activity(user, event_time, current_hour, planned_logoffs)
 
                 # Lock/unlock events for Windows workstation users
-                self._generate_lock_unlock_events(user, current_hour, local_hour, persona_name)
-
-        # Pre-decide logoffs so profile traffic can bound persona timestamps
-        planned_logoffs = self._plan_logoffs_for_hour(enabled_users, current_hour)
+                self._generate_lock_unlock_events(
+                    user, current_hour, local_hour, persona_name, planned_logoffs
+                )
 
         self._generate_system_traffic(current_hour, planned_logoffs=planned_logoffs)
         self._generate_stale_account_noise(current_hour)
@@ -2216,7 +2247,13 @@ class BaselineMixin:
 
         return sorted(final)
 
-    def _generate_user_activity(self, user: User, event_time: datetime) -> None:
+    def _generate_user_activity(
+        self,
+        user: User,
+        event_time: datetime,
+        current_hour: datetime | None = None,
+        planned_logoffs: dict[tuple[str, str], float] | None = None,
+    ) -> None:
         """Generate activity for user at specified time."""
         rng = _get_rng()
         if hasattr(self, "world_model"):
@@ -2262,7 +2299,13 @@ class BaselineMixin:
 
         sessions = self.state_manager.get_sessions_for_user(user.username)
         has_session_on_system = any(
-            s.system == system.hostname and _session_started_by(s, event_time) for s in sessions
+            s.system == system.hostname
+            and (
+                _session_active_at(s, event_time, current_hour, planned_logoffs)
+                if current_hour is not None
+                else _session_started_by(s, event_time)
+            )
+            for s in sessions
         )
         if not has_session_on_system and activities:
             if hasattr(self, "world_planner"):
@@ -2273,6 +2316,21 @@ class BaselineMixin:
         for activity_type in activities:
             jitter = timedelta(seconds=rng.randint(0, 55))
             t = event_time + jitter
+            active_session = next(
+                (
+                    s
+                    for s in self.state_manager.get_sessions_for_user(user.username)
+                    if s.system == system.hostname
+                    and (
+                        _session_active_at(s, t, current_hour, planned_logoffs)
+                        if current_hour is not None
+                        else _session_started_by(s, t)
+                    )
+                ),
+                None,
+            )
+            if active_session is None:
+                continue
             self.state_manager.set_current_time(t)
             self.activity_generator.execute_baseline_activity(
                 user=user, system=system, time=t, activity_type=activity_type
@@ -2295,10 +2353,17 @@ class BaselineMixin:
                     (
                         s
                         for s in sessions
-                        if s.system == system.hostname and _session_started_by(s, runas_t)
+                        if s.system == system.hostname
+                        and (
+                            _session_active_at(s, runas_t, current_hour, planned_logoffs)
+                            if current_hour is not None
+                            else _session_started_by(s, runas_t)
+                        )
                     ),
                     None,
                 )
+                if session is None:
+                    return
                 self.state_manager.set_current_time(runas_t)
                 self.activity_generator.generate_explicit_credentials(
                     user=user,
@@ -2331,10 +2396,17 @@ class BaselineMixin:
                         (
                             s
                             for s in sessions
-                            if s.system == system.hostname and _session_started_by(s, hd_t)
+                            if s.system == system.hostname
+                            and (
+                                _session_active_at(s, hd_t, current_hour, planned_logoffs)
+                                if current_hour is not None
+                                else _session_started_by(s, hd_t)
+                            )
                         ),
                         None,
                     )
+                    if session is None:
+                        return
                     self.state_manager.set_current_time(hd_t)
                     self.activity_generator.generate_explicit_credentials(
                         user=user,
@@ -2384,6 +2456,7 @@ class BaselineMixin:
         current_hour: datetime,
         local_hour: int,
         persona_name: str | None,
+        planned_logoffs: dict[tuple[str, str], float] | None = None,
     ) -> None:
         """Generate workstation lock/unlock events for Windows interactive sessions."""
         rng = _get_rng()
@@ -2396,6 +2469,7 @@ class BaselineMixin:
                 s
                 for s in sessions
                 if s.logon_type == 2
+                and _session_active_at(s, current_hour, current_hour, planned_logoffs)
                 and any(
                     sys.type == "workstation"
                     for sys in self.scenario.environment.systems
@@ -2418,7 +2492,11 @@ class BaselineMixin:
         if user.username in pending:
             unlock_t, pending_logon_id = pending.pop(user.username)
             if unlock_t < hour_end:
-                self._emit_unlock(user, system, unlock_t, pending_logon_id, rng)
+                pending_session = self.state_manager.get_session(pending_logon_id)
+                if pending_session and _session_active_at(
+                    pending_session, unlock_t, current_hour, planned_logoffs
+                ):
+                    self._emit_unlock(user, system, unlock_t, pending_logon_id, rng)
 
         # Per-persona lock frequency
         _pn = (persona_name or "").lower()
@@ -2435,6 +2513,8 @@ class BaselineMixin:
         # Lunch lock at hour 12
         if local_hour == 12 and rng.random() < 0.85:
             lock_t = current_hour + timedelta(minutes=rng.randint(0, 15))
+            if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
+                return
             self.state_manager.set_current_time(lock_t)
             self.activity_generator.generate_workstation_lock(
                 user=user,
@@ -2443,6 +2523,9 @@ class BaselineMixin:
                 logon_id=session.logon_id,
             )
             unlock_t = lock_t + timedelta(minutes=rng.randint(30, 60))
+            logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
+            if logoff_time and unlock_t >= logoff_time:
+                return
             if unlock_t < hour_end:
                 self._emit_unlock(user, system, unlock_t, session.logon_id, rng)
             else:
@@ -2452,6 +2535,8 @@ class BaselineMixin:
         # Random meeting-break lock/unlock
         if rng.random() < lock_prob:
             lock_t = current_hour + timedelta(seconds=rng.randint(60, 3500))
+            if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
+                return
             self.state_manager.set_current_time(lock_t)
             self.activity_generator.generate_workstation_lock(
                 user=user,
@@ -2460,6 +2545,9 @@ class BaselineMixin:
                 logon_id=session.logon_id,
             )
             unlock_t = lock_t + timedelta(minutes=rng.randint(2, 15))
+            logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
+            if logoff_time and unlock_t >= logoff_time:
+                return
             if unlock_t < hour_end:
                 self._emit_unlock(user, system, unlock_t, session.logon_id, rng)
             else:
@@ -3760,6 +3848,9 @@ class BaselineMixin:
                         _reg_pid = _svc_pid
                         _reg_image = r"C:\Windows\System32\svchost.exe"
                         _reg_user = "SYSTEM"
+                    _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
+                    if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
+                        _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
                     _target = f"{_key}\\{_vname}"
                     # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
                     _reg_action = "delete" if rng.random() < 0.10 else "modify"
@@ -3771,10 +3862,14 @@ class BaselineMixin:
                             auth=AuthContext(username=_reg_user),
                             process=ProcessContext(
                                 pid=_reg_pid,
-                                parent_pid=0,
+                                parent_pid=_reg_proc.parent_pid if _reg_proc is not None else 0,
                                 image=_reg_image,
-                                command_line="",
-                                username=_reg_user,
+                                command_line=_reg_proc.command_line
+                                if _reg_proc is not None
+                                else "",
+                                username=_reg_proc.username if _reg_proc is not None else _reg_user,
+                                logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
+                                start_time=_reg_proc.start_time if _reg_proc is not None else None,
                             ),
                             registry=RegistryContext(
                                 key=_target, value=_details, action=_reg_action, pid=_reg_pid

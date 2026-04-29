@@ -1414,6 +1414,8 @@ class SysmonEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
+        self._shift_followons_after_process_create()
+
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
             if isinstance(ts, datetime):
@@ -1453,6 +1455,31 @@ class SysmonEventEmitter(LogEmitter):
             self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
+
+    def _shift_followons_after_process_create(self) -> None:
+        """Prevent same-ProcessGuid Sysmon follow-ons from preceding Event 1."""
+        process_create_times: dict[tuple[str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            computer = str(event.get("Computer", ""))
+            if isinstance(ts, datetime) and guid:
+                process_create_times[(computer, str(guid))] = ts
+
+        for event in self._event_dicts:
+            event_id = event.get("EventID")
+            if event_id == 1:
+                continue
+            ts = event.get("TimeCreated")
+            computer = str(event.get("Computer", ""))
+            guid = event.get("ProcessGuid") or event.get("SourceProcessGuid")
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            create_time = process_create_times.get((computer, str(guid)))
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + timedelta(milliseconds=1)
 
     def flush(self) -> None:
         with self._file_lock:

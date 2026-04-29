@@ -639,6 +639,39 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp > process_event.timestamp
 
+    def test_image_load_is_clamped_after_process_start(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Image-load telemetry should not predate the process it references."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = session_start + timedelta(minutes=5)
+        state_manager.set_current_time(session_start)
+        logon_id = activity_gen.generate_logon(test_user, test_system, session_start)
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            process_time,
+            logon_id,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            session_start + timedelta(minutes=1),
+            pid,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Windows\System32\kernel32.dll",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        process_start = state_manager.get_process(test_system.hostname, pid).start_time
+        assert event.event_type == "image_load"
+        assert event.timestamp > process_start
+        assert event.process.start_time == process_start
+
     def test_user_session_process_identity_resolved_before_emit(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):

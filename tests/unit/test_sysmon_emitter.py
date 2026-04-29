@@ -23,7 +23,7 @@
 """Unit tests for Sysmon event emitter."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -337,6 +337,32 @@ class TestSysmonEventEmitter:
         assert timestamps == sorted(timestamps)
         assert len(set(timestamps)) == len(timestamps)
         assert all(re.search(r"\.\d{7}Z$", ts) for ts in timestamps)
+
+    def test_follow_on_shifted_after_process_create(self, format_def, temp_output):
+        """Follow-on telemetry with a ProcessGuid should not precede Event 1."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        create_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        follow_on_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 7,
+                "TimeCreated": follow_on_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": create_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+        ]
+
+        emitter._shift_followons_after_process_create()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == create_time + timedelta(milliseconds=1)
 
     def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""

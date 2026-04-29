@@ -1126,6 +1126,8 @@ class WindowsEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
+        self._shift_logoffs_after_dependents()
+
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
             if isinstance(ts, datetime):
@@ -1176,6 +1178,35 @@ class WindowsEventEmitter(LogEmitter):
             self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
+
+    def _shift_logoffs_after_dependents(self) -> None:
+        """Prevent visible 4634 records from preceding same-session dependents."""
+        latest_dependent: dict[tuple[str, str], datetime] = {}
+        logoffs: list[tuple[tuple[str, str], dict[str, Any]]] = []
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            event_id = event.get("EventID")
+            computer = str(event.get("Computer", ""))
+            if event_id == 4634:
+                logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
+                if logon_id:
+                    logoffs.append(((computer, logon_id), event))
+                continue
+            if event_id not in {4688, 4801}:
+                continue
+            logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
+            if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+                continue
+            key = (computer, logon_id)
+            latest_dependent[key] = max(ts, latest_dependent.get(key, ts))
+
+        for key, event in logoffs:
+            ts = event.get("TimeCreated")
+            latest = latest_dependent.get(key)
+            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + timedelta(milliseconds=1)
 
     def flush(self) -> None:
         """Flush dict buffer then all host writers."""

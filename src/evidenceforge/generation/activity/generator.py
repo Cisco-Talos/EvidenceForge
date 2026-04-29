@@ -2463,6 +2463,8 @@ class ActivityGenerator:
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
         if session:
+            if session.last_activity_time and time <= session.last_activity_time:
+                time = session.last_activity_time + timedelta(seconds=1)
             if session.explorer_pid is not None:
                 self.state_manager.end_process(session.system, session.explorer_pid)
             # Clean up per-RDP-session winlogon chain
@@ -2639,6 +2641,10 @@ class ActivityGenerator:
 
         # Phase 2: Build SecurityEvent
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        if running_proc and running_proc.logon_id:
+            session = self.state_manager.get_session(running_proc.logon_id)
+            if session is not None:
+                session.last_activity_time = time
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
@@ -2734,6 +2740,8 @@ class ActivityGenerator:
                         image=process_name,
                         command_line=command_line,
                         username=process_username,
+                        logon_id=process_logon_id,
+                        start_time=running_proc.start_time if running_proc is not None else None,
                     ),
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -2757,6 +2765,8 @@ class ActivityGenerator:
                         image=process_name,
                         command_line=command_line,
                         username=process_username,
+                        logon_id=process_logon_id,
+                        start_time=running_proc.start_time if running_proc is not None else None,
                     ),
                     image_load=ImageLoadContext(image_loaded=dll_path),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -2819,6 +2829,15 @@ class ActivityGenerator:
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
+
+    def _clamp_time_after_process_start(
+        self, system: System, pid: int, time: datetime, *, offset_ms: int = 100
+    ) -> datetime:
+        """Ensure dependent process telemetry is not timestamped before process start."""
+        process = self.state_manager.get_process(system.hostname, pid)
+        if process and process.start_time and time <= process.start_time:
+            return process.start_time + timedelta(milliseconds=offset_ms)
+        return time
 
     def generate_process_termination(
         self,
@@ -5816,6 +5835,9 @@ class ActivityGenerator:
         if not hasattr(self, "_last_workstation_lock_time"):
             self._last_workstation_lock_time = {}
         self._last_workstation_lock_time[(system.hostname, user.username, logon_id)] = time
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            session.last_activity_time = time
         event = SecurityEvent(
             timestamp=time,
             event_type="workstation_locked",
@@ -5842,6 +5864,9 @@ class ActivityGenerator:
             min_unlock_time = lock_time + timedelta(seconds=min_unlock_gap_seconds())
             if time < min_unlock_time:
                 time = min_unlock_time
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            session.last_activity_time = time
         event = SecurityEvent(
             timestamp=time,
             event_type="workstation_unlocked",
@@ -6414,6 +6439,7 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import ProcessContext
 
+        time = self._clamp_time_after_process_start(system, source_pid, time)
         rng = random.Random(
             _stable_seed(
                 "remote_thread:"
@@ -6504,6 +6530,7 @@ class ActivityGenerator:
         # Entity lifecycle: validate target PID exists
         self.state_manager.validate_target_pid(system.hostname, target_pid)
 
+        time = self._clamp_time_after_process_start(system, source_pid, time)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
@@ -6569,16 +6596,20 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
 
+        time = self._clamp_time_after_process_start(system, pid, time)
+        proc = self.state_manager.get_process(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="image_load",
             src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=pid,
-                parent_pid=0,
+                parent_pid=proc.parent_pid if proc is not None else 0,
                 image=image,
-                command_line="",
-                username=user.username,
+                command_line=proc.command_line if proc is not None else "",
+                username=proc.username if proc is not None else user.username,
+                logon_id=proc.logon_id if proc is not None else "",
+                start_time=proc.start_time if proc is not None else None,
             ),
             image_load=ImageLoadContext(
                 image_loaded=dll_path,

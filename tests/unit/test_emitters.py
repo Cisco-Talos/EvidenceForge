@@ -24,7 +24,7 @@
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -216,6 +216,31 @@ class TestWindowsEventEmitter:
         print(f"{'=' * 80}")
         print(content)
         print(f"{'=' * 80}\n")
+
+    def test_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
+        """A visible 4634 should not precede later rendered evidence for the same session."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logoff_time + timedelta(seconds=10)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+            },
+        ]
+
+        emitter._shift_logoffs_after_dependents()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time + timedelta(milliseconds=1)
 
     def test_buffering(self, format_def, temp_output):
         """Test that events are buffered before flushing."""
