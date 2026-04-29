@@ -4347,6 +4347,8 @@ class ActivityGenerator:
                 history="ShADadfF",
                 orig_pkts=max(4, orig_bytes // 1460 + 1),
                 resp_pkts=max(4, resp_bytes // 1460 + 1),
+                orig_ip_bytes=orig_bytes + max(4, orig_bytes // 1460 + 1) * 40,
+                resp_ip_bytes=resp_bytes + max(4, resp_bytes // 1460 + 1) * 40,
                 local_orig=_is_private_ip(source_ip),
                 local_resp=_is_private_ip(target_system.ip),
                 ip_proto=6,
@@ -4358,16 +4360,11 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            # Session ID: monotonic + unique per host. Keep this in the same
-            # small integer regime real systemd-logind messages use; huge
-            # epoch-derived IDs mixed with small IDs are a synthetic tell.
+            # Session ID: monotonic + unique per host. StateManager owns this
+            # sequence because baseline syslog noise and explicit SSH sessions
+            # both produce systemd-logind messages for the same host.
             hostname = target_system.hostname
-            if not hasattr(self, "_session_id_state"):
-                self._session_id_state: dict[str, int] = {}
-            if hostname not in self._session_id_state:
-                self._session_id_state[hostname] = rng.randint(20, 250)
-            session_id = self._session_id_state[hostname] + rng.randint(1, 4)
-            self._session_id_state[hostname] = session_id
+            session_id = self.state_manager.next_linux_logind_session_id(hostname, rng, time)
 
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
@@ -4429,7 +4426,7 @@ class ActivityGenerator:
                 src_host=event.dst_host,
                 syslog=SyslogContext(
                     app_name="systemd-logind",
-                    pid=1000 + (_stable_seed("logind_pid") % 59000),
+                    pid=self._get_system_pid(hostname, "logind", 456),
                     facility=10,
                     severity=6,
                     message=f"New session {session_id} of user {user.username}.",

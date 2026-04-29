@@ -49,6 +49,28 @@ class TestStateManagerInit:
         assert len(sm._pid_counters) == 0
         assert len(sm._used_logon_ids) == 0
 
+    def test_linux_logind_session_ids_follow_event_time(self):
+        """Logind session IDs should sort with event time, not generation order."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(7)
+
+        later_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=10),
+        )
+        earlier_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=1),
+        )
+
+        assert earlier_id < later_id
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""

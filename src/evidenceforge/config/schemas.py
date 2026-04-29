@@ -150,6 +150,15 @@ class TlsIssuerEntry(BaseModel, extra="forbid"):
     not_before_max_days: int
     key_types: list[TlsKeyType]
 
+    @model_validator(mode="after")
+    def rsa_named_ca_uses_rsa_keys(self) -> Self:
+        """Reject RSA-named issuer profiles that can emit ECDSA metadata."""
+        if " rsa " in f" {self.name.lower()} ":
+            ecdsa_types = [key for key in self.key_types if key.type.lower() == "ecdsa"]
+            if ecdsa_types:
+                raise ValueError("RSA-named issuers must not include ecdsa key_types")
+        return self
+
 
 class TlsSanConfig(BaseModel, extra="forbid"):
     """SAN generation settings in tls_realism.yaml."""

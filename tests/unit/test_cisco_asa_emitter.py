@@ -154,6 +154,15 @@ class TestConnectionIdCounter:
         ids = [asa_emitter._next_conn_id("fw01", ts) for _ in range(5000)]
         assert len(ids) == len(set(ids))
 
+    def test_no_duplicates_across_adjacent_second_bursts(self, asa_emitter):
+        ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        first_second_ids = [asa_emitter._next_conn_id("fw01", ts) for _ in range(5000)]
+        next_second_ids = [
+            asa_emitter._next_conn_id("fw01", ts + timedelta(seconds=1)) for _ in range(5000)
+        ]
+
+        assert set(first_second_ids).isdisjoint(next_second_ids)
+
     def test_connection_ids_are_not_epoch_shaped(self, asa_emitter):
         conn_id = asa_emitter._next_conn_id("fw01", T0)
         assert conn_id < 1_000_000_000

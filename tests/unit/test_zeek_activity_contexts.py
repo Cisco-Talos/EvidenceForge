@@ -233,6 +233,63 @@ class TestSslContextPopulation:
         assert session_ids == sorted(session_ids)
         assert max(session_ids) < 1000
 
+    def test_ssh_systemd_logind_uses_seeded_host_pid(self, activity_gen):
+        gen, events = activity_gen
+        gen._system_pids = {"linux01": {"logind": 789}}
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        logind_events = [
+            event for event in events if event.syslog and event.syslog.app_name == "systemd-logind"
+        ]
+        assert logind_events
+        assert {event.syslog.pid for event in logind_events} == {789}
+
+    def test_ssh_connection_carries_ip_byte_counters(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        ssh_events = [
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        ]
+        assert ssh_events
+        event = ssh_events[0]
+        assert event.network.orig_ip_bytes is not None
+        assert event.network.resp_ip_bytes is not None
+        assert event.network.orig_ip_bytes > event.network.orig_bytes
+        assert event.network.resp_ip_bytes > event.network.resp_bytes
+
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen
 

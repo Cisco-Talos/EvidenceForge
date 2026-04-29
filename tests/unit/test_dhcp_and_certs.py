@@ -139,6 +139,18 @@ class TestTlsIssuers:
         observed = {pick_key_type(random.Random(seed), issuer) for seed in range(20)}
         assert observed == {("rsa", 2048)}
 
+    def test_rsa_named_issuers_only_emit_rsa_certificate_metadata(self):
+        """RSA-branded issuers should not produce ECDSA x509 key/signature pairs."""
+        data = load_tls_issuers()
+        rsa_named_issuers = [
+            issuer for issuer in data["issuers"] if " rsa " in f" {issuer['name'].lower()} "
+        ]
+
+        assert rsa_named_issuers
+        for issuer in rsa_named_issuers:
+            observed = {pick_key_type(random.Random(seed), issuer)[0] for seed in range(20)}
+            assert observed == {"rsa"}, issuer["name"]
+
     def test_san_dns_never_wildcards_public_suffix(self):
         """Generated SAN lists should not contain impossible public-suffix wildcards."""
         assert _tls_san_dns_names("stackoverflow.com") == [

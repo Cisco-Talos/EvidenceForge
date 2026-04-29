@@ -17,7 +17,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `spawn_rules.yaml` | `spawn_rules.py` | Parent-child process relationships for Windows and Linux. Builds reverse child-to-parent index. |
 | `bash_commands.yaml` | `bash_commands.py` | Per-role bash command pools (sysadmin, dba, developer, generic) with `{placeholder}` templates. |
 | `system_processes.yaml` | `system_processes.py` | Baseline Windows scheduled tasks and system services (svchost, MpCmdRun, etc.). |
-| `tls_issuers.yaml` | `tls_issuers.py` | Certificate issuer configs (Let's Encrypt, DigiCert, etc.) with validity periods and key types. |
+| `tls_issuers.yaml` | `tls_issuers.py` | Certificate issuer configs (Let's Encrypt, DigiCert, etc.) with validity periods and key types. RSA-named issuers should not include ECDSA key types under the current simplified x509 model. |
 | `tls_realism.yaml` | `tls_realism.py` | TLS SAN, OCSP, certificate-chain, and destination-profile settings with overlay support. |
 | `kerberos_realism.yaml` | `kerberos_realism.py` | Kerberos 4768 TGT PreAuthType, TicketOptions, encryption, and PKINIT certificate field distributions with overlay support. |
 | `windows_auth_realism.yaml` | `windows_auth_realism.py` | Windows Security authentication realism knobs such as minimum 4800→4801 lock/unlock gap, failed-logon validation paths, companion network evidence, and 4672 privilege profiles. |

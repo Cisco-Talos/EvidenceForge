@@ -4505,11 +4505,7 @@ class BaselineMixin:
                             )
                 elif source_roll < 0.45:
                     # Sequential session IDs per host (systemd-logind increments from boot)
-                    if not hasattr(self, "_session_counters"):
-                        self._session_counters = {}
-                    self._session_counters.setdefault(system.hostname, 0)
-                    self._session_counters[system.hostname] += 1
-                    sid = self._session_counters[system.hostname]
+                    sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
                     session_users = ["root", "admin"]
                     if has_web_role:
@@ -4580,11 +4576,9 @@ class BaselineMixin:
                             auth_msg = (
                                 f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                             )
-                        if not hasattr(self, "_session_counters"):
-                            self._session_counters = {}
-                        self._session_counters.setdefault(system.hostname, 0)
-                        self._session_counters[system.hostname] += 1
-                        ssh_sid = self._session_counters[system.hostname]
+                        ssh_sid = self.state_manager.next_linux_logind_session_id(
+                            system.hostname, rng, ts
+                        )
                         login_msgs = [
                             (
                                 "sshd",

@@ -107,6 +107,9 @@ extract: sessions, processes, connections, leases, or other state may have start
 visible window, so missing pre-window initiators are not automatically impossible. Still flag a
 visible initiating event that appears later than a dependent event for the same identifier, such as a
 same-host `4688` process event before a later `4624` for the same LogonID.
+Do not treat a Type 7 Windows `4624` unlock as the original session creation event; it can
+legitimately appear after earlier in-window process activity for a session that began before the
+collection window.
 
 ### Step 5: Suggest Improvements
 
