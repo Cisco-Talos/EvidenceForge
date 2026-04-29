@@ -1348,6 +1348,7 @@ class SysmonEventEmitter(LogEmitter):
         self._record_id_counters: dict[str, int] = {}
         self._erid_rngs: dict[str, random.Random] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
+        self._time_collision_count_by_computer: dict[str, int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1429,6 +1430,7 @@ class SysmonEventEmitter(LogEmitter):
             _normalize_windows_time_created(
                 event,
                 self._last_time_created_by_computer,
+                self._time_collision_count_by_computer,
                 sequence,
                 "sysmon_time_created",
                 jitter_existing_microseconds=True,

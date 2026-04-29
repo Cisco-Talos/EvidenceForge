@@ -12,7 +12,8 @@ Schema documentation for host-level activity config files. User customizations g
 2. [systemd_schedules.yaml](#systemd_schedulesyaml)
 3. [extra_syslog_messages.yaml](#extra_syslog_messagesyaml)
 4. [kerberos_realism.yaml](#kerberos_realismyaml)
-5. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
+5. [timing_profiles.yaml](#timing_profilesyaml)
+6. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -275,6 +276,49 @@ failed_logon:
 The lock/unlock gap applies when a generated 4801 unlock would otherwise occur too soon after the previous 4800 lock for the same user, host, and LogonID. Overlays can increase or decrease the value, but `eforge validate-config` requires at least 60 seconds.
 
 Failed-logon profiles control source-native Windows 4625 fields and DC-side validation evidence. Local interactive failures should remain workstation-local (`User32`/`Negotiate` with no source IP); network failures choose weighted NTLM/Negotiate profiles, a weighted validation path (`4776`, `4771`, or both), and companion network ports for sensor-visible failed-auth attempts. Remote auth companion connections must be established or reset after payload, never SYN-only. Special-privilege profiles control the 4672 `PrivilegeList` for service accounts, domain admins, workstation admins, and UAC-elevated users. Run `eforge validate-config` after overlay changes; probabilities must be between 0 and 1, weights/ports must be positive, validation paths must emit at least one DC-side event, and privilege names must use `Se*Privilege` names.
+
+---
+
+## timing_profiles.yaml
+
+Data-driven timing windows for causal relationships, source-native latency, teardown margins, and Windows/Sysmon same-timestamp collision spacing. Use this when tuning realism of correlated event gaps without changing scenario YAML.
+
+### Structure
+
+```yaml
+relationships:
+  network.dns_before_tcp:
+    class: causal_prerequisite
+    position: before
+    min_ms: 20
+    max_ms: 1500
+
+windows_event_time:
+  collision_spacing:
+    near_zero_until: 25
+    near_gap_min_us: 50
+    near_gap_max_us: 500
+    large_gap_min_ms: 1000
+    large_gap_max_ms: 4000
+```
+
+### Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `relationships.<name>.class` | string | yes | Relationship class such as `same_observation`, `source_latency`, `causal_prerequisite`, `human_workflow`, `periodic`, or `teardown` |
+| `relationships.<name>.position` | string | yes | `before` or `after` relative to the trigger event |
+| `relationships.<name>.min_ms` | int | yes | Minimum offset in milliseconds |
+| `relationships.<name>.max_ms` | int | yes | Maximum offset in milliseconds; must be `>= min_ms` |
+| `windows_event_time.collision_spacing.near_zero_until` | int | yes | Same-host tied-event collisions that can remain near-zero before larger spacing begins |
+| `windows_event_time.collision_spacing.near_gap_min_us` / `near_gap_max_us` | int | yes | Microsecond spacing for small tied clusters |
+| `windows_event_time.collision_spacing.large_gap_min_ms` / `large_gap_max_ms` | int | yes | Millisecond spacing for large tied clusters that would otherwise compress into synthetic-looking bursts |
+
+### Conventions
+
+- Treat `same_observation` and small tied clusters as eligible for near-zero gaps.
+- Use seconds or minutes for human or bulk workflow relationships; do not force everything into microseconds.
+- Run `eforge validate-config` after overlay changes; it rejects invalid relationship classes, positions, negative windows, and inverted min/max ranges.
 
 ---
 

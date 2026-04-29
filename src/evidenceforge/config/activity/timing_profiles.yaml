@@ -1,0 +1,55 @@
+# Timing realism profiles for causal relationships and source-native rendering.
+#
+# Relationship classes:
+# - same_observation: same packet/action observed by one source; near-zero is acceptable.
+# - source_latency: same action rendered by different source pipelines.
+# - causal_prerequisite: prerequisite work before the trigger.
+# - human_workflow: human/operator actions; often seconds to minutes.
+# - teardown: cleanup/session/process end after final dependent evidence.
+#
+# Values are intentionally conservative. Scenario-specific projects can override
+# them with .eforge/config/activity/timing_profiles.yaml.
+
+relationships:
+  network.dns_before_tcp:
+    class: causal_prerequisite
+    position: before
+    min_ms: 20
+    max_ms: 1500
+  auth.kerberos_before_logon:
+    class: causal_prerequisite
+    position: before
+    min_ms: 40
+    max_ms: 350
+  process.remote_thread_lsass_access:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 75
+  windows.audit_from_admin_command:
+    class: source_latency
+    position: after
+    min_ms: 100
+    max_ms: 900
+  windows.logoff_after_last_activity:
+    class: teardown
+    position: after
+    min_ms: 2000
+    max_ms: 15000
+  windows.logoff_after_rendered_dependents:
+    class: teardown
+    position: after
+    min_ms: 125
+    max_ms: 750
+
+windows_event_time:
+  collision_spacing:
+    # For small tied clusters, near-zero remains realistic.
+    near_zero_until: 25
+    near_gap_min_us: 50
+    near_gap_max_us: 500
+    # Larger tied clusters usually represent compound activity that should
+    # unfold across seconds/minutes, not microseconds.
+    large_gap_min_ms: 1000
+    large_gap_max_ms: 4000
+

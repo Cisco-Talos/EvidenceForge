@@ -218,6 +218,9 @@ def validate_config() -> ValidationResult:
         "activity/traffic_rates.yaml": {
             "dict_fields": {"low", "medium", "high"},
         },
+        "activity/timing_profiles.yaml": {
+            "dict_fields": {"relationships", "windows_event_time"},
+        },
     }
 
     overlay_errors = False
@@ -427,6 +430,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
+    from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
@@ -446,6 +450,7 @@ def validate_config() -> ValidationResult:
     sys_proc_data = load_system_processes()
     tls_realism_data = load_tls_realism()
     windows_auth_data = load_windows_auth_realism()
+    timing_profiles_data = load_timing_profiles()
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
@@ -739,6 +744,128 @@ def validate_config() -> ValidationResult:
                 f'OCSP responder host "{domain}" not found in dns_registry',
             )
         )
+
+    # --- Timing profile integrity ---
+    valid_timing_classes = {
+        "same_observation",
+        "source_latency",
+        "causal_prerequisite",
+        "human_workflow",
+        "burst_fanout",
+        "periodic",
+        "teardown",
+    }
+    relationships = timing_profiles_data.get("relationships", {})
+    if not isinstance(relationships, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "relationships must be a mapping")
+        )
+    else:
+        for rel_name, rel_data in relationships.items():
+            if not isinstance(rel_data, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" must be a mapping',
+                    )
+                )
+                continue
+            rel_class = rel_data.get("class")
+            if rel_class not in valid_timing_classes:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" has invalid class "{rel_class}"',
+                    )
+                )
+            position = rel_data.get("position")
+            if position not in {"before", "after"}:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" has invalid position "{position}"',
+                    )
+                )
+            min_ms = rel_data.get("min_ms")
+            max_ms = rel_data.get("max_ms")
+            if not isinstance(min_ms, int) or min_ms < 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" min_ms must be a non-negative integer',
+                    )
+                )
+            if not isinstance(max_ms, int) or max_ms < 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" max_ms must be a non-negative integer',
+                    )
+                )
+            if isinstance(min_ms, int) and isinstance(max_ms, int) and max_ms < min_ms:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
+                    )
+                )
+    spacing = timing_profiles_data.get("windows_event_time", {}).get("collision_spacing", {})
+    if not isinstance(spacing, dict):
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "timing_profiles.yaml",
+                "windows_event_time.collision_spacing must be a mapping",
+            )
+        )
+    else:
+        _spacing_minimums = {
+            "near_zero_until": 0,
+            "near_gap_min_us": 1,
+            "near_gap_max_us": 1,
+            "large_gap_min_ms": 1,
+            "large_gap_max_ms": 1,
+        }
+        for field_name, minimum in _spacing_minimums.items():
+            value = spacing.get(field_name)
+            if not isinstance(value, int) or value < minimum:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_event_time.collision_spacing.{field_name} must be an integer >= {minimum}",
+                    )
+                )
+        if (
+            isinstance(spacing.get("near_gap_min_us"), int)
+            and isinstance(spacing.get("near_gap_max_us"), int)
+            and spacing["near_gap_max_us"] < spacing["near_gap_min_us"]
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "windows_event_time.collision_spacing.near_gap_max_us must be >= near_gap_min_us",
+                )
+            )
+        if (
+            isinstance(spacing.get("large_gap_min_ms"), int)
+            and isinstance(spacing.get("large_gap_max_ms"), int)
+            and spacing["large_gap_max_ms"] < spacing["large_gap_min_ms"]
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "windows_event_time.collision_spacing.large_gap_max_ms must be >= large_gap_min_ms",
+                )
+            )
 
     # Check 8: Orphaned site maps
     for domain in site_domains - dns_domain_set:

@@ -28,6 +28,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -133,7 +134,11 @@ class TestLogoffWindows:
         )
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        assert event.timestamp == timestamp + timedelta(seconds=12)
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(win_system.hostname, logon_id, session.last_activity_time),
+        )
+        assert event.timestamp == session.last_activity_time + expected_delta
 
     def test_logoff_emits_ecar_logout(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters

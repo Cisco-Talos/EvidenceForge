@@ -31,8 +31,10 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import AuthContext, HostContext, NetworkContext
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
+from evidenceforge.generation.emitters.windows import _normalize_windows_time_created
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 
@@ -327,7 +329,37 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        assert emitter._event_dicts[0]["TimeCreated"] == process_time + timedelta(milliseconds=125)
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
+
+    def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
+        """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        last_by_computer: dict[str, datetime] = {}
+        collision_count_by_computer: dict[str, int] = {}
+        rendered_times: list[datetime] = []
+
+        for sequence in range(30):
+            event = {
+                "EventID": 4688,
+                "TimeCreated": base_time,
+                "Computer": "WIN-TEST-01.corp.local",
+            }
+            _normalize_windows_time_created(
+                event,
+                last_by_computer,
+                collision_count_by_computer,
+                sequence,
+                "test_windows_time_created",
+            )
+            rendered_times.append(event["TimeCreated"])
+
+        gaps = [rendered_times[i] - rendered_times[i - 1] for i in range(1, len(rendered_times))]
+        assert max(gaps[:24]) < timedelta(milliseconds=1)
+        assert min(gaps[25:]) >= timedelta(seconds=1)
 
     def test_buffering(self, format_def, temp_output):
         """Test that events are buffered before flushing."""

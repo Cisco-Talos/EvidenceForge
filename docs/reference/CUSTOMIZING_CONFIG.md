@@ -159,6 +159,7 @@ Configuration files are interconnected. When you add an entry to one file, other
 | New TLS OCSP responder behavior | `tls_realism.yaml` (`ocsp.responders`) plus `dns_registry.yaml` for each responder hostname |
 | Kerberos TGT pre-auth realism | `kerberos_realism.yaml` (`tgt_success.pre_auth_types`, ticket options, encryption types, and PKINIT certificate profiles). Run `eforge validate-config`; PKINIT (`PreAuthType: 15`) requires populated certificate profile support. |
 | Windows auth realism | `windows_auth_realism.yaml` (`workstation_lock.min_unlock_gap_seconds`, failed-logon local/network profiles, and optional companion network connection rates) |
+| Causal/source-native timing | `timing_profiles.yaml` (`relationships` for causal prerequisites, source latency, teardown margins, plus Windows/Sysmon collision spacing) |
 | Public NTP fallback servers | `network_params.yaml` (`public_ntp_servers`; scenario-defined internal/domain NTP servers still take precedence) |
 | A new application | `spawn_rules.yaml` (process tree), `process_network_map.yaml` (if it generates traffic) |
 | Canonical process image paths | `application_catalog.yaml` for user applications, or `system_processes.yaml` for OS binaries; storyline bare executable names resolve through these catalogs |

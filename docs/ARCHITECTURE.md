@@ -395,17 +395,22 @@ ActivityGenerator.generate_connection()
 **Key components:**
 - `ExpansionRule` (ABC) — `matches(event_type, ctx) → bool` + `expand(event_type, ctx) → list[ExpandedEvent]`
 - `ExpansionContext` — carries event params + engine state (DNS cache, Kerberos cache, SID registry, skip_types)
-- `TimingSpec` — `(min_ms, max_ms, position: "before"|"after")` for realistic inter-event timing
+- `TimingSpec` — `(min_ms, max_ms, position: "before"|"after")` sampled from
+  `config/activity/timing_profiles.yaml` for realistic inter-event timing
 - `CausalExpansionEngine` — evaluates all matching rules, sorts by timing (before-events first), returns ordered list
+
+The timing profile file is overlay-aware. Causal prerequisites, source latency,
+teardown margins, and Windows/Sysmon same-timestamp collision spacing are data-driven
+so tuning can happen at the relationship class without hardcoding one global delay.
 
 **Currently registered rules:**
 
 | Rule | Trigger | Emits | Timing |
 |------|---------|-------|--------|
-| `DnsBeforeConnection` | TCP connection (not port 53) | DNS query (UDP/53) | 5-80ms before |
-| `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) | TGT 50-200ms before, TGS 20-100ms after TGT; elevated-session 4672 remains tied to the target-host 4624 |
-| `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) | 1-50ms after |
-| `SupplementaryAuditEvents` | Process creation with admin commands | 4720/4726/4728/4697/4698/1102 | 100-500ms after |
+| `DnsBeforeConnection` | TCP connection (not port 53) | DNS query (UDP/53) | `network.dns_before_tcp` timing profile |
+| `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) | `auth.kerberos_before_logon` timing profile; elevated-session 4672 remains tied to the target-host 4624 |
+| `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) | `process.remote_thread_lsass_access` timing profile |
+| `SupplementaryAuditEvents` | Process creation with admin commands | 4720/4726/4728/4697/4698/1102 | `windows.audit_from_admin_command` timing profile |
 
 **Adding a new rule:** Create a new `ExpansionRule` subclass in `rules.py`, implement `matches()` and `expand()`, and add it to `default_rules()` in `registry.py`. The engine auto-creates with defaults — no wiring needed in ActivityGenerator or GenerationEngine.
 

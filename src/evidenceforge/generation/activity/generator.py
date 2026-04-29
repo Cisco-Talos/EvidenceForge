@@ -60,6 +60,7 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.activity.windows_auth_realism import (
     failed_logon_config,
     min_unlock_gap_seconds,
@@ -2468,7 +2469,10 @@ class ActivityGenerator:
                 # Event 1 after canonical process creation). Leave enough room
                 # that final logoff/logout records do not render before those
                 # same-session dependents in another source.
-                min_logoff_time = session.last_activity_time + timedelta(seconds=2)
+                min_logoff_time = session.last_activity_time + sample_timing_delta(
+                    "windows.logoff_after_last_activity",
+                    seed_parts=(system.hostname, logon_id, session.last_activity_time),
+                )
                 if time <= min_logoff_time:
                     time = min_logoff_time
             if session.explorer_pid is not None:

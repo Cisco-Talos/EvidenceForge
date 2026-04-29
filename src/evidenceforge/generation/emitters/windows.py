@@ -38,6 +38,10 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_timing_delta,
+    windows_collision_spacing_config,
+)
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.windows_event import format_windows_system_time
@@ -54,6 +58,7 @@ _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMO
 def _normalize_windows_time_created(
     event: dict[str, Any],
     last_by_computer: dict[str, datetime],
+    collision_count_by_computer: dict[str, int],
     sequence: int,
     seed_prefix: str,
     *,
@@ -65,7 +70,8 @@ def _normalize_windows_time_created(
         return
 
     computer = str(event.get("Computer", ""))
-    normalized = ensure_utc(ts)
+    original = ensure_utc(ts)
+    normalized = original
     seed = (
         f"{seed_prefix}_{computer}_{sequence}_{event.get('EventID', '')}_"
         f"{event.get('ExecutionProcessID', '')}_{event.get('ExecutionThreadID', '')}"
@@ -77,8 +83,23 @@ def _normalize_windows_time_created(
         normalized = normalized + timedelta(microseconds=rng.randint(50, 500))
 
     previous = last_by_computer.get(computer)
-    if previous is not None and normalized <= previous:
-        normalized = previous + timedelta(microseconds=1)
+    if previous is not None and original <= previous:
+        collision_count = collision_count_by_computer.get(computer, 0) + 1
+        collision_count_by_computer[computer] = collision_count
+        spacing = windows_collision_spacing_config()
+        seed = (
+            f"{seed_prefix}:collision:{computer}:{sequence}:{event.get('EventID', '')}:"
+            f"{event.get('EventRecordID', '')}"
+        )
+        rng = random.Random(_stable_seed(seed))
+        if collision_count <= spacing["near_zero_until"]:
+            gap_us = rng.randint(spacing["near_gap_min_us"], spacing["near_gap_max_us"])
+            normalized = previous + timedelta(microseconds=gap_us)
+        else:
+            gap_ms = rng.randint(spacing["large_gap_min_ms"], spacing["large_gap_max_ms"])
+            normalized = previous + timedelta(milliseconds=gap_ms)
+    else:
+        collision_count_by_computer[computer] = 0
     last_by_computer[computer] = normalized
     event["TimeCreated"] = normalized
 
@@ -1051,6 +1072,7 @@ class WindowsEventEmitter(LogEmitter):
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
+        self._time_collision_count_by_computer: dict[str, int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -1143,6 +1165,7 @@ class WindowsEventEmitter(LogEmitter):
             _normalize_windows_time_created(
                 event,
                 self._last_time_created_by_computer,
+                self._time_collision_count_by_computer,
                 sequence,
                 "windows_time_created",
             )
@@ -1213,7 +1236,10 @@ class WindowsEventEmitter(LogEmitter):
             ts = event.get("TimeCreated")
             latest = latest_dependent.get(key)
             if isinstance(ts, datetime) and latest is not None and ts <= latest:
-                event["TimeCreated"] = latest + timedelta(milliseconds=125)
+                event["TimeCreated"] = latest + sample_timing_delta(
+                    "windows.logoff_after_rendered_dependents",
+                    seed_parts=(key[0], key[1], latest),
+                )
 
     def flush(self) -> None:
         """Flush dict buffer then all host writers."""
