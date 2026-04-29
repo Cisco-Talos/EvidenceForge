@@ -37,13 +37,13 @@ jobs:
         if: github.ref_name != 'dev' && github.base_ref != 'dev'
         run: uv run pytest --include-slow --cov-report=xml
 
-      - name: Run tests with coverage (dev)
+      - name: Run fast unit tests (dev)
         if: github.ref_name == 'dev' || github.base_ref == 'dev'
-        run: uv run pytest --cov-report=xml
+        run: uv run pytest tests/unit --no-cov
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.12' && github.ref_name != 'dev' && github.base_ref != 'dev'
         with:
           file: ./coverage.xml
           fail_ci_if_error: false
