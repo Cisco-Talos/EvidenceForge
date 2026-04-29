@@ -221,7 +221,14 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         for sensor_hostname in sensor_hosts:
             src_iface = self._resolve_interface(net.src_ip, sensor_hostname)
             dst_iface = self._resolve_interface(net.dst_ip, sensor_hostname)
-            conn_id = self._next_conn_id(sensor_hostname, event.timestamp)
+            if fw is not None:
+                src_iface = fw.src_interface or src_iface
+                dst_iface = fw.dst_interface or dst_iface
+            conn_id = (
+                fw.connection_id
+                if fw is not None and fw.connection_id > 0
+                else self._next_conn_id(sensor_hostname, event.timestamp)
+            )
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:
@@ -416,7 +423,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             "timestamp": event.timestamp,
             "hostname": fw_hostname,
             "severity": 4,
-            "msg_id": 106023,
+            "msg_id": fw.msg_id if fw and fw.msg_id > 0 else 106023,
             "message": message,
             "pri": self._pri(4),
             "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,

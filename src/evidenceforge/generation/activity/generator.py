@@ -46,8 +46,11 @@ from evidenceforge.events.contexts import (
     HostContext,
     HttpContext,
     IdsContext,
+    ImageLoadContext,
     KerberosContext,
     OcspContext,
+    ProcessAccessContext,
+    ProcessContext,
     ProxyContext,
     RegistryContext,
     RemoteThreadContext,
@@ -2347,6 +2350,15 @@ class ActivityGenerator:
         )
         if process_username != user.username:
             _integrity = "Medium"
+        parent_pid = self._sanitize_user_parent_pid(
+            system=system,
+            user=user,
+            time=time,
+            logon_id=process_logon_id,
+            process_name=process_name,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
 
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
@@ -2470,7 +2482,7 @@ class ActivityGenerator:
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time + timedelta(milliseconds=module_delay_ms),
-                    event_type="module_load",
+                    event_type="image_load",
                     src_host=host_ctx,
                     auth=auth_ctx,
                     process=ProcessContext(
@@ -2480,7 +2492,7 @@ class ActivityGenerator:
                         command_line=command_line,
                         username=process_username,
                     ),
-                    file=FileContext(path=dll_path, action="load", pid=pid),
+                    image_load=ImageLoadContext(image_loaded=dll_path),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
@@ -6075,11 +6087,15 @@ class ActivityGenerator:
         # Entity lifecycle: validate target PID exists
         self.state_manager.validate_target_pid(system.hostname, target_pid)
 
-        from evidenceforge.events.contexts import ProcessContext
-
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
+        source_thread_id = -1
+        if source_proc is not None:
+            source_thread_rng = random.Random(
+                _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
+            )
+            source_thread_id = source_thread_rng.randint(1000, 9999)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
@@ -6095,9 +6111,15 @@ class ActivityGenerator:
             ),
             auth=AuthContext(
                 username=source_proc.username if source_proc is not None else user.username,
-                target_server=target_image,
-                source_port=target_pid,  # Pack target PID (same pattern as create_remote_thread)
-                failure_status=granted_access,  # Pack access mask into failure_status
+            ),
+            process_access=ProcessAccessContext(
+                source_pid=source_pid,
+                source_image=source_image,
+                source_thread_id=source_thread_id,
+                target_pid=target_pid,
+                target_image=target_image,
+                target_process_object_id=target_obj_id,
+                granted_access=granted_access,
             ),
             edr=EdrContext(object_id=target_obj_id, actor_id=source_obj_id),
         )
@@ -6193,12 +6215,15 @@ class ActivityGenerator:
         lease_time: float = 3600.0,
         uid: str = "",
         msg_types: list[str] | None = None,
+        domain: str | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
         from evidenceforge.events.contexts import DhcpContext
 
         if msg_types is None:
             msg_types = ["DISCOVER", "OFFER", "REQUEST", "ACK"]
+        if domain is None:
+            domain = getattr(self, "_ad_domain", "") or ""
 
         from evidenceforge.events.contexts import NetworkContext
 
@@ -6233,6 +6258,7 @@ class ActivityGenerator:
                 server_addr=server_addr,
                 mac=mac,
                 host_name=system.hostname,
+                domain=domain,
                 assigned_addr=system.ip,
                 lease_time=lease_time,
                 uids=[uid] if uid else [],
@@ -6803,6 +6829,44 @@ class ActivityGenerator:
 
         # No valid parent alive — auto-create the chain
         return self._ensure_parent_chain(system, user, time, logon_id, exe_name, os_cat, depth=0)
+
+    def _sanitize_user_parent_pid(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int:
+        """Prevent user-context Windows processes from being parented by PID 4/System."""
+        if _get_os_category(system.os) != "windows":
+            return parent_pid
+        if process_username in _SYSTEM_ACCOUNTS or process_username.endswith("$"):
+            return parent_pid
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        parent_image = (parent_proc.image if parent_proc is not None else "").lower()
+        if parent_pid != 4 and parent_image not in {"system", "ntoskrnl.exe"}:
+            return parent_pid
+
+        resolved = self._resolve_parent(system, user, time, logon_id, process_name)
+        resolved_proc = self.state_manager.get_process(system.hostname, resolved)
+        resolved_image = (resolved_proc.image if resolved_proc is not None else "").lower()
+        if resolved != 4 and resolved_image not in {"system", "ntoskrnl.exe"}:
+            return resolved
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("explorer", "winlogon", "services", "svchost_dcom"):
+            candidate = sys_pids.get(role)
+            if (
+                candidate
+                and candidate != 4
+                and self.state_manager.get_process(system.hostname, candidate)
+            ):
+                return candidate
+        return parent_pid
 
     def _ensure_parent_chain(
         self,

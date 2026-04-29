@@ -32,14 +32,6 @@ fields:
     required: true
     description: "Bash command executed"
 
-  - name: exit_code
-    type: integer
-    required: false
-    description: "Command exit code"
-    constraints:
-      min_value: 0
-      max_value: 255
-
 output:
   format: text
   file_extension: ".history"

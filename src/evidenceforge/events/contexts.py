@@ -118,6 +118,21 @@ class RemoteThreadContext:
 
 
 @dataclass(slots=True)
+class ProcessAccessContext:
+    """Cross-source details for one process opening another process."""
+
+    source_pid: int
+    source_image: str
+    target_pid: int
+    target_image: str
+    granted_access: str
+    source_thread_id: int = -1
+    target_user: str = "NT AUTHORITY\\SYSTEM"
+    target_process_object_id: str = ""
+    call_trace: str = ""
+
+
+@dataclass(slots=True)
 class NetworkContext:
     """Network connection details -- shared across Zeek, eCAR, Snort."""
 
@@ -312,7 +327,6 @@ class ShellContext:
     """Shell command execution details (bash_history)."""
 
     command: str
-    exit_code: int = 0
 
 
 # --- Zeek protocol-layer contexts (Phase: Zeek expansion) ---

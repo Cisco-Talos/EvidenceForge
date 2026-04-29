@@ -651,8 +651,15 @@ class SysmonEventEmitter(LogEmitter):
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
-        # Use per-host boot time for parent GUID (not Jan 1 hardcode)
-        _parent_ts = self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
+        parent_proc = None
+        sm = getattr(self, "_state_manager", None)
+        if sm and proc.parent_pid > 0:
+            parent_proc = sm.get_process(host.hostname, proc.parent_pid)
+        _parent_ts = (
+            parent_proc.start_time
+            if parent_proc is not None
+            else self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
+        )
         parent_guid = self._generate_process_guid(
             host.hostname,
             proc.parent_pid,
@@ -834,23 +841,23 @@ class SysmonEventEmitter(LogEmitter):
         rng = random.Random()
         host = event.src_host
         proc = event.process  # Source process
-        auth = event.auth
+        access = event.process_access
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
 
-        # Target process info from auth context (same pattern as create_remote_thread)
-        target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
-        target_username = auth.username if auth else ""
+        target_pid = access.target_pid if access else rng.randint(500, 800)
         target_image = self._resolve_full_image_path(
-            auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe",
-            username=target_username,
+            access.target_image if access else r"C:\Windows\System32\lsass.exe",
+            username=proc.username,
         )
         target_guid = self._get_stable_process_guid(host.hostname, target_pid, event.timestamp)
 
         # Determine user string
-        if auth and auth.username:
-            user = self._format_user(auth.username, host.netbios_domain)
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
         else:
             user = "NT AUTHORITY\\SYSTEM"
 
@@ -858,7 +865,7 @@ class SysmonEventEmitter(LogEmitter):
         # 0x1010 = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
         # 0x1FFFFF = PROCESS_ALL_ACCESS
         # 0x1438 = typical mimikatz access mask
-        granted_access = auth.failure_status if auth and auth.failure_status else "0x1010"
+        granted_access = access.granted_access if access else "0x1010"
 
         event_data = {
             "EventID": 10,
@@ -872,14 +879,16 @@ class SysmonEventEmitter(LogEmitter):
             "SourceProcessGUID": source_guid,
             "SourceProcessId": proc.pid,
             "SourceImage": proc.image,
-            "SourceThreadId": rng.randint(100, 9999),
+            "SourceThreadId": access.source_thread_id if access else -1,
             "SourceUser": user,
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
-            "TargetUser": "NT AUTHORITY\\SYSTEM",
+            "TargetUser": access.target_user if access else "NT AUTHORITY\\SYSTEM",
             "GrantedAccess": granted_access,
-            "CallTrace": self._get_call_trace(host.hostname),
+            "CallTrace": access.call_trace
+            if access and access.call_trace
+            else self._get_call_trace(host.hostname),
         }
         self.emit_event(event_data)
 

@@ -776,6 +776,16 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         proc = event.process
         is_outbound = net.src_ip == host.ip
+        pid = net.initiating_pid if net.initiating_pid > 0 else 4
+        image = proc.image if proc else ""
+        if not image and pid > 0:
+            sm = getattr(self, "_state_manager", None)
+            if sm is not None:
+                running = sm.get_process(host.hostname, pid)
+                if running is not None:
+                    image = running.image
+        if not image:
+            image = r"C:\Windows\System32\svchost.exe" if pid == 4 else "-"
 
         event_data = {
             "EventID": 5156,
@@ -785,10 +795,8 @@ class WindowsEventEmitter(LogEmitter):
             "Level": 0,
             "ExecutionProcessID": 4,
             "ExecutionThreadID": rng.randint(50, 200),
-            "ProcessID": net.initiating_pid if net.initiating_pid > 0 else 4,
-            "Application": self._to_device_path(
-                proc.image if proc else r"C:\Windows\System32\svchost.exe"
-            ),
+            "ProcessID": pid,
+            "Application": self._to_device_path(image),
             "Direction": "%%14593" if is_outbound else "%%14592",
             "SourceAddress": net.src_ip,
             "SourcePort": net.src_port,

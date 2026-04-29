@@ -347,6 +347,9 @@ class TestActivityGenerator:
             def randint(self, lower, _upper):
                 return lower
 
+            def uniform(self, lower, _upper):
+                return lower
+
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         logon_id = "0x12345"
@@ -364,14 +367,14 @@ class TestActivityGenerator:
         module_events = [
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call[0][0].event_type == "module_load"
+            if call[0][0].event_type == "image_load"
         ]
         assert module_events
         event = module_events[-1]
         from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 
         profile_paths = {entry["path"] for entry in get_dlls_for_process("firefox.exe")}
-        assert event.file.path in profile_paths
+        assert event.image_load.image_loaded in profile_paths
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
 

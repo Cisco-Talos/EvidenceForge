@@ -29,10 +29,11 @@ from datetime import UTC, datetime
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, HostContext
+from evidenceforge.events.contexts import AuthContext, HostContext, NetworkContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 
 
@@ -483,6 +484,53 @@ class TestWindowsEventEmitter:
             in content
         )
         assert '<Data Name="Protocol">6</Data>' in content
+
+    def test_wfp_connection_resolves_application_from_state_manager(self, format_def, temp_output):
+        """WFP 5156 uses canonical process state when the event lacks ProcessContext."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
+        pid = state_manager.create_process(
+            system="WKS-01",
+            parent_pid=4,
+            image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            command_line="firefox.exe",
+            username="CORP\\jsmith",
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        emitter._state_manager = state_manager
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.50",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="WKS-01.corp.local",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=pid,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert f'<Data Name="ProcessID">{pid}</Data>' in content
+        assert (
+            '<Data Name="Application">\\device\\harddiskvolume1\\program files\\mozilla '
+            "firefox\\firefox.exe</Data>"
+        ) in content
 
     def test_device_path_conversion(self):
         """Test _to_device_path helper converts Windows paths correctly."""

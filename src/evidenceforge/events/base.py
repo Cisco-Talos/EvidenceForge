@@ -52,6 +52,7 @@ from evidenceforge.events.contexts import (
     NtpContext,
     OcspContext,
     PeContext,
+    ProcessAccessContext,
     ProcessContext,
     ProxyContext,
     RawContext,
@@ -94,6 +95,7 @@ class SecurityEvent:
     file: FileContext | None = None
     registry: RegistryContext | None = None
     remote_thread: RemoteThreadContext | None = None
+    process_access: ProcessAccessContext | None = None
     ids: IdsContext | None = None
     image_load: ImageLoadContext | None = None
     syslog: SyslogContext | None = None

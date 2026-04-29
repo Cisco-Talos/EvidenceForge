@@ -98,8 +98,9 @@ class TestSysmonProcessAccess:
         assert event.event_type == "process_access"
         assert event.process.pid == 5432
         assert "mimikatz" in event.process.image
-        assert event.auth.target_server == r"C:\Windows\System32\lsass.exe"
-        assert event.auth.failure_status == "0x1010"
+        assert event.process_access is not None
+        assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
+        assert event.process_access.granted_access == "0x1010"
 
     def test_process_access_default_target_is_lsass(
         self, activity_gen, mock_emitters, windows_system, test_user
@@ -116,7 +117,7 @@ class TestSysmonProcessAccess:
         )
 
         event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
-        assert event.auth.target_server == r"C:\Windows\System32\lsass.exe"
+        assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
 
     def test_process_access_custom_access_mask(
         self, activity_gen, mock_emitters, windows_system, test_user
@@ -134,7 +135,7 @@ class TestSysmonProcessAccess:
         )
 
         event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
-        assert event.auth.failure_status == "0x1FFFFF"
+        assert event.process_access.granted_access == "0x1FFFFF"
 
     def test_process_access_only_on_windows(self, activity_gen, mock_emitters, test_user):
         """ProcessAccess should only emit on Windows systems."""

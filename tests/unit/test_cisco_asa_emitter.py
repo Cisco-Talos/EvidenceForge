@@ -276,6 +276,25 @@ class TestPermitRecords:
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
         assert "Built inbound TCP connection" in output
 
+    def test_permit_uses_firewall_context_connection_id_and_interfaces(self, asa_emitter, tmp_path):
+        """Context-owned ASA fields override emitter-derived fallback fields."""
+        event = _make_connection_event(
+            firewall=FirewallContext(
+                action="permit",
+                msg_id=302013,
+                connection_id=424242,
+                src_interface="vpn",
+                dst_interface="egress",
+            )
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        assert "TCP connection 424242" in output
+        assert "vpn:10.0.10.50/54321" in output
+        assert "egress:203.0.113.50/443" in output
+
 
 class TestDenyRecords:
     def test_deny_produces_single_record(self, asa_emitter, tmp_path):
@@ -326,6 +345,30 @@ class TestDenyRecords:
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
         assert "(type 8, code 0)" in output
         assert "Deny icmp" in output
+
+    def test_deny_uses_firewall_context_message_id_and_interfaces(self, asa_emitter, tmp_path):
+        """Deny records keep canonical firewall context metadata when provided."""
+        event = _make_connection_event(
+            src_ip="10.0.10.50",
+            dst_ip="203.0.113.53",
+            dst_port=53,
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106100,
+                connection_id=0,
+                src_interface="inside",
+                dst_interface="internet",
+                access_group="inside_dns_policy",
+            ),
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        assert "%ASA-4-106100:" in output
+        assert "Deny tcp src inside:10.0.10.50/54321" in output
+        assert "dst internet:203.0.113.53/53" in output
+        assert 'by access-group "inside_dns_policy"' in output
 
 
 class TestSyslogFormat:

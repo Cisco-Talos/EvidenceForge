@@ -227,7 +227,7 @@ Each `event_type` string maps to which contexts must/may be populated. "required
 | `bash_command` | required | required | - | - | - | - | - | - | Bash history entry |
 | `file_operation` | required | - | - | - | - | required | - | - | File create/modify/delete (eCAR FILE) |
 | `registry_operation` | required | - | - | - | - | - | required | - | Registry modification (eCAR REGISTRY) |
-| `module_load` | required | - | optional | - | - | - | - | - | Module/DLL load (eCAR MODULE/LOAD) |
+| `image_load` | required | - | optional | - | - | - | - | - | Module/DLL load (Sysmon Event 7, eCAR MODULE/LOAD) |
 | `machine_logon` | required | required | - | - | - | - | - | - | Machine account auth (4624 Type 3) |
 | `kerberos_tgt` | required | required | - | - | - | - | - | - | Kerberos TGT request (4768) |
 | `kerberos_service` | required | required | - | - | - | - | - | - | Kerberos service ticket (4769) |
@@ -237,7 +237,7 @@ Each `event_type` string maps to which contexts must/may be populated. "required
 **Notes:**
 - `connection` and `dns_query` have no `host` context because the current `generate_connection()` works purely with IP addresses, not host objects. This is preserved as-is (not new behavior).
 - `system_process_create` uses the same contexts as `process_create` but is a distinct type so emitters can apply different logic (e.g., no syslog emission for Windows boot processes).
-- `module_load` covers eCAR MODULE/LOAD events. `process` is optional (module loads can be attributed to a process or standalone).
+- `image_load` carries canonical DLL/module-load data shared by Sysmon Event 7 and eCAR MODULE/LOAD. `process` is optional (module loads can be attributed to a process or standalone). `module_load` remains accepted by eCAR as a legacy compatibility alias.
 
 ## 4. Dispatcher Design
 
@@ -384,7 +384,7 @@ class LogEmitter(ABC):
 | `SyslogEmitter` | `{logon, logon_failed, logoff, process_create, bash_command}` |
 | `ZeekEmitter` (conn) | `{connection}` |
 | `ZeekDnsEmitter` | `{dns_query}` |
-| `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, module_load, create_remote_thread, process_access, service_installed}` |
+| `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, image_load, module_load, create_remote_thread, process_access, service_installed}` |
 | `SnortEmitter` | `{connection}` (only when `event.ids` is populated) |
 | `BashHistoryEmitter` | `{bash_command}` |
 | `WebEmitter` | `{web_request}` |
@@ -510,7 +510,7 @@ def generate_logon(self, user, system, time, logon_type=2, source_ip=None):
 - `_emit_ecar_process()` -> `EcarEmitter._render_process_create()`
 - `_emit_ecar_file_event()` -> `EcarEmitter._render_file_operation()`
 - `_emit_ecar_registry_event()` -> `EcarEmitter._render_registry_operation()`
-- `_emit_ecar_module_event()` -> `EcarEmitter._render_module_load()`
+- `_emit_ecar_module_event()` -> `EcarEmitter._render_module_load()` via canonical `image_load`
 - `_emit_ecar_flow_event()` -> `EcarEmitter._render_connection()`
 
 ### 4.5 eCAR Format Improvements (Post-Migration)
