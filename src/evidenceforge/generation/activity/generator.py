@@ -2466,9 +2466,10 @@ class ActivityGenerator:
 
             dll_profiles = get_dlls_for_process(_exe_lower)
             dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
+            module_delay_ms = rng.randint(2, 1500)
             self.dispatcher.dispatch(
                 SecurityEvent(
-                    timestamp=time,
+                    timestamp=time + timedelta(milliseconds=module_delay_ms),
                     event_type="module_load",
                     src_host=host_ctx,
                     auth=auth_ctx,
@@ -2568,6 +2569,18 @@ class ActivityGenerator:
         running_proc = self.state_manager.get_process(system.hostname, pid)
         process_username = running_proc.username if running_proc is not None else user.username
         process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
+        if not process_logon_id:
+            if process_username in _SYSTEM_ACCOUNTS:
+                process_logon_id = "0x3e7"
+            else:
+                resolved_username, resolved_logon_id = self._resolve_process_identity(
+                    system=system,
+                    username=process_username,
+                    logon_id=logon_id,
+                    process_name=process_name,
+                )
+                process_username = resolved_username
+                process_logon_id = resolved_logon_id or logon_id
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
@@ -6064,23 +6077,29 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import ProcessContext
 
+        source_proc = self.state_manager.get_process(system.hostname, source_pid)
+        source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
+        target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
             src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=source_pid,
-                parent_pid=0,
+                parent_pid=source_proc.parent_pid if source_proc is not None else 0,
                 image=source_image,
-                command_line="",
-                username=user.username,
+                command_line=source_proc.command_line if source_proc is not None else "",
+                username=source_proc.username if source_proc is not None else user.username,
+                logon_id=source_proc.logon_id if source_proc is not None else "",
+                start_time=source_proc.start_time if source_proc is not None else None,
             ),
             auth=AuthContext(
-                username=user.username,
+                username=source_proc.username if source_proc is not None else user.username,
                 target_server=target_image,
                 source_port=target_pid,  # Pack target PID (same pattern as create_remote_thread)
                 failure_status=granted_access,  # Pack access mask into failure_status
             ),
+            edr=EdrContext(object_id=target_obj_id, actor_id=source_obj_id),
         )
         self.dispatcher.dispatch(event)
 

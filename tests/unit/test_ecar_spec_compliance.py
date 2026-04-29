@@ -181,6 +181,38 @@ class TestRemoteThreadRendering:
         assert rendered["start_address"] == "0000000002060000"
 
 
+class TestSessionOutcomeRendering:
+    def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
+        """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jdoe",
+                source_ip="10.0.0.20",
+                failure_status="0xC000006D",
+                failure_substatus="0xC000006A",
+            ),
+        )
+
+        emitter._render_failed_logon(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["outcome"] == "failure"
+        assert rendered["status_code"] == "0xC000006D"
+        assert rendered["sub_status"] == "0xC000006A"
+
+
 class TestChronologicalOutput:
     def test_close_sorts_per_host_ecar_by_timestamp(self, tmp_path, ts):
         """Per-host eCAR files should be written chronologically on close."""

@@ -638,8 +638,16 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
+        render_time = event.timestamp + self._source_offset(
+            "process_create",
+            host.hostname,
+            proc.pid,
+            event.timestamp,
+            minimum_ms=3,
+            maximum_ms=85,
+        )
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -663,7 +671,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 1,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -700,6 +708,23 @@ class SysmonEventEmitter(LogEmitter):
         event_data["Company"] = company
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
+
+    @staticmethod
+    def _source_offset(
+        event_type: str,
+        hostname: str,
+        pid: int,
+        timestamp: datetime,
+        *,
+        minimum_ms: int,
+        maximum_ms: int,
+    ) -> timedelta:
+        """Deterministic Sysmon collection latency for cross-source events."""
+        span = maximum_ms - minimum_ms
+        offset = minimum_ms + (
+            _stable_seed(f"sysmon:{event_type}:{hostname}:{pid}:{timestamp}") % span
+        )
+        return timedelta(milliseconds=offset)
 
     def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""

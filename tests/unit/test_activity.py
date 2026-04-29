@@ -373,6 +373,46 @@ class TestActivityGenerator:
         profile_paths = {entry["path"] for entry in get_dlls_for_process("firefox.exe")}
         assert event.file.path in profile_paths
         assert event.process.image.endswith("firefox.exe")
+        assert event.timestamp > timestamp
+
+    def test_system_process_termination_defaults_logon_id_to_system(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """SYSTEM process termination should not emit blank Security 4689 LogonId."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\usoclient.exe",
+            command_line="usoclient.exe ResumeUpdate",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="",
+        )
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        activity_gen.generate_process_termination(
+            system_user,
+            test_system,
+            timestamp,
+            pid,
+            r"C:\Windows\System32\usoclient.exe",
+            "",
+        )
+
+        event = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_terminate"
+        ][-1]
+        assert event.auth.logon_id == "0x3e7"
+        assert event.process.logon_id == "0x3e7"
 
     def test_generate_explicit_credentials_uses_supplied_process_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
