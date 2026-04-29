@@ -84,7 +84,7 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "<EventID>4624</EventID>" in content
         assert "<TimeCreated" in content
-        assert "2024-01-15T10:30:45.123456Z" in content
+        assert "2024-01-15T10:30:45.1234560Z" in content
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
@@ -636,7 +636,7 @@ class TestWindowsEventEmitter:
         emitter.close()
 
         content = temp_output.read_text()
-        assert "2024-01-15T10:30:45.123456Z" in content  # 6 decimal places
+        assert "2024-01-15T10:30:45.1234560Z" in content  # 100ns-style precision
 
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
         """Test emitting 4771 (Kerberos pre-auth failed)."""
@@ -693,6 +693,8 @@ class TestWindowsEventEmitter:
         assert "Microsoft-Windows-Eventlog" in content
         assert "LogFileCleared" in content
         assert "UserData" in content
+        assert "<SubjectUserName>admin01</SubjectUserName>" in content
+        assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):

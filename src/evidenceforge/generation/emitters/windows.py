@@ -93,6 +93,11 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     return netbios_domain
 
 
+def _format_windows_system_time(ts: datetime) -> str:
+    """Render Windows XML SystemTime with 100ns-style fractional precision."""
+    return ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "0Z"
+
+
 class WindowsEventEmitter(LogEmitter):
     """Emitter for Windows Event Log format (XML).
 
@@ -462,8 +467,16 @@ class WindowsEventEmitter(LogEmitter):
             "SubStatus": auth.failure_substatus,
             "FailureReason": auth.failure_reason,
             "LogonType": auth.logon_type,
+            "LogonProcessName": auth.logon_process or "NtLmSsp",
+            "AuthenticationPackageName": auth.auth_package or "NTLM",
+            "WorkstationName": auth.workstation_name or "-",
+            "LmPackageName": auth.lm_package or "-",
+            "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
+            "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
+            "ProcessName": auth.process_name or "-",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "IpPort": auth.source_port
+            or (rng.randint(49152, 65535) if auth.logon_type == 3 else 0),
         }
         self.emit_event(event_data)
 
@@ -1128,7 +1141,7 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                event_data["TimeCreated"] = _format_windows_system_time(ts)
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":

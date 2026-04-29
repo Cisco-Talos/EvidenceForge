@@ -120,6 +120,33 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_improbable_kerberos_failure_preauth(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        real_loader = kerberos_realism.load_kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            data = real_loader()
+            failure = dict(data["tgt_failure"])
+            failure["pre_auth_types"] = {
+                "none_or_legacy": {"value": 0, "weight": 50},
+                "encrypted_timestamp": {"value": 2, "weight": 50},
+            }
+            return {**data, "tgt_failure": failure}
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "4771 failure PreAuthType 0/no-preauth weight must not exceed 10%" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_browser_like_proxy_infra_template(self, monkeypatch):
         from evidenceforge.generation.activity import proxy_uri
 
@@ -150,5 +177,26 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "proxy_uri_templates.yaml"
             and "unsuitable content type" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_too_short_workstation_unlock_gap(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {"workstation_lock": {"min_unlock_gap_seconds": 10}}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "min_unlock_gap_seconds must be at least 60" in issue.message
             for issue in result.issues
         )

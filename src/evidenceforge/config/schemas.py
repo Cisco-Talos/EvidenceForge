@@ -446,6 +446,56 @@ class KerberosTgtSuccessConfig(BaseModel, extra="forbid"):
         return self
 
 
+class KerberosFailurePreAuthTypeEntry(BaseModel, extra="forbid"):
+    """Weighted 4771 failure pre-auth profile."""
+
+    value: int
+    weight: int
+    description: str = ""
+
+    @field_validator("value")
+    @classmethod
+    def allowed_pre_auth_type(cls, v: int) -> int:
+        if v not in {0, 2}:
+            raise ValueError("failure pre-auth value must be one of 0 or 2")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class KerberosTgtFailureConfig(BaseModel, extra="forbid"):
+    """Failed 4771 field distributions."""
+
+    pre_auth_types: dict[str, KerberosFailurePreAuthTypeEntry]
+    ticket_options: dict[str, KerberosWeightedHexValue]
+
+    @field_validator("pre_auth_types", "ticket_options")
+    @classmethod
+    def weighted_profiles_non_empty(cls, v: dict) -> dict:
+        if not v:
+            raise ValueError("weighted profile dict must not be empty")
+        if sum(entry.weight for entry in v.values()) <= 0:
+            raise ValueError("weighted profile dict must have a positive total weight")
+        return v
+
+    @model_validator(mode="after")
+    def realistic_failure_weights(self) -> KerberosTgtFailureConfig:
+        weights: dict[int, int] = {}
+        for entry in self.pre_auth_types.values():
+            weights[entry.value] = weights.get(entry.value, 0) + entry.weight
+        total = sum(weights.values())
+        if weights.get(2, 0) == 0:
+            raise ValueError("4771 failure PreAuthType 2 must be present")
+        if weights.get(0, 0) / total > 0.10:
+            raise ValueError("4771 failure PreAuthType 0/no-preauth weight must not exceed 10%")
+        return self
+
+
 class KerberosCertificateProfile(BaseModel, extra="forbid"):
     """Certificate field generation profile for Kerberos PKINIT events."""
 
@@ -481,6 +531,7 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
     """Root schema for kerberos_realism.yaml."""
 
     tgt_success: KerberosTgtSuccessConfig
+    tgt_failure: KerberosTgtFailureConfig
     certificate_profiles: dict[str, KerberosCertificateProfile] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -603,6 +654,72 @@ class PublicNtpServerEntry(BaseModel, extra="forbid"):
     stratum: int = Field(ge=1, le=4)
     ref_id: str
     weight: int = Field(gt=0)
+
+
+class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
+    """Local interactive 4625 profile."""
+
+    logon_process_name: str
+    authentication_package_name: str
+    process_name: str
+
+
+class WindowsFailedLogonProcessProfile(BaseModel, extra="forbid"):
+    """Network 4625 logon process/auth package profile."""
+
+    logon_process_name: str
+    authentication_package_name: str
+    lm_package_name: str
+    weight: int = Field(gt=0)
+
+
+class WindowsFailedLogonPortProfile(BaseModel, extra="forbid"):
+    """Network 4625 companion connection port profile."""
+
+    port: int = Field(gt=0, le=65535)
+    weight: int = Field(gt=0)
+
+
+class WindowsFailedLogonNetworkProfile(BaseModel, extra="forbid"):
+    """Network 4625 profile."""
+
+    logon_process_weights: dict[str, WindowsFailedLogonProcessProfile]
+    emit_network_connection_probability: float = Field(ge=0.0, le=1.0)
+    network_ports: dict[str, WindowsFailedLogonPortProfile]
+
+    @field_validator("logon_process_weights", "network_ports")
+    @classmethod
+    def weighted_profiles_non_empty(cls, v: dict) -> dict:
+        if not v:
+            raise ValueError("weighted profile dict must not be empty")
+        return v
+
+
+class WindowsFailedLogonConfig(BaseModel, extra="forbid"):
+    """Windows failed-logon profile config."""
+
+    local_interactive: WindowsFailedLogonLocalProfile
+    network: WindowsFailedLogonNetworkProfile
+
+
+class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
+    """Windows workstation lock/unlock realism config."""
+
+    min_unlock_gap_seconds: int
+
+    @field_validator("min_unlock_gap_seconds")
+    @classmethod
+    def min_gap_realistic(cls, v: int) -> int:
+        if v < 60:
+            raise ValueError("workstation_lock.min_unlock_gap_seconds must be at least 60")
+        return v
+
+
+class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
+    """Windows authentication realism knobs."""
+
+    workstation_lock: WindowsWorkstationLockConfig
+    failed_logon: WindowsFailedLogonConfig
 
 
 class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):

@@ -181,6 +181,9 @@ def validate_config() -> ValidationResult:
         "activity/network_params.yaml": {
             "list_fields": {"oui_prefixes": None, "public_ntp_servers": "name"},
         },
+        "activity/windows_auth_realism.yaml": {
+            "dict_fields": {"workstation_lock"},
+        },
         "activity/bash_commands.yaml": {
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
             # No structural constraints — skip unexpected-key check
@@ -422,6 +425,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.system_processes import load_system_processes
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
+    from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
     catalog_data = load_catalog()
@@ -436,6 +440,7 @@ def validate_config() -> ValidationResult:
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
     tls_realism_data = load_tls_realism()
+    windows_auth_data = load_windows_auth_realism()
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
@@ -1195,6 +1200,7 @@ def validate_config() -> ValidationResult:
         SystemServiceEntry,
         TlsIssuerEntry,
         TlsRealismConfig,
+        WindowsAuthRealismConfig,
         validate_entry,
     )
 
@@ -1347,6 +1353,10 @@ def validate_config() -> ValidationResult:
                 "network_params.yaml (public_ntp_servers)",
             )
         )
+
+    err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
 
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         _SCHEMA_CHECKS.append(

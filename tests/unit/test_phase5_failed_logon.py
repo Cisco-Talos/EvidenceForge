@@ -219,10 +219,10 @@ class TestFailedLogonRate:
 
 
 class TestFailedLogonDC:
-    """Test failed logon events are also emitted on the domain controller."""
+    """Test failed logon domain-controller validation evidence."""
 
-    def test_failed_logon_emits_on_dc(self, state_manager, mock_emitters, timestamp):
-        """Failed logon with dc_system should emit on both workstation and DC."""
+    def test_failed_logon_does_not_clone_4625_on_dc(self, state_manager, mock_emitters, timestamp):
+        """Failed logon with dc_system should keep 4625 on target and validation on DC."""
         ag = ActivityGenerator(state_manager, mock_emitters)
         state_manager.set_current_time(timestamp)
 
@@ -241,17 +241,16 @@ class TestFailedLogonDC:
             dc_system=dc,
         )
 
-        # Windows emitter should receive multiple events (workstation + DC)
         win_emitter = mock_emitters["windows_event_security"]
-        assert win_emitter.emit.call_count >= 2
-
-        # Collect all emitted events
         events = [call[0][0] for call in win_emitter.emit.call_args_list]
-        hosts = {e.dst_host.hostname for e in events}
+        failed_logons = [event for event in events if event.event_type == "failed_logon"]
+        dc_events = [
+            event for event in events if event.dst_host and event.dst_host.hostname == "DC-01"
+        ]
 
-        # Both workstation and DC should have events
-        assert "WKS-01" in hosts, "Missing 4625 on workstation"
-        assert "DC-01" in hosts, "Missing 4625/4776 on DC"
+        assert len(failed_logons) == 1
+        assert failed_logons[0].dst_host.hostname == "WKS-01"
+        assert "ntlm_validation" in {event.event_type for event in dc_events}
 
     def test_failed_logon_dc_gets_4776(self, state_manager, mock_emitters, timestamp):
         """DC should receive a failed NTLM validation (4776) event."""
@@ -279,6 +278,44 @@ class TestFailedLogonDC:
         assert "ntlm_validation" in event_types, "Missing 4776 on DC"
         ntlm_event = next(e for e in dc_events if e.event_type == "ntlm_validation")
         assert ntlm_event.auth.failure_status != "0x0"
+
+    def test_known_user_failed_logon_uses_wrong_password_substatus(
+        self, state_manager, mock_emitters, timestamp
+    ):
+        """A known user should not receive the nonexistent-user SubStatus."""
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        for _ in range(50):
+            ag.generate_failed_logon(user=user, system=wks, time=timestamp, logon_type=3)
+
+        events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "failed_logon"
+        ]
+        assert events
+        assert all(event.auth.failure_substatus != "0xc0000064" for event in events)
+
+    def test_interactive_failed_logon_uses_local_windows_shape(
+        self, state_manager, mock_emitters, timestamp
+    ):
+        """Interactive 4625 context should look like a local workstation failure."""
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        ag.generate_failed_logon(user=user, system=wks, time=timestamp, logon_type=2)
+
+        event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package == "Negotiate"
+        assert event.auth.workstation_name == "WKS-01"
+        assert event.auth.source_ip == "-"
+        assert event.auth.process_name == r"C:\Windows\System32\winlogon.exe"
 
     def test_no_dc_no_extra_events(self, state_manager, mock_emitters, timestamp):
         """Without dc_system, only workstation events are emitted."""

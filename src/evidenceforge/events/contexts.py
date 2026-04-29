@@ -77,6 +77,7 @@ class AuthContext:
     process_pid: int = 0  # PID of process using explicit credentials (4648 ProcessId)
     target_server: str = ""  # 4648 TargetServerName (e.g., "fileserver01", "localhost")
     process_name: str = ""  # 4648 ProcessName (process using explicit creds)
+    workstation_name: str = ""  # Windows WorkstationName for logon/failure events
 
 
 @dataclass(slots=True)

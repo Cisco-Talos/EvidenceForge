@@ -41,6 +41,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 ### P0 Cross-Source Timing Audit
 
 - [ ] **P0** Comprehensive correlated-event timing audit — after the current 78% synthetic blind-review fixes, perform a full audit similar to the emitter field-provenance audit, but focused on timing relationships between correlated events. Inventory all generated event clusters that are expected to correlate across Security/Sysmon/eCAR/Zeek/proxy/ASA/syslog/baseline/storyline outputs; identify where timestamps are source-native exact, realistically offset, impossible, or accidentally reordered; verify same-source ordering invariants such as process-create before process follow-on artifacts; verify cross-source offsets such as DNS before TCP, proxy client leg before proxy egress, firewall deny before absent downstream evidence, process create before WFP/Sysmon network evidence, auth before process, module/file/registry after process, and teardown after build/start; then implement root-cause fixes with tests and generated-output probes.
+- [ ] **P0** Windows auth timing findings to include in the audit — the Windows Security/auth blind review found 4688 process-create records that can render before the matching 4624 for the same LogonID, plus exact duplicated failed-logon timestamps across host/DC evidence. Treat these as known examples when auditing correlated auth/process timing rather than rediscovering them later.
 
 ### World Model Refactor
 
