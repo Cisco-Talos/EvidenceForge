@@ -6779,17 +6779,25 @@ class ActivityGenerator:
                     "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
                 }
         elif logon_type == 10:
-            # RDP: NtLmSsp/CredSSP
+            # RemoteInteractive/RDP 4624 records use the workstation logon process;
+            # CredSSP is the transport/SSP layer, not a native 4624 auth package.
+            auth_package = rng.choices(
+                ["Negotiate", "Kerberos", "NTLM"], weights=[55, 35, 10], k=1
+            )[0]
             return {
-                "LogonProcessName": "NtLmSsp",
-                "AuthenticationPackageName": rng.choice(["CredSSP", "Negotiate"]),
-                "LmPackageName": "-",
-                "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": auth_package,
+                "LmPackageName": "NTLM V2" if auth_package == "NTLM" else "-",
+                "LogonGuid": f"{{{uuid.uuid4()}}}"
+                if auth_package == "Kerberos"
+                else "{00000000-0000-0000-0000-000000000000}",
             }
         else:
-            # Type 7 (unlock), 11 (cached), etc.: Negotiate
+            # Type 7 (unlock), 11 (cached interactive), etc. are local interactive
+            # workstation logons. User32 is the logon process; Negotiate is the
+            # auth package.
             return {
-                "LogonProcessName": "Negotiate",
+                "LogonProcessName": "User32",
                 "AuthenticationPackageName": "Negotiate",
                 "LmPackageName": "-",
                 "LogonGuid": "{00000000-0000-0000-0000-000000000000}",

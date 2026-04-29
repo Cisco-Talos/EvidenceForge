@@ -84,7 +84,7 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "<EventID>4624</EventID>" in content
         assert "<TimeCreated" in content
-        assert "2024-01-15T10:30:45.1234560Z" in content
+        assert re.search(r"2024-01-15T10:30:45\.123456\dZ", content)
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
@@ -613,8 +613,8 @@ class TestWindowsEventEmitter:
             == r"\device\harddiskvolume1\test.exe"
         )
 
-    def test_timestamp_microsecond_precision(self, format_def, temp_output):
-        """Test that timestamps have 6 decimal places (microsecond precision)."""
+    def test_timestamp_100ns_precision(self, format_def, temp_output):
+        """Test that timestamps have EVTX-like 100ns precision."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
         event_data = {
@@ -636,7 +636,37 @@ class TestWindowsEventEmitter:
         emitter.close()
 
         content = temp_output.read_text()
-        assert "2024-01-15T10:30:45.1234560Z" in content  # 100ns-style precision
+        assert re.search(r"2024-01-15T10:30:45\.123456\dZ", content)
+
+    def test_timestamp_100ns_digit_varies(self, format_def, temp_output):
+        """The synthetic 100ns digit should not always be zero."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=50)
+        for idx in range(20):
+            event_data = {
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, idx, 123456, tzinfo=UTC),
+                "Computer": "WIN-TEST-01.corp.local",
+                "Channel": "Security",
+                "Level": 0,
+                "ExecutionProcessID": 600,
+                "ExecutionThreadID": 100 + idx,
+                "TargetUserSid": "S-1-5-21-123-456-789-1001",
+                "TargetUserName": f"user{idx}",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": f"0x{idx:06x}",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "-",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+            emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        timestamps = re.findall(r'SystemTime="[^"]+\.(\d{7})Z"', content)
+        assert len(timestamps) == 20
+        assert len({fraction[-1] for fraction in timestamps}) > 1
 
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
         """Test emitting 4771 (Kerberos pre-auth failed)."""
@@ -696,6 +726,68 @@ class TestWindowsEventEmitter:
         assert "<SubjectUserName>admin01</SubjectUserName>" in content
         assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0
+
+    def test_event_record_id_restarts_after_log_cleared(self, format_def, temp_output):
+        """Security EventRecordID should restart after source-native 1102 log clear."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        base = {
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+        }
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "TargetUserName": "jsmith",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": "0x1",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "-",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+        )
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 1102,
+                "TimeCreated": datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+                "SubjectUserSid": "S-1-5-21-123-456-789-1001",
+                "SubjectUserName": "admin01",
+                "SubjectDomainName": "CORP",
+                "SubjectLogonId": "0x2",
+            }
+        )
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 32, 0, tzinfo=UTC),
+                "TargetUserName": "jsmith",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": "0x3",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "-",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+        )
+        emitter.close()
+
+        content = temp_output.read_text()
+        record_ids = [
+            int(value) for value in re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content)
+        ]
+        assert len(record_ids) == 3
+        assert record_ids[0] < record_ids[1]
+        assert record_ids[2] < record_ids[1]
+        assert record_ids[2] <= 20
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):
         """Test emitting 4800 (workstation locked) with populated EventData fields."""

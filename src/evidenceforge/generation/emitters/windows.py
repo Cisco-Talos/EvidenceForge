@@ -93,9 +93,14 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     return netbios_domain
 
 
-def _format_windows_system_time(ts: datetime) -> str:
+def _format_windows_system_time(ts: datetime, event_data: dict[str, Any]) -> str:
     """Render Windows XML SystemTime with 100ns-style fractional precision."""
-    return ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "0Z"
+    seed = (
+        f"windows_100ns_{event_data.get('Computer', '')}_{event_data.get('EventRecordID', '')}_"
+        f"{event_data.get('EventID', '')}_{ts.isoformat()}"
+    )
+    final_digit = _stable_seed(seed) % 10
+    return ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + f"{final_digit}Z"
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -1141,7 +1146,7 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = _format_windows_system_time(ts)
+                event_data["TimeCreated"] = _format_windows_system_time(ts, event_data)
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -1212,6 +1217,9 @@ class WindowsEventEmitter(LogEmitter):
             else:
                 self._record_id_counters[counter_key] += 1
             event["EventRecordID"] = self._record_id_counters[counter_key]
+            if event.get("EventID") == 1102:
+                reset_rng = random.Random(f"erid_reset_{counter_key}_{event['EventRecordID']}")
+                self._record_id_counters[counter_key] = reset_rng.randint(0, 5)
 
         # Render and route to per-host writers
         for event in self._event_dicts:

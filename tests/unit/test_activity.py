@@ -180,6 +180,43 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 11
         assert event.auth.source_ip == "-"
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package == "Negotiate"
+
+    def test_generate_logon_unlock_uses_user32_logon_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Unlock logon (type 7) should not use Negotiate as LogonProcessName."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=7)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 7
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package == "Negotiate"
+
+    def test_generate_logon_rdp_uses_native_4624_auth_shape(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP 4624 should not render CredSSP as the authentication package."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=10,
+            source_ip="10.0.99.50",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 10
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
+        assert event.auth.auth_package != "CredSSP"
 
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
