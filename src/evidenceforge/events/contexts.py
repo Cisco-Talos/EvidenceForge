@@ -73,6 +73,7 @@ class AuthContext:
     subject_username: str = ""  # SubjectUserName (usually SYSTEM)
     subject_domain: str = ""  # SubjectDomainName (usually NT AUTHORITY)
     subject_logon_id: str = ""  # SubjectLogonId (usually 0x3e7)
+    privilege_list: str = ""  # Newline-separated Windows 4672 PrivilegeList
     reporting_pid: int = 0  # PID of the process reporting this event (e.g., lsass for logons)
     process_pid: int = 0  # PID of process using explicit credentials (4648 ProcessId)
     target_server: str = ""  # 4648 TargetServerName (e.g., "fileserver01", "localhost")

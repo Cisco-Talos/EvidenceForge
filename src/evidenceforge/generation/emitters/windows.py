@@ -280,7 +280,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x2e0",
             "ProcessName": r"C:\Windows\System32\lsass.exe",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "IpPort": auth.source_port if auth.logon_type in (3, 10) else 0,
             "LogonProcessName": auth.logon_process,
             "AuthenticationPackageName": auth.auth_package,
             "LmPackageName": auth.lm_package,
@@ -291,29 +291,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
-            is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
-            is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
-            is_admin = is_system or auth.logon_type == 5
-            if is_service_account:
-                privs = (
-                    "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
-                    "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
-                )
-            elif is_admin:
-                privs = (
-                    "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
-                    "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
-                    "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
-                    "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
-                    "SeDelegateSessionUserImpersonatePrivilege"
-                )
-            else:
-                # Regular user with occasional elevation (e.g., UAC prompt)
-                privs = (
-                    "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
-                    "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
-                    "SeTimeZonePrivilege"
-                )
+            privs = auth.privilege_list or "SeChangeNotifyPrivilege"
             priv_data = {
                 "EventID": 4672,
                 "TimeCreated": event.timestamp,
@@ -341,28 +319,7 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
 
-        is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
-        is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
-        is_admin = is_system or auth.logon_type == 5
-        if is_service_account:
-            privs = (
-                "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
-                "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
-            )
-        elif is_admin:
-            privs = (
-                "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
-                "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
-                "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
-                "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
-                "SeDelegateSessionUserImpersonatePrivilege"
-            )
-        else:
-            privs = (
-                "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
-                "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
-                "SeTimeZonePrivilege"
-            )
+        privs = auth.privilege_list or "SeChangeNotifyPrivilege"
 
         priv_data = {
             "EventID": 4672,

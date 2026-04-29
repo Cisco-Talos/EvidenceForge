@@ -200,3 +200,127 @@ class TestValidateConfig:
             and "min_unlock_gap_seconds must be at least 60" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_empty_failed_auth_validation_path(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {
+                "workstation_lock": {"min_unlock_gap_seconds": 127},
+                "failed_logon": {
+                    "local_interactive": {
+                        "logon_process_name": "User32",
+                        "authentication_package_name": "Negotiate",
+                        "process_name": r"C:\Windows\System32\winlogon.exe",
+                    },
+                    "network": {
+                        "validation_path_weights": {
+                            "none": {"emit_4776": False, "emit_4771": False, "weight": 1}
+                        },
+                        "logon_process_weights": {
+                            "ntlm": {
+                                "logon_process_name": "NtLmSsp",
+                                "authentication_package_name": "NTLM",
+                                "lm_package_name": "NTLM V2",
+                                "weight": 1,
+                            }
+                        },
+                        "emit_network_connection_probability": 1.0,
+                        "network_ports": {"smb": {"port": 445, "weight": 1}},
+                    },
+                },
+                "special_privileges": {
+                    "profiles": {
+                        "service_account": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                        "domain_admin": {"privileges": ["SeDebugPrivilege"], "weight": 1},
+                        "workstation_admin": {
+                            "privileges": ["SeBackupPrivilege"],
+                            "weight": 1,
+                        },
+                        "uac_elevated_user": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                    }
+                },
+            }
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "validation path must emit at least one DC-side event" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_special_privilege_name(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {
+                "workstation_lock": {"min_unlock_gap_seconds": 127},
+                "failed_logon": {
+                    "local_interactive": {
+                        "logon_process_name": "User32",
+                        "authentication_package_name": "Negotiate",
+                        "process_name": r"C:\Windows\System32\winlogon.exe",
+                    },
+                    "network": {
+                        "validation_path_weights": {
+                            "ntlm": {"emit_4776": True, "emit_4771": False, "weight": 1}
+                        },
+                        "logon_process_weights": {
+                            "ntlm": {
+                                "logon_process_name": "NtLmSsp",
+                                "authentication_package_name": "NTLM",
+                                "lm_package_name": "NTLM V2",
+                                "weight": 1,
+                            }
+                        },
+                        "emit_network_connection_probability": 1.0,
+                        "network_ports": {"smb": {"port": 445, "weight": 1}},
+                    },
+                },
+                "special_privileges": {
+                    "profiles": {
+                        "service_account": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                        "domain_admin": {"privileges": ["Debug"], "weight": 1},
+                        "workstation_admin": {
+                            "privileges": ["SeBackupPrivilege"],
+                            "weight": 1,
+                        },
+                        "uac_elevated_user": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                    }
+                },
+            }
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "Windows privileges must use Se*Privilege names" in issue.message
+            for issue in result.issues
+        )

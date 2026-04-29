@@ -12,7 +12,7 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -680,14 +680,29 @@ class WindowsFailedLogonPortProfile(BaseModel, extra="forbid"):
     weight: int = Field(gt=0)
 
 
+class WindowsFailedLogonValidationPathProfile(BaseModel, extra="forbid"):
+    """DC-side validation evidence profile for failed network logons."""
+
+    emit_4776: bool
+    emit_4771: bool
+    weight: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def emits_some_validation(self) -> Self:
+        if not self.emit_4776 and not self.emit_4771:
+            raise ValueError("validation path must emit at least one DC-side event")
+        return self
+
+
 class WindowsFailedLogonNetworkProfile(BaseModel, extra="forbid"):
     """Network 4625 profile."""
 
+    validation_path_weights: dict[str, WindowsFailedLogonValidationPathProfile]
     logon_process_weights: dict[str, WindowsFailedLogonProcessProfile]
     emit_network_connection_probability: float = Field(ge=0.0, le=1.0)
     network_ports: dict[str, WindowsFailedLogonPortProfile]
 
-    @field_validator("logon_process_weights", "network_ports")
+    @field_validator("validation_path_weights", "logon_process_weights", "network_ports")
     @classmethod
     def weighted_profiles_non_empty(cls, v: dict) -> dict:
         if not v:
@@ -715,11 +730,47 @@ class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
         return v
 
 
+class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
+    """Source-native 4672 privilege list profile."""
+
+    privileges: list[str] = Field(min_length=1)
+    weight: int = Field(gt=0)
+
+    @field_validator("privileges")
+    @classmethod
+    def privileges_are_windows_names(cls, v: list[str]) -> list[str]:
+        for privilege in v:
+            if not privilege.startswith("Se") or not privilege.endswith("Privilege"):
+                raise ValueError("Windows privileges must use Se*Privilege names")
+        return v
+
+
+class WindowsSpecialPrivilegesConfig(BaseModel, extra="forbid"):
+    """Windows 4672 privilege profile config."""
+
+    profiles: dict[str, WindowsSpecialPrivilegesProfile]
+
+    @field_validator("profiles")
+    @classmethod
+    def required_profiles_present(cls, v: dict) -> dict:
+        required = {
+            "service_account",
+            "domain_admin",
+            "workstation_admin",
+            "uac_elevated_user",
+        }
+        missing = required - set(v)
+        if missing:
+            raise ValueError(f"special_privileges.profiles missing required profiles: {missing}")
+        return v
+
+
 class WindowsAuthRealismConfig(BaseModel, extra="forbid"):
     """Windows authentication realism knobs."""
 
     workstation_lock: WindowsWorkstationLockConfig
     failed_logon: WindowsFailedLogonConfig
+    special_privileges: WindowsSpecialPrivilegesConfig
 
 
 class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):

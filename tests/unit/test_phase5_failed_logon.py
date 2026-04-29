@@ -30,6 +30,7 @@ import pytest
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity import generator as generator_mod
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -221,8 +222,21 @@ class TestFailedLogonRate:
 class TestFailedLogonDC:
     """Test failed logon domain-controller validation evidence."""
 
-    def test_failed_logon_does_not_clone_4625_on_dc(self, state_manager, mock_emitters, timestamp):
+    def test_failed_logon_does_not_clone_4625_on_dc(
+        self, state_manager, mock_emitters, timestamp, monkeypatch
+    ):
         """Failed logon with dc_system should keep 4625 on target and validation on DC."""
+        monkeypatch.setattr(
+            generator_mod,
+            "failed_logon_config",
+            lambda: {
+                "network": {
+                    "validation_path_weights": {
+                        "ntlm_only": {"emit_4776": True, "emit_4771": False, "weight": 1}
+                    }
+                }
+            },
+        )
         ag = ActivityGenerator(state_manager, mock_emitters)
         state_manager.set_current_time(timestamp)
 
@@ -252,8 +266,19 @@ class TestFailedLogonDC:
         assert failed_logons[0].dst_host.hostname == "WKS-01"
         assert "ntlm_validation" in {event.event_type for event in dc_events}
 
-    def test_failed_logon_dc_gets_4776(self, state_manager, mock_emitters, timestamp):
+    def test_failed_logon_dc_gets_4776(self, state_manager, mock_emitters, timestamp, monkeypatch):
         """DC should receive a failed NTLM validation (4776) event."""
+        monkeypatch.setattr(
+            generator_mod,
+            "failed_logon_config",
+            lambda: {
+                "network": {
+                    "validation_path_weights": {
+                        "ntlm_only": {"emit_4776": True, "emit_4771": False, "weight": 1}
+                    }
+                }
+            },
+        )
         ag = ActivityGenerator(state_manager, mock_emitters)
         state_manager.set_current_time(timestamp)
 
@@ -264,7 +289,12 @@ class TestFailedLogonDC:
         user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
 
         ag.generate_failed_logon(
-            user=user, system=wks, time=timestamp, source_ip="10.0.10.1", dc_system=dc
+            user=user,
+            system=wks,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.10.1",
+            dc_system=dc,
         )
 
         # Check for ntlm_validation event type on DC
@@ -272,12 +302,108 @@ class TestFailedLogonDC:
         dc_events = [
             call[0][0]
             for call in win_emitter.emit.call_args_list
-            if call[0][0].dst_host.hostname == "DC-01"
+            if call[0][0].dst_host and call[0][0].dst_host.hostname == "DC-01"
         ]
         event_types = {e.event_type for e in dc_events}
         assert "ntlm_validation" in event_types, "Missing 4776 on DC"
         ntlm_event = next(e for e in dc_events if e.event_type == "ntlm_validation")
         assert ntlm_event.auth.failure_status != "0x0"
+
+    def test_failed_logon_can_emit_kerberos_without_ntlm(
+        self, state_manager, mock_emitters, timestamp, monkeypatch
+    ):
+        """Failed-auth validation paths should be data-driven, not always Kerberos+NTLM."""
+        monkeypatch.setattr(
+            generator_mod,
+            "failed_logon_config",
+            lambda: {
+                "network": {
+                    "validation_path_weights": {
+                        "kerberos_only": {"emit_4776": False, "emit_4771": True, "weight": 1}
+                    },
+                    "logon_process_weights": {
+                        "negotiate": {
+                            "logon_process_name": "NtLmSsp",
+                            "authentication_package_name": "Negotiate",
+                            "lm_package_name": "-",
+                            "weight": 1,
+                        }
+                    },
+                    "emit_network_connection_probability": 1.0,
+                    "network_ports": {"smb": {"port": 445, "weight": 1}},
+                }
+            },
+        )
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        dc = System(
+            hostname="DC-01", ip="10.0.10.100", os="Windows Server 2019", type="domain_controller"
+        )
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        for _ in range(5):
+            ag.generate_failed_logon(
+                user=user,
+                system=wks,
+                time=timestamp,
+                logon_type=3,
+                source_ip="45.83.221.45",
+                dc_system=dc,
+            )
+
+        event_types = {
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        }
+        assert "kerberos_preauth_failed" in event_types
+        assert "ntlm_validation" not in event_types
+
+    def test_failed_logon_network_evidence_is_not_syn_only(
+        self, state_manager, mock_emitters, timestamp, monkeypatch
+    ):
+        """Remote Windows 4625 evidence should not pair with Zeek S0 connections."""
+        monkeypatch.setattr(
+            generator_mod,
+            "failed_logon_config",
+            lambda: {
+                "network": {
+                    "validation_path_weights": {
+                        "ntlm_only": {"emit_4776": True, "emit_4771": False, "weight": 1}
+                    },
+                    "logon_process_weights": {
+                        "ntlm": {
+                            "logon_process_name": "NtLmSsp",
+                            "authentication_package_name": "NTLM",
+                            "lm_package_name": "NTLM V2",
+                            "weight": 1,
+                        }
+                    },
+                    "emit_network_connection_probability": 1.0,
+                    "network_ports": {"smb": {"port": 445, "weight": 1}},
+                }
+            },
+        )
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        state_manager.set_current_time(timestamp)
+        wks = System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
+        user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+
+        ag.generate_failed_logon(
+            user=user,
+            system=wks,
+            time=timestamp,
+            logon_type=3,
+            source_ip="45.83.221.45",
+        )
+
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert network_events
+        assert all(event.network.conn_state != "S0" for event in network_events)
 
     def test_known_user_failed_logon_uses_wrong_password_substatus(
         self, state_manager, mock_emitters, timestamp

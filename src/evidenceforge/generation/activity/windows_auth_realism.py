@@ -52,3 +52,9 @@ def failed_logon_config() -> dict[str, Any]:
     """Return failed-logon source-native field profiles."""
     config = load_windows_auth_realism().get("failed_logon", {})
     return config if isinstance(config, dict) else {}
+
+
+def special_privileges_config() -> dict[str, Any]:
+    """Return Windows 4672 privilege profile config."""
+    config = load_windows_auth_realism().get("special_privileges", {})
+    return config if isinstance(config, dict) else {}

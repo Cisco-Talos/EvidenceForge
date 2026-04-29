@@ -223,7 +223,7 @@ class TestActivityGenerator:
     ):
         """Network logon (type 3) should allow custom source IP."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        source_ip = "203.0.113.50"
+        source_ip = "45.83.221.45"
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_logon(
@@ -234,6 +234,61 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 3
         assert event.auth.source_ip == source_ip
+        assert event.auth.source_port > 0
+
+    def test_remote_successful_logon_emits_matching_established_network_evidence(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """External successful remote logons should have non-S0 network evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "45.83.221.45"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=52595,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert logon_event.auth.source_port == 52595
+        assert network_event.network.src_ip == source_ip
+        assert network_event.network.src_port == 52595
+        assert network_event.network.dst_ip == test_system.ip
+        assert network_event.network.conn_state == "SF"
+
+    def test_elevated_logon_carries_configured_privilege_profile(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """4672 privilege list should come from canonical auth context."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        admin = User(
+            username="admin.lee",
+            full_name="Admin Lee",
+            email="admin.lee@example.com",
+            persona="sysadmin",
+            enabled=True,
+        )
+
+        with patch.object(activity_gen, "_should_elevate", return_value=True):
+            activity_gen.generate_logon(admin, test_system, timestamp, logon_type=2)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.privilege_list
+        assert "SeDebugPrivilege" in event.auth.privilege_list
 
     def test_workstation_unlock_enforces_configured_minimum_gap(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
