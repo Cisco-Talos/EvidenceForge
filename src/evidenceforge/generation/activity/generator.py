@@ -2646,6 +2646,7 @@ class ActivityGenerator:
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
         proxy_bypass: bool = False,
+        process_image: str | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -2931,6 +2932,7 @@ class ActivityGenerator:
                 proxy=proxy_context,
                 hostname=self._proxy_fqdn(proxy_sys),
                 proxy_bypass=True,
+                process_image=process_image,
             )
 
             if proxy_context.status_code >= 400:
@@ -3290,10 +3292,28 @@ class ActivityGenerator:
 
         # Resolve eCAR actor_id from initiating process (if pid is known)
         conn_actor_id = ""
+        process_ctx = None
         if pid > 0 and resolved_source_system:
             conn_actor_id = self.state_manager.get_process_object_id(
                 resolved_source_system.hostname, pid
             )
+            running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if running is not None:
+                process_ctx = ProcessContext(
+                    pid=pid,
+                    parent_pid=running.parent_pid,
+                    image=running.image,
+                    command_line=running.command_line,
+                    username=running.username,
+                )
+            elif process_image:
+                process_ctx = ProcessContext(
+                    pid=pid,
+                    parent_pid=0,
+                    image=process_image,
+                    command_line="",
+                    username="",
+                )
 
         event = SecurityEvent(
             timestamp=time,
@@ -3301,6 +3321,7 @@ class ActivityGenerator:
             src_host=src_host_ctx,
             dst_host=dst_host_ctx,
             local_only=local_only,
+            process=process_ctx,
             network=NetworkContext(
                 src_ip=src_ip,
                 src_port=src_port,
@@ -3859,6 +3880,7 @@ class ActivityGenerator:
                 dst_port=dst_port,
                 protocol=proto,
                 pid=pid if pid > 0 else 4,
+                application=event.process.image if event.process is not None else None,
             )
 
         return uid
@@ -5524,7 +5546,7 @@ class ActivityGenerator:
         dst_port: int,
         protocol: str,
         pid: int = 4,
-        application: str = r"C:\Windows\System32\svchost.exe",
+        application: str | None = None,
     ) -> None:
         """Generate WFP connection permitted event (5156) on Windows host.
 
@@ -5533,6 +5555,25 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import NetworkContext, ProcessContext
 
         ip_proto = 6 if protocol == "tcp" else 17 if protocol == "udp" else 1
+        process = None
+        if application:
+            process = ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=application,
+                command_line="",
+                username="",
+            )
+        elif pid > 0:
+            running = self.state_manager.get_process(system.hostname, pid)
+            if running is not None:
+                process = ProcessContext(
+                    pid=pid,
+                    parent_pid=running.parent_pid,
+                    image=running.image,
+                    command_line=running.command_line,
+                    username=running.username,
+                )
         event = SecurityEvent(
             timestamp=time,
             event_type="wfp_connection",
@@ -5546,13 +5587,7 @@ class ActivityGenerator:
                 ip_proto=ip_proto,
                 initiating_pid=pid,
             ),
-            process=ProcessContext(
-                pid=pid,
-                parent_pid=0,
-                image=application,
-                command_line="",
-                username="",
-            ),
+            process=process,
         )
         self.dispatcher.dispatch(event)
 

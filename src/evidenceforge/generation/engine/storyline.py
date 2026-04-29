@@ -892,6 +892,7 @@ class StorylineMixin:
                 source_system=src_sys,
                 http=http_ctx,
                 pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                process_image=getattr(self, "_last_storyline_image", "") or None,
                 hostname=conn_hostname,
             )
             malicious_event["dst_ip"] = dst_ip
@@ -1412,6 +1413,7 @@ class StorylineMixin:
                             proxy=proxy_ctx,
                             hostname=conn_hostname if conn_hostname is not None else spec.hostname,
                             pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                            process_image=getattr(self, "_last_storyline_image", "") or None,
                         )
                     else:
                         self.activity_generator.generate_connection(
@@ -1442,6 +1444,7 @@ class StorylineMixin:
                         http=http_ctx,
                         hostname=conn_hostname,
                         pid=getattr(self, "_last_storyline_pid", -1) or -1,
+                        process_image=getattr(self, "_last_storyline_image", "") or None,
                     )
                 attempt_count += 1
 

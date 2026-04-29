@@ -378,6 +378,66 @@ class TestActivityGenerator:
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
 
+    def test_wfp_connection_uses_state_process_image(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """WFP events should not stamp the default svchost image onto non-system PIDs."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -NoProfile",
+            username="testuser",
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+
+        activity_gen.generate_wfp_connection(
+            system=test_system,
+            time=timestamp,
+            src_ip=test_system.ip,
+            src_port=50123,
+            dst_ip="10.0.0.20",
+            dst_port=8080,
+            protocol="tcp",
+            pid=pid,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "wfp_connection"
+        assert event.network.initiating_pid == pid
+        assert event.process.image.endswith("powershell.exe")
+
+    def test_generate_connection_carries_process_image_to_wfp_when_process_ended(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Storyline connections can preserve process image even after process teardown."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="10.0.0.20",
+            time=timestamp,
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=200,
+            resp_bytes=500,
+            pid=5156,
+            source_system=test_system,
+            process_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            hostname="service.provenance.test",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "wfp_connection"
+        assert event.network.initiating_pid == 5156
+        assert event.process.image.endswith("powershell.exe")
+
     def test_system_process_termination_defaults_logon_id_to_system(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
