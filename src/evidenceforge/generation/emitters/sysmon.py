@@ -38,6 +38,7 @@ from typing import Any
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.windows import (
@@ -1069,7 +1070,19 @@ class SysmonEventEmitter(LogEmitter):
         net = event.network
         proc = event.process
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        render_time = event.timestamp + sample_timing_delta(
+            "source.sysmon_network_connection",
+            seed_parts=(
+                host.hostname,
+                net.initiating_pid if net else -1,
+                net.src_ip if net else "",
+                net.src_port if net else 0,
+                net.dst_ip if net else "",
+                net.dst_port if net else 0,
+                event.timestamp,
+            ),
+        )
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         # Process info — use ProcessContext if available, else resolve from
         # initiating_pid via StateManager lookup. Real Sysmon always knows the
@@ -1107,7 +1120,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 3,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,

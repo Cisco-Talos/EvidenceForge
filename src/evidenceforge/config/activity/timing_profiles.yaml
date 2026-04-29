@@ -41,6 +41,21 @@ relationships:
     position: after
     min_ms: 125
     max_ms: 750
+  source.windows_wfp_connection:
+    class: source_latency
+    position: after
+    min_ms: 3
+    max_ms: 35
+  source.sysmon_network_connection:
+    class: source_latency
+    position: after
+    min_ms: 12
+    max_ms: 90
+  source.ecar_flow:
+    class: source_latency
+    position: after
+    min_ms: 40
+    max_ms: 300
 
 windows_event_time:
   collision_spacing:
@@ -52,4 +67,3 @@ windows_event_time:
     # unfold across seconds/minutes, not microseconds.
     large_gap_min_ms: 1000
     large_gap_max_ms: 4000
-

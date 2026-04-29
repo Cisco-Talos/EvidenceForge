@@ -29,6 +29,7 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 _ECAR_SORT_PRIORITY = {
@@ -322,8 +323,21 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # OUTBOUND FLOW on source host (if source is internal/known)
         if event.src_host:
+            event_ts = event.timestamp + sample_timing_delta(
+                "source.ecar_flow",
+                seed_parts=(
+                    "outbound",
+                    event.src_host.hostname,
+                    net.initiating_pid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+            )
             event_data = {
-                "timestamp": event.timestamp,
+                "timestamp": event_ts,
                 "hostname": event.src_host.hostname,
                 "object": "FLOW",
                 "action": "CONNECT",
@@ -341,12 +355,25 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # INBOUND FLOW on destination host (if destination is internal/known)
         if event.dst_host:
+            event_ts = event.timestamp + sample_timing_delta(
+                "source.ecar_flow",
+                seed_parts=(
+                    "inbound",
+                    event.dst_host.hostname,
+                    net.initiating_pid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+            )
             # Host-based EDR sees the local interface IP, not the NAT VIP
             dst_ip = net.dst_ip
             if event.nat and event.nat.mapped_dst_ip and event.nat.mapped_dst_ip != net.dst_ip:
                 dst_ip = event.nat.mapped_dst_ip
             event_data = {
-                "timestamp": event.timestamp,
+                "timestamp": event_ts,
                 "hostname": event.dst_host.hostname,
                 "object": "FLOW",
                 "action": "CONNECT",

@@ -778,10 +778,22 @@ class WindowsEventEmitter(LogEmitter):
                 image = "System"
             else:
                 return
+        render_time = event.timestamp + sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=(
+                host.hostname,
+                pid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+        )
 
         event_data = {
             "EventID": 5156,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,

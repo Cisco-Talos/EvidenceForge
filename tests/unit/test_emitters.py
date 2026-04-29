@@ -676,6 +676,39 @@ class TestWindowsEventEmitter:
             "firefox\\firefox.exe</Data>"
         ) in content
 
+    def test_wfp_connection_uses_source_native_timestamp_offset(self, format_def, temp_output):
+        """WFP 5156 should render with a host-audit offset from the canonical connection."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.50",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="WKS-01.corp.local",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=4,
+            ),
+        )
+
+        emitter.emit(event)
+
+        expected_delta = sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=("WKS-01", 4, "10.0.0.50", 49263, "93.184.216.34", 443, event_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
+
     def test_wfp_connection_pid4_renders_system_application(self, format_def, temp_output):
         """WFP 5156 for PID 4 should render System, not a synthetic svchost path."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

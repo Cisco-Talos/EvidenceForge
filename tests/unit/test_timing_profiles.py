@@ -28,6 +28,16 @@ def test_timing_profiles_load_default_relationship():
     assert window.max_ms == 1500
     assert window.relationship_class == "causal_prerequisite"
 
+    source_window = get_timing_window(
+        "source.ecar_flow",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert source_window.position == "after"
+    assert source_window.relationship_class == "source_latency"
+    assert source_window.min_ms > 0
+
 
 def test_timing_profiles_overlay_overrides_relationship(tmp_path, monkeypatch):
     overlay = tmp_path / ".eforge" / "config" / "activity"
