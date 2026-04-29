@@ -315,13 +315,7 @@ class TestShellContext:
         from evidenceforge.events.contexts import ShellContext
 
         ctx = ShellContext(command="ls -la")
-        assert ctx.exit_code == 0
-
-    def test_with_exit_code(self):
-        from evidenceforge.events.contexts import ShellContext
-
-        ctx = ShellContext(command="false", exit_code=1)
-        assert ctx.exit_code == 1
+        assert ctx.command == "ls -la"
 
 
 class TestSecurityEventNewContexts:

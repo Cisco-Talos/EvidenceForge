@@ -96,7 +96,12 @@ class TestActivityGenerator:
         """Create mock emitters."""
         windows_emitter = Mock()
         zeek_emitter = Mock()
-        return {"windows_event_security": windows_emitter, "zeek_conn": zeek_emitter}
+        zeek_dns_emitter = Mock()
+        return {
+            "windows_event_security": windows_emitter,
+            "zeek_conn": zeek_emitter,
+            "zeek_dns": zeek_dns_emitter,
+        }
 
     @pytest.fixture
     def activity_gen(self, state_manager, mock_emitters):
@@ -225,11 +230,41 @@ class TestActivityGenerator:
             if call[0][0].event_type == "process_create"
         ]
         assert len(process_events) >= 1
-        event = process_events[0]
+        event = next(ev for ev in process_events if ev.process.image == process_name)
         assert event.auth.username == test_user.username
         assert event.process.logon_id == logon_id
         assert event.process.image == process_name
         assert event.process.command_line == command_line
+
+    def test_process_follow_on_file_event_after_process_create(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Process follow-on artifacts should not predate the process create event."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0x12345",
+            r"C:\Users\Public\dropper.exe",
+            r"C:\Users\Public\dropper.exe",
+            ensure_file_event=True,
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_event = next(event for event in events if event.event_type == "process_create")
+        file_event = next(
+            event
+            for event in events
+            if event.event_type == "file_create"
+            and event.file is not None
+            and event.file.path == r"C:\Users\Public\dropper.exe"
+        )
+        assert file_event.timestamp > process_event.timestamp
 
     def test_user_session_process_identity_resolved_before_emit(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -347,6 +382,9 @@ class TestActivityGenerator:
             def randint(self, lower, _upper):
                 return lower
 
+            def uniform(self, lower, _upper):
+                return lower
+
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         logon_id = "0x12345"
@@ -364,16 +402,132 @@ class TestActivityGenerator:
         module_events = [
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
-            if call[0][0].event_type == "module_load"
+            if call[0][0].event_type == "image_load"
         ]
         assert module_events
         event = module_events[-1]
         from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 
         profile_paths = {entry["path"] for entry in get_dlls_for_process("firefox.exe")}
-        assert event.file.path in profile_paths
+        assert event.image_load.image_loaded in profile_paths
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
+
+    def test_wfp_connection_uses_state_process_image(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """WFP events should not stamp the default svchost image onto non-system PIDs."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -NoProfile",
+            username="testuser",
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+
+        activity_gen.generate_wfp_connection(
+            system=test_system,
+            time=timestamp,
+            src_ip=test_system.ip,
+            src_port=50123,
+            dst_ip="10.0.0.20",
+            dst_port=8080,
+            protocol="tcp",
+            pid=pid,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "wfp_connection"
+        assert event.network.initiating_pid == pid
+        assert event.process.image.endswith("powershell.exe")
+
+    def test_generate_connection_carries_process_image_to_wfp_when_process_ended(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Storyline connections can preserve process image even after process teardown."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="10.0.0.20",
+            time=timestamp,
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=200,
+            resp_bytes=500,
+            pid=5156,
+            source_system=test_system,
+            process_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            hostname="service.provenance.test",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "wfp_connection"
+        assert event.network.initiating_pid == 5156
+        assert event.process.image.endswith("powershell.exe")
+
+    def test_wfp_connection_skips_unresolved_non_system_pid(
+        self, activity_gen, test_system, mock_emitters
+    ):
+        """WFP 5156 should not render a non-system PID when its image is unknown."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        activity_gen.generate_wfp_connection(
+            system=test_system,
+            time=timestamp,
+            src_ip=test_system.ip,
+            src_port=50123,
+            dst_ip="10.0.0.20",
+            dst_port=8080,
+            protocol="tcp",
+            pid=5156,
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
+
+    def test_generate_connection_uses_registered_internal_fqdn_for_dns(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Known scenario host FQDNs should win over generated internal aliases."""
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        previous = REVERSE_DNS.get("10.0.0.10")
+        REVERSE_DNS["10.0.0.10"] = "dc01.corp.local"
+        activity_gen._dns_server_ips = ["10.0.0.1"]
+
+        try:
+            activity_gen.generate_connection(
+                src_ip=test_system.ip,
+                dst_ip="10.0.0.10",
+                time=timestamp,
+                dst_port=389,
+                proto="tcp",
+                service="ldap",
+                emit_dns=True,
+                source_system=test_system,
+                duration=1.0,
+            )
+        finally:
+            if previous is None:
+                REVERSE_DNS.pop("10.0.0.10", None)
+            else:
+                REVERSE_DNS["10.0.0.10"] = previous
+
+        dns_events = []
+        for emitter in mock_emitters.values():
+            dns_events.extend(
+                call.args[0] for call in emitter.emit.call_args_list if call.args[0].dns is not None
+            )
+        assert any(event.dns.query == "dc01.corp.local" for event in dns_events)
 
     def test_system_process_termination_defaults_logon_id_to_system(
         self, activity_gen, test_system, state_manager, mock_emitters

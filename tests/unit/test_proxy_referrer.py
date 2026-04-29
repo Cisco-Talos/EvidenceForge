@@ -508,3 +508,42 @@ class TestConnectTunnelBehavior:
 
         connect_count = sum(1 for line in all_lines if "CONNECT" in line)
         assert connect_count == 3, f"Expected 3 CONNECTs (one per host), got {connect_count}"
+
+    def test_same_host_on_different_proxy_gets_separate_connect(self):
+        """CONNECT tunnel reuse is scoped to the proxy that owns the tunnel."""
+        from pathlib import Path
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        fmt = load_format("proxy_access")
+        emitter = ProxyEmitter(fmt, Path("/tmp/test_proxy"))
+
+        all_lines: list[str] = []
+        emitter.emit_to_host = lambda line, fqdn: all_lines.append(line)
+
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        for proxy_fqdn in ["PROXY-01", "PROXY-02"]:
+            event = SecurityEvent(
+                timestamp=ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.10.50",
+                    src_port=54321,
+                    dst_ip="93.184.216.34",
+                    dst_port=443,
+                    protocol="tcp",
+                ),
+                proxy=ProxyContext(
+                    client_ip="10.0.10.50",
+                    method="GET",
+                    url="https://example.com/",
+                    host="example.com",
+                    proxy_fqdn=proxy_fqdn,
+                ),
+            )
+            emitter.emit(event)
+            ts += timedelta(seconds=1)
+
+        connect_count = sum(1 for line in all_lines if "CONNECT" in line)
+        assert connect_count == 2, f"Expected 2 CONNECTs (one per proxy), got {connect_count}"

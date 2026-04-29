@@ -532,6 +532,121 @@ def validate_config() -> ValidationResult:
                 f'Domain "{domain}" not found in dns_registry',
             )
         )
+    _INFRA_PROXY_CLASSES = {
+        "crl",
+        "ocsp",
+        "software_update",
+        "telemetry",
+        "windows_trust_list",
+        "windows_update",
+    }
+    _GENERIC_BROWSER_PATHS = {
+        "/login",
+        "/signin",
+        "/favicon.ico",
+        "/assets/main.css",
+        "/assets/app.js",
+        "/dashboard",
+    }
+    _INFRA_CONTENT_TYPES = {
+        "ocsp": {"application/ocsp-response"},
+        "crl": {"application/pkix-crl"},
+        "windows_update": {
+            "application/octet-stream",
+            "application/vnd.ms-cab-compressed",
+            "application/x-cab",
+        },
+        "windows_trust_list": {
+            "application/vnd.ms-cab-compressed",
+            "application/octet-stream",
+        },
+        "software_update": {
+            "application/json",
+            "application/octet-stream",
+        },
+        "telemetry": {"application/json"},
+    }
+    for domain, entry in proxy_data.get("domains", {}).items():
+        if not isinstance(entry, dict):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" entry must be a mapping',
+                )
+            )
+            continue
+        paths = entry.get("paths", [])
+        methods = entry.get("methods", [])
+        content_types = entry.get("content_types")
+        domain_class = entry.get("domain_class")
+        referrer_policy = entry.get("referrer_policy", "normal")
+        if not isinstance(paths, list) or not paths:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" must define a non-empty paths list',
+                )
+            )
+        if not isinstance(methods, list) or not methods:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" must define a non-empty methods list',
+                )
+            )
+        if content_types is not None and (
+            not isinstance(content_types, list) or len(content_types) != len(paths)
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" content_types must be a list matching paths length',
+                )
+            )
+        if referrer_policy not in {"normal", "none"}:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" has invalid referrer_policy "{referrer_policy}"',
+                )
+            )
+        if domain_class in _INFRA_PROXY_CLASSES:
+            if referrer_policy != "none":
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_uri_templates.yaml",
+                        f'Domain "{domain}" class "{domain_class}" must set referrer_policy: none',
+                    )
+                )
+            default_content_type = entry.get("content_type", "")
+            allowed_types = _INFRA_CONTENT_TYPES[domain_class]
+            observed_types = set(content_types or [default_content_type])
+            for content_type in observed_types:
+                if content_type not in allowed_types:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "proxy_uri_templates.yaml",
+                            f'Domain "{domain}" class "{domain_class}" has unsuitable content type "{content_type}"',
+                        )
+                    )
+            for path in paths:
+                if path in _GENERIC_BROWSER_PATHS or path.endswith(
+                    (".css", ".js", ".ico", ".jpeg", ".jpg", ".png", ".webp", ".woff2")
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "proxy_uri_templates.yaml",
+                            f'Domain "{domain}" class "{domain_class}" uses browser-like path "{path}"',
+                        )
+                    )
     proxy_ua_hosts: set[str] = set()
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         for override in proxy_ua_data.get("domain_overrides", {}).values():
@@ -931,11 +1046,53 @@ def validate_config() -> ValidationResult:
     #   params — placeholder pools for template resolution
     #   keyboard_adjacency — typo model data
     #   dba, webadmin, security — sub-role pools mapped from personas by _get_role_pool()
-    _BASH_SPECIAL_KEYS = {"common", "params", "keyboard_adjacency", "dba", "webadmin", "security"}
+    _BASH_SPECIAL_KEYS = {
+        "common",
+        "params",
+        "keyboard_adjacency",
+        "typo_model",
+        "dba",
+        "webadmin",
+        "security",
+    }
     from evidenceforge.generation.activity.bash_commands import load_bash_commands
 
     bash_data = load_bash_commands()
     if bash_data:
+        typo_model = bash_data.get("typo_model", {})
+        if not isinstance(typo_model, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "typo_model must be a mapping")
+            )
+        else:
+            max_rate = typo_model.get("max_rate", 0.08)
+            correction_probability = typo_model.get("correction_probability", 0.85)
+            short_history_threshold = typo_model.get("short_history_threshold", 8)
+            short_history_max_typos = typo_model.get("short_history_max_typos", 1)
+            for field_name, value in {
+                "max_rate": max_rate,
+                "correction_probability": correction_probability,
+            }.items():
+                if not isinstance(value, int | float) or not 0 <= float(value) <= 1:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "bash_commands.yaml",
+                            f"typo_model.{field_name} must be a number between 0 and 1",
+                        )
+                    )
+            for field_name, value in {
+                "short_history_threshold": short_history_threshold,
+                "short_history_max_typos": short_history_max_typos,
+            }.items():
+                if not isinstance(value, int) or value < 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "bash_commands.yaml",
+                            f"typo_model.{field_name} must be a non-negative integer",
+                        )
+                    )
         for role_key in bash_data:
             if role_key in _BASH_SPECIAL_KEYS:
                 continue

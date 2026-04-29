@@ -29,7 +29,12 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    HostContext,
+    ProcessAccessContext,
+    ProcessContext,
+)
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 
 
@@ -198,6 +203,17 @@ class TestCreateRemoteThread:
 class TestProcessAccess:
     """Tests for eCAR PROCESS/OPEN rendering."""
 
+    def _access_context(self) -> ProcessAccessContext:
+        return ProcessAccessContext(
+            source_pid=2064,
+            source_image=r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe",
+            source_thread_id=4321,
+            target_pid=672,
+            target_image=r"C:\Windows\System32\lsass.exe",
+            target_process_object_id="target-process-uuid",
+            granted_access="0x1410",
+        )
+
     def test_object_action(self, emitter, ts, windows_host, tmp_path):
         """PROCESS/OPEN has correct object and action."""
         event = SecurityEvent(
@@ -213,10 +229,8 @@ class TestProcessAccess:
             ),
             auth=AuthContext(
                 username="SYSTEM",
-                target_server=r"C:\Windows\System32\lsass.exe",
-                source_port=672,
-                failure_status="0x1410",
             ),
+            process_access=self._access_context(),
         )
         emitter.emit(event)
         emitter.close()
@@ -241,10 +255,8 @@ class TestProcessAccess:
             ),
             auth=AuthContext(
                 username="SYSTEM",
-                target_server=r"C:\Windows\System32\lsass.exe",
-                source_port=672,
-                failure_status="0x1410",
             ),
+            process_access=self._access_context(),
         )
         emitter.emit(event)
         emitter.close()
@@ -268,10 +280,8 @@ class TestProcessAccess:
             ),
             auth=AuthContext(
                 username="SYSTEM",
-                target_server=r"C:\Windows\System32\lsass.exe",
-                source_port=672,
-                failure_status="0x1410",
             ),
+            process_access=self._access_context(),
         )
         emitter.emit(event)
         emitter.close()
@@ -298,10 +308,8 @@ class TestProcessAccess:
             ),
             auth=AuthContext(
                 username="SYSTEM",
-                target_server=r"C:\Windows\System32\lsass.exe",
-                source_port=672,
-                failure_status="0x1410",
             ),
+            process_access=self._access_context(),
         )
         emitter.emit(event)
         emitter.close()
@@ -341,10 +349,8 @@ class TestProcessAccess:
             ),
             auth=AuthContext(
                 username="SYSTEM",
-                target_server=r"C:\Windows\System32\lsass.exe",
-                source_port=672,
-                failure_status="0x1410",
             ),
+            process_access=self._access_context(),
         )
         emitter.emit(event)
         emitter.close()

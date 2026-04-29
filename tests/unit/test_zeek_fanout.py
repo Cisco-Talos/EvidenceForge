@@ -155,6 +155,7 @@ class TestDhcpFanOut:
                     server_addr="10.0.0.1",
                     mac="00:50:56:ab:cd:ef",
                     host_name="ws01",
+                    domain="corp.local",
                     assigned_addr="10.0.10.50",
                     uids=["CDhcpFanout1234"],
                     msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
@@ -174,6 +175,7 @@ class TestDhcpFanOut:
             conn_row = json.loads((base / "core-tap" / "conn.json").read_text())
             dhcp_row = json.loads((base / "core-tap" / "dhcp.json").read_text())
             assert dhcp_row["uids"] == [conn_row["uid"]]
+            assert dhcp_row["domain"] == "corp.local"
 
 
 class TestHttpFilesFanOut:

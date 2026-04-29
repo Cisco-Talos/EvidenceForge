@@ -16,7 +16,7 @@ class TestProxyUriOsFiltering:
         from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
         rng = random.Random(42)
-        _, _, _, ua_override = pick_proxy_uri(
+        _, _, _, ua_override, _ = pick_proxy_uri(
             rng, "download.windowsupdate.com", [], source_os="linux"
         )
         assert ua_override is None, f"Windows UA override returned for Linux host: {ua_override}"
@@ -26,7 +26,7 @@ class TestProxyUriOsFiltering:
         from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
         rng = random.Random(42)
-        _, _, _, ua_override = pick_proxy_uri(
+        _, _, _, ua_override, _ = pick_proxy_uri(
             rng, "download.windowsupdate.com", [], source_os="windows"
         )
         assert ua_override is not None
@@ -39,7 +39,9 @@ class TestProxyUriOsFiltering:
         # Generic domains have no os field — UA overrides (if any) apply universally
         rng = random.Random(42)
         # Use a domain with no os field — tag-based or generic fallback
-        _, _, _, ua_override = pick_proxy_uri(rng, "example.com", ["background"], source_os="linux")
+        _, _, _, ua_override, _ = pick_proxy_uri(
+            rng, "example.com", ["background"], source_os="linux"
+        )
         # Generic/tag entries typically don't have user_agent, so None is expected
         # The point is: no crash, no filtering error
 
@@ -48,7 +50,9 @@ class TestProxyUriOsFiltering:
         from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
         rng = random.Random(42)
-        _, _, _, ua_override = pick_proxy_uri(rng, "download.windowsupdate.com", [], source_os=None)
+        _, _, _, ua_override, _ = pick_proxy_uri(
+            rng, "download.windowsupdate.com", [], source_os=None
+        )
         assert ua_override is not None
         assert "Windows-Update-Agent" in ua_override
 
@@ -57,7 +61,7 @@ class TestProxyUriOsFiltering:
         from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
         rng = random.Random(42)
-        _, _, _, ua_override = pick_proxy_uri(rng, "crl.microsoft.com", [], source_os="linux")
+        _, _, _, ua_override, _ = pick_proxy_uri(rng, "crl.microsoft.com", [], source_os="linux")
         assert ua_override is None
 
     def test_overlay_path_extension_overrides_bad_content_type(self, tmp_path, monkeypatch):
@@ -87,7 +91,7 @@ class TestProxyUriOsFiltering:
         reset_proxy_uri_templates_cache()
 
         try:
-            path, content_type, method, _ = pick_proxy_uri(
+            path, content_type, method, _, _ = pick_proxy_uri(
                 random.Random(42),
                 "updates.example.test",
                 [],
@@ -99,6 +103,40 @@ class TestProxyUriOsFiltering:
         assert path == "/status.gif"
         assert method == "GET"
         assert content_type == "image/gif"
+
+    def test_certificate_infra_templates_are_not_browser_like(self):
+        """OCSP/CRL proxy templates should not use generic website paths or referrers."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        infra_domains = {
+            "ocsp.pki.goog": {"application/ocsp-response"},
+            "crl3.digicert.com": {"application/pkix-crl"},
+            "crl.microsoft.com": {"application/pkix-crl"},
+            "settings-win.data.microsoft.com": {"application/json"},
+            "update.googleapis.com": {"application/json", "application/octet-stream"},
+        }
+        for host, allowed_types in infra_domains.items():
+            path, content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
+                random.Random(42),
+                host,
+                ["background"],
+                source_os="windows",
+            )
+            assert path not in {"/login", "/favicon.ico", "/assets/main.css"}
+            assert not path.endswith((".css", ".js", ".ico", ".webp"))
+            assert content_type in allowed_types
+            assert referrer_policy == "none"
+
+    def test_non_browser_proxy_domains_are_not_browser_session_targets(self):
+        """Proxy domain_class controls whether a host can use browser-style site maps."""
+        from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+
+        assert is_browser_like_proxy_domain("ocsp.pki.goog") is False
+        assert is_browser_like_proxy_domain("crl.microsoft.com") is False
+        assert is_browser_like_proxy_domain("settings-win.data.microsoft.com") is False
+        assert is_browser_like_proxy_domain("update.googleapis.com") is False
+        assert is_browser_like_proxy_domain("www.bing.com") is True
+        assert is_browser_like_proxy_domain("unknown.example.test") is True
 
     def test_connect_user_agent_uses_domain_override(self):
         """CONNECT proxy entries should still use destination-specific service UAs."""
@@ -119,6 +157,14 @@ class TestProxyUriOsFiltering:
         )
 
         assert ua == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+
+        update_ua = pick_proxy_user_agent(
+            random.Random(42),
+            source,
+            hostname="update.googleapis.com",
+        )
+
+        assert update_ua == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
 
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
         """Domain-specific proxy UA rules should override inherited browser session UAs."""

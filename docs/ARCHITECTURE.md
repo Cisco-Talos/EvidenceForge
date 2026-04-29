@@ -157,7 +157,7 @@ SecurityEvent
 ├── syslog: SyslogContext (app_name, message, pid, facility, severity)
 ├── weird: WeirdContext (name, notice, peer, source)
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
-├── shell: ShellContext (command, exit_code)
+├── shell: ShellContext (command)
 ├── ... (27 context types total)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```

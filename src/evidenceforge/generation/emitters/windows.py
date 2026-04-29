@@ -776,6 +776,19 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         proc = event.process
         is_outbound = net.src_ip == host.ip
+        pid = net.initiating_pid if net.initiating_pid > 0 else 4
+        image = proc.image if proc else ""
+        if not image and pid > 0:
+            sm = getattr(self, "_state_manager", None)
+            if sm is not None:
+                running = sm.get_process(host.hostname, pid)
+                if running is not None:
+                    image = running.image
+        if not image:
+            if pid == 4:
+                image = "System"
+            else:
+                return
 
         event_data = {
             "EventID": 5156,
@@ -785,10 +798,8 @@ class WindowsEventEmitter(LogEmitter):
             "Level": 0,
             "ExecutionProcessID": 4,
             "ExecutionThreadID": rng.randint(50, 200),
-            "ProcessID": net.initiating_pid if net.initiating_pid > 0 else 4,
-            "Application": self._to_device_path(
-                proc.image if proc else r"C:\Windows\System32\svchost.exe"
-            ),
+            "ProcessID": pid,
+            "Application": self._to_device_path(image),
             "Direction": "%%14593" if is_outbound else "%%14592",
             "SourceAddress": net.src_ip,
             "SourcePort": net.src_port,
@@ -806,6 +817,8 @@ class WindowsEventEmitter(LogEmitter):
     @staticmethod
     def _to_device_path(path: str) -> str:
         """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
+        if path == "System":
+            return path
         if path and len(path) > 2 and path[1] == ":":
             return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
         return path.lower()

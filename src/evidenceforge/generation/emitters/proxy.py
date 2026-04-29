@@ -31,8 +31,8 @@ from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
 
 # CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
-# only when no tunnel exists for this (client_ip, host) pair, or the
-# existing tunnel has been idle longer than this threshold.
+# only when no tunnel exists for this (proxy_fqdn, client_ip, host, port)
+# tuple, or the existing tunnel has been idle longer than this threshold.
 _CONNECT_TUNNEL_TIMEOUT_S = 300  # 5 minutes
 
 
@@ -95,8 +95,9 @@ class ProxyEmitter(HostMultiplexEmitter):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        # Track active CONNECT tunnels: (client_ip, host) -> last_activity_time
-        self._active_tunnels: dict[tuple[str, str], datetime] = {}
+        # Track active CONNECT tunnels:
+        # (proxy_fqdn, client_ip, host, dst_port) -> last_activity_time
+        self._active_tunnels: dict[tuple[str, str, str, int], datetime] = {}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry a ProxyContext."""
@@ -106,14 +107,15 @@ class ProxyEmitter(HostMultiplexEmitter):
         """Render ProxyContext to W3C Extended format.
 
         For HTTPS (port 443), emits CONNECT entry only for the first request
-        to a (client_ip, host) pair within the tunnel timeout window.
+        to a (proxy_fqdn, client_ip, host, dst_port) tuple within the tunnel timeout window.
         """
         px = event.proxy
         net = event.network
 
         # For HTTPS: emit CONNECT only if no active tunnel exists
         if _is_https_request(px, net) and px.method != "CONNECT":
-            tunnel_key = (px.client_ip, px.host)
+            dst_port = net.dst_port if net is not None and net.dst_port else 443
+            tunnel_key = (px.proxy_fqdn, px.client_ip, px.host, dst_port)
             last_activity = self._active_tunnels.get(tunnel_key)
             needs_connect = True
             if last_activity is not None:

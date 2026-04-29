@@ -192,6 +192,8 @@ domains:
   domain.example.com:
     user_agent: "Mozilla/5.0 ..."     # Optional, overrides default
     os: windows                        # Optional, restricts to OS
+    domain_class: browser              # Optional: browser, ocsp, crl, windows_update, etc.
+    referrer_policy: normal            # Optional: normal or none
     paths:                             # Required, list of URI path templates
       - "/api/v2/endpoint/{guid}"
       - "/static/resource.js"
@@ -205,6 +207,8 @@ domains:
 |-------|------|----------|-------------|
 | `user_agent` | string | no | Custom User-Agent header (overrides browser default) |
 | `os` | string | no | Restrict to `windows` or `linux` |
+| `domain_class` | string | no | Domain behavior class. Certificate and update infrastructure should use classes such as `ocsp`, `crl`, or `windows_update` rather than browser-like defaults. |
+| `referrer_policy` | string | no | `normal` emits realistic browser referrers where appropriate; `none` suppresses referrers for certificate/update infrastructure. |
 | `paths` | list[string] | yes | URI path templates with optional `{placeholder}` variables |
 | `content_type` | string | no | MIME type for responses |
 | `methods` | list[string] | no | HTTP methods (default: `["GET"]`) |
@@ -225,6 +229,8 @@ When the skill auto-generates a proxy_uri_templates entry for a new domain, use 
 ```yaml
   www.example.com:
     # TODO: Add domain-specific URI paths for realistic proxy logs
+    domain_class: browser
+    referrer_policy: normal
     paths:
       - "/"
       - "/api/v1/{guid}"
@@ -233,6 +239,10 @@ When the skill auto-generates a proxy_uri_templates entry for a new domain, use 
     content_type: "text/html"
     methods: ["GET"]
 ```
+
+For OCSP, CRL, and software update domains, avoid generic browser paths such as `/login`, `/favicon.ico`, `.css`, or `.js`. Use the domain's native protocol paths/content types and set `referrer_policy: none`; `eforge validate-config` flags browser-like infrastructure templates.
+
+Domains with non-browser `domain_class` values (`ocsp`, `crl`, `software_update`, `telemetry`, `windows_update`, or `windows_trust_list`) are excluded from browser-style site-map sessions. This keeps certificate checks, telemetry calls, and update probes from accidentally producing page loads, favicons, CSS, or search referrers.
 
 ---
 

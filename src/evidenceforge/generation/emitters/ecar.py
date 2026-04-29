@@ -88,6 +88,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "file_delete",
         "registry_modify",
         "module_load",
+        "image_load",
         "create_remote_thread",
         "process_access",
         "service_installed",
@@ -120,6 +121,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_delete": self._render_file_event,
             "registry_modify": self._render_registry_event,
             "module_load": self._render_module_event,
+            "image_load": self._render_module_event,
             "create_remote_thread": self._render_create_remote_thread,
             "process_access": self._render_process_access,
             "service_installed": self._render_service_installed,
@@ -286,17 +288,22 @@ class EcarEmitter(HostMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
-        """Render eCAR MODULE/LOAD event from canonical FileContext (logged on src_host)."""
+        """Render eCAR MODULE/LOAD event from canonical ImageLoadContext."""
         host = event.src_host
         proc = event.process
+        module_path = ""
+        if event.image_load is not None:
+            module_path = event.image_load.image_loaded
+        elif event.file is not None:
+            module_path = event.file.path
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
-            "pid": event.file.pid if event.file else -1,
+            "pid": proc.pid if proc else (event.file.pid if event.file else -1),
             "principal": event.auth.username if event.auth else "",
-            "file_path": event.file.path if event.file else "",
+            "file_path": module_path,
             "_host_fqdn": self._host_fqdn(host),
         }
         if proc:
@@ -412,14 +419,12 @@ class EcarEmitter(HostMultiplexEmitter):
         actorID = source process UUID, image_path = source image,
         command_line = target command line.
         """
-        import random as rng_mod
-
         host = event.src_host
         proc = event.process
-        auth = event.auth
-        target_image = auth.target_server if auth and auth.target_server else ""
-        target_pid = int(auth.source_port) if auth and auth.source_port else -1
-        granted_access = auth.failure_status if auth and auth.failure_status else "0x0"
+        access = event.process_access
+        target_image = access.target_image if access else ""
+        target_pid = access.target_pid if access else -1
+        granted_access = access.granted_access if access else "0x0"
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
@@ -429,14 +434,14 @@ class EcarEmitter(HostMultiplexEmitter):
             "actorID": event.edr.actor_id if event.edr else str(uuid.uuid4()),
             "pid": proc.pid,
             "ppid": proc.parent_pid,
-            "tid": rng_mod.randint(1000, 9999),
+            "tid": access.source_thread_id if access else -1,
             "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
             "image_path": proc.image,
             "command_line": proc.command_line,
             "parent_image_path": proc.parent_image or proc.image,
             "target_pid": target_pid,
             "target_image_path": target_image,
-            "target_process_uuid": event.edr.object_id if event.edr else "",
+            "target_process_uuid": access.target_process_object_id if access else "",
             "granted_access": granted_access,
             "_host_fqdn": self._host_fqdn(host),
         }

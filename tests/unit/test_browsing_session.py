@@ -217,6 +217,11 @@ class TestTagAndGenericFallback:
         assert len(requests) > 0
         assert requests[0].is_page_load
 
+    def test_non_browser_proxy_domain_produces_no_browsing_session(self):
+        rng = random.Random(42)
+        requests = generate_browsing_session(rng, "ocsp.pki.goog", ["background"])
+        assert requests == []
+
 
 class TestResponseSizes:
     """Response body lengths should be realistic for content types."""

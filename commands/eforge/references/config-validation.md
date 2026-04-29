@@ -26,8 +26,10 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 7 | Orphaned proxy templates | WARNING | Domain key in proxy_uri_templates that doesn't exist in dns_registry |
 | 8 | Orphaned OCSP responders | WARNING | OCSP responder host in tls_realism that doesn't exist in dns_registry |
 | 9 | Orphaned site maps | WARNING | Domain key or referenced subresource host in site_maps that doesn't exist in dns_registry |
-| 10 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
-| 11 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
+| 10 | Invalid proxy template structure | ERROR | proxy_uri_templates entry has empty paths/methods, mismatched content type lists, or invalid referrer_policy |
+| 11 | Browser-like infrastructure proxy templates | WARNING | OCSP/CRL/update domain_class uses browser paths/content types or emits referrers |
+| 12 | Missing proxy templates | INFO | dns_registry domain with `web` or `saas` tag but no proxy_uri_templates entry |
+| 13 | Missing site maps | INFO | dns_registry domain with `web` or `saas` tag but no site_maps entry |
 
 ## Traffic Profile Integrity
 

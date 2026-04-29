@@ -734,3 +734,6 @@ class TestDnsSupportQueryTypes:
         assert nx_call["dst_ip"] == "10.0.0.10"
         assert nx_dns.AA is True
         assert nx_dns.rtt is not None
+        if nx_dns.query.startswith("_"):
+            assert nx_dns.query_type == "SRV"
+            assert nx_dns.qtype == 33

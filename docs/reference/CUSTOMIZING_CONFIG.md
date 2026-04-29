@@ -154,13 +154,16 @@ Configuration files are interconnected. When you add an entry to one file, other
 | When you add... | Also update... |
 |----------------|----------------|
 | A new domain | `proxy_uri_templates.yaml` (URI paths), `site_maps.yaml` (browsing depth) |
+| Certificate/update/telemetry proxy behavior | `proxy_uri_templates.yaml` (`domain_class`, infra-specific paths/content types, and `referrer_policy: none`; non-browser classes are excluded from site-map browsing sessions) |
 | New proxy User-Agent behavior | `proxy_user_agents.yaml` (workstation/server UA pools, package-manager host bindings, domain-specific update/cert/telemetry overrides) |
 | New TLS OCSP responder behavior | `tls_realism.yaml` (`ocsp.responders`) plus `dns_registry.yaml` for each responder hostname |
 | Kerberos TGT pre-auth realism | `kerberos_realism.yaml` (`tgt_success.pre_auth_types`, ticket options, encryption types, and PKINIT certificate profiles). Run `eforge validate-config`; PKINIT (`PreAuthType: 15`) requires populated certificate profile support. |
 | Public NTP fallback servers | `network_params.yaml` (`public_ntp_servers`; scenario-defined internal/domain NTP servers still take precedence) |
 | A new application | `spawn_rules.yaml` (process tree), `process_network_map.yaml` (if it generates traffic) |
+| Canonical process image paths | `application_catalog.yaml` for user applications, or `system_processes.yaml` for OS binaries; storyline bare executable names resolve through these catalogs |
 | A DLL load profile | Add `loaded_modules` to the app in `application_catalog.yaml`, or to the process entry in `system_processes.yaml`. Overlay entries extend the DLL pool (deep merge adds new modules alongside defaults). |
 | A new persona | `application_catalog.yaml` (add persona to relevant apps' `personas:` lists) |
+| Bash typo/noise behavior | `bash_commands.yaml` (`typo_model` plus role command pools) |
 | Sysmon filter rules | `sysmon_filters.yaml` — overlay replaces entire top-level sections (e.g., `network_connect:` replaces all Event 3 rules). Standalone, no cascades. |
 | EDR background events | `edr_pools.yaml` — overlay replaces entire sections (e.g., `file_paths_windows:` replaces the full file path pool). Use `{user}` and `{rand}` templates. |
 | CallTrace patterns | `calltrace_patterns.yaml` — overlay replaces the entire `patterns:` list. Each pattern needs `modules` and `offset_ranges` with `[min, max]` hex ranges. |

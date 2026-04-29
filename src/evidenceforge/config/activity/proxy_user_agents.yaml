@@ -13,6 +13,8 @@ domain_overrides:
     hosts:
       - download.windowsupdate.com
       - ctldl.windowsupdate.com
+      - dl.google.com
+      - update.googleapis.com
       - packages.microsoft.com
     user_agents:
       - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
@@ -21,6 +23,15 @@ domain_overrides:
     hosts:
       - crl.microsoft.com
       - ocsp.digicert.com
+      - crl3.digicert.com
+      - crl4.digicert.com
+      - crls.pki.goog
+      - ocsp.pki.goog
+      - ocsp.sectigo.com
+      - ocsp.globalsign.com
+      - ocsp.int-x3.letsencrypt.org
+      - r3.o.lencr.org
+      - x1.c.lencr.org
     user_agents:
       - "Microsoft-CryptoAPI/10.0"
   windows_telemetry:
