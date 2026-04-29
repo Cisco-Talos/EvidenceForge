@@ -785,7 +785,10 @@ class WindowsEventEmitter(LogEmitter):
                 if running is not None:
                     image = running.image
         if not image:
-            image = r"C:\Windows\System32\svchost.exe" if pid == 4 else "-"
+            if pid == 4:
+                image = "System"
+            else:
+                return
 
         event_data = {
             "EventID": 5156,
@@ -814,6 +817,8 @@ class WindowsEventEmitter(LogEmitter):
     @staticmethod
     def _to_device_path(path: str) -> str:
         """Convert C:\\path to \\device\\harddiskvolume1\\path (lowercase)."""
+        if path == "System":
+            return path
         if path and len(path) > 2 and path[1] == ":":
             return f"\\device\\harddiskvolume1\\{path[3:]}".lower()
         return path.lower()

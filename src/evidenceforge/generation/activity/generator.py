@@ -2697,13 +2697,16 @@ class ActivityGenerator:
         hostname_was_explicit = hostname not in (None, "")
         hostname_from_reverse_dns = False
         if hostname is None:
-            if emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
+            reverse_hostname = REVERSE_DNS.get(dst_ip)
+            if reverse_hostname is not None:
+                hostname = reverse_hostname
+                hostname_from_reverse_dns = True
+            elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
                 hostname = _generate_internal_hostname(
                     _get_rng(), dst_ip, getattr(self, "_ad_domain", "corp.local")
                 )
             else:
-                hostname = REVERSE_DNS.get(dst_ip)
-                hostname_from_reverse_dns = hostname is not None
+                hostname = None
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
             if not _is_private_ip(dst_ip):
                 hostname = _generate_random_hostname(_get_rng(), dst_ip)
@@ -4688,11 +4691,13 @@ class ActivityGenerator:
             nx_src_port = self._allocate_ephemeral_port(
                 src_ip, nx_dns_server_ip, 53, "udp", nx_time, _src_os
             )
+            nx_qtype = 33 if nx_query.startswith("_") else 1
+            nx_qtype_name = "SRV" if nx_qtype == 33 else "A"
             nx_ctx = DnsContext(
                 query=nx_query,
                 trans_id=rng.randint(1, 65535),
-                qtype=1,
-                query_type="A",
+                qtype=nx_qtype,
+                query_type=nx_qtype_name,
                 rcode="NXDOMAIN",
                 rcode_num=3,
                 rtt=_dns_rtt(rng, nx_dns_server_ip),
@@ -5574,6 +5579,13 @@ class ActivityGenerator:
                     command_line=running.command_line,
                     username=running.username,
                 )
+        if process is None and pid > 0 and pid != 4:
+            logger.debug(
+                "Skipping WFP 5156 for unresolved process image: host=%s pid=%s",
+                system.hostname,
+                pid,
+            )
+            return
         event = SecurityEvent(
             timestamp=time,
             event_type="wfp_connection",

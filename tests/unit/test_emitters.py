@@ -532,6 +532,69 @@ class TestWindowsEventEmitter:
             "firefox\\firefox.exe</Data>"
         ) in content
 
+    def test_wfp_connection_pid4_renders_system_application(self, format_def, temp_output):
+        """WFP 5156 for PID 4 should render System, not a synthetic svchost path."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.50",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="WKS-01.corp.local",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=4,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="ProcessID">4</Data>' in content
+        assert '<Data Name="Application">System</Data>' in content
+        assert "svchost.exe" not in content
+
+    def test_wfp_connection_skips_unresolved_non_system_pid(self, format_def, temp_output):
+        """WFP 5156 should not invent an Application value for unknown non-system PIDs."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.50",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="WKS-01.corp.local",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=5156,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        assert not temp_output.exists() or temp_output.read_text() == ""
+
     def test_device_path_conversion(self):
         """Test _to_device_path helper converts Windows paths correctly."""
         assert (
