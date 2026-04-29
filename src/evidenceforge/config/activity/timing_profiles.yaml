@@ -56,6 +56,21 @@ relationships:
     position: after
     min_ms: 40
     max_ms: 300
+  source.zeek_ssl_analyzer:
+    class: same_observation
+    position: after
+    min_ms: 5
+    max_ms: 80
+  source.zeek_x509_analyzer:
+    class: same_observation
+    position: after
+    min_ms: 120
+    max_ms: 650
+  network.tls_completed_min_duration:
+    class: same_observation
+    position: after
+    min_ms: 800
+    max_ms: 2500
 
 windows_event_time:
   collision_spacing:

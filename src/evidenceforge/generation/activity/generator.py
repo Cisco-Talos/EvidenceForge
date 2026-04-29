@@ -60,7 +60,7 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
 from evidenceforge.generation.activity.windows_auth_realism import (
     failed_logon_config,
     min_unlock_gap_seconds,
@@ -2678,6 +2678,7 @@ class ActivityGenerator:
                     system.hostname, parent_pid, _get_os_category(system.os)
                 ),
                 parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
+                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
                 start_time=running_proc.start_time if running_proc is not None else None,
@@ -3508,12 +3509,22 @@ class ActivityGenerator:
                 if duration is not None:
                     duration = rng.uniform(0.001, 0.5)
 
-        if proto == "tcp" and service == "ssl" and conn_state == "SF":
+        if proto == "tcp" and dst_port == 443 and conn_state == "SF":
             # A completed TLS session with ssl.log/SNI evidence must include
             # at least a ClientHello and server handshake payload at conn.log
             # accounting level, even when the logical request body is empty.
             orig_bytes = max(orig_bytes or 0, rng.randint(180, 900))
             resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
+            tls_min_window = get_timing_window(
+                "network.tls_completed_min_duration",
+                default_min_ms=800,
+                default_max_ms=2500,
+                default_position="after",
+                default_class="same_observation",
+            )
+            tls_min_duration = tls_min_window.min_ms / 1000
+            if duration is None or duration < tls_min_duration:
+                duration = tls_min_duration + rng.uniform(0.0, 0.4)
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
@@ -3604,6 +3615,11 @@ class ActivityGenerator:
                     image=running.image,
                     command_line=running.command_line,
                     username=running.username,
+                    logon_id=running.logon_id,
+                    start_time=running.start_time,
+                    parent_start_time=self._lookup_parent_start_time(
+                        resolved_source_system.hostname, running.parent_pid
+                    ),
                 )
             elif process_image:
                 process_ctx = ProcessContext(
@@ -4658,8 +4674,10 @@ class ActivityGenerator:
                 logon_id=logon_id,
                 parent_image=self._lookup_parent_image(system.hostname, parent_pid),
                 parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
+                parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
                 token_elevation="%%1936",
                 mandatory_label="S-1-16-16384",
+                start_time=self._lookup_parent_start_time(system.hostname, pid),
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
@@ -7132,6 +7150,13 @@ class ActivityGenerator:
         """Check if a PID is still running in state manager."""
         return self.state_manager.get_process(system.hostname, pid) is not None
 
+    def _is_pid_active_at(self, system: System, pid: int, time: datetime) -> bool:
+        """Check whether a PID exists and has started by the requested time."""
+        if pid == 4 and _get_os_category(system.os) == "windows":
+            return True
+        proc = self.state_manager.get_process(system.hostname, pid)
+        return proc is not None and proc.start_time <= time
+
     def _lookup_parent_image(self, hostname: str, parent_pid: int) -> str:
         """Look up parent process image from StateManager, with fallback."""
         proc = self.state_manager.get_process(hostname, parent_pid)
@@ -7146,7 +7171,14 @@ class ActivityGenerator:
             return proc.command_line
         return "-"
 
-    def _get_session_explorer_pid(self, system: System, user: User) -> int | None:
+    def _lookup_parent_start_time(self, hostname: str, parent_pid: int) -> datetime | None:
+        """Look up parent process start time at event construction time."""
+        proc = self.state_manager.get_process(hostname, parent_pid)
+        return proc.start_time if proc else None
+
+    def _get_session_explorer_pid(
+        self, system: System, user: User, time: datetime | None = None
+    ) -> int | None:
         """Get the explorer.exe PID for the user's active interactive session.
 
         Returns None if no interactive session exists or explorer PID not set.
@@ -7154,11 +7186,17 @@ class ActivityGenerator:
         sessions = self.state_manager.get_sessions_for_user(user.username)
         for session in sessions:
             if session.system == system.hostname and session.explorer_pid is not None:
+                if time is not None and not self._is_pid_active_at(
+                    system, session.explorer_pid, time
+                ):
+                    continue
                 if self._is_pid_alive(system, session.explorer_pid):
                     return session.explorer_pid
         return None
 
-    def _select_parent_pid(self, system: System, user: User, process_name: str) -> int:
+    def _select_parent_pid(
+        self, system: System, user: User, process_name: str, time: datetime | None = None
+    ) -> int:
         """Select a realistic parent PID based on process type and history.
 
         Builds process trees with depth by tracking recent user processes.
@@ -7174,7 +7212,13 @@ class ActivityGenerator:
         key = (system.hostname, user.username)
         history = self._user_process_history.get(key, [])
         # Filter history to only include still-running processes
-        alive_history = [(pid, name) for pid, name in history if self._is_pid_alive(system, pid)]
+        alive_history = []
+        for pid, name in history:
+            if time is not None:
+                if self._is_pid_active_at(system, pid, time):
+                    alive_history.append((pid, name))
+            elif self._is_pid_alive(system, pid):
+                alive_history.append((pid, name))
 
         if os_cat == "windows":
             exe_name = (
@@ -7210,7 +7254,7 @@ class ActivityGenerator:
                 )
 
             # Prefer session-specific explorer PID over system-wide default
-            session_explorer = self._get_session_explorer_pid(system, user)
+            session_explorer = self._get_session_explorer_pid(system, user, time=time)
             explorer_pid = session_explorer or sys_pids.get(
                 "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
             )
@@ -7253,7 +7297,11 @@ class ActivityGenerator:
                 if (
                     sess.system == system.hostname
                     and sess.session_shell_pid is not None
-                    and self._is_pid_alive(system, sess.session_shell_pid)
+                    and (
+                        self._is_pid_active_at(system, sess.session_shell_pid, time)
+                        if time is not None
+                        else self._is_pid_alive(system, sess.session_shell_pid)
+                    )
                 ):
                     return sess.session_shell_pid
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
@@ -7344,14 +7392,14 @@ class ActivityGenerator:
 
         if not possible_parents:
             # No rules for this exe — fall back to legacy logic
-            return self._select_parent_pid(system, user, process_name)
+            return self._select_parent_pid(system, user, process_name, time=time)
 
         # Check alive_history for a matching parent
         key = (system.hostname, user.username)
         history = self._user_process_history.get(key, [])
         alive_parents = []
         for pid, name in history:
-            if not self._is_pid_alive(system, pid):
+            if not self._is_pid_active_at(system, pid, time):
                 continue
             hist_exe = (
                 name.rsplit("\\", 1)[-1].lower()
@@ -7364,7 +7412,7 @@ class ActivityGenerator:
         # Also check seeded system processes as potential parents
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
-            if proc:
+            if proc and proc.start_time <= time:
                 proc_exe = (
                     proc.image.rsplit("\\", 1)[-1].lower()
                     if "\\" in proc.image
@@ -7404,23 +7452,27 @@ class ActivityGenerator:
             return parent_pid
         parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
         parent_image = (parent_proc.image if parent_proc is not None else "").lower()
-        if parent_pid != 4 and parent_image not in {"system", "ntoskrnl.exe"}:
+        if (
+            parent_pid != 4
+            and parent_image not in {"system", "ntoskrnl.exe"}
+            and self._is_pid_active_at(system, parent_pid, time)
+        ):
             return parent_pid
 
         resolved = self._resolve_parent(system, user, time, logon_id, process_name)
         resolved_proc = self.state_manager.get_process(system.hostname, resolved)
         resolved_image = (resolved_proc.image if resolved_proc is not None else "").lower()
-        if resolved != 4 and resolved_image not in {"system", "ntoskrnl.exe"}:
+        if (
+            resolved != 4
+            and resolved_image not in {"system", "ntoskrnl.exe"}
+            and self._is_pid_active_at(system, resolved, time)
+        ):
             return resolved
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
         for role in ("explorer", "winlogon", "services", "svchost_dcom"):
             candidate = sys_pids.get(role)
-            if (
-                candidate
-                and candidate != 4
-                and self.state_manager.get_process(system.hostname, candidate)
-            ):
+            if candidate and candidate != 4 and self._is_pid_active_at(system, candidate, time):
                 return candidate
         return parent_pid
 
@@ -7507,7 +7559,7 @@ class ActivityGenerator:
         # Check if chosen parent is already a seeded system process
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
-            if proc:
+            if proc and proc.start_time <= time:
                 proc_exe = (
                     proc.image.rsplit("\\", 1)[-1].lower()
                     if "\\" in proc.image
@@ -7610,8 +7662,12 @@ class ActivityGenerator:
                     parent_command_line=self._lookup_parent_command_line(
                         system.hostname, grandparent_pid
                     ),
+                    parent_start_time=self._lookup_parent_start_time(
+                        system.hostname, grandparent_pid
+                    ),
                     token_elevation="%%1938",
                     mandatory_label="S-1-16-8192",
+                    start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
                 ),
             )
             self.dispatcher.dispatch(event)

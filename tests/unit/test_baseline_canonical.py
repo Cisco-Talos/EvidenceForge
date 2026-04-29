@@ -178,6 +178,29 @@ class TestIdsAlertCorrelation:
         assert first.root_delay == second.root_delay
         assert first.root_disp == second.root_disp
 
+    def test_completed_tls_duration_contains_zeek_analyzer_evidence(
+        self, activity_gen, mock_emitters, timestamp
+    ):
+        """Completed TLS conn duration should be long enough for ssl/x509 analyzer rows."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=0.002,
+            orig_bytes=1,
+            resp_bytes=1,
+            conn_state="SF",
+            hostname="www.example.com",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.ssl is not None
+        assert event.x509 is not None
+        assert event.network.duration >= 0.8
+
 
 class TestWebAccessCorrelation:
     """Web access logs should produce correlated Zeek conn + HTTP + web records."""

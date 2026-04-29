@@ -292,6 +292,16 @@ relationships:
     position: before
     min_ms: 20
     max_ms: 1500
+  source.zeek_ssl_analyzer:
+    class: same_observation
+    position: after
+    min_ms: 5
+    max_ms: 80
+  network.tls_completed_min_duration:
+    class: same_observation
+    position: after
+    min_ms: 800
+    max_ms: 2500
 
 windows_event_time:
   collision_spacing:
@@ -317,6 +327,9 @@ windows_event_time:
 ### Conventions
 
 - Treat `same_observation` and small tied clusters as eligible for near-zero gaps.
+- Keep source-native analyzer offsets inside the owning event lifetime. For example, Zeek
+  `ssl.log` and `x509.log` timestamps should occur after conn start but before conn end for
+  the same UID.
 - Use seconds or minutes for human or bulk workflow relationships; do not force everything into microseconds.
 - Run `eforge validate-config` after overlay changes; it rejects invalid relationship classes, positions, negative windows, and inverted min/max ranges.
 

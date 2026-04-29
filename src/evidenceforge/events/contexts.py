@@ -94,6 +94,7 @@ class ProcessContext:
     logon_id: str = ""  # For 4688/4689 SubjectLogonId + TargetLogonId
     parent_image: str = ""  # ParentProcessName (4688)
     parent_command_line: str = ""  # ParentCommandLine (Sysmon Event 1)
+    parent_start_time: datetime | None = None  # Parent creation time for stable GUIDs
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs

@@ -38,6 +38,15 @@ def test_timing_profiles_load_default_relationship():
     assert source_window.relationship_class == "source_latency"
     assert source_window.min_ms > 0
 
+    tls_window = get_timing_window(
+        "network.tls_completed_min_duration",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert tls_window.relationship_class == "same_observation"
+    assert tls_window.min_ms >= 650
+
 
 def test_timing_profiles_overlay_overrides_relationship(tmp_path, monkeypatch):
     overlay = tmp_path / ".eforge" / "config" / "activity"
