@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-04-24
+**Last Updated:** 2026-04-29
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -46,6 +46,8 @@ Runtime ownership state was expanded to track exact session/process/connection p
 Verification is complete: dedicated `tests/unit/test_world_model.py` coverage was added and `uv run pytest -v --include-slow` passed (`1483 passed`).
 
 ### Recently Resolved
+
+- [x] Open PR consolidation into `dev` — re-applied the storyline typing-cadence monotonicity fix from PR #81, folded Dependabot pytest/Pygments updates into the dev workflow, and added Dependabot configuration so future dependency PRs target `dev`.
 
 - [ ] **IN PROGRESS** Windows Security/authentication source review — focused baseline eval is complete; fixing high-signal Windows auth realism findings first (4672/session semantics and sparse 4800/4801 rendering), then rerunning focused generation/eval before moving deeper.
 
