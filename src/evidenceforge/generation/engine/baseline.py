@@ -50,6 +50,10 @@ from evidenceforge.generation.activity.generator import (
     _linux_uid_for_user,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.ids_signatures import (
+    load_ids_signatures,
+    render_dns_query_template,
+)
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
@@ -110,6 +114,41 @@ def _session_active_at(
         return False
     logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
     return logoff_time is None or time < logoff_time
+
+
+def _dns_context_for_ids_signature(
+    signature: dict[str, Any],
+    rng: random.Random,
+    *,
+    ad_domain: str,
+    dns_server_ip: str,
+) -> Any | None:
+    """Build canonical DNS payload for DNS IDS signatures."""
+    dns_query = render_dns_query_template(signature, rng)
+    if not dns_query:
+        return None
+
+    from evidenceforge.events.contexts import DnsContext
+
+    dns_answer = _generate_random_external_ip(rng)
+    return DnsContext(
+        query=dns_query,
+        trans_id=rng.randint(1, 65535),
+        qtype=1,
+        query_type="A",
+        rcode="NOERROR",
+        rcode_num=0,
+        answers=[dns_answer],
+        TTLs=[
+            float(
+                _dns_base_ttl(
+                    dns_query,
+                    _dns_is_internal_name(dns_query, ad_domain),
+                )
+            )
+        ],
+        rtt=_dns_rtt(rng, dns_server_ip),
+    )
 
 
 # Day-of-week intensity multipliers (0=Monday, 6=Sunday).
@@ -4762,12 +4801,7 @@ class BaselineMixin:
 
         # IDS false-positive alerts
         if "snort_alert" in self.emitters and self.scenario.environment.network:
-            from evidenceforge.config import get_activity_directory
-            from evidenceforge.utils.files import load_yaml
-
-            _all_sigs = load_yaml(get_activity_directory() / "ids_signatures.yaml").get(
-                "signatures", []
-            )
+            _all_sigs = load_ids_signatures().get("signatures", [])
             _FP_SIGS_BY_PROTO: dict[str, list[dict]] = {"tcp": [], "udp": [], "icmp": []}
             for sig in _all_sigs:
                 proto = sig.get("proto", "tcp")
@@ -4856,6 +4890,19 @@ class BaselineMixin:
                         src_ip = ext_ip
                         dst_ip = inbound_vips.get(local_sys.ip, local_sys.ip)
                         source_system = None
+                    dns_ctx = None
+                    if (
+                        alert_proto in {"udp", "tcp"}
+                        and alert_dst_port == 53
+                        and sig_direction == "out"
+                    ):
+                        dns_ctx = _dns_context_for_ids_signature(
+                            sig,
+                            rng,
+                            ad_domain=self.scenario.environment.domain or "corp.local",
+                            dns_server_ip=dst_ip,
+                        )
+
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
                         dst_ip=dst_ip,
@@ -4869,6 +4916,7 @@ class BaselineMixin:
                         orig_bytes=rng.randint(40, 2000),
                         resp_bytes=rng.randint(0, 1000),
                         source_system=source_system,
+                        dns=dns_ctx,
                         ids=IdsContext(
                             sid=sig["sid"],
                             rev=sig.get("rev", 1),

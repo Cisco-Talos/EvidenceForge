@@ -209,6 +209,9 @@ def validate_config() -> ValidationResult:
                 "dll_pool",
             },
         },
+        "activity/ids_signatures.yaml": {
+            "list_fields": {"signatures": None},
+        },
         "activity/web_scan_presets.yaml": {
             "dict_fields": {"presets"},
         },
@@ -414,6 +417,7 @@ def validate_config() -> ValidationResult:
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
     )
@@ -428,6 +432,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
+    ids_data = load_ids_signatures()
     catalog_data = load_catalog()
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
@@ -499,6 +504,61 @@ def validate_config() -> ValidationResult:
                         "WARNING", "dns_registry.yaml", f'Domain "{domain}" has invalid tag "{tag}"'
                     )
                 )
+
+    # --- IDS Signature Integrity ---
+    for i, sig in enumerate(ids_data.get("signatures", [])):
+        sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
+        if not isinstance(sig, dict):
+            result.issues.append(
+                Issue("ERROR", "ids_signatures.yaml", f"Signature {sid} must be a mapping")
+            )
+            continue
+        for required in ("sid", "rev", "message", "classification", "priority", "proto"):
+            if required not in sig:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} missing required field {required}",
+                    )
+                )
+        proto = sig.get("proto")
+        if proto not in {"tcp", "udp", "icmp"}:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} has invalid proto {proto!r}",
+                )
+            )
+        templates = sig.get("dns_query_templates")
+        if templates is not None:
+            if proto not in {"udp", "tcp"} or sig.get("dst_port") != 53:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} defines dns_query_templates but is not a DNS signature",
+                    )
+                )
+            elif not isinstance(templates, list) or not templates:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} dns_query_templates must be a non-empty list",
+                    )
+                )
+            else:
+                for template in templates:
+                    if not isinstance(template, str) or "{token}" not in template:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "ids_signatures.yaml",
+                                f"Signature {sid} DNS template {template!r} must contain {{token}}",
+                            )
+                        )
 
     # --- Checks 7-10: DNS → Downstream Cascade ---
     # proxy_data and site_data loaded above via overlay-aware loaders
