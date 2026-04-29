@@ -2543,19 +2543,20 @@ class ActivityGenerator:
                 else:
                     close_gap_seconds = abs((time - session.network_close_time).total_seconds())
                     close_aligned = close_gap_seconds <= 60.0
-            message = f"pam_unix(sshd:session): session closed for user {user.username}"
-            if source_port and close_aligned and session:
+            if not close_aligned:
+                event.syslog = None
+            else:
                 message = (
                     f"Received disconnect from {session.source_ip} port {source_port}:11: "
                     "disconnected by user"
                 )
-            event.syslog = SyslogContext(
-                app_name="sshd",
-                pid=sshd_pid,
-                facility=10,
-                severity=6,
-                message=message,
-            )
+                event.syslog = SyslogContext(
+                    app_name="sshd",
+                    pid=sshd_pid,
+                    facility=10,
+                    severity=6,
+                    message=message,
+                )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)

@@ -360,7 +360,7 @@ public_ntp_servers:
 
 dns_tunnel_rtt:
   min_seconds: 0.04
-  max_seconds: 1.5
+  max_seconds: 0.35
 ```
 
 ---

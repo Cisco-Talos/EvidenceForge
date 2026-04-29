@@ -246,10 +246,10 @@ class TestLogoffLinux:
         assert event.timestamp == close_time + expected_delta
         assert "Received disconnect from 10.0.10.50 port 51111" in event.syslog.message
 
-    def test_ssh_logoff_uses_generic_close_when_far_from_transport_close(
+    def test_ssh_logoff_suppresses_syslog_when_far_from_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
-        """Stale transport tuples should not be reused for much later PAM session closes."""
+        """Stale transport tuples should not produce contradictory sshd session closes."""
         state_manager.set_current_time(timestamp)
         logon_id = state_manager.create_session(
             username=test_user.username,
@@ -277,17 +277,12 @@ class TestLogoffLinux:
         )
 
         event = mock_emitters["syslog"].emit.call_args[0][0]
-        assert event.timestamp > last_activity_time
-        assert event.syslog.message == (
-            f"pam_unix(sshd:session): session closed for user {test_user.username}"
-        )
-        assert "10.0.10.50" not in event.syslog.message
-        assert "51111" not in event.syslog.message
+        assert event.syslog is None
 
-    def test_ssh_logoff_uses_generic_close_for_self_sourced_session(
+    def test_ssh_logoff_suppresses_syslog_for_self_sourced_session(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
-        """Self-sourced SSH session cleanup should not claim an external TCP tuple."""
+        """Self-sourced SSH session cleanup should not claim an external sshd close."""
         state_manager.set_current_time(timestamp)
         logon_id = state_manager.create_session(
             username=test_user.username,
@@ -313,11 +308,7 @@ class TestLogoffLinux:
         )
 
         event = mock_emitters["syslog"].emit.call_args[0][0]
-        assert event.syslog.message == (
-            f"pam_unix(sshd:session): session closed for user {test_user.username}"
-        )
-        assert linux_system.ip not in event.syslog.message
-        assert "51111" not in event.syslog.message
+        assert event.syslog is None
 
 
 class TestLogoffNoEcar:
