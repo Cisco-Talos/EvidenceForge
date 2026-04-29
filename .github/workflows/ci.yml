@@ -34,7 +34,12 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run tests with coverage
+        if: github.ref_name != 'dev' && github.base_ref != 'dev'
         run: uv run pytest --include-slow --cov-report=xml
+
+      - name: Run tests with coverage (dev)
+        if: github.ref_name == 'dev' || github.base_ref == 'dev'
+        run: uv run pytest --cov-report=xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
