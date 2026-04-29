@@ -822,6 +822,7 @@ class ActivityGenerator:
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
@@ -2533,19 +2534,27 @@ class ActivityGenerator:
                 else 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
             )
             source_port = session.source_port if session else 0
+            close_aligned = False
+            if source_port and session:
+                if session.source_ip == system.ip:
+                    close_aligned = False
+                elif session.network_close_time is None:
+                    close_aligned = True
+                else:
+                    close_gap_seconds = abs((time - session.network_close_time).total_seconds())
+                    close_aligned = close_gap_seconds <= 60.0
+            message = f"pam_unix(sshd:session): session closed for user {user.username}"
+            if source_port and close_aligned and session:
+                message = (
+                    f"Received disconnect from {session.source_ip} port {source_port}:11: "
+                    "disconnected by user"
+                )
             event.syslog = SyslogContext(
                 app_name="sshd",
                 pid=sshd_pid,
                 facility=10,
                 severity=6,
-                message=(
-                    f"pam_unix(sshd:session): session closed for user {user.username}"
-                    if source_port == 0
-                    else (
-                        f"Received disconnect from {session.source_ip} port {source_port}:11: "
-                        "disconnected by user"
-                    )
-                ),
+                message=message,
             )
 
         # Phase 3: Dispatch to matching emitters
@@ -2871,6 +2880,25 @@ class ActivityGenerator:
         if process and process.start_time and time <= process.start_time:
             return process.start_time + timedelta(milliseconds=offset_ms)
         return time
+
+    def reserve_ssh_source_port(
+        self,
+        source_ip: str,
+        target_ip: str,
+        source_port: int | None,
+        rng: random.Random,
+        source_os: str,
+    ) -> int:
+        """Reserve a per-source/destination SSH source port for unambiguous correlation."""
+        candidate = source_port or _ephemeral_port(rng, source_os)
+        for _ in range(100):
+            key = (source_ip, target_ip, candidate)
+            if key not in self._ssh_source_ports:
+                self._ssh_source_ports.add(key)
+                return candidate
+            candidate = _ephemeral_port(rng, source_os)
+        self._ssh_source_ports.add((source_ip, target_ip, candidate))
+        return candidate
 
     def generate_process_termination(
         self,
@@ -3405,6 +3433,8 @@ class ActivityGenerator:
                 min_query_payload += 10
             if orig_bytes is None or orig_bytes < min_query_payload:
                 orig_bytes = min_query_payload
+            if duration is None and dns is not None and dns.rtt is not None:
+                duration = max(0.001, dns.rtt)
 
         if pid > 0 and resolved_source_system:
             process = self.state_manager.get_process(resolved_source_system.hostname, pid)
@@ -4287,6 +4317,7 @@ class ActivityGenerator:
         sshd_pid: int | None = None,
         logon_id: str = "",
         session_obj_id: str = "",
+        min_duration: float | None = None,
     ) -> str:
         """Generate an SSH session as a compound event (Zeek conn + syslog auth + eCAR).
 
@@ -4313,8 +4344,16 @@ class ActivityGenerator:
             _src_os = _get_os_category(source_system.os)
         elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
             _src_os = _get_os_category(self._ip_to_system[source_ip].os)
-        src_port = source_port or _ephemeral_port(rng, _src_os)
+        src_port = self.reserve_ssh_source_port(
+            source_ip,
+            target_system.ip,
+            source_port,
+            rng,
+            _src_os,
+        )
         duration = rng.uniform(30.0, 3600.0)
+        if min_duration is not None:
+            duration = max(duration, min_duration)
         close_time = time + timedelta(seconds=duration)
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
@@ -4336,8 +4375,7 @@ class ActivityGenerator:
         if sshd_pid is None:
             sshd_key = logon_id or f"{user.username}_{target_system.hostname}_{time.isoformat()}"
             sshd_pid = 1000 + (_stable_seed(f"sshd_pid_{sshd_key}") % 59000)
-        if logon_id and not session_obj_id:
-            session_obj_id = self.state_manager.get_session_object_id(logon_id)
+        if logon_id:
             self.state_manager.update_session_metadata(
                 logon_id,
                 source_port=src_port,
@@ -4345,6 +4383,8 @@ class ActivityGenerator:
                 transport_pid=sshd_pid,
                 network_close_time=close_time,
             )
+            if not session_obj_id:
+                session_obj_id = self.state_manager.get_session_object_id(logon_id)
 
         # Allocate connection in StateManager
         conn_id = self.state_manager.open_connection(
@@ -6678,18 +6718,29 @@ class ActivityGenerator:
 
         time = self._clamp_time_after_process_start(system, pid, time)
         proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None:
+            logger.debug(
+                "Skipping image load for non-running process: %s pid=%s image=%s dll=%s",
+                system.hostname,
+                pid,
+                image,
+                dll_path,
+            )
+            return
+        self.state_manager.update_process_activity_time(system.hostname, pid, time)
+        proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="image_load",
             src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=pid,
-                parent_pid=proc.parent_pid if proc is not None else 0,
+                parent_pid=proc.parent_pid,
                 image=image,
-                command_line=proc.command_line if proc is not None else "",
-                username=proc.username if proc is not None else user.username,
-                logon_id=proc.logon_id if proc is not None else "",
-                start_time=proc.start_time if proc is not None else None,
+                command_line=proc.command_line,
+                username=proc.username,
+                logon_id=proc.logon_id,
+                start_time=proc.start_time,
             ),
             image_load=ImageLoadContext(
                 image_loaded=dll_path,
@@ -6697,6 +6748,7 @@ class ActivityGenerator:
                 signature=signature,
                 signature_status=signature_status,
             ),
+            edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
         )
         self.dispatcher.dispatch(event)
 

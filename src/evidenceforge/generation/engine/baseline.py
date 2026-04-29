@@ -1713,6 +1713,8 @@ class BaselineMixin:
 
                     term_offset = rng.uniform(0, 3599)
                     term_time = current_hour + timedelta(seconds=term_offset)
+                    if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
+                        term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
                     self.state_manager.set_current_time(term_time)
                     self.activity_generator.generate_process_termination(
                         user=actor,
@@ -4541,7 +4543,13 @@ class BaselineMixin:
                     from evidenceforge.generation.activity.generator import _ephemeral_port
 
                     _src_os = _get_os_category(src_sys_obj.os) if src_sys_obj else "linux"
-                    port = _ephemeral_port(rng, _src_os)
+                    port = self.activity_generator.reserve_ssh_source_port(
+                        ip,
+                        system.ip,
+                        _ephemeral_port(rng, _src_os),
+                        rng,
+                        _src_os,
+                    )
                     ssh_duration = rng.uniform(30.0, 1800.0)
                     self.activity_generator.generate_connection(
                         src_ip=ip,
@@ -4556,6 +4564,7 @@ class BaselineMixin:
                         src_port=port,
                         pid=sys_pids.get("sshd", -1),
                         source_system=src_sys_obj,
+                        conn_state="SF",
                     )
                     sshd_pid = rng.randint(5000, 60000)
                     ssh_user = rng.choice(
@@ -4612,16 +4621,11 @@ class BaselineMixin:
                     else:
                         # Disconnect sequence
                         disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
-                        msgs = [
-                            f"Received disconnect from {ip} port {port}:11: disconnected by user",
-                            f"Disconnected from user {ssh_user} {ip} port {port}",
-                            f"pam_unix(sshd:session): session closed for user {ssh_user}",
-                        ]
                         self.activity_generator.generate_syslog_event(
                             system=system,
                             time=disconnect_time,
                             app_name="sshd",
-                            message=rng.choice(msgs),
+                            message=f"pam_unix(sshd:session): session closed for user {ssh_user}",
                             pid=sshd_pid,
                             facility=10,
                         )

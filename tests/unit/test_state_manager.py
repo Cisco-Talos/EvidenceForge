@@ -294,6 +294,20 @@ class TestProcessManagement:
         result = sm.end_process("WS-01", 999)
         assert result is False
 
+    def test_update_process_activity_time_keeps_latest(self):
+        """Process activity marker should track the latest dependent event."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        pid = sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
+
+        assert sm.update_process_activity_time("WS-01", pid, start + timedelta(minutes=5))
+        assert sm.update_process_activity_time("WS-01", pid, start + timedelta(minutes=2))
+        proc = sm.get_process("WS-01", pid)
+
+        assert proc is not None
+        assert proc.last_activity_time == start + timedelta(minutes=5)
+
     def test_list_running_processes(self):
         """Test listing all running processes."""
         sm = StateManager()

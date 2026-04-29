@@ -331,6 +331,106 @@ class TestSslContextPopulation:
             seconds=ssh_event.network.duration
         )
 
+    def test_ssh_session_records_transport_close_time_with_existing_object_id(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+        )
+        session_obj_id = gen.state_manager.get_session_object_id(logon_id)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+            session_obj_id=session_obj_id,
+        )
+
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        session = gen.state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.network_close_time == base_time + timedelta(
+            seconds=ssh_event.network.duration
+        )
+
+    def test_ssh_session_honors_min_duration(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            min_duration=7200.0,
+        )
+
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        assert ssh_event.network.duration >= 7200.0
+
+    def test_ssh_source_ports_are_unique_per_endpoint_tuple(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        for idx in range(2):
+            gen.generate_ssh_session(
+                user=user,
+                target_system=target,
+                time=base_time + timedelta(minutes=idx),
+                source_ip="10.0.10.50",
+                source_port=51111,
+            )
+
+        ssh_ports = [
+            event.network.src_port
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        ]
+        assert len(ssh_ports) == 2
+        assert len(set(ssh_ports)) == 2
+
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen
 

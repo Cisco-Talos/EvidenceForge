@@ -1370,6 +1370,7 @@ def validate_config() -> ValidationResult:
         ConnectionEntry,
         CreateRemoteThreadPatternEntry,
         DnsEntry,
+        DnsTunnelRttConfig,
         KerberosRealismConfig,
         OuiEntry,
         PersonaEntry,
@@ -1540,6 +1541,13 @@ def validate_config() -> ValidationResult:
                 "network_params.yaml (public_ntp_servers)",
             )
         )
+        err = validate_entry(
+            net_params.get("dns_tunnel_rtt", {}),
+            DnsTunnelRttConfig,
+            "network_params.yaml (dns_tunnel_rtt)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (dns_tunnel_rtt)", err))
 
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:

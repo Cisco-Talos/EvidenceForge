@@ -987,6 +987,10 @@ class WorldPlanner:
         sshd_pid = 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
         self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
+        min_duration = max(
+            30.0,
+            (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
+        )
         uid = self.activity_generator.generate_ssh_session(
             user=user,
             target_system=plan.target_system,
@@ -997,6 +1001,7 @@ class WorldPlanner:
             sshd_pid=sshd_pid,
             logon_id=logon_id,
             session_obj_id=session_obj_id,
+            min_duration=min_duration,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:

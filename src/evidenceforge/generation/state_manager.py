@@ -459,6 +459,17 @@ class StateManager:
             proc = self.state.running_processes.get((system, pid))
             return proc.ecar_object_id if proc else ""
 
+    def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
+        """Record the latest dependent activity timestamp for a running process."""
+        with self._lock:
+            proc = self.state.running_processes.get((system, pid))
+            if proc is None:
+                return False
+            activity_time = ensure_utc(activity_time)
+            if proc.last_activity_time is None or activity_time > proc.last_activity_time:
+                proc.last_activity_time = activity_time
+            return True
+
     def get_processes_for_user(self, username: str) -> list[RunningProcess]:
         """Get all running processes for a user.
 

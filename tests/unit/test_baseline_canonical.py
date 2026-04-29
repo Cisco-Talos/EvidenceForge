@@ -692,6 +692,7 @@ class TestBaselineSshTiming:
         source = inspect.getsource(BaselineMixin)
         assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
         assert "duration=ssh_duration" in source
+        assert 'conn_state="SF"' in source
         assert "max(1.0, ssh_duration)" in source
 
 

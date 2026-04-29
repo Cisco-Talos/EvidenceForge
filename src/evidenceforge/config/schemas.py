@@ -665,6 +665,21 @@ class PublicNtpServerEntry(BaseModel, extra="forbid"):
     weight: int = Field(gt=0)
 
 
+class DnsTunnelRttConfig(BaseModel, extra="forbid"):
+    """DNS tunnel response timing parameters in network_params.yaml."""
+
+    min_seconds: float = Field(ge=0.001)
+    max_seconds: float = Field(ge=0.001)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> DnsTunnelRttConfig:
+        if self.max_seconds < self.min_seconds:
+            raise ValueError("max_seconds must be greater than or equal to min_seconds")
+        if self.max_seconds > 10.0:
+            raise ValueError("max_seconds should stay within realistic DNS transaction timing")
+        return self
+
+
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
     """Local interactive 4625 profile."""
 

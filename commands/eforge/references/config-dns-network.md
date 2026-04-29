@@ -340,7 +340,7 @@ Minimal single-page structure for domains with no curated or tag-based match.
 
 ## network_params.yaml
 
-MAC OUI (vendor) prefixes and public NTP server defaults with frequency weights. Scenario-defined internal/domain NTP servers are preferred at generation time; `public_ntp_servers` is the fallback pool for non-domain environments and for upstream refids on internal NTP servers.
+MAC OUI (vendor) prefixes, public NTP server defaults, and DNS tunnel transaction timing. Scenario-defined internal/domain NTP servers are preferred at generation time; `public_ntp_servers` is the fallback pool for non-domain environments and for upstream refids on internal NTP servers.
 
 ### Structure
 
@@ -357,6 +357,10 @@ public_ntp_servers:
     stratum: 1
     ref_id: ".NIST."
     weight: 20
+
+dns_tunnel_rtt:
+  min_seconds: 0.04
+  max_seconds: 1.5
 ```
 
 ---

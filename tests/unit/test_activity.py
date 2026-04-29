@@ -818,6 +818,36 @@ class TestActivityGenerator:
         assert event.image_load.image_loaded in profile_paths
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
+        assert event.edr.actor_id
+
+    def test_image_load_skips_ended_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Dependent image loads should not render after the process has terminated."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+            command_line="ssh.exe web01",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        state_manager.end_process(test_system.hostname, pid)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            pid,
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+            r"C:\Windows\System32\advapi32.dll",
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
 
     def test_wfp_connection_uses_state_process_image(
         self, activity_gen, test_system, state_manager, mock_emitters

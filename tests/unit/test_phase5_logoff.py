@@ -246,6 +246,79 @@ class TestLogoffLinux:
         assert event.timestamp == close_time + expected_delta
         assert "Received disconnect from 10.0.10.50 port 51111" in event.syslog.message
 
+    def test_ssh_logoff_uses_generic_close_when_far_from_transport_close(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Stale transport tuples should not be reused for much later PAM session closes."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        close_time = timestamp + timedelta(minutes=8)
+        last_activity_time = timestamp + timedelta(hours=2)
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.last_activity_time = last_activity_time
+        mock_emitters["syslog"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(hours=2, minutes=5),
+            logon_id,
+            logon_type=10,
+        )
+
+        event = mock_emitters["syslog"].emit.call_args[0][0]
+        assert event.timestamp > last_activity_time
+        assert event.syslog.message == (
+            f"pam_unix(sshd:session): session closed for user {test_user.username}"
+        )
+        assert "10.0.10.50" not in event.syslog.message
+        assert "51111" not in event.syslog.message
+
+    def test_ssh_logoff_uses_generic_close_for_self_sourced_session(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Self-sourced SSH session cleanup should not claim an external TCP tuple."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip=linux_system.ip,
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        state_manager.update_session_metadata(
+            logon_id,
+            network_close_time=timestamp + timedelta(minutes=8),
+        )
+        mock_emitters["syslog"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(minutes=8),
+            logon_id,
+            logon_type=10,
+        )
+
+        event = mock_emitters["syslog"].emit.call_args[0][0]
+        assert event.syslog.message == (
+            f"pam_unix(sshd:session): session closed for user {test_user.username}"
+        )
+        assert linux_system.ip not in event.syslog.message
+        assert "51111" not in event.syslog.message
+
 
 class TestLogoffNoEcar:
     """Test logoff when eCAR is not available."""

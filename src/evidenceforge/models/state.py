@@ -89,6 +89,7 @@ class RunningProcess:
         system: System hostname where process is running
         start_time: When the process started
         integrity_level: Windows integrity level (System, High, Medium, Low)
+        last_activity_time: Last dependent activity timestamp for this process
     """
 
     pid: int
@@ -99,6 +100,7 @@ class RunningProcess:
     system: str
     start_time: datetime
     integrity_level: str
+    last_activity_time: datetime | None = None
     logon_id: str = ""
     ecar_object_id: str = ""
     story_created: bool = False
