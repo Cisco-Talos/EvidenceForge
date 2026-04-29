@@ -169,6 +169,18 @@ Derived values (hostname, hash, domain) must be computed **once** and attached t
 **Anti-pattern:** Each emitter does its own `REVERSE_DNS.get(dst_ip)` → produces inconsistent results.
 **Correct:** Resolve hostname once in `generate_connection()`, pass to all downstream consumers.
 
+### 1a. Fix root causes at the owning layer
+When generated output is wrong, fix the root cause where that truth is owned. Do not patch symptoms in one emitter when the bad value, timing, routing, or correlation was created upstream. Prefer canonical context, state, planner, generation, routing/visibility, or data-config fixes over emitter patches when the issue involves shared event truth, actor/session/process ownership, timing, correlation IDs, source/destination semantics, or cross-source evidence. Do not force every fix into context objects: bad event ordering belongs in planner/generator timing, bad host visibility belongs in routing/visibility, bad enumerables belong in YAML config + loaders/validation, and bad source-native formatting belongs in emitters/templates.
+
+**Anti-pattern:** A Windows emitter rewrites a bad LogonID or source IP just before rendering.
+**Correct:** The planner/generator builds the right `AuthContext`/state relationship, and the emitter renders the source-native view of that already-correct event.
+
+### 1b. Add correlated sources through canonical events
+When adding a new correlated log source or expanding an existing one, target the canonical event/context/state layer first, then add the emitter as a source-native renderer. New integrations should reuse or extend `SecurityEvent` contexts, state relationships, causal/timing rules, visibility/routing rules, and data-driven config so the new source agrees with existing evidence by construction. Avoid private low-level emitter pipelines for evidence that must correlate with auth, process, network, file, registry, DNS, proxy, firewall, IDS, or other shared activity. Direct emitter-only generation is acceptable for purely source-local health/status noise, source-specific rendering details, or explicit raw escape hatches that do not need cross-source correlation.
+
+**Anti-pattern:** A new EDR-like source independently invents process IDs, parent images, hashes, and connection tuples inside its emitter.
+**Correct:** The source renders existing `ProcessContext`, `NetworkContext`, `FileContext`, state IDs, and causal relationships, adding new canonical context fields only when the source needs facts that no existing context owns.
+
 ### 2. Data-driven, not code-driven
 Enumerable pools (domains, processes, user agents, file paths, OUI prefixes, TLS issuers) belong in **YAML files** under `src/evidenceforge/config/` with cached loaders, not hardcoded Python lists. Follow the existing pattern:
 - `src/evidenceforge/config/activity/spawn_rules.yaml` + `generation/activity/spawn_rules.py`

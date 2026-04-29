@@ -336,6 +336,7 @@ class TestSysmonEventEmitter:
         timestamps = re.findall(r'SystemTime="([^"]+)"', content)
         assert timestamps == sorted(timestamps)
         assert len(set(timestamps)) == len(timestamps)
+        assert all(re.search(r"\.\d{7}Z$", ts) for ts in timestamps)
 
     def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""

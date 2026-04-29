@@ -46,10 +46,10 @@ output/
 |----------|------|----------|-------|
 | 1102 | Security Log Cleared | Defense Evasion | Different provider (Microsoft-Windows-Eventlog). Uses `<UserData>` instead of `<EventData>`. Level=4, Keywords=0x4020. |
 | 4624 | Successful Logon | Authentication | Version 2 format. Includes ImpersonationLevel, VirtualAccount, ElevatedToken, TargetLinkedLogonId. LogonTypes: 2 (interactive), 3 (network), 5 (service), 7 (unlock), 10 (RDP), 11 (cached). IPv4 rendered as `::ffff:x.x.x.x`. |
-| 4625 | Failed Logon | Authentication | Version 0. Keywords=0x8010 (Audit Failure). Includes Status/SubStatus failure codes. |
+| 4625 | Failed Logon | Authentication | Version 0. Keywords=0x8010 (Audit Failure). Includes Status/SubStatus failure codes. Remote failed-auth attempts use established/reset-after-payload network evidence rather than SYN-only probes. |
 | 4634 | Logoff | Authentication | Paired with 4624 via matching TargetLogonId. Generated for interactive sessions (type 2/10) at work-day end and for type 3 network logons (including machine account logons on DCs) after short delays. |
 | 4648 | Explicit Credentials | Lateral Movement | Fires when RunAs, PsExec, WMIC, or scheduled tasks use alternate credentials. Emitted on the source system. |
-| 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside the target-host 4624 for elevated accounts. Admin accounts get full privilege set; regular users get limited set. |
+| 4672 | Special Privileges Assigned | Privilege Use | Auto-emitted alongside the target-host 4624 for elevated accounts. Privilege lists are selected from data-driven service/admin/UAC profiles in `windows_auth_realism.yaml`. |
 | 4688 | Process Created | Execution | Version 2. Includes CommandLine, ParentProcessName, MandatoryLabel. TokenElevationType indicates UAC status. |
 | 4689 | Process Exited | Execution | Paired with 4688. Status always 0x0. |
 | 4697 | Service Installed | Persistence | ServiceFileName can contain full command lines. ServiceType 0x10=Own Process. |

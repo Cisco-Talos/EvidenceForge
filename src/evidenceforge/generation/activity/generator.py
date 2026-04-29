@@ -60,6 +60,11 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
+from evidenceforge.generation.activity.windows_auth_realism import (
+    failed_logon_config,
+    min_unlock_gap_seconds,
+    special_privileges_config,
+)
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -85,6 +90,16 @@ from .network import (
 logger = logging.getLogger(__name__)
 
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_SYSTEM_ACCOUNT_SIDS = {
+    "SYSTEM": "S-1-5-18",
+    "LOCAL SERVICE": "S-1-5-19",
+    "NETWORK SERVICE": "S-1-5-20",
+}
+_SYSTEM_ACCOUNT_LOGON_IDS = {
+    "SYSTEM": "0x3e7",
+    "LOCAL SERVICE": "0x3e5",
+    "NETWORK SERVICE": "0x3e4",
+}
 _WINDOWS_USER_SESSION_PROCESSES = {
     "sihost.exe",
     "searchhost.exe",
@@ -108,6 +123,27 @@ def _session_started_by(session: Any, time: datetime) -> bool:
         session_start = session_start.astimezone(UTC)
     activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
     return session_start <= activity_time
+
+
+def _extract_image_from_command(command_line: str) -> str:
+    """Extract an executable image from a command line without truncating paths with spaces."""
+    cleaned = command_line.strip()
+    if not cleaned:
+        return ""
+    if cleaned[0] == '"':
+        closing = cleaned.find('"', 1)
+        if closing > 1:
+            return cleaned[1:closing]
+
+    import re
+
+    match = re.match(r"^([A-Za-z]:\\.*?\.exe)\b", cleaned, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.match(r"^(/[^ ]+)", cleaned)
+    if match:
+        return match.group(1)
+    return cleaned.split()[0]
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -843,6 +879,7 @@ class ActivityGenerator:
         username: str,
         logon_id: str,
         process_name: str,
+        time: datetime,
     ) -> tuple[str, str]:
         """Resolve process owner/logon before emitters render cross-source evidence."""
         if _get_os_category(system.os) != "windows":
@@ -859,6 +896,7 @@ class ActivityGenerator:
                 session.system == system.hostname
                 and session.username not in _SYSTEM_ACCOUNTS
                 and session.logon_type in (2, 10, 11)
+                and _session_started_by(session, time)
             )
         ]
         if not candidates:
@@ -1780,14 +1818,21 @@ class ActivityGenerator:
             system: System being logged into
             time: Logon timestamp
             logon_type: Windows logon type (2=interactive, 3=network, 10=remote interactive)
-            source_ip: Source IP address (defaults to system IP for interactive logons)
+            source_ip: Source IP address for remote logons. Local logons render with no
+                source address in Windows Security, but still use the host IP for DC-side
+                authentication evidence when applicable.
 
         Returns:
             LogonID (hex string format, e.g., "0x3e7")
         """
-        # Use system IP for interactive logons, allow override for network logons
+        self.state_manager.set_current_time(time)
+        local_logon = logon_type in (2, 5, 7, 11)
+        dc_source_ip = source_ip or system.ip
         if source_ip is None:
-            source_ip = system.ip if logon_type != 3 else "127.0.0.1"
+            source_ip = "-" if local_logon else system.ip
+        auth_source_ip = "-" if local_logon else source_ip
+        if not local_logon and source_port is None and source_ip and source_ip != "-":
+            source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
         # Linux type-10 remote logons are SSH, not RDP
         os_cat = _get_os_category(system.os)
@@ -1805,7 +1850,7 @@ class ActivityGenerator:
                 username=user.username,
                 system=system.hostname,
                 logon_type=logon_type,
-                source_ip=source_ip,
+                source_ip=auth_source_ip,
                 source_port=source_port or 0,
                 session_kind=session_kind,
             )
@@ -1817,21 +1862,32 @@ class ActivityGenerator:
                     username=user.username,
                     system=system.hostname,
                     logon_type=logon_type,
-                    source_ip=source_ip,
+                    source_ip=auth_source_ip,
                     start_time=time,
                     source_port=source_port or 0,
                     session_kind=session_kind,
                 )
             elif source_port is not None:
                 self.state_manager.update_session_metadata(logon_id, source_port=source_port)
+            if (
+                existing_session is not None
+                and logon_type != 7
+                and existing_session.start_time < time
+            ):
+                time = existing_session.start_time
+                self.state_manager.set_current_time(time)
 
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
+        elevated = self._should_elevate(user)
+        privilege_list = (
+            self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
+        )
 
         # Phase 2: Build SecurityEvent with all contexts
         # For network logons (type 3, 10), resolve source host from source_ip
         src_host_ctx = None
-        if logon_type in (3, 10) and source_ip:
+        if logon_type in (3, 10) and source_ip and source_ip != "-":
             if hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
                 src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
@@ -1847,8 +1903,9 @@ class ActivityGenerator:
                 logon_id=logon_id,
                 logon_type=logon_type,
                 auth_package=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
-                source_ip=source_ip,
-                elevated=self._should_elevate(user),
+                source_ip=auth_source_ip,
+                source_port=source_port or 0,
+                elevated=elevated,
                 logon_process=auth_pkg.get("LogonProcessName", ""),
                 lm_package=auth_pkg.get("LmPackageName", "-"),
                 logon_guid=auth_pkg.get("LogonGuid", "{00000000-0000-0000-0000-000000000000}"),
@@ -1856,6 +1913,7 @@ class ActivityGenerator:
                 subject_username="SYSTEM",
                 subject_domain="NT AUTHORITY",
                 subject_logon_id="0x3e7",
+                privilege_list=privilege_list,
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
             edr=EdrContext(object_id=session_obj_id),
@@ -1892,7 +1950,7 @@ class ActivityGenerator:
                 facility=10,
                 severity=6,
                 message=(
-                    f"Accepted password for {user.username} from {source_ip} "
+                    f"Accepted password for {user.username} from {auth_source_ip} "
                     f"port {effective_source_port or _ephemeral_port(_get_rng(), 'linux')} ssh2"
                 ),
             )
@@ -1908,8 +1966,17 @@ class ActivityGenerator:
             actor=user,
             target_system=system,
             auth_package=auth_package_name,
-            src_ip=source_ip,
+            src_ip=dc_source_ip,
             os_category=_get_os_category(system.os),
+        )
+
+        self._maybe_emit_remote_logon_network_connection(
+            system=system,
+            time=time,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            source_port=source_port or 0,
+            auth_package=auth_package_name,
         )
 
         # Phase 3: Dispatch to matching emitters
@@ -2029,9 +2096,12 @@ class ActivityGenerator:
         dc_idx = rng.randint(0, len(dc_hostnames) - 1)
         dc_hostname = dc_hostnames[dc_idx]
 
-        # TGT request: 50-200ms before the 4624 on the target
-        tgt_offset_ms = rng.randint(50, 200)
-        tgt_time = time - timedelta(milliseconds=tgt_offset_ms)
+        # TGT and service ticket requests both precede the target-host 4624.
+        # Keep TGT before TGS, and TGS before member-host logon.
+        tgs_offset_ms = rng.randint(20, 100)
+        tgt_gap_ms = rng.randint(20, 100)
+        tgs_time = time - timedelta(milliseconds=tgs_offset_ms)
+        tgt_time = tgs_time - timedelta(milliseconds=tgt_gap_ms)
         self.generate_kerberos_tgt(
             username=user.username,
             source_ip=source_ip,
@@ -2039,9 +2109,6 @@ class ActivityGenerator:
             time=tgt_time,
         )
 
-        # Service ticket request: 20-100ms after TGT
-        tgs_offset_ms = rng.randint(20, 100)
-        tgs_time = tgt_time + timedelta(milliseconds=tgs_offset_ms)
         _svc_template = rng.choices(_KERBEROS_SVC_VALUES, weights=_KERBEROS_SVC_WEIGHTS, k=1)[0]
         service_name = _svc_template.format(
             hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
@@ -2070,20 +2137,24 @@ class ActivityGenerator:
         result="failure" and dispatches to matching emitters (Windows 4625,
         syslog "Failed password", eCAR LOGIN with failure_reason).
 
-        When dc_system is provided, also emits 4625 and 4776 (NTLM validation)
-        on the domain controller, matching real AD authentication flow.
+        When dc_system is provided, also emits DC-side credential validation evidence
+        such as 4776 and 4771. The target host owns 4625; cloning it onto the DC would
+        make two machines claim the same local failed logon.
 
         Args:
             user: User attempting to log on (or performing the test)
             system: Target system
             time: Attempt timestamp
             logon_type: Logon type attempted
-            source_ip: Source IP (defaults to system IP for interactive)
+            source_ip: Source IP for remote attempts. Local failed logons render with no
+                source address in Windows Security.
             target_username: If set, the logon targets this user instead of the actor
             dc_system: Domain controller to also emit 4625/4776 on (optional)
         """
+        local_logon = logon_type in (2, 5, 7, 11)
         if source_ip is None:
-            source_ip = system.ip if logon_type != 3 else "127.0.0.1"
+            source_ip = "-" if local_logon else system.ip
+        auth_source_ip = "-" if local_logon else source_ip
 
         # Use target_username if provided, otherwise use the actor's username
         effective_username = target_username or user.username
@@ -2091,13 +2162,20 @@ class ActivityGenerator:
         # Determine failure substatus with correct SID handling
         rng = _get_rng()
         substatus_roll = rng.random()
-        if substatus_roll < 0.60:
+        known_account = self._is_known_failed_logon_account(effective_username, user)
+        failed_profile = self._failed_logon_profile(logon_type, system, source_ip, rng)
+        validation_path = self._failed_logon_validation_path(logon_type, failed_profile, rng)
+        if known_account and substatus_roll < 0.80:
             substatus = "0xc000006a"  # Wrong password
             user_sid = self._get_sid(effective_username)
             failure_reason = "%%2313"
-        elif substatus_roll < 0.85:
+        elif not known_account and substatus_roll < 0.60:
             substatus = "0xc0000064"  # User not found: NULL SID
             user_sid = "S-1-0-0"
+            failure_reason = "%%2313"
+        elif substatus_roll < 0.85:
+            substatus = "0xc000006a"  # Wrong password
+            user_sid = self._get_sid(effective_username)
             failure_reason = "%%2313"
         elif substatus_roll < 0.95:
             substatus = "0xc0000234"  # Account locked out
@@ -2116,12 +2194,18 @@ class ActivityGenerator:
                 username=effective_username,
                 user_sid=user_sid,
                 logon_type=logon_type,
-                auth_package="Negotiate",
                 result="failure",
                 failure_reason=failure_reason,
                 failure_status="0xc000006d",
                 failure_substatus=substatus,
-                source_ip=source_ip,
+                source_ip=auth_source_ip,
+                source_port=failed_profile["source_port"],
+                auth_package=failed_profile["auth_package"],
+                logon_process=failed_profile["logon_process"],
+                lm_package=failed_profile["lm_package"],
+                process_pid=failed_profile["process_pid"],
+                process_name=failed_profile["process_name"],
+                workstation_name=failed_profile["workstation_name"],
                 subject_sid=self._get_sid("SYSTEM"),
                 subject_username="SYSTEM",
                 subject_domain="NT AUTHORITY",
@@ -2147,44 +2231,25 @@ class ActivityGenerator:
 
         self.dispatcher.dispatch(event)
 
-        # Domain controller side: 4625 + 4776 for domain account authentication
+        # Domain controller side: validation evidence only. The failed local logon
+        # (4625) belongs to the target workstation/server, not the DC.
         if dc_system and dc_system.hostname != system.hostname:
-            dc_event = SecurityEvent(
-                timestamp=time,
-                event_type="failed_logon",
-                dst_host=self._build_dc_host_context(dc_system.hostname),
-                auth=AuthContext(
-                    username=effective_username,
-                    user_sid=user_sid,
-                    logon_type=3,  # Network logon on DC
-                    auth_package="Negotiate",
-                    result="failure",
-                    failure_reason=failure_reason,
-                    failure_status="0xc000006d",
-                    failure_substatus=substatus,
-                    source_ip=source_ip,
-                    subject_sid=self._get_sid("SYSTEM"),
-                    subject_username="SYSTEM",
-                    subject_domain="NT AUTHORITY",
-                    subject_logon_id="0x3e7",
-                ),
-            )
-            self.dispatcher.dispatch(dc_event)
-
             # 4776 NTLM credential validation on DC
-            self.generate_ntlm_validation(
-                username=effective_username,
-                workstation=system.hostname,
-                dc_hostname=dc_system.hostname,
-                time=time,
-                status=substatus,
-            )
+            if validation_path.get("emit_4776", True):
+                ntlm_delay_ms = rng.randint(3, 85)
+                self.generate_ntlm_validation(
+                    username=effective_username,
+                    workstation=system.hostname,
+                    dc_hostname=dc_system.hostname,
+                    time=time + timedelta(milliseconds=ntlm_delay_ms),
+                    status=substatus,
+                )
 
             # 4771 Kerberos pre-authentication failure on DC
             # In real AD, Kerberos is tried first; 4771 fires before 4625/4776
             # for wrong-password failures.
-            if substatus == "0xc000006a":  # Wrong password
-                krb_time = time - timedelta(milliseconds=_get_rng().randint(5, 50))
+            if validation_path.get("emit_4771", False) and substatus == "0xc000006a":
+                krb_time = time - timedelta(milliseconds=rng.randint(40, 350))
                 self.generate_kerberos_preauth_failed(
                     username=effective_username,
                     source_ip=source_ip,
@@ -2193,7 +2258,187 @@ class ActivityGenerator:
                     status="0x18",  # KDC_ERR_PREAUTH_FAILED
                 )
 
+        self._maybe_emit_failed_logon_network_connection(
+            system=system,
+            time=time,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            profile=failed_profile,
+            rng=rng,
+        )
+
         logger.debug(f"Generated failed logon: {user.username} on {system.hostname}")
+
+    def _account_subject_fields(
+        self,
+        username: str,
+        system: System,
+        logon_id: str | None = None,
+    ) -> dict[str, str]:
+        """Return coherent Windows subject identity fields for an account."""
+        if username in _SYSTEM_ACCOUNT_SIDS:
+            return {
+                "sid": _SYSTEM_ACCOUNT_SIDS[username],
+                "username": username,
+                "domain": "NT AUTHORITY",
+                "logon_id": logon_id or _SYSTEM_ACCOUNT_LOGON_IDS[username],
+            }
+        return {
+            "sid": self._get_sid(username),
+            "username": username,
+            "domain": self._build_host_context(system).netbios_domain,
+            "logon_id": logon_id or self._get_user_logon_id(username, system.hostname),
+        }
+
+    def _failed_logon_profile(
+        self,
+        logon_type: int,
+        system: System,
+        source_ip: str,
+        rng: random.Random,
+    ) -> dict[str, Any]:
+        """Return source-native Windows 4625 field values for a failed logon."""
+        config = failed_logon_config()
+        if logon_type in (2, 7, 11):
+            local = config.get("local_interactive", {})
+            process_name = str(local.get("process_name") or r"C:\Windows\System32\winlogon.exe")
+            winlogon_pid = self._get_system_pid(system.hostname, "winlogon", 0)
+            return {
+                "auth_package": str(local.get("authentication_package_name") or "Negotiate"),
+                "logon_process": str(local.get("logon_process_name") or "User32"),
+                "lm_package": "-",
+                "process_pid": winlogon_pid,
+                "process_name": process_name,
+                "workstation_name": system.hostname,
+                "source_port": 0,
+                "network_port": 0,
+                "emit_network_probability": 0.0,
+            }
+
+        network = config.get("network", {})
+        process_profiles = [
+            value
+            for value in (network.get("logon_process_weights") or {}).values()
+            if isinstance(value, dict) and int(value.get("weight", 0)) > 0
+        ]
+        if process_profiles:
+            weights = [int(profile.get("weight", 1)) for profile in process_profiles]
+            selected = rng.choices(process_profiles, weights=weights, k=1)[0]
+        else:
+            selected = {
+                "authentication_package_name": "NTLM",
+                "logon_process_name": "NtLmSsp",
+                "lm_package_name": "NTLM V2",
+            }
+        ports = [
+            value
+            for value in (network.get("network_ports") or {}).values()
+            if isinstance(value, dict) and int(value.get("weight", 0)) > 0
+        ]
+        if ports:
+            port_weights = [int(port.get("weight", 1)) for port in ports]
+            network_port = int(rng.choices(ports, weights=port_weights, k=1)[0].get("port", 445))
+        else:
+            network_port = 445
+        return {
+            "auth_package": str(selected.get("authentication_package_name") or "NTLM"),
+            "logon_process": str(selected.get("logon_process_name") or "NtLmSsp"),
+            "lm_package": str(selected.get("lm_package_name") or "-"),
+            "process_pid": self._get_system_pid(system.hostname, "lsass", 0x2E0),
+            "process_name": r"C:\Windows\System32\lsass.exe",
+            "workstation_name": self._workstation_name_for_source(source_ip),
+            "source_port": _ephemeral_port(rng, self._os_for_ip(source_ip)),
+            "network_port": network_port,
+            "emit_network_probability": float(
+                network.get("emit_network_connection_probability", 1.0)
+            ),
+        }
+
+    @staticmethod
+    def _failed_logon_validation_path(
+        logon_type: int,
+        profile: dict[str, Any],
+        rng: random.Random,
+    ) -> dict[str, bool]:
+        """Choose which DC-side failed-auth validation evidence to emit."""
+        if logon_type in (2, 5, 7, 11):
+            return {"emit_4776": False, "emit_4771": False}
+        config = failed_logon_config().get("network", {})
+        paths = [
+            value
+            for value in (config.get("validation_path_weights") or {}).values()
+            if isinstance(value, dict) and int(value.get("weight", 0)) > 0
+        ]
+        if paths:
+            weights = [int(path.get("weight", 1)) for path in paths]
+            selected = rng.choices(paths, weights=weights, k=1)[0]
+            return {
+                "emit_4776": bool(selected.get("emit_4776", False)),
+                "emit_4771": bool(selected.get("emit_4771", False)),
+            }
+        auth_package = str(profile.get("auth_package") or "NTLM")
+        return {
+            "emit_4776": auth_package in ("NTLM", "Negotiate"),
+            "emit_4771": auth_package in ("Kerberos", "Negotiate"),
+        }
+
+    @staticmethod
+    def _workstation_name_for_source(source_ip: str) -> str:
+        """Return a plausible WorkstationName for a failed network logon source."""
+        if not source_ip or source_ip == "-":
+            return "-"
+        rdns = REVERSE_DNS.get(source_ip, "")
+        if rdns:
+            return rdns.split(".", 1)[0].upper()
+        return source_ip
+
+    def _maybe_emit_failed_logon_network_connection(
+        self,
+        system: System,
+        time: datetime,
+        logon_type: int,
+        source_ip: str,
+        profile: dict[str, Any],
+        rng: random.Random,
+    ) -> None:
+        """Emit visible network evidence for remote failed-auth attempts when appropriate."""
+        if logon_type != 3 or not source_ip or source_ip == "-":
+            return
+        if _get_os_category(system.os) != "windows":
+            return
+        probability = float(profile.get("emit_network_probability", 0.0))
+        if probability <= 0 or rng.random() > probability:
+            return
+        dst_port = int(profile.get("network_port", 445))
+        service = "smb" if dst_port == 445 else "rdp" if dst_port == 3389 else None
+        self.generate_connection(
+            src_ip=source_ip,
+            dst_ip=system.ip,
+            time=time - timedelta(milliseconds=rng.randint(20, 250)),
+            dst_port=dst_port,
+            proto="tcp",
+            service=service,
+            duration=rng.uniform(0.02, 1.5),
+            orig_bytes=rng.randint(120, 900),
+            resp_bytes=rng.randint(0, 500),
+            src_port=int(
+                profile.get("source_port") or _ephemeral_port(rng, self._os_for_ip(source_ip))
+            ),
+            conn_state=rng.choices(["SF", "RSTR"], weights=[70, 30], k=1)[0],
+        )
+
+    def _is_known_failed_logon_account(self, username: str, actor: User) -> bool:
+        """Return whether a failed-logon target is a known account in this scenario."""
+        normalized = username.split("@", 1)[0].lower()
+        if normalized == actor.username.lower():
+            return True
+        if actor.email and username.lower() == actor.email.lower():
+            return True
+        if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"} or username.endswith("$"):
+            return True
+        if username in getattr(self, "sid_registry", {}):
+            return True
+        return False
 
     def generate_logoff(
         self,
@@ -2311,6 +2556,8 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        self.state_manager.set_current_time(time)
+
         # Determine integrity level per UAC model:
         # - SYSTEM processes: "System" (handled in generate_system_process)
         # - Explicitly elevated (admin tools, installers): "High"
@@ -2355,7 +2602,18 @@ class ActivityGenerator:
             username=user.username,
             logon_id=logon_id,
             process_name=process_name,
+            time=time,
         )
+        session = self.state_manager.get_session(process_logon_id)
+        if session is not None and time <= session.start_time:
+            offset_ms = 100 + (
+                _stable_seed(
+                    f"process_after_logon:{system.hostname}:{process_logon_id}:{process_name}"
+                )
+                % 1400
+            )
+            time = session.start_time + timedelta(milliseconds=offset_ms)
+            self.state_manager.set_current_time(time)
         if process_username != user.username:
             _integrity = "Medium"
         parent_pid = self._sanitize_user_parent_pid(
@@ -2598,6 +2856,7 @@ class ActivityGenerator:
                     username=process_username,
                     logon_id=logon_id,
                     process_name=process_name,
+                    time=time,
                 )
                 process_username = resolved_username
                 process_logon_id = resolved_logon_id or logon_id
@@ -5043,6 +5302,20 @@ class ActivityGenerator:
                     time=ssh_time,
                     source_ip=source_ip,
                 )
+            elif (
+                _get_os_category(system.os) == "windows"
+                and logon_type == 10
+                and source_ip
+                and source_ip != system.ip
+            ):
+                rdp_time = time - timedelta(milliseconds=_get_rng().randint(80, 400))
+                self.generate_rdp_session(
+                    user=user,
+                    target_system=system,
+                    time=rdp_time,
+                    source_ip=source_ip,
+                )
+                return
 
             self.generate_logon(user, system, time, logon_type=logon_type, source_ip=source_ip)
 
@@ -5055,7 +5328,9 @@ class ActivityGenerator:
                     (
                         s
                         for s in sessions
-                        if s.system == system.hostname and _session_started_by(s, time)
+                        if s.system == system.hostname
+                        and _session_started_by(s, time)
+                        and s.logon_type in (2, 10, 11)
                     ),
                     None,
                 )
@@ -5507,16 +5782,7 @@ class ActivityGenerator:
         or other explicit credential usage.
         """
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
-        # System accounts have canonical LogonIds — don't look up sessions
-        _CANONICAL_LOGON_IDS = {
-            "SYSTEM": "0x3e7",
-            "LOCAL SERVICE": "0x3e5",
-            "NETWORK SERVICE": "0x3e4",
-        }
-        if user.username in _CANONICAL_LOGON_IDS:
-            subject_logon_id = _CANONICAL_LOGON_IDS[user.username]
-        else:
-            subject_logon_id = self._get_user_logon_id(user.username, system.hostname)
+        subject = self._account_subject_fields(user.username, system)
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",
@@ -5524,10 +5790,10 @@ class ActivityGenerator:
             auth=AuthContext(
                 username=target_username,
                 user_sid=self._get_sid(target_username),
-                subject_sid=self._get_sid(user.username),
-                subject_username=user.username,
-                subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=subject_logon_id,
+                subject_sid=subject["sid"],
+                subject_username=subject["username"],
+                subject_domain=subject["domain"],
+                subject_logon_id=subject["logon_id"],
                 logon_guid="{00000000-0000-0000-0000-000000000000}",
                 reporting_pid=reporting_pid,
                 process_pid=process_pid,
@@ -5547,6 +5813,9 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Generate workstation lock event (4800)."""
+        if not hasattr(self, "_last_workstation_lock_time"):
+            self._last_workstation_lock_time = {}
+        self._last_workstation_lock_time[(system.hostname, user.username, logon_id)] = time
         event = SecurityEvent(
             timestamp=time,
             event_type="workstation_locked",
@@ -5567,6 +5836,12 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Generate workstation unlock event (4801 + 4624 type 7)."""
+        lock_key = (system.hostname, user.username, logon_id)
+        lock_time = getattr(self, "_last_workstation_lock_time", {}).get(lock_key)
+        if lock_time is not None:
+            min_unlock_time = lock_time + timedelta(seconds=min_unlock_gap_seconds())
+            if time < min_unlock_time:
+                time = min_unlock_time
         event = SecurityEvent(
             timestamp=time,
             event_type="workstation_unlocked",
@@ -5584,7 +5859,7 @@ class ActivityGenerator:
             system=system,
             time=time + timedelta(milliseconds=50),
             logon_type=7,
-            source_ip=system.ip,
+            source_ip="-",
             logon_id=logon_id,
         )
 
@@ -5666,6 +5941,14 @@ class ActivityGenerator:
         Returns Zeek UID.
         """
         rng = _get_rng()
+        src_port = self._allocate_ephemeral_port(
+            source_ip,
+            target_system.ip,
+            3389,
+            "tcp",
+            time,
+            self._os_for_ip(source_ip),
+        )
 
         # 1. Network connection (Zeek conn.log port 3389)
         # emit_dns=True so the causal engine generates DNS evidence for the
@@ -5681,6 +5964,7 @@ class ActivityGenerator:
             duration=rng.uniform(60.0, 3600.0),
             orig_bytes=rng.randint(50000, 500000),
             resp_bytes=rng.randint(100000, 2000000),
+            src_port=src_port,
             emit_dns=True,
             source_system=source_system,
             pid=source_pid,
@@ -5694,6 +5978,7 @@ class ActivityGenerator:
             time=logon_time,
             logon_type=10,
             source_ip=source_ip,
+            source_port=src_port,
             logon_id=logon_id,
         )
 
@@ -5711,13 +5996,7 @@ class ActivityGenerator:
         Emits 4624 (type 5) + 4672 (special privileges) via normal pipeline.
         Each call gets a unique LogonID (real Windows allocates new sessions for service restarts).
         """
-        _ACCOUNT_SIDS = {
-            "SYSTEM": "S-1-5-18",
-            "LOCAL SERVICE": "S-1-5-19",
-            "NETWORK SERVICE": "S-1-5-20",
-        }
-
-        sid = _ACCOUNT_SIDS.get(service_account, "S-1-5-18")
+        sid = _SYSTEM_ACCOUNT_SIDS.get(service_account, self._get_sid(service_account))
         # Allocate unique LogonID via StateManager (same as regular logons)
         logon_id = self.state_manager.create_session(
             username=service_account,
@@ -5727,6 +6006,7 @@ class ActivityGenerator:
         )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject = self._account_subject_fields("SYSTEM", system, logon_id="0x3e7")
 
         event = SecurityEvent(
             timestamp=time,
@@ -5743,10 +6023,10 @@ class ActivityGenerator:
                 logon_process="Advapi",
                 lm_package="-",
                 logon_guid="{00000000-0000-0000-0000-000000000000}",
-                subject_sid="S-1-5-18",
-                subject_username=system.hostname + "$",
-                subject_domain=host.netbios_domain,
-                subject_logon_id="0x3e7",
+                subject_sid=subject["sid"],
+                subject_username=subject["username"],
+                subject_domain=subject["domain"],
+                subject_logon_id=subject["logon_id"],
                 reporting_pid=reporting_pid,
             ),
         )
@@ -5763,6 +6043,9 @@ class ActivityGenerator:
     ) -> None:
         """Generate Kerberos pre-authentication failed event (4771) on DC."""
         rng = _get_rng()
+        from evidenceforge.generation.activity.kerberos_realism import pick_tgt_failure_fields
+
+        failure_fields = pick_tgt_failure_fields(rng)
         dc_host = self._build_dc_host_context(dc_hostname)
         reporting_pid = self._get_system_pid(dc_hostname, "lsass", 0x2E0)
         event = SecurityEvent(
@@ -5774,9 +6057,9 @@ class ActivityGenerator:
                 target_domain=getattr(self, "_ad_domain", "corp.local").upper(),
                 target_sid=self._get_sid(username),
                 service_name="krbtgt",
-                ticket_options="0x40810010",
+                ticket_options=failure_fields["ticket_options"],
                 ticket_status=status,
-                pre_auth_type=0,
+                pre_auth_type=failure_fields["pre_auth_type"],
                 source_ip=f"::ffff:{source_ip}" if ":" not in source_ip else source_ip,
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
                 reporting_pid=reporting_pid,
@@ -5784,7 +6067,12 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
-    def _get_user_logon_id(self, username: str, hostname: str) -> str:
+    def _get_user_logon_id(
+        self,
+        username: str,
+        hostname: str,
+        at_time: datetime | None = None,
+    ) -> str:
         """Look up the user's active session LogonID on the given host.
 
         Returns the session LogonID if found. Well-known service identities use
@@ -5801,10 +6089,41 @@ class ActivityGenerator:
 
         sessions = self.state_manager.get_sessions_for_user(username)
         if sessions:
-            active = next((s for s in sessions if s.system == hostname), None)
+            host_sessions = [s for s in sessions if s.system == hostname]
+            if at_time is not None:
+                host_sessions = [s for s in host_sessions if _session_started_by(s, at_time)]
+            active = max(host_sessions, key=lambda s: s.start_time) if host_sessions else None
             if active:
                 return active.logon_id
         return "0x0"
+
+    def _ensure_account_management_subject_logon(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> str:
+        """Return an active subject LogonID for account-management audit events."""
+        existing = self._get_user_logon_id(actor.username, system.hostname, time)
+        if existing != "0x0":
+            return existing
+
+        source_ip = system.ip
+        world_model = getattr(self, "_world_model", None)
+        primary_system_name = getattr(actor, "primary_system", None)
+        if world_model is not None and primary_system_name:
+            primary_system = world_model.systems_by_hostname.get(primary_system_name)
+            if primary_system is not None:
+                source_ip = primary_system.ip
+
+        logon_time = time - timedelta(milliseconds=500)
+        return self.generate_logon(
+            actor,
+            system,
+            logon_time,
+            logon_type=3 if source_ip != system.ip else 2,
+            source_ip=source_ip,
+        )
 
     def generate_log_cleared(
         self,
@@ -5822,7 +6141,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
             ),
         )
         self.dispatcher.dispatch(event)
@@ -5851,7 +6170,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
             service=ServiceContext(
@@ -5886,7 +6205,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
             scheduled_task=ScheduledTaskContext(
@@ -5917,6 +6236,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import GroupMembershipContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event_type = f"group_member_{'added' if action == 'add' else 'removed'}_{scope}"
         event = SecurityEvent(
@@ -5928,7 +6248,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             group_membership=GroupMembershipContext(
@@ -5953,6 +6273,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -5963,7 +6284,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -5990,6 +6311,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6000,7 +6322,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6023,6 +6345,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6033,7 +6356,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6064,7 +6387,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6278,6 +6601,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6288,7 +6612,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6538,7 +6862,9 @@ class ActivityGenerator:
     def _should_elevate(self, user: User) -> bool:
         """Determine if a logon should generate 4672 (Special Privileges).
 
-        Role-based: admins ~80%, machine accounts always, regular users ~5%.
+        Role-based: admins ~80%, machine/service accounts always. Regular
+        users do not randomly receive 4672 unless the scenario marks them as
+        privileged via persona or group membership.
         """
         rng = _get_rng()
         username = user.username
@@ -6552,8 +6878,11 @@ class ActivityGenerator:
         persona = getattr(user, "persona", None)
         if persona and str(persona) in self._ADMIN_PERSONAS:
             return rng.random() < 0.80
-        # Regular users: ~5% (occasional admin task)
-        return rng.random() < 0.05
+        admin_group_terms = ("admin", "operator", "account operator", "server operator")
+        groups = [str(group).lower() for group in getattr(user, "groups", [])]
+        if any(any(term in group for term in admin_group_terms) for group in groups):
+            return rng.random() < 0.80
+        return False
 
     def _select_auth_package(self, logon_type: int) -> dict[str, str]:
         """Select auth package, LogonProcessName, and LogonGuid based on logon type.
@@ -6595,21 +6924,91 @@ class ActivityGenerator:
                     "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
                 }
         elif logon_type == 10:
-            # RDP: NtLmSsp/CredSSP
+            # RemoteInteractive/RDP 4624 records use the workstation logon process;
+            # CredSSP is the transport/SSP layer, not a native 4624 auth package.
+            auth_package = rng.choices(
+                ["Negotiate", "Kerberos", "NTLM"], weights=[55, 35, 10], k=1
+            )[0]
             return {
-                "LogonProcessName": "NtLmSsp",
-                "AuthenticationPackageName": rng.choice(["CredSSP", "Negotiate"]),
-                "LmPackageName": "-",
-                "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": auth_package,
+                "LmPackageName": "NTLM V2" if auth_package == "NTLM" else "-",
+                "LogonGuid": f"{{{uuid.uuid4()}}}"
+                if auth_package == "Kerberos"
+                else "{00000000-0000-0000-0000-000000000000}",
             }
         else:
-            # Type 7 (unlock), 11 (cached), etc.: Negotiate
+            # Type 7 (unlock), 11 (cached interactive), etc. are local interactive
+            # workstation logons. User32 is the logon process; Negotiate is the
+            # auth package.
             return {
-                "LogonProcessName": "Negotiate",
+                "LogonProcessName": "User32",
                 "AuthenticationPackageName": "Negotiate",
                 "LmPackageName": "-",
                 "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
             }
+
+    def _select_special_privileges(
+        self,
+        user: User,
+        logon_type: int,
+        hostname: str,
+    ) -> str:
+        """Return a source-native 4672 privilege list for this elevated session."""
+        username = user.username
+        if username in ("LOCAL SERVICE", "NETWORK SERVICE"):
+            profile_name = "service_account"
+        elif username == "SYSTEM" or username.endswith("$") or logon_type == 5:
+            profile_name = "domain_admin"
+        else:
+            persona = str(getattr(user, "persona", "") or "")
+            profile_name = (
+                "domain_admin" if persona in self._ADMIN_PERSONAS else "uac_elevated_user"
+            )
+            if profile_name == "domain_admin" and "dc" not in hostname.lower():
+                profile_name = "workstation_admin"
+
+        profiles = special_privileges_config().get("profiles", {})
+        profile = profiles.get(profile_name, {}) if isinstance(profiles, dict) else {}
+        privileges = profile.get("privileges") if isinstance(profile, dict) else None
+        if not isinstance(privileges, list) or not privileges:
+            privileges = ["SeChangeNotifyPrivilege"]
+        return "\n\t\t\t".join(str(privilege) for privilege in privileges)
+
+    def _maybe_emit_remote_logon_network_connection(
+        self,
+        system: System,
+        time: datetime,
+        logon_type: int,
+        source_ip: str | None,
+        source_port: int,
+        auth_package: str,
+    ) -> None:
+        """Emit established network evidence for remote Windows logons when needed."""
+        if logon_type not in (3, 10):
+            return
+        if not source_ip or source_ip == "-" or source_port <= 0:
+            return
+        if _get_os_category(system.os) != "windows":
+            return
+        if _is_private_ip(source_ip):
+            return
+        rng = _get_rng()
+        dst_port = 3389 if logon_type == 10 else 445
+        service = "rdp" if dst_port == 3389 else "smb"
+        self.generate_connection(
+            src_ip=source_ip,
+            dst_ip=system.ip,
+            time=time - timedelta(milliseconds=rng.randint(150, 900)),
+            dst_port=dst_port,
+            proto="tcp",
+            service=service,
+            duration=rng.uniform(1.5, 45.0) if auth_package != "NTLM" else rng.uniform(0.4, 8.0),
+            orig_bytes=rng.randint(700, 6500),
+            resp_bytes=rng.randint(900, 12000),
+            src_port=source_port,
+            conn_state="SF",
+        )
 
     def _get_system_pid(self, hostname: str, role: str, fallback: int) -> int:
         """Get a seeded system process PID by role name."""
@@ -7009,6 +7408,36 @@ class ActivityGenerator:
                 )
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
+        # Auto-created parent chains should not fabricate a fresh parent with
+        # the same executable as the child when another valid parent exists.
+        # Existing same-exe parents are still honored in _resolve_parent().
+        child_exe_lower = child_exe.lower()
+        nonself_parents = [
+            parent for parent in possible_parents if parent.lower() != child_exe_lower
+        ]
+        if nonself_parents:
+            possible_parents = nonself_parents
+
+        if (
+            os_cat == "windows"
+            and child_exe_lower in {"cmd.exe", "powershell.exe", "pwsh.exe"}
+            and "explorer.exe" in {parent.lower() for parent in possible_parents}
+        ):
+            possible_parents = ["explorer.exe"]
+
+        # Fresh CLI parent chains should start from a shell when the rules
+        # allow it. Existing IDE/editor parents are still honored in
+        # _resolve_parent(), but auto-creating a new Code.exe just to launch a
+        # command-line tool looks less like a normal interactive session.
+        if os_cat == "windows":
+            shell_parents = [
+                parent
+                for parent in possible_parents
+                if parent.lower() in {"cmd.exe", "powershell.exe", "pwsh.exe"}
+            ]
+            if shell_parents:
+                possible_parents = shell_parents
+
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux
         chosen_parent = rng.choice(possible_parents)
 
@@ -7042,15 +7471,14 @@ class ActivityGenerator:
         if os_cat == "windows":
             for tmpl in cmd_templates:
                 if "\\" in tmpl:
-                    cleaned = tmpl.strip('"')
-                    image = cleaned.split('" ')[0] if '" ' in cleaned else cleaned.split()[0]
+                    image = _extract_image_from_command(tmpl)
                     break
             if not image:
                 image = resolve_image_path(chosen_parent, "windows", username=user.username)
         else:
             for tmpl in cmd_templates:
                 if "/" in tmpl:
-                    image = tmpl.split()[0]
+                    image = _extract_image_from_command(tmpl)
                     break
             if not image:
                 image = resolve_image_path(chosen_parent, "linux")
@@ -7061,8 +7489,12 @@ class ActivityGenerator:
         spawn_delay = config.get("spawn_delay", [0.5, 3.0])
         delay_sec = rng.uniform(spawn_delay[0], spawn_delay[1])
         parent_time = time - timedelta(seconds=delay_sec * (depth + 1))
+        session = self.state_manager.get_session(logon_id)
+        if session is not None and parent_time <= session.start_time:
+            parent_time = session.start_time + timedelta(milliseconds=10 * (4 - depth))
 
         # Create the parent process
+        self.state_manager.set_current_time(parent_time)
         parent_pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=grandparent_pid,

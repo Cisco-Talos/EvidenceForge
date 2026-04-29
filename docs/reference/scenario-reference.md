@@ -50,7 +50,7 @@ environment:
   groups: [...]               # Optional
 ```
 
-Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Each field:
+Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic. Each field:
 - `username`: Account name (must not collide with active users or service_accounts)
 - `last_active`: ISO date when the account was last active (context only, not used by engine)
 - `reason`: Why the account is stale (context only, for ground truth documentation)
@@ -265,6 +265,7 @@ Sessions marked as `storyline_protected` (by storyline events that depend on the
 The engine automatically generates realistic failed logon patterns without scenario configuration:
 
 - **Password typos** (~5% of interactive logons): 1-2 failed attempts (4625) immediately before a successful logon (4624) for the same user. Simulates mistyped complex passwords.
+- **Remote failed auth**: network 4625 events use data-driven Windows auth realism profiles for LogonProcessName/auth package, DC-side 4771/4776 validation-path selection, and matching sensor-visible connection evidence. Auth-bearing connections are established or reset after payload; SYN-only probes are reserved for scans/unreachable services without host auth evidence.
 - **Stale scheduled tasks**: Periodic failed batch logons (type 4) from plausible service accounts on deterministic hosts. Fires every 1-2 hours, representing forgotten tasks with expired credentials.
 - **Management software sweeps**: 1-2 times per business day, a management tool tries a disabled credential across 5-15 servers in quick succession. All fail with "account disabled."
 

@@ -82,6 +82,7 @@ class TestProcessTermination:
             "C:\\Windows\\System32\\cmd.exe",
             "cmd.exe /c dir",
         )
+        process_start = state_manager.get_process(win_system.hostname, pid).start_time
         mock_emitters["windows_event_security"].reset_mock()
 
         activity_gen.generate_process_termination(
@@ -98,7 +99,7 @@ class TestProcessTermination:
         assert event.event_type == "process_terminate"
         assert event.process.pid == pid
         assert event.process.image == "C:\\Windows\\System32\\cmd.exe"
-        assert event.process.start_time == timestamp
+        assert event.process.start_time == process_start
 
     def test_removes_process_from_state(
         self, activity_gen, test_user, win_system, timestamp, state_manager

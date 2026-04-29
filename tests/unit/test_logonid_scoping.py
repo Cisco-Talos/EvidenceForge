@@ -213,6 +213,39 @@ class TestLogonIdSystemScoping:
         remaining_systems = {s.system for s in sessions}
         assert "WKS-A" in remaining_systems
 
+    def test_storyline_process_access_uses_last_process_as_source(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed process_access should emit Sysmon Event 10 from the prior process."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        engine._record_last_storyline_process(
+            system_a,
+            4242,
+            r"C:\Windows\Temp\procdump64.exe",
+        )
+        engine.activity_generator.generate_process_access = Mock()
+
+        spec = Mock()
+        spec.type = "process_access"
+        spec.target_process = "lsass.exe"
+        spec.access_mask = "0x1010"
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=attacker,
+            system=system_a,
+            time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+            activity="Dump credentials",
+            explicit_types={"process_access"},
+        )
+
+        engine.activity_generator.generate_process_access.assert_called_once()
+        kwargs = engine.activity_generator.generate_process_access.call_args.kwargs
+        assert kwargs["source_pid"] == 4242
+        assert kwargs["source_image"] == r"C:\Windows\Temp\procdump64.exe"
+        assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
+        assert kwargs["granted_access"] == "0x1010"
+
 
 class _FixedRng:
     def uniform(self, a: float, b: float) -> float:

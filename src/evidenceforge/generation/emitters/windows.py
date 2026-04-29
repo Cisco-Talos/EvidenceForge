@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.windows_event import format_windows_system_time
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -270,7 +271,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x2e0",
             "ProcessName": r"C:\Windows\System32\lsass.exe",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "IpPort": auth.source_port if auth.logon_type in (3, 10) else 0,
             "LogonProcessName": auth.logon_process,
             "AuthenticationPackageName": auth.auth_package,
             "LmPackageName": auth.lm_package,
@@ -281,29 +282,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
-            is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
-            is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
-            is_admin = is_system or auth.logon_type == 5
-            if is_service_account:
-                privs = (
-                    "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
-                    "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
-                )
-            elif is_admin:
-                privs = (
-                    "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
-                    "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
-                    "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
-                    "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
-                    "SeDelegateSessionUserImpersonatePrivilege"
-                )
-            else:
-                # Regular user with occasional elevation (e.g., UAC prompt)
-                privs = (
-                    "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
-                    "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
-                    "SeTimeZonePrivilege"
-                )
+            privs = auth.privilege_list or "SeChangeNotifyPrivilege"
             priv_data = {
                 "EventID": 4672,
                 "TimeCreated": event.timestamp,
@@ -331,28 +310,7 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
 
-        is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
-        is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
-        is_admin = is_system or auth.logon_type == 5
-        if is_service_account:
-            privs = (
-                "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
-                "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
-            )
-        elif is_admin:
-            privs = (
-                "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
-                "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
-                "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
-                "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
-                "SeDelegateSessionUserImpersonatePrivilege"
-            )
-        else:
-            privs = (
-                "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
-                "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
-                "SeTimeZonePrivilege"
-            )
+        privs = auth.privilege_list or "SeChangeNotifyPrivilege"
 
         priv_data = {
             "EventID": 4672,
@@ -462,8 +420,16 @@ class WindowsEventEmitter(LogEmitter):
             "SubStatus": auth.failure_substatus,
             "FailureReason": auth.failure_reason,
             "LogonType": auth.logon_type,
+            "LogonProcessName": auth.logon_process or "NtLmSsp",
+            "AuthenticationPackageName": auth.auth_package or "NTLM",
+            "WorkstationName": auth.workstation_name or "-",
+            "LmPackageName": auth.lm_package or "-",
+            "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
+            "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
+            "ProcessName": auth.process_name or "-",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "IpPort": auth.source_port
+            or (rng.randint(49152, 65535) if auth.logon_type == 3 else 0),
         }
         self.emit_event(event_data)
 
@@ -1128,7 +1094,7 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -1199,6 +1165,9 @@ class WindowsEventEmitter(LogEmitter):
             else:
                 self._record_id_counters[counter_key] += 1
             event["EventRecordID"] = self._record_id_counters[counter_key]
+            if event.get("EventID") == 1102:
+                reset_rng = random.Random(f"erid_reset_{counter_key}_{event['EventRecordID']}")
+                self._record_id_counters[counter_key] = reset_rng.randint(0, 5)
 
         # Render and route to per-host writers
         for event in self._event_dicts:

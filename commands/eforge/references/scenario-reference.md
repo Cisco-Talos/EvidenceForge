@@ -281,7 +281,7 @@ environment:
       reason: "Former contractor, account disabled but not deleted"
 ```
 
-Each stale account has ~15% chance per hour of generating a failed logon (4625) on a server or DC.
+Each stale account has ~15% chance per hour of generating a failed logon (4625) on a server or DC. Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic.
 
 ## Storyline
 

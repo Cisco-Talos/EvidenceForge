@@ -517,6 +517,7 @@ events:
 
 - **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections with `hostname` set always emit DNS; connections without `hostname` skip DNS (correct for raw-IP C2)
 - **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC; elevated-session 4672 is emitted on the host where the 4624 logon session is created
+- **Remote auth network evidence** — Windows remote logon and failed-logon events carry source ports from canonical session/attempt context; when network logs are visible, auth-bearing attempts use established or reset-after-payload connection evidence rather than SYN-only probes
 - **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
 - **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events

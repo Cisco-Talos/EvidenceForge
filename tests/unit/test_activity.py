@@ -22,7 +22,7 @@
 
 """Unit tests for activity generation."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
@@ -34,6 +34,7 @@ from evidenceforge.generation.activity import (
     ActivityGenerator,
     _is_invalid_network_connection,
 )
+from evidenceforge.generation.activity.generator import _extract_image_from_command
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -147,10 +148,171 @@ class TestActivityGenerator:
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
 
-    def test_generate_logon_interactive_uses_system_ip(
+    def test_generate_logon_existing_session_renders_canonical_start_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Interactive logon (type 2) should use system IP as source."""
+        """Re-rendering an existing session must not move the visible 4624 later."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        later_time = session_start + timedelta(seconds=30)
+        state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=session_start,
+            session_kind="interactive",
+        )
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            later_time,
+            logon_type=2,
+            logon_id="0xabc123",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "logon"
+        assert event.timestamp == session_start
+
+    def test_auto_created_parent_chain_stays_after_session_start(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Synthetic parent-chain events should not precede the owning logon session."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = state_manager.register_session(
+            logon_id="0xabc124",
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=session_start,
+            session_kind="interactive",
+        ).logon_id
+
+        activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=session_start + timedelta(milliseconds=100),
+            logon_id=logon_id,
+            process_name=r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe",
+            command_line='sqlcmd.exe -S sqlprod01 -Q "SELECT 1"',
+            parent_pid=4,
+        )
+
+        related_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].auth.logon_id == logon_id
+        ]
+        assert related_events
+        assert all(event.timestamp > session_start for event in related_events)
+
+    def test_process_identity_ignores_future_interactive_session(
+        self, activity_gen, state_manager, test_system
+    ):
+        """User-shell attribution must not borrow a session that starts later."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        future_logon = process_time + timedelta(seconds=30)
+        state_manager.register_session(
+            logon_id="0xfuture",
+            username="alice",
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=future_logon,
+            session_kind="interactive",
+        )
+
+        username, logon_id = activity_gen._resolve_process_identity(
+            system=test_system,
+            username="SYSTEM",
+            logon_id="0x3e7",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            time=process_time,
+        )
+
+        assert username == "SYSTEM"
+        assert logon_id == "0x3e7"
+
+    def test_process_activity_does_not_reuse_network_logon_session(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Desktop process baselines should not run under Type 3 network tokens."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.register_session(
+            logon_id="0xnetwork",
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip="45.83.221.45",
+            start_time=timestamp - timedelta(minutes=5),
+            session_kind="network",
+        )
+
+        activity_gen.execute_baseline_activity(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            activity_type="process_system",
+        )
+
+        process_events = [
+            call.args[0]
+            for call in activity_gen.dispatcher.emitters[
+                "windows_event_security"
+            ].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+        ]
+        assert process_events
+        assert process_events[-1].auth.logon_id != "0xnetwork"
+        assert state_manager.get_session(process_events[-1].auth.logon_id).logon_type == 2
+
+    def test_account_management_subject_logon_ignores_future_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4720 SubjectLogonId should use a visible earlier session, not a future one."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.register_session(
+            logon_id="0xfuture",
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.99",
+            start_time=timestamp + timedelta(minutes=30),
+            session_kind="rdp",
+        )
+
+        activity_gen.generate_account_created(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc-audit",
+            target_sid="S-1-5-21-1-2-3-1109",
+        )
+
+        account_event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "account_created"
+        ][0]
+        assert account_event.auth.subject_logon_id != "0xfuture"
+        subject_session = state_manager.get_session(account_event.auth.subject_logon_id)
+        assert subject_session is not None
+        assert subject_session.start_time < timestamp
+
+    def test_regular_user_logon_is_not_randomly_elevated(
+        self, activity_gen, test_user, test_system
+    ):
+        """Ordinary users should not receive 4672 without a privileged role."""
+        assert activity_gen._should_elevate(test_user) is False
+
+    def test_generate_logon_interactive_uses_no_source_ip(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Interactive logon (type 2) should not render a remote source IP."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -159,14 +321,98 @@ class TestActivityGenerator:
         # SecurityEvent dispatched to Windows emitter
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 2
-        assert event.auth.source_ip == test_system.ip
+        assert event.auth.source_ip == "-"
+
+    def test_generate_logon_cached_interactive_ignores_remote_source_ip(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Cached interactive logon (type 11) is local even if caller passes a source IP."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=11,
+            source_ip="10.0.99.50",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 11
+        assert event.auth.source_ip == "-"
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package == "Negotiate"
+
+    def test_generate_logon_unlock_uses_user32_logon_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Unlock logon (type 7) should not use Negotiate as LogonProcessName."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=7)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 7
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package == "Negotiate"
+
+    def test_generate_logon_rdp_uses_native_4624_auth_shape(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP 4624 should not render CredSSP as the authentication package."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=10,
+            source_ip="10.0.99.50",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 10
+        assert event.auth.logon_process == "User32"
+        assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
+        assert event.auth.auth_package != "CredSSP"
+
+    def test_generate_rdp_session_reuses_source_port_across_network_and_logon(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP network evidence and destination 4624 should share one source port."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_rdp_session(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+        )
+
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 10
+        )
+        assert network_event.network.dst_port == 3389
+        assert network_event.network.src_port > 0
+        assert logon_event.auth.source_port == network_event.network.src_port
 
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
         """Network logon (type 3) should allow custom source IP."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        source_ip = "203.0.113.50"
+        source_ip = "45.83.221.45"
         state_manager.set_current_time(timestamp)
 
         activity_gen.generate_logon(
@@ -177,6 +423,133 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 3
         assert event.auth.source_ip == source_ip
+        assert event.auth.source_port > 0
+
+    def test_remote_successful_logon_emits_matching_established_network_evidence(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """External successful remote logons should have non-S0 network evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "45.83.221.45"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=52595,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert logon_event.auth.source_port == 52595
+        assert network_event.network.src_ip == source_ip
+        assert network_event.network.src_port == 52595
+        assert network_event.network.dst_ip == test_system.ip
+        assert network_event.network.conn_state == "SF"
+
+    def test_elevated_logon_carries_configured_privilege_profile(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """4672 privilege list should come from canonical auth context."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        admin = User(
+            username="admin.lee",
+            full_name="Admin Lee",
+            email="admin.lee@example.com",
+            persona="sysadmin",
+            enabled=True,
+        )
+
+        with patch.object(activity_gen, "_should_elevate", return_value=True):
+            activity_gen.generate_logon(admin, test_system, timestamp, logon_type=2)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.privilege_list
+        assert "SeDebugPrivilege" in event.auth.privilege_list
+
+    def test_workstation_unlock_enforces_configured_minimum_gap(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A 4801 too close to a previous 4800 is shifted to a realistic gap."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x4f2a1b"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=5),
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            lock_time + timedelta(seconds=1),
+            logon_id,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+        unlock_logon = next(
+            event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
+        )
+        assert unlock.timestamp == lock_time + timedelta(seconds=127)
+        assert unlock_logon.timestamp == unlock.timestamp + timedelta(milliseconds=50)
+        assert unlock_logon.auth.source_ip == "-"
+
+    def test_extract_image_from_command_preserves_program_files_path(self):
+        """Quoted and unquoted Program Files command lines should not truncate at C:\\Program."""
+        assert (
+            _extract_image_from_command(
+                r'"C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe" nosplash'
+            )
+            == r"C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe"
+        )
+        assert (
+            _extract_image_from_command(
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe --type=renderer"
+            )
+            == r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        )
+
+    def test_explicit_credentials_system_subject_uses_nt_authority(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """4648 generated by SYSTEM should not pair S-1-5-18 with the AD domain."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        system_user = User(username="SYSTEM", full_name="System", email="system@example.local")
+
+        activity_gen.generate_explicit_credentials(
+            user=system_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_backup",
+            target_server="filesrv01",
+            process_name=r"C:\Windows\System32\svchost.exe",
+            process_pid=1234,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.subject_sid == "S-1-5-18"
+        assert event.auth.subject_username == "SYSTEM"
+        assert event.auth.subject_domain == "NT AUTHORITY"
 
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -836,6 +1209,39 @@ class TestActivityGenerator:
         event_types = [c[0][0].event_type for c in emitter.emit.call_args_list]
         assert "logon" in event_types
         assert "process_create" in event_types
+
+    def test_generate_process_shifts_after_existing_session_start(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A process using an existing LogonID should render after that session start."""
+        logon_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0xabc123"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip="10.0.0.50",
+            start_time=logon_time,
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            process_time,
+            logon_id,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe",
+        )
+
+        event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        )
+        assert event.event_type == "process_create"
+        assert event.timestamp > logon_time
 
     def test_execute_baseline_activity_connection_web(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
