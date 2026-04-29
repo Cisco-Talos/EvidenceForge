@@ -4,9 +4,10 @@
 """Tests for proxy emitter referrer field and CONNECT tunnel behavior."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, ProxyContext
+from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
 
 
 class TestProxyContextReferrer:
@@ -144,6 +145,73 @@ class TestProxyEmitterReferrer:
 
 class TestConnectTunnelBehavior:
     """Verify CONNECT is emitted once per tunnel, not per request."""
+
+    def test_dynamic_https_api_request_is_not_cached(self):
+        """TLS-inspected dynamic API requests should reach origin even when cache roll is low."""
+        from evidenceforge.generation.activity import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System
+
+        class LowCacheRollRandom:
+            def random(self):
+                return 0.1
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def choice(self, values):
+                return values[0]
+
+        generator = ActivityGenerator(StateManager(), {})
+        source_system = System(
+            hostname="ws01",
+            ip="10.0.10.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        proxy_system = System(
+            hostname="proxy01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+
+        with (
+            patch("evidenceforge.generation.activity.generator._get_rng", LowCacheRollRandom),
+            patch(
+                "evidenceforge.generation.activity.generator.pick_proxy_domain_user_agent",
+                return_value="",
+            ),
+            patch(
+                "evidenceforge.generation.activity.generator.pick_proxy_user_agent",
+                return_value="Mozilla/5.0",
+            ),
+        ):
+            proxy_context = generator._build_proxy_context(
+                src_ip="10.0.10.10",
+                dst_ip="45.33.49.112",
+                dst_port=443,
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=1000,
+                hostname="telemetry-sync.example.net",
+                source_system=source_system,
+                proxy_sys=proxy_system,
+                http=HttpContext(
+                    method="GET",
+                    host="telemetry-sync.example.net",
+                    uri="/v1/checkin",
+                    user_agent="FixtureBeacon/1.0",
+                    response_body_len=1000,
+                    status_code=200,
+                    resp_mime_types=["text/html"],
+                ),
+                explicit_mode=True,
+            )
+
+        assert proxy_context.cache_result == "MISS"
 
     def test_first_https_request_emits_connect(self):
         from pathlib import Path

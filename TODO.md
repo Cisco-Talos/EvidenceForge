@@ -47,6 +47,12 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 
 ### Recently Resolved
 
+- [x] Blind Windows process/Sysmon/eCAR realism evaluation — separate evaluator scored the regenerated focused dataset 90% synthetic. Highest-impact findings: eCAR THREAD/REMOTE_CREATE disagrees with Sysmon Event 8 on thread IDs/start addresses, process create user/logon identity can disagree across Security/Sysmon/eCAR, and process-create timestamps are too exact across sources. Medium findings covered unmatched terminations, templated process distributions, and pre-seeded process GUID references.
+
+- [x] Pytest stabilization after Windows process/Sysmon/eCAR review — fixed the explicit-proxy storyline integration failure by preventing dynamic HTTPS API-style proxy requests from being modeled as cache HITs, then reran `uv run pytest --include-slow --durations=50 --durations-min=1.0` successfully (`2329 passed, 1 skipped` in 737.74s). Duration data shows runtime is dominated by the medium dataset memory test (410.68s), explicit proxy storyline fixture (139.43s), and medium dataset generation setup (107.60s); the medium/parallel tests were already marked slow, and the explicit proxy correlation fixture is now marked slow too.
+
+- [x] Windows process/Sysmon/eCAR source review — generated a focused Windows-heavy dataset with Windows Security, Sysmon, eCAR, and Zeek. Fixed Sysmon Event 5 `ProcessGuid` mismatches by carrying process start time on termination events, and fixed Windows Security/Sysmon same-second timestamp jitter so rendered XML stays chronological per host. Focused tests and regenerated-output probes passed.
+
 - [x] Open PR consolidation into `dev` — re-applied the storyline typing-cadence monotonicity fix from PR #81, folded Dependabot pytest/Pygments updates into the dev workflow, and added Dependabot configuration so future dependency PRs target `dev`.
 
 - [ ] **IN PROGRESS** Windows Security/authentication source review — focused baseline eval is complete; fixing high-signal Windows auth realism findings first (4672/session semantics and sparse 4800/4801 rendering), then rerunning focused generation/eval before moving deeper.

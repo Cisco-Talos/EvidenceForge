@@ -102,6 +102,7 @@ class ProcessContext:
     command_line: str
     username: str
     integrity_level: str = "Medium"  # Low, Medium, High, System
+    start_time: datetime | None = None  # Creation time for stable process GUIDs
 
 @dataclass(slots=True)
 class NetworkContext:

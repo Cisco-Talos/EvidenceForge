@@ -22,6 +22,7 @@
 
 """Unit tests for Sysmon event emitter."""
 
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -200,6 +201,84 @@ class TestSysmonEventEmitter:
         content = output_file.read_text()
         assert "<EventID>5</EventID>" in content
         assert '<Data Name="ProcessId">8052</Data>' in content
+
+    def test_process_terminate_guid_uses_process_start_time(self, format_def, tmp_path):
+        """Event 5 ProcessGuid should match Event 1 even after process state is removed."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        start_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        terminate_time = datetime(2024, 1, 15, 10, 35, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=terminate_time,
+            event_type="process_terminate",
+            src_host=host,
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="",
+                username="jsmith",
+                start_time=start_time,
+            ),
+            auth=AuthContext(username="jsmith"),
+        )
+
+        expected_guid = emitter._generate_process_guid("WKS-01", 8052, start_time)
+        terminate_time_guid = emitter._generate_process_guid("WKS-01", 8052, terminate_time)
+
+        emitter.emit(event)
+        emitter.close()
+
+        output_file = output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml"
+        content = output_file.read_text()
+        assert f'<Data Name="ProcessGuid">{expected_guid}</Data>' in content
+        assert terminate_time_guid not in content
+
+    def test_close_preserves_chronological_order_for_same_second_events(
+        self, format_def, temp_output
+    ):
+        """Rendered microsecond jitter should not reorder same-second Sysmon events."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+
+        for idx in range(5):
+            emitter.emit_event(
+                {
+                    "EventID": 5,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+                    "Computer": "WKS-01.corp.local",
+                    "Channel": "Microsoft-Windows-Sysmon/Operational",
+                    "Level": 4,
+                    "ExecutionProcessID": 2756,
+                    "ExecutionThreadID": 3632 + idx,
+                    "UtcTime": "2024-01-15 10:30:00.000",
+                    "ProcessGuid": f"{{12345678-abcd-ef01-2345-67890123456{idx}}}",
+                    "ProcessId": 8052 + idx,
+                    "Image": r"C:\Windows\System32\cmd.exe",
+                    "User": r"CORP\jsmith",
+                }
+            )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        timestamps = re.findall(r'SystemTime="([^"]+)"', content)
+        assert timestamps == sorted(timestamps)
+        assert len(set(timestamps)) == len(timestamps)
 
     def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""

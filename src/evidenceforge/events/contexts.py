@@ -30,6 +30,7 @@ All use @dataclass(slots=True) for memory efficiency.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -93,6 +94,7 @@ class ProcessContext:
     parent_command_line: str = ""  # ParentCommandLine (Sysmon Event 1)
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
+    start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
 
 
 @dataclass(slots=True)

@@ -97,7 +97,7 @@ output/
 | 22 | DNSQuery | Discovery | DNS lookups as seen by the Windows DNS Client service (svchost.exe). QueryName, QueryStatus, and resolved addresses. |
 
 **Known Limitations:**
-- ProcessGuid is deterministic from (hostname, PID, timestamp) — not a real Windows GUID
+- ProcessGuid is deterministic from (hostname, PID, process creation time), so Events 1/3/5/7/8/10/11/12/13/22 agree for the same known process — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
 - Events 1, 3, 5, 7, 8, 10, 11, 12/13, and 22 are implemented; real Sysmon has 30+ event types

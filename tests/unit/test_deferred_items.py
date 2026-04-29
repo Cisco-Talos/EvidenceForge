@@ -101,12 +101,18 @@ class TestCatalogGapsFilled:
             "Teams.exe": {
                 "teams.microsoft.com",
                 "login.microsoftonline.com",
+                "res.cdn.office.net",
+                "statics.teams.cdn.office.net",
                 "graph.microsoft.com",
             },
             "OneDrive.exe": {
+                "static.sharepointonline.com",
                 "sharepoint.com",
+                "spoprod-a.akamaihd.net",
                 "onedrive.live.com",
+                "res.cdn.office.net",
                 "cdn.onenote.net",
+                "c1-onenote-15.cdn.office.net",
                 "onenote.officeapps.live.com",
                 "graph.microsoft.com",
                 "login.live.com",

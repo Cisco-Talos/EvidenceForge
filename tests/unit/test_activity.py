@@ -298,7 +298,14 @@ class TestActivityGenerator:
         dst_port = 443
 
         uid = activity_gen.generate_connection(
-            src_ip, dst_ip, timestamp, dst_port=dst_port, service="ssl"
+            src_ip,
+            dst_ip,
+            timestamp,
+            dst_port=dst_port,
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
         )
 
         # Verify UID returned

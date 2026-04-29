@@ -40,7 +40,10 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
-from evidenceforge.generation.emitters.windows import _subject_domain
+from evidenceforge.generation.emitters.windows import (
+    _normalize_windows_time_created,
+    _subject_domain,
+)
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -678,7 +681,9 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, proc.pid, proc.start_time or event.timestamp
+        )
         # Use per-host boot time for parent GUID (not Jan 1 hardcode)
         _parent_ts = self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
         parent_guid = self._generate_process_guid(
@@ -774,7 +779,9 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        process_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, proc.pid, proc.start_time or event.timestamp
+        )
 
         if auth and auth.username:
             user = self._format_user(auth.username, host.netbios_domain)
@@ -844,7 +851,7 @@ class SysmonEventEmitter(LogEmitter):
         auth = event.auth
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        source_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
 
         # Target process info from auth context (target_server=target_image, process_name=unused)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(1000, 8000)
@@ -853,7 +860,7 @@ class SysmonEventEmitter(LogEmitter):
             auth.target_server if auth and auth.target_server else r"C:\Windows\explorer.exe",
             username=target_username,
         )
-        target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
+        target_guid = self._get_stable_process_guid(host.hostname, target_pid, event.timestamp)
         start_module, start_function = self._pick_remote_thread_start(proc.image, target_image, rng)
 
         event_data = {
@@ -909,7 +916,7 @@ class SysmonEventEmitter(LogEmitter):
         auth = event.auth
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        source_guid = self._generate_process_guid(host.hostname, proc.pid, event.timestamp)
+        source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
 
         # Target process info from auth context (same pattern as create_remote_thread)
         target_pid = int(auth.source_port) if auth and auth.source_port else rng.randint(500, 800)
@@ -918,7 +925,7 @@ class SysmonEventEmitter(LogEmitter):
             auth.target_server if auth and auth.target_server else r"C:\Windows\System32\lsass.exe",
             username=target_username,
         )
-        target_guid = self._generate_process_guid(host.hostname, target_pid, event.timestamp)
+        target_guid = self._get_stable_process_guid(host.hostname, target_pid, event.timestamp)
 
         # Determine user string
         if auth and auth.username:
@@ -1409,6 +1416,7 @@ class SysmonEventEmitter(LogEmitter):
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_counters: dict[str, int] = {}
         self._erid_rngs: dict[str, random.Random] = {}
+        self._last_time_created_by_computer: dict[str, datetime] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1450,13 +1458,6 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                # Sysmon events arrive via a separate kernel callback,
-                # typically tens to hundreds of microseconds after the
-                # corresponding Security event.
-                if ts.microsecond == 0:
-                    ts = ts.replace(microsecond=random.randint(100000, 999999))
-                else:
-                    ts = ts + timedelta(microseconds=random.randint(50, 500))
                 event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -1490,7 +1491,14 @@ class SysmonEventEmitter(LogEmitter):
 
         self._event_dicts.sort(key=_sort_key)
 
-        for event in self._event_dicts:
+        for sequence, event in enumerate(self._event_dicts):
+            _normalize_windows_time_created(
+                event,
+                self._last_time_created_by_computer,
+                sequence,
+                "sysmon_time_created",
+                jitter_existing_microseconds=True,
+            )
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
             if counter_key not in self._record_id_counters:

@@ -1001,6 +1001,22 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
 
+        proxy_cacheable = proxy_method in {"GET", "HEAD"}
+        if http is not None:
+            from evidenceforge.generation.activity.http_content import infer_mime_type_from_path
+
+            response_mime = proxy_content_type or infer_mime_type_from_path(url)
+            proxy_cacheable = proxy_cacheable and (
+                response_mime.startswith(("image/", "font/"))
+                or response_mime
+                in {
+                    "application/javascript",
+                    "text/css",
+                    "application/json",
+                    "application/octet-stream",
+                }
+            )
+
         cache_roll = rng.random()
         if explicit_mode and proxy_method == "CONNECT":
             if cache_roll < 0.975:
@@ -1011,7 +1027,7 @@ class ActivityGenerator:
                 cache_result = "AUTH_REQUIRED"
             else:
                 cache_result = "GATEWAY_ERROR"
-        elif cache_roll < 0.30:
+        elif proxy_cacheable and cache_roll < 0.30:
             cache_result = "HIT"
         elif cache_roll < 0.95:
             cache_result = "MISS"
@@ -2288,6 +2304,7 @@ class ActivityGenerator:
         )
 
         # Phase 2: Build SecurityEvent
+        running_proc = self.state_manager.get_process(system.hostname, pid)
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
         event = SecurityEvent(
@@ -2313,6 +2330,7 @@ class ActivityGenerator:
                 parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 token_elevation="%%1938",
                 mandatory_label="S-1-16-8192",
+                start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
@@ -2483,6 +2501,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        running_proc = self.state_manager.get_process(system.hostname, pid)
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
@@ -2500,6 +2519,7 @@ class ActivityGenerator:
                 command_line="",
                 username=user.username,
                 logon_id=logon_id,
+                start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id),
         )
@@ -2567,6 +2587,12 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import NetworkContext
 
         caller_provided_conn_state = conn_state is not None
+        caller_provided_payload = (
+            service is not None
+            and duration is not None
+            and (orig_bytes or 0) > 0
+            and (resp_bytes or 0) > 0
+        )
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -3040,7 +3066,18 @@ class ActivityGenerator:
                 resp_bytes = 0
         else:
             if duration is not None:
-                entry = rng.choices(_TCP_CONN_ENTRIES, weights=_TCP_CONN_WEIGHTS, k=1)[0]
+                tcp_entries = _TCP_CONN_ENTRIES
+                tcp_weights = _TCP_CONN_WEIGHTS
+                if caller_provided_payload:
+                    candidates = [
+                        entry
+                        for entry in _TCP_CONN_ENTRIES
+                        if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
+                    ]
+                    if candidates:
+                        tcp_entries = candidates
+                        tcp_weights = [entry[1] for entry in candidates]
+                entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
                 conn_state, _, history = entry
             else:
                 conn_state = "S0"
@@ -4683,12 +4720,24 @@ class ActivityGenerator:
 
             dns_tags = conn_info.get("dns_tags") or []
             if conn_info["service"] == "ssl":
-                ext_hostname, dst_ip = self._pick_profiled_tls_destination(
-                    rng,
-                    src_ip=system.ip,
-                    source_system=system,
-                    purpose_tags=tuple(dns_tags) if dns_tags else ("web", "saas"),
-                )
+                if hasattr(self, "_pick_profiled_tls_destination"):
+                    ext_hostname, dst_ip = self._pick_profiled_tls_destination(
+                        rng,
+                        src_ip=system.ip,
+                        source_system=system,
+                        purpose_tags=tuple(dns_tags) if dns_tags else ("web", "saas"),
+                    )
+                elif dns_tags:
+                    tag = rng.choice(dns_tags)
+                    ext_hostname, dst_ip = _pick_domain_and_ip(
+                        rng,
+                        tag,
+                        src_host=system.hostname,
+                        include_os=_get_os_category(system.os),
+                    )
+                else:
+                    ext_hostname = _gen_lt_domain(rng)
+                    dst_ip = _d2ip(ext_hostname)
             elif dns_tags:
                 tag = rng.choice(dns_tags)
                 ext_hostname, dst_ip = _pick_domain_and_ip(

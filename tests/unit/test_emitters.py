@@ -23,6 +23,7 @@
 """Unit tests for log emitters."""
 
 import json
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -274,6 +275,40 @@ class TestWindowsEventEmitter:
         assert "user0" in content
         assert "user1" in content
         assert "user2" in content
+
+    def test_close_preserves_chronological_order_for_same_second_events(
+        self, format_def, temp_output
+    ):
+        """Rendered microsecond jitter should not reorder same-second Windows events."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+
+        for idx in range(5):
+            emitter.emit_event(
+                {
+                    "EventID": 4624,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+                    "Computer": "WIN-TEST-01",
+                    "Channel": "Security",
+                    "Level": 0,
+                    "ExecutionProcessID": 4,
+                    "ExecutionThreadID": 100 + idx,
+                    "TargetUserName": f"user{idx}",
+                    "TargetDomainName": "CORP",
+                    "TargetLogonId": f"0x{idx:06x}",
+                    "LogonType": 2,
+                    "WorkstationName": "WIN-TEST-01",
+                    "IpAddress": "192.168.1.100",
+                    "LogonProcessName": "User32",
+                    "AuthenticationPackageName": "Negotiate",
+                }
+            )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        timestamps = re.findall(r'SystemTime="([^"]+)"', content)
+        assert timestamps == sorted(timestamps)
+        assert len(set(timestamps)) == len(timestamps)
 
     def test_failed_logon_keywords_and_task(self, format_def, temp_output):
         """Test that 4625 uses Audit Failure keywords and correct task ID."""

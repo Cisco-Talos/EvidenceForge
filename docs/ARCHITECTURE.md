@@ -147,7 +147,7 @@ SecurityEvent
 ├── src_host: HostContext (originating system — hostname, IP, OS, domain, FQDN)
 ├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
-├── process: ProcessContext (pid, parent_pid, image, command_line)
+├── process: ProcessContext (pid, parent_pid, image, command_line, start_time)
 ├── network: NetworkContext (src/dst IP/port, protocol, zeek_uid, bytes)
 ├── dns: DnsContext (query, type, response, TTL)
 ├── file: FileContext (path, hash, operation)
