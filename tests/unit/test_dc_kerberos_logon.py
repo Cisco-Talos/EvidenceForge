@@ -28,7 +28,7 @@ the target system logs the 4624.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -132,7 +132,7 @@ class TestDCKerberosOnLogon:
             logon_event = next(e for e in events if e.event_type == "logon")
             assert tgt_event.timestamp < logon_event.timestamp
             assert tgs_event.timestamp > tgt_event.timestamp
-            assert tgs_event.timestamp <= logon_event.timestamp
+            assert tgs_event.timestamp < logon_event.timestamp
 
     def test_kerberos_logon_produces_dc_events_deterministically(
         self, activity_gen, mock_emitters, windows_system, test_user
@@ -170,13 +170,23 @@ class TestDCKerberosOnLogon:
             mock_emitters["windows_event_security"].emit.reset_mock()
             ts_i = datetime(2024, 3, 15, 10, i, 0, tzinfo=UTC)
             activity_gen.state_manager.set_current_time(ts_i)
-            activity_gen.generate_logon(
-                user=test_user,
-                system=windows_system,
-                time=ts_i,
-                logon_type=10,  # RDP — uses CredSSP/Negotiate, not Kerberos
-                source_ip="10.10.10.50",
-            )
+            with patch.object(
+                activity_gen,
+                "_select_auth_package",
+                return_value={
+                    "LogonProcessName": "User32",
+                    "AuthenticationPackageName": "NTLM",
+                    "LmPackageName": "NTLM V2",
+                    "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+                },
+            ):
+                activity_gen.generate_logon(
+                    user=test_user,
+                    system=windows_system,
+                    time=ts_i,
+                    logon_type=10,
+                    source_ip="10.10.10.50",
+                )
             events = [
                 call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
             ]

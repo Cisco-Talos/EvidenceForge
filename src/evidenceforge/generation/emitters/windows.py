@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.windows_event import format_windows_system_time
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -91,16 +92,6 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     if username.upper() in _NT_AUTHORITY_ACCOUNTS:
         return "NT AUTHORITY"
     return netbios_domain
-
-
-def _format_windows_system_time(ts: datetime, event_data: dict[str, Any]) -> str:
-    """Render Windows XML SystemTime with 100ns-style fractional precision."""
-    seed = (
-        f"windows_100ns_{event_data.get('Computer', '')}_{event_data.get('EventRecordID', '')}_"
-        f"{event_data.get('EventID', '')}_{ts.isoformat()}"
-    )
-    final_digit = _stable_seed(seed) % 10
-    return ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + f"{final_digit}Z"
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -1103,7 +1094,7 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = _format_windows_system_time(ts, event_data)
+                event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":

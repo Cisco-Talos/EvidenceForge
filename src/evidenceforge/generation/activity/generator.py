@@ -879,6 +879,7 @@ class ActivityGenerator:
         username: str,
         logon_id: str,
         process_name: str,
+        time: datetime,
     ) -> tuple[str, str]:
         """Resolve process owner/logon before emitters render cross-source evidence."""
         if _get_os_category(system.os) != "windows":
@@ -895,6 +896,7 @@ class ActivityGenerator:
                 session.system == system.hostname
                 and session.username not in _SYSTEM_ACCOUNTS
                 and session.logon_type in (2, 10, 11)
+                and _session_started_by(session, time)
             )
         ]
         if not candidates:
@@ -1823,6 +1825,7 @@ class ActivityGenerator:
         Returns:
             LogonID (hex string format, e.g., "0x3e7")
         """
+        self.state_manager.set_current_time(time)
         local_logon = logon_type in (2, 5, 7, 11)
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
@@ -1866,6 +1869,13 @@ class ActivityGenerator:
                 )
             elif source_port is not None:
                 self.state_manager.update_session_metadata(logon_id, source_port=source_port)
+            if (
+                existing_session is not None
+                and logon_type != 7
+                and existing_session.start_time < time
+            ):
+                time = existing_session.start_time
+                self.state_manager.set_current_time(time)
 
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
@@ -2086,9 +2096,12 @@ class ActivityGenerator:
         dc_idx = rng.randint(0, len(dc_hostnames) - 1)
         dc_hostname = dc_hostnames[dc_idx]
 
-        # TGT request: 50-200ms before the 4624 on the target
-        tgt_offset_ms = rng.randint(50, 200)
-        tgt_time = time - timedelta(milliseconds=tgt_offset_ms)
+        # TGT and service ticket requests both precede the target-host 4624.
+        # Keep TGT before TGS, and TGS before member-host logon.
+        tgs_offset_ms = rng.randint(20, 100)
+        tgt_gap_ms = rng.randint(20, 100)
+        tgs_time = time - timedelta(milliseconds=tgs_offset_ms)
+        tgt_time = tgs_time - timedelta(milliseconds=tgt_gap_ms)
         self.generate_kerberos_tgt(
             username=user.username,
             source_ip=source_ip,
@@ -2096,9 +2109,6 @@ class ActivityGenerator:
             time=tgt_time,
         )
 
-        # Service ticket request: 20-100ms after TGT
-        tgs_offset_ms = rng.randint(20, 100)
-        tgs_time = tgt_time + timedelta(milliseconds=tgs_offset_ms)
         _svc_template = rng.choices(_KERBEROS_SVC_VALUES, weights=_KERBEROS_SVC_WEIGHTS, k=1)[0]
         service_name = _svc_template.format(
             hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
@@ -2546,6 +2556,8 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        self.state_manager.set_current_time(time)
+
         # Determine integrity level per UAC model:
         # - SYSTEM processes: "System" (handled in generate_system_process)
         # - Explicitly elevated (admin tools, installers): "High"
@@ -2590,6 +2602,7 @@ class ActivityGenerator:
             username=user.username,
             logon_id=logon_id,
             process_name=process_name,
+            time=time,
         )
         session = self.state_manager.get_session(process_logon_id)
         if session is not None and time <= session.start_time:
@@ -2843,6 +2856,7 @@ class ActivityGenerator:
                     username=process_username,
                     logon_id=logon_id,
                     process_name=process_name,
+                    time=time,
                 )
                 process_username = resolved_username
                 process_logon_id = resolved_logon_id or logon_id
@@ -5288,6 +5302,20 @@ class ActivityGenerator:
                     time=ssh_time,
                     source_ip=source_ip,
                 )
+            elif (
+                _get_os_category(system.os) == "windows"
+                and logon_type == 10
+                and source_ip
+                and source_ip != system.ip
+            ):
+                rdp_time = time - timedelta(milliseconds=_get_rng().randint(80, 400))
+                self.generate_rdp_session(
+                    user=user,
+                    target_system=system,
+                    time=rdp_time,
+                    source_ip=source_ip,
+                )
+                return
 
             self.generate_logon(user, system, time, logon_type=logon_type, source_ip=source_ip)
 
@@ -5300,7 +5328,9 @@ class ActivityGenerator:
                     (
                         s
                         for s in sessions
-                        if s.system == system.hostname and _session_started_by(s, time)
+                        if s.system == system.hostname
+                        and _session_started_by(s, time)
+                        and s.logon_type in (2, 10, 11)
                     ),
                     None,
                 )
@@ -5911,6 +5941,14 @@ class ActivityGenerator:
         Returns Zeek UID.
         """
         rng = _get_rng()
+        src_port = self._allocate_ephemeral_port(
+            source_ip,
+            target_system.ip,
+            3389,
+            "tcp",
+            time,
+            self._os_for_ip(source_ip),
+        )
 
         # 1. Network connection (Zeek conn.log port 3389)
         # emit_dns=True so the causal engine generates DNS evidence for the
@@ -5926,6 +5964,7 @@ class ActivityGenerator:
             duration=rng.uniform(60.0, 3600.0),
             orig_bytes=rng.randint(50000, 500000),
             resp_bytes=rng.randint(100000, 2000000),
+            src_port=src_port,
             emit_dns=True,
             source_system=source_system,
             pid=source_pid,
@@ -5939,6 +5978,7 @@ class ActivityGenerator:
             time=logon_time,
             logon_type=10,
             source_ip=source_ip,
+            source_port=src_port,
             logon_id=logon_id,
         )
 
@@ -6027,7 +6067,12 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
-    def _get_user_logon_id(self, username: str, hostname: str) -> str:
+    def _get_user_logon_id(
+        self,
+        username: str,
+        hostname: str,
+        at_time: datetime | None = None,
+    ) -> str:
         """Look up the user's active session LogonID on the given host.
 
         Returns the session LogonID if found. Well-known service identities use
@@ -6045,10 +6090,40 @@ class ActivityGenerator:
         sessions = self.state_manager.get_sessions_for_user(username)
         if sessions:
             host_sessions = [s for s in sessions if s.system == hostname]
+            if at_time is not None:
+                host_sessions = [s for s in host_sessions if _session_started_by(s, at_time)]
             active = max(host_sessions, key=lambda s: s.start_time) if host_sessions else None
             if active:
                 return active.logon_id
         return "0x0"
+
+    def _ensure_account_management_subject_logon(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> str:
+        """Return an active subject LogonID for account-management audit events."""
+        existing = self._get_user_logon_id(actor.username, system.hostname, time)
+        if existing != "0x0":
+            return existing
+
+        source_ip = system.ip
+        world_model = getattr(self, "_world_model", None)
+        primary_system_name = getattr(actor, "primary_system", None)
+        if world_model is not None and primary_system_name:
+            primary_system = world_model.systems_by_hostname.get(primary_system_name)
+            if primary_system is not None:
+                source_ip = primary_system.ip
+
+        logon_time = time - timedelta(milliseconds=500)
+        return self.generate_logon(
+            actor,
+            system,
+            logon_time,
+            logon_type=3 if source_ip != system.ip else 2,
+            source_ip=source_ip,
+        )
 
     def generate_log_cleared(
         self,
@@ -6066,7 +6141,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
             ),
         )
         self.dispatcher.dispatch(event)
@@ -6095,7 +6170,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
             service=ServiceContext(
@@ -6130,7 +6205,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
             scheduled_task=ScheduledTaskContext(
@@ -6161,6 +6236,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import GroupMembershipContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event_type = f"group_member_{'added' if action == 'add' else 'removed'}_{scope}"
         event = SecurityEvent(
@@ -6172,7 +6248,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             group_membership=GroupMembershipContext(
@@ -6197,6 +6273,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6207,7 +6284,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6234,6 +6311,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6244,7 +6322,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6267,6 +6345,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6277,7 +6356,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6308,7 +6387,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname),
+                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6522,6 +6601,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import AccountManagementContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
         event = SecurityEvent(
             timestamp=time,
@@ -6532,7 +6612,7 @@ class ActivityGenerator:
                 subject_sid=self._get_sid(actor.username),
                 subject_username=actor.username,
                 subject_domain=host.netbios_domain,
-                subject_logon_id=self._get_user_logon_id(actor.username, system.hostname),
+                subject_logon_id=subject_logon_id,
                 reporting_pid=reporting_pid,
             ),
             account_management=AccountManagementContext(
@@ -6782,7 +6862,9 @@ class ActivityGenerator:
     def _should_elevate(self, user: User) -> bool:
         """Determine if a logon should generate 4672 (Special Privileges).
 
-        Role-based: admins ~80%, machine accounts always, regular users ~5%.
+        Role-based: admins ~80%, machine/service accounts always. Regular
+        users do not randomly receive 4672 unless the scenario marks them as
+        privileged via persona or group membership.
         """
         rng = _get_rng()
         username = user.username
@@ -6796,8 +6878,11 @@ class ActivityGenerator:
         persona = getattr(user, "persona", None)
         if persona and str(persona) in self._ADMIN_PERSONAS:
             return rng.random() < 0.80
-        # Regular users: ~5% (occasional admin task)
-        return rng.random() < 0.05
+        admin_group_terms = ("admin", "operator", "account operator", "server operator")
+        groups = [str(group).lower() for group in getattr(user, "groups", [])]
+        if any(any(term in group for term in admin_group_terms) for group in groups):
+            return rng.random() < 0.80
+        return False
 
     def _select_auth_package(self, logon_type: int) -> dict[str, str]:
         """Select auth package, LogonProcessName, and LogonGuid based on logon type.
@@ -7374,8 +7459,12 @@ class ActivityGenerator:
         spawn_delay = config.get("spawn_delay", [0.5, 3.0])
         delay_sec = rng.uniform(spawn_delay[0], spawn_delay[1])
         parent_time = time - timedelta(seconds=delay_sec * (depth + 1))
+        session = self.state_manager.get_session(logon_id)
+        if session is not None and parent_time <= session.start_time:
+            parent_time = session.start_time + timedelta(milliseconds=10 * (4 - depth))
 
         # Create the parent process
+        self.state_manager.set_current_time(parent_time)
         parent_pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=grandparent_pid,

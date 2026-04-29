@@ -44,6 +44,7 @@ from evidenceforge.generation.emitters.windows import (
     _normalize_windows_time_created,
     _subject_domain,
 )
+from evidenceforge.generation.emitters.windows_event import format_windows_system_time
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -1388,7 +1389,7 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
                 event_data[key] = xml_escape(val)

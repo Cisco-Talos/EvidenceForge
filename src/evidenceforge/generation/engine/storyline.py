@@ -380,6 +380,27 @@ class StorylineMixin:
         self._last_storyline_image = image
         self._last_storyline_system = system.hostname
 
+    def _record_storyline_logon(self, actor: User, system: System, logon_id: str) -> None:
+        """Record the latest storyline-created session by actor and target host."""
+        if not hasattr(self, "_last_storyline_logon_by_actor_system"):
+            self._last_storyline_logon_by_actor_system: dict[tuple[str, str], str] = {}
+        self._last_storyline_logon_by_actor_system[(actor.username, system.hostname)] = logon_id
+
+    def _last_storyline_logon_for_actor_system(
+        self,
+        actor: User,
+        system: System,
+    ) -> str | None:
+        """Return the latest storyline-created active LogonID for this actor/host."""
+        logons = getattr(self, "_last_storyline_logon_by_actor_system", {})
+        logon_id = logons.get((actor.username, system.hostname))
+        if not logon_id:
+            return None
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != system.hostname:
+            return None
+        return logon_id
+
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
         """Return last storyline process only when it belongs to the same source host."""
         if system is None:
@@ -636,6 +657,7 @@ class StorylineMixin:
                 session.storyline_protected = True
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
+            self._record_storyline_logon(actor, system, logon_id)
 
         elif spec.type == "failed_logon":
             _attacker_ips = ["45.33.32.156", "185.220.101.34", "91.219.236.174"]
@@ -689,22 +711,25 @@ class StorylineMixin:
                             service_account=actor.username,
                         )
                 else:
-                    # Pre-compute the session kind via the planner so reuse
-                    # filtering matches the correct transport type.
-                    plan = self.world_model.plan_session(
-                        user=actor,
-                        target_system=system,
-                        rng=rng,
-                    )
-                    target_session = self.world_planner.ensure_user_session(
-                        actor,
-                        system,
-                        time,
-                        rng,
-                        session_kind=plan.session_kind,
-                        storyline_protected=True,
-                    )
-                    logon_id = target_session.logon_id
+                    logon_id = self._last_storyline_logon_for_actor_system(actor, system)
+                    if logon_id is None:
+                        # Pre-compute the session kind via the planner so reuse
+                        # filtering matches the correct transport type.
+                        plan = self.world_model.plan_session(
+                            user=actor,
+                            target_system=system,
+                            rng=rng,
+                        )
+                        target_session = self.world_planner.ensure_user_session(
+                            actor,
+                            system,
+                            time,
+                            rng,
+                            session_kind=plan.session_kind,
+                            storyline_protected=True,
+                        )
+                        logon_id = target_session.logon_id
+                        self._record_storyline_logon(actor, system, logon_id)
             else:
                 sessions = self.state_manager.get_sessions_for_user(actor.username)
                 target_session = next((s for s in sessions if s.system == system.hostname), None)
@@ -713,10 +738,9 @@ class StorylineMixin:
                     logon_id = self.activity_generator.generate_logon(
                         actor, system, logon_time, logon_type=3
                     )
+                    self._record_storyline_logon(actor, system, logon_id)
                 else:
                     logon_id = target_session.logon_id
-
-            from evidenceforge.generation.activity import _get_os_category
 
             os_category = _get_os_category(system.os)
             process_name = _normalize_storyline_process_image(
@@ -984,6 +1008,8 @@ class StorylineMixin:
                     source_ip=source_ip,
                 )
                 result = SimpleNamespace(network_uid=uid)
+            if getattr(result, "session", None) is not None:
+                self._record_storyline_logon(actor, target, result.session.logon_id)
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
             result_source_ip = (
@@ -1193,6 +1219,39 @@ class StorylineMixin:
                     target_image=spec.target_process,
                 )
             malicious_event["target_process"] = spec.target_process
+
+        elif spec.type == "process_access":
+            source_pid, source_image = self._last_storyline_process_for_system(system)
+            if source_pid <= 0:
+                # Without a source process, there is no realistic Sysmon Event
+                # 10 relationship to render. Keep the storyline record, but do
+                # not fabricate an unowned process-access event.
+                malicious_event["target_process"] = spec.target_process
+                malicious_event["skipped_reason"] = "no_source_process"
+            else:
+                os_category = _get_os_category(system.os)
+                target_image = _normalize_storyline_process_image(
+                    spec.target_process,
+                    os_category,
+                    username=actor.username,
+                )
+                target_name = target_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                target_pid = self.activity_generator._get_system_pid(
+                    system.hostname,
+                    target_name.replace(".exe", ""),
+                    0x27C,
+                )
+                self.activity_generator.generate_process_access(
+                    user=actor,
+                    system=system,
+                    time=time,
+                    source_pid=source_pid,
+                    source_image=source_image,
+                    target_pid=target_pid,
+                    target_image=target_image,
+                    granted_access=spec.access_mask,
+                )
+                malicious_event["target_process"] = target_image
 
         elif spec.type == "dhcp_lease":
             ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")
