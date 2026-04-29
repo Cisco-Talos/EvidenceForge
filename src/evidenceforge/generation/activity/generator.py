@@ -1116,7 +1116,14 @@ class ActivityGenerator:
             )
 
         cache_roll = rng.random()
-        if explicit_mode and proxy_method == "CONNECT":
+        if http is not None:
+            # When the request already carries canonical HTTP outcome data,
+            # proxy rendering should not independently invent a policy denial.
+            if proxy_cacheable and cache_roll < 0.30 and http.status_code < 400:
+                cache_result = "HIT"
+            else:
+                cache_result = "MISS"
+        elif explicit_mode and proxy_method == "CONNECT":
             if cache_roll < 0.975:
                 cache_result = "NONE"
             elif cache_roll < 0.988:
@@ -1162,11 +1169,15 @@ class ActivityGenerator:
             host_len = len(proxy_hostname)
             cs_bytes = rng.randint(180 + host_len, 520 + host_len)
 
-        status_code = {
-            "DENIED": 403,
-            "AUTH_REQUIRED": 407,
-            "GATEWAY_ERROR": rng.choice([502, 503, 504]),
-        }.get(cache_result, 200)
+        status_code = (
+            http.status_code
+            if http is not None
+            else {
+                "DENIED": 403,
+                "AUTH_REQUIRED": 407,
+                "GATEWAY_ERROR": rng.choice([502, 503, 504]),
+            }.get(cache_result, 200)
+        )
         time_taken = int((duration or 0) * 1000)
         if explicit_mode and proxy_method == "CONNECT" and status_code >= 400:
             time_taken = rng.randint(20, 1500)
@@ -3951,7 +3962,12 @@ class ActivityGenerator:
                 if domain_user_agent:
                     user_agent = domain_user_agent
                 cache_roll = rng.random()
-                if cache_roll < 0.30:
+                if event.http is not None:
+                    if cache_roll < 0.30 and event.http.status_code < 400:
+                        cache_result = "HIT"
+                    else:
+                        cache_result = "MISS"
+                elif cache_roll < 0.30:
                     cache_result = "HIT"
                 elif cache_roll < 0.95:
                     cache_result = "MISS"
@@ -3975,7 +3991,13 @@ class ActivityGenerator:
                     method=proxy_method,
                     url=url,
                     host=proxy_hostname,
-                    status_code=200 if cache_result != "DENIED" else 403,
+                    status_code=(
+                        event.http.status_code
+                        if event.http is not None
+                        else 200
+                        if cache_result != "DENIED"
+                        else 403
+                    ),
                     sc_bytes=_sc,
                     cs_bytes=_cs,
                     time_taken=int((duration or 0) * 1000),

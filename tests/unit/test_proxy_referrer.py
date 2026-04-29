@@ -213,6 +213,74 @@ class TestConnectTunnelBehavior:
 
         assert proxy_context.cache_result == "MISS"
 
+    def test_http_context_status_prevents_random_proxy_denial(self):
+        """Canonical HTTP success should not be overwritten by proxy cache randomness."""
+        from evidenceforge.generation.activity import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System
+
+        class HighCacheRollRandom:
+            def random(self):
+                return 0.99
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def choice(self, values):
+                return values[0]
+
+        generator = ActivityGenerator(StateManager(), {})
+        source_system = System(
+            hostname="ws01",
+            ip="10.0.10.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        proxy_system = System(
+            hostname="proxy01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+
+        with (
+            patch("evidenceforge.generation.activity.generator._get_rng", HighCacheRollRandom),
+            patch(
+                "evidenceforge.generation.activity.generator.pick_proxy_domain_user_agent",
+                return_value="",
+            ),
+            patch(
+                "evidenceforge.generation.activity.generator.pick_proxy_user_agent",
+                return_value="FixtureBeacon/1.0",
+            ),
+        ):
+            proxy_context = generator._build_proxy_context(
+                src_ip="10.0.10.10",
+                dst_ip="45.33.49.112",
+                dst_port=443,
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=1000,
+                hostname="telemetry-sync.example.net",
+                source_system=source_system,
+                proxy_sys=proxy_system,
+                http=HttpContext(
+                    method="GET",
+                    host="telemetry-sync.example.net",
+                    uri="/v1/checkin",
+                    user_agent="FixtureBeacon/1.0",
+                    response_body_len=1000,
+                    status_code=200,
+                    resp_mime_types=["text/html"],
+                ),
+                explicit_mode=True,
+            )
+
+        assert proxy_context.status_code == 200
+        assert proxy_context.cache_result == "MISS"
+
     def test_first_https_request_emits_connect(self):
         from pathlib import Path
 
