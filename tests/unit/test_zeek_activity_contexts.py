@@ -290,6 +290,47 @@ class TestSslContextPopulation:
         assert event.network.orig_ip_bytes > event.network.orig_bytes
         assert event.network.resp_ip_bytes > event.network.resp_bytes
 
+    def test_ssh_session_records_transport_close_time(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+        )
+
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        session = gen.state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.network_close_time == base_time + timedelta(
+            seconds=ssh_event.network.duration
+        )
+
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen
 

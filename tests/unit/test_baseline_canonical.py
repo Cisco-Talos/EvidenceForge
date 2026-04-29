@@ -680,6 +680,21 @@ class TestNoInternalGenerateRaw:
         assert "generate_raw" not in source
 
 
+class TestBaselineSshTiming:
+    """Regression tests for baseline SSH connection/syslog correlation."""
+
+    def test_disconnect_uses_same_duration_as_generated_connection(self):
+        """Baseline SSH disconnect timing should share the conn.log duration."""
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
+        assert "duration=ssh_duration" in source
+        assert "max(1.0, ssh_duration)" in source
+
+
 class TestSensorStartup:
     """Sensor startup events dispatch through canonical path."""
 

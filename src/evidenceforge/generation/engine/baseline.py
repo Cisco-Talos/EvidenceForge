@@ -4542,6 +4542,7 @@ class BaselineMixin:
 
                     _src_os = _get_os_category(src_sys_obj.os) if src_sys_obj else "linux"
                     port = _ephemeral_port(rng, _src_os)
+                    ssh_duration = rng.uniform(30.0, 1800.0)
                     self.activity_generator.generate_connection(
                         src_ip=ip,
                         dst_ip=system.ip,
@@ -4549,7 +4550,7 @@ class BaselineMixin:
                         dst_port=22,
                         proto="tcp",
                         service="ssh",
-                        duration=rng.uniform(30.0, 1800.0),
+                        duration=ssh_duration,
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
@@ -4610,6 +4611,7 @@ class BaselineMixin:
                             _msg_offset += rng.randint(1, 50)
                     else:
                         # Disconnect sequence
+                        disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
                         msgs = [
                             f"Received disconnect from {ip} port {port}:11: disconnected by user",
                             f"Disconnected from user {ssh_user} {ip} port {port}",
@@ -4617,7 +4619,7 @@ class BaselineMixin:
                         ]
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts,
+                            time=disconnect_time,
                             app_name="sshd",
                             message=rng.choice(msgs),
                             pid=sshd_pid,

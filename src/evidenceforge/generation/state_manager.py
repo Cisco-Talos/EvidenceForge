@@ -235,6 +235,7 @@ class StateManager:
         source_port: int | None = None,
         session_kind: str | None = None,
         transport_pid: int | None = None,
+        network_close_time: datetime | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -247,6 +248,8 @@ class StateManager:
                 session.session_kind = session_kind
             if transport_pid is not None:
                 session.transport_pid = transport_pid
+            if network_close_time is not None:
+                session.network_close_time = ensure_utc(network_close_time)
             return True
 
     def end_session(self, logon_id: str) -> bool:

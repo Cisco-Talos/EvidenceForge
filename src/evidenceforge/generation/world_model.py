@@ -1001,7 +1001,11 @@ class WorldPlanner:
         session = self.state_manager.get_session(logon_id)
         if session is None:
             raise RuntimeError(f"Failed to resolve SSH session {logon_id}")
-        session.last_activity_time = activity_time
+        session.last_activity_time = max(
+            marker
+            for marker in (session.last_activity_time, session.network_close_time, activity_time)
+            if marker is not None
+        )
 
         # Create per-session sshd child + bash login shell for realistic
         # Linux process trees.  Each SSH session gets its own sshd fork

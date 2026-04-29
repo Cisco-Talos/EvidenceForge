@@ -1148,11 +1148,27 @@ class ActivityGenerator:
         else:
             sc_bytes = response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
 
+        if (
+            explicit_mode
+            and proxy_method == "CONNECT"
+            and cache_result
+            in {
+                "DENIED",
+                "AUTH_REQUIRED",
+                "GATEWAY_ERROR",
+            }
+        ):
+            host_len = len(proxy_hostname)
+            cs_bytes = rng.randint(180 + host_len, 520 + host_len)
+
         status_code = {
             "DENIED": 403,
             "AUTH_REQUIRED": 407,
             "GATEWAY_ERROR": rng.choice([502, 503, 504]),
         }.get(cache_result, 200)
+        time_taken = int((duration or 0) * 1000)
+        if explicit_mode and proxy_method == "CONNECT" and status_code >= 400:
+            time_taken = rng.randint(20, 1500)
 
         return ProxyContext(
             client_ip=src_ip,
@@ -1165,7 +1181,7 @@ class ActivityGenerator:
             else status_code,
             sc_bytes=sc_bytes,
             cs_bytes=cs_bytes,
-            time_taken=int((duration or 0) * 1000),
+            time_taken=time_taken,
             user_agent=user_agent,
             content_type=proxy_content_type,
             cache_result=cache_result,
@@ -2464,14 +2480,20 @@ class ActivityGenerator:
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
         if session:
-            if session.last_activity_time:
+            session_end_markers = [
+                marker
+                for marker in (session.last_activity_time, session.network_close_time)
+                if marker is not None
+            ]
+            if session_end_markers:
                 # Source emitters add small native delays (for example Sysmon
                 # Event 1 after canonical process creation). Leave enough room
                 # that final logoff/logout records do not render before those
                 # same-session dependents in another source.
-                min_logoff_time = session.last_activity_time + sample_timing_delta(
+                latest_session_marker = max(session_end_markers)
+                min_logoff_time = latest_session_marker + sample_timing_delta(
                     "windows.logoff_after_last_activity",
-                    seed_parts=(system.hostname, logon_id, session.last_activity_time),
+                    seed_parts=(system.hostname, logon_id, latest_session_marker),
                 )
                 if time <= min_logoff_time:
                     time = min_logoff_time
@@ -3204,6 +3226,19 @@ class ActivityGenerator:
                     else [],
                 )
 
+            if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
+                rng = _get_rng()
+                host_len = len(proxy_context.host or "")
+                proxy_context.cs_bytes = rng.randint(180 + host_len, 520 + host_len)
+                proxy_context.sc_bytes = rng.randint(250, 2000)
+                proxy_context.time_taken = rng.randint(20, 1500)
+                proxy_context.tunnel_status_code = proxy_context.status_code
+                client_http.status_code = proxy_context.status_code
+                client_http.status_msg = (
+                    "Forbidden" if proxy_context.status_code == 403 else "Proxy Error"
+                )
+                client_http.response_body_len = 0
+
             client_orig_bytes = max(1, proxy_context.cs_bytes or orig_bytes or 1)
             client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
             client_duration = min(duration or 0.2, 2.0)
@@ -3359,6 +3394,17 @@ class ActivityGenerator:
 
         if pid <= 0:
             pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
+
+        if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+            query_len = len(dns.query) if dns is not None and dns.query else 12
+            query_type = (dns.query_type if dns is not None else "").upper()
+            min_query_payload = query_len + 16
+            if query_type in {"TXT", "NULL"}:
+                min_query_payload += 18
+            elif query_type == "SRV":
+                min_query_payload += 10
+            if orig_bytes is None or orig_bytes < min_query_payload:
+                orig_bytes = min_query_payload
 
         if pid > 0 and resolved_source_system:
             process = self.state_manager.get_process(resolved_source_system.hostname, pid)
@@ -4269,6 +4315,7 @@ class ActivityGenerator:
             _src_os = _get_os_category(self._ip_to_system[source_ip].os)
         src_port = source_port or _ephemeral_port(rng, _src_os)
         duration = rng.uniform(30.0, 3600.0)
+        close_time = time + timedelta(seconds=duration)
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
         visibility = self._network_visibility or (
@@ -4296,6 +4343,7 @@ class ActivityGenerator:
                 source_port=src_port,
                 session_kind="ssh",
                 transport_pid=sshd_pid,
+                network_close_time=close_time,
             )
 
         # Allocate connection in StateManager
@@ -4308,7 +4356,7 @@ class ActivityGenerator:
             source_system=src_host_ctx.hostname if src_host_ctx else "",
             source_hostname=src_host_ctx.fqdn if src_host_ctx else "",
             hostname=self._build_host_context(target_system).fqdn,
-            close_time=time + timedelta(seconds=duration),
+            close_time=close_time,
         )
         uid = self.state_manager.get_zeek_uid(conn_id)
         self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
