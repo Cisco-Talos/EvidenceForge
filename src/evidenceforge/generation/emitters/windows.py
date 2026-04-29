@@ -1182,7 +1182,12 @@ class WindowsEventEmitter(LogEmitter):
         self._event_dicts.clear()
 
     def _shift_logoffs_after_dependents(self) -> None:
-        """Prevent visible 4634 records from preceding same-session dependents."""
+        """Prevent visible 4634 records from preceding same-session dependents.
+
+        Sysmon and EDR sources render small source-native collection offsets after
+        canonical process creation. A visible Security logoff needs to clear that
+        offset window, not just the Security 4688 timestamp.
+        """
         latest_dependent: dict[tuple[str, str], datetime] = {}
         logoffs: list[tuple[tuple[str, str], dict[str, Any]]] = []
         for event in self._event_dicts:
@@ -1208,7 +1213,7 @@ class WindowsEventEmitter(LogEmitter):
             ts = event.get("TimeCreated")
             latest = latest_dependent.get(key)
             if isinstance(ts, datetime) and latest is not None and ts <= latest:
-                event["TimeCreated"] = latest + timedelta(milliseconds=1)
+                event["TimeCreated"] = latest + timedelta(milliseconds=125)
 
     def flush(self) -> None:
         """Flush dict buffer then all host writers."""

@@ -22,7 +22,7 @@
 
 """Unit tests for Phase 5.1.2: Baseline logoff generation."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -113,6 +113,27 @@ class TestLogoffWindows:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 3
+
+    def test_logoff_leaves_margin_after_last_activity(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Logoff should leave room for source-native process-create offsets."""
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.last_activity_time = timestamp + timedelta(seconds=10)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            win_system,
+            timestamp + timedelta(seconds=10, milliseconds=500),
+            logon_id,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.timestamp == timestamp + timedelta(seconds=12)
 
     def test_logoff_emits_ecar_logout(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters

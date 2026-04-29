@@ -2463,8 +2463,14 @@ class ActivityGenerator:
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
         if session:
-            if session.last_activity_time and time <= session.last_activity_time:
-                time = session.last_activity_time + timedelta(seconds=1)
+            if session.last_activity_time:
+                # Source emitters add small native delays (for example Sysmon
+                # Event 1 after canonical process creation). Leave enough room
+                # that final logoff/logout records do not render before those
+                # same-session dependents in another source.
+                min_logoff_time = session.last_activity_time + timedelta(seconds=2)
+                if time <= min_logoff_time:
+                    time = min_logoff_time
             if session.explorer_pid is not None:
                 self.state_manager.end_process(session.system, session.explorer_pid)
             # Clean up per-RDP-session winlogon chain

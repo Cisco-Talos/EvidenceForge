@@ -327,7 +327,7 @@ class TestWindowsEventEmitter:
 
         emitter._shift_logoffs_after_dependents()
 
-        assert emitter._event_dicts[0]["TimeCreated"] == process_time + timedelta(milliseconds=1)
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time + timedelta(milliseconds=125)
 
     def test_buffering(self, format_def, temp_output):
         """Test that events are buffered before flushing."""
