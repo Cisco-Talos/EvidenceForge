@@ -1025,12 +1025,20 @@ class ActivityGenerator:
             user_agent = ""
         else:
             source_os = _get_os_category(source_system.os) if source_system else None
-            path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                rng, proxy_hostname, domain_tags, source_os=source_os
-            )
+            (
+                path,
+                proxy_content_type,
+                proxy_method,
+                proxy_ua_override,
+                referrer_policy,
+            ) = pick_proxy_uri(rng, proxy_hostname, domain_tags, source_os=source_os)
             scheme = "https" if dst_port == 443 or service == "ssl" else "http"
             url = f"{scheme}://{proxy_hostname}{path}"
-            proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
+            proxy_referrer = (
+                ""
+                if referrer_policy == "none"
+                else pick_referrer(rng, proxy_hostname, context="general", port=dst_port)
+            )
             user_agent = ""
 
         domain_user_agent = pick_proxy_domain_user_agent(
@@ -2420,7 +2428,7 @@ class ActivityGenerator:
             if not _is_system_binary:
                 self.dispatcher.dispatch(
                     SecurityEvent(
-                        timestamp=time,
+                        timestamp=time + timedelta(milliseconds=120),
                         event_type="file_create",
                         src_host=self._build_host_context(system),
                         auth=AuthContext(username=process_username),
@@ -2458,7 +2466,7 @@ class ActivityGenerator:
             }[action]
             self.dispatcher.dispatch(
                 SecurityEvent(
-                    timestamp=time,
+                    timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
                     event_type=event_type,
                     src_host=host_ctx,
                     auth=auth_ctx,
@@ -2478,7 +2486,7 @@ class ActivityGenerator:
 
             dll_profiles = get_dlls_for_process(_exe_lower)
             dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
-            module_delay_ms = rng.randint(2, 1500)
+            module_delay_ms = rng.randint(120, 1500)
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time + timedelta(milliseconds=module_delay_ms),
@@ -2540,7 +2548,7 @@ class ActivityGenerator:
                 reg_action = "delete" if rng.random() < 0.15 else "modify"
                 self.dispatcher.dispatch(
                     SecurityEvent(
-                        timestamp=time,
+                        timestamp=time + timedelta(milliseconds=rng.randint(120, 950)),
                         event_type="registry_modify",
                         src_host=host_ctx,
                         auth=auth_ctx,
@@ -3462,22 +3470,48 @@ class ActivityGenerator:
                 elif dst_port == 443:
                     # Legacy single-connection HTTPS path
                     _src_os = _get_os_category(source_system.os) if source_system else None
-                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
+                    (
+                        path,
+                        proxy_content_type,
+                        proxy_method,
+                        proxy_ua_override,
+                        referrer_policy,
+                    ) = pick_proxy_uri(
+                        _get_rng(),
+                        proxy_hostname,
+                        domain_tags,
+                        source_os=_src_os,
                     )
                     url = f"https://{proxy_hostname}{path}"
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
-                    proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=443)
+                    proxy_referrer = (
+                        ""
+                        if referrer_policy == "none"
+                        else pick_referrer(rng, proxy_hostname, context="general", port=443)
+                    )
                 else:
                     _src_os = _get_os_category(source_system.os) if source_system else None
-                    path, proxy_content_type, proxy_method, proxy_ua_override = pick_proxy_uri(
-                        _get_rng(), proxy_hostname, domain_tags, source_os=_src_os
+                    (
+                        path,
+                        proxy_content_type,
+                        proxy_method,
+                        proxy_ua_override,
+                        referrer_policy,
+                    ) = pick_proxy_uri(
+                        _get_rng(),
+                        proxy_hostname,
+                        domain_tags,
+                        source_os=_src_os,
                     )
                     url = f"http://{proxy_hostname}{path}"
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
-                    proxy_referrer = pick_referrer(rng, proxy_hostname, context="general", port=80)
+                    proxy_referrer = (
+                        ""
+                        if referrer_policy == "none"
+                        else pick_referrer(rng, proxy_hostname, context="general", port=80)
+                    )
                 # OS-aware proxy User-Agent selection (skip when session set it)
                 if event.http is None:
                     if proxy_ua_override:
@@ -3598,7 +3632,7 @@ class ActivityGenerator:
                 web_host = dst_ip
             web_domain_tags = get_domain_tags(web_host)
             _src_os_http = _get_os_category(source_system.os) if source_system else None
-            uri, mime_type, http_method, http_ua_override = pick_proxy_uri(
+            uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
                 rng, web_host, web_domain_tags, source_os=_src_os_http
             )
             if http_ua_override:
@@ -3611,7 +3645,11 @@ class ActivityGenerator:
                 resp_body_len = 0
             from evidenceforge.generation.activity.referrer import pick_referrer
 
-            _http_referer = pick_referrer(rng, host, context="general", port=dst_port)
+            _http_referer = (
+                ""
+                if http_referrer_policy == "none"
+                else pick_referrer(rng, host, context="general", port=dst_port)
+            )
             event.http = HttpContext(
                 method=http_method,
                 host=host,
@@ -4232,10 +4270,11 @@ class ActivityGenerator:
         self.generate_bash_command(user, system, time, command)
 
         # Probabilistically emit 0-3 noise commands (role-aware)
-        from evidenceforge.generation.activity.bash_commands import pick_bash_command
+        from evidenceforge.generation.activity.bash_commands import pick_bash_command_entry
 
         rng = _get_rng()
         n_noise = rng.choices([0, 1, 1, 2, 2, 3], k=1)[0]
+        typo_count = 0
         # Complexity-aware inter-command delays
         _COMPLEX_PREFIXES = ("nmap", "find ", "tar ", "rsync", "make", "docker", "ansible")
         _MEDIUM_PREFIXES = ("curl", "wget", "scp", "ssh ", "mysql", "psql", "pip", "apt", "yum")
@@ -4251,9 +4290,17 @@ class ActivityGenerator:
                 delay = rng.uniform(1.0, 5.0)
             cumulative_delay += delay
             noise_time = time + timedelta(seconds=cumulative_delay)
-            noise_cmd = pick_bash_command(
-                rng, user.persona or "", system.hostname, system.services, username=user.username
+            noise_cmd, is_typo = pick_bash_command_entry(
+                rng,
+                user.persona or "",
+                system.hostname,
+                system.services,
+                username=user.username,
+                session_command_count=n_noise + 1,
+                prior_typo_count=typo_count,
             )
+            if is_typo:
+                typo_count += 1
             self.generate_bash_command(user, system, noise_time, noise_cmd)
             prev_cmd = noise_cmd
 

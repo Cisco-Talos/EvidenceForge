@@ -435,6 +435,8 @@ events:
     service: ssl
 ```
 
+Prefer full process image paths when you know the correct path. Bare executable names are accepted when the path is uncertain; generation normalizes them through the configured application/process catalog so Windows and Linux logs get canonical image paths. If a scenario needs a custom install location, add or update the relevant application/process overlay instead of inventing a one-off path in the storyline.
+
 IMPORTANT: When a process command line references a domain URL (Invoke-WebRequest, DownloadString, curl, wget), always add a paired `connection` event with `hostname` set. Without it, the domain will appear in Sysmon but be completely absent from DNS, SSL, HTTP, and proxy logs — a glaring cross-source inconsistency. For raw-IP URLs, the connection alone (without `hostname`) is sufficient.
 
 **Network connections (C2, exfiltration):**

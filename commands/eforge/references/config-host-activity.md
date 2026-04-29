@@ -34,6 +34,12 @@ sysadmin:                            # Role-specific commands
 developer:
   - "git status"
   - "docker ps"
+
+typo_model:                          # Optional typo/noise controls
+  max_rate: 0.08
+  short_history_threshold: 8
+  short_history_max_typos: 1
+  correction_probability: 0.85
 ```
 
 ### Placeholder Tokens
@@ -53,6 +59,8 @@ These are resolved at generation time from a built-in params dictionary:
 
 - `common:` section provides baseline commands for all Linux users
 - Role keys must match persona names (e.g., `sysadmin`, `developer`, `analyst`)
+- `typo_model:` caps typo density so short bash histories do not look artificially noisy
+- Run `eforge validate-config` after changing `typo_model`; rates must be between 0 and 1, and count thresholds must be non-negative integers
 - A user gets commands from `common` + their persona's role section
 - Commands should be realistic — look at actual bash history for reference
 - Include common typos and abbreviated commands for realism (`ll`, `cd -`)

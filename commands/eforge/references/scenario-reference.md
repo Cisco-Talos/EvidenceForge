@@ -329,6 +329,8 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `web_scan` | web_access + Zeek HTTP + Zeek conn | `dst_ip`, `rate`, one of `duration`/`end_time`/`count` | `preset`, `paths`, `hostname`, `user_agent`, `jitter` |
 | `raw` | Any single format | `target_format`, `fields` | |
 
+For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event.
+
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
 For `web_scan`, `rate` is average requests/second. Duration/end-time scans apply deterministic per-campaign throughput drift; explicit `count` remains exact.

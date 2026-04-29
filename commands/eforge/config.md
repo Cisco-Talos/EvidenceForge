@@ -54,10 +54,10 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add/modify DLL load profile | `application_catalog.yaml` or `system_processes.yaml` | `sysmon_filters.yaml` (Event 7 filter) |
 | Create/modify persona | `personas/{name}.yaml` | `application_catalog.yaml` (persona lists), `traffic_profiles.yaml` (persona_traffic) |
 | Modify spawn rules | `spawn_rules.yaml` | `application_catalog.yaml` (validate exe exists) |
-| Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists) |
+| Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
-| Modify bash commands | `bash_commands.yaml` | Validate role names match persona names |
+| Modify bash commands | `bash_commands.yaml` | Validate role names match persona names; keep `typo_model` rates/counts realistic |
 | Modify traffic rate defaults | `traffic_rates.yaml` | (standalone — intensity-based rate table for all system traffic) |
 | Modify systemd schedules | `systemd_schedules.yaml` | (standalone) |
 | Modify Sysmon event filtering | `sysmon_filters.yaml` | (standalone — affects which Events 3/7/11/12/13/22 are emitted) |

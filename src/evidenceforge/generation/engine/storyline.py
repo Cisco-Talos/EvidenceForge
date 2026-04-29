@@ -36,6 +36,7 @@ import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import System, User
@@ -147,6 +148,17 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     if count is None:
         effective_rate *= rng.uniform(0.82, 1.18)
     return 1.0 / effective_rate
+
+
+def _normalize_storyline_process_image(
+    process_name: str,
+    os_category: str,
+    username: str = "",
+) -> str:
+    """Normalize a storyline executable to the canonical full path when possible."""
+    if "\\" in process_name or "/" in process_name:
+        return process_name
+    return resolve_image_path(process_name, os_category, username=username)
 
 
 # Realistic decoded PowerShell commands for base64 encoding
@@ -707,7 +719,11 @@ class StorylineMixin:
             from evidenceforge.generation.activity import _get_os_category
 
             os_category = _get_os_category(system.os)
-            process_name = spec.process_name
+            process_name = _normalize_storyline_process_image(
+                spec.process_name,
+                os_category,
+                username=actor.username,
+            )
             command_line = spec.command_line or process_name
 
             if os_category == "linux":

@@ -38,6 +38,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
+### P0 Cross-Source Timing Audit
+
+- [ ] **P0** Comprehensive correlated-event timing audit — after the current 78% synthetic blind-review fixes, perform a full audit similar to the emitter field-provenance audit, but focused on timing relationships between correlated events. Inventory all generated event clusters that are expected to correlate across Security/Sysmon/eCAR/Zeek/proxy/ASA/syslog/baseline/storyline outputs; identify where timestamps are source-native exact, realistically offset, impossible, or accidentally reordered; verify same-source ordering invariants such as process-create before process follow-on artifacts; verify cross-source offsets such as DNS before TCP, proxy client leg before proxy egress, firewall deny before absent downstream evidence, process create before WFP/Sysmon network evidence, auth before process, module/file/registry after process, and teardown after build/start; then implement root-cause fixes with tests and generated-output probes.
+
 ### World Model Refactor
 
 - [x] Open the draft PR from `world-model` into `dev`

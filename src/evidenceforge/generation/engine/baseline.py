@@ -3274,8 +3274,27 @@ class BaselineMixin:
             pick_domain_and_ip,
             resolve_domain_ip,
         )
+        from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
         domain_tags = get_domain_tags(hostname) if hostname else []
+
+        if not is_browser_like_proxy_domain(hostname):
+            self.activity_generator.generate_connection(
+                src_ip=system.ip,
+                dst_ip=dst_ip,
+                time=base_ts,
+                dst_port=conn.get("port", 443),
+                proto=conn.get("proto", "tcp"),
+                service=conn.get("service"),
+                duration=rng.uniform(0.1, 10.0),
+                orig_bytes=rng.randint(200, 8000),
+                resp_bytes=rng.randint(500, 80000),
+                emit_dns=conn.get("emit_dns", False),
+                source_system=system,
+                hostname=hostname,
+                pid=persona_pid,
+            )
+            return
 
         # Resolve browsing intensity: user override > persona > default
         intensity = "normal"
@@ -3975,7 +3994,9 @@ class BaselineMixin:
             if os_cat == "linux" and sys_type == "server":
                 roster = self._get_server_ssh_users(system)
                 if roster:
-                    from evidenceforge.generation.activity.bash_commands import pick_bash_command
+                    from evidenceforge.generation.activity.bash_commands import (
+                        pick_bash_command_entry,
+                    )
 
                     num_ssh = rng.randint(1, 3)
                     for _ in range(num_ssh):
@@ -4019,15 +4040,20 @@ class BaselineMixin:
                                 "pip install",
                             ]
                         )
+                        typo_count = 0
                         for _cmd_i in range(n_cmds):
                             cmd_offset = rng.randint(30, 600)
-                            cmd = pick_bash_command(
+                            cmd, is_typo = pick_bash_command_entry(
                                 rng,
                                 ssh_user.persona or "",
                                 system.hostname,
                                 system.services,
                                 username=ssh_user.username,
+                                session_command_count=n_cmds,
+                                prior_typo_count=typo_count,
                             )
+                            if is_typo:
+                                typo_count += 1
                             # Complexity-aware timing: build/install commands
                             # take longer than simple lookups (ls, cat, pwd)
                             is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)

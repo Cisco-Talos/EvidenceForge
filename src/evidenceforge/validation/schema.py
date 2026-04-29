@@ -117,6 +117,11 @@ def _get_os_category(os_string: str) -> str:
     return "unknown"
 
 
+def _is_full_process_path(process_name: str) -> bool:
+    """Return whether process_name looks like a full OS path."""
+    return "/" in process_name or "\\" in process_name
+
+
 @dataclass
 class ValidationIssue:
     """Represents a validation issue found in a scenario.
@@ -1009,6 +1014,46 @@ class ScenarioValidator:
                 if event_type == "process" and hasattr(spec, "command_line"):
                     cmd = spec.command_line or spec.process_name
                     cmd_lower = cmd.lower()
+                    process_name = getattr(spec, "process_name", "")
+
+                    if process_name and not _is_full_process_path(process_name):
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="info",
+                                field_path=f"storyline.{idx}.events.{spec_idx}.process_name",
+                                message=(
+                                    f"[{event.id}] Process name '{process_name}' is bare; "
+                                    "generation will normalize it to a canonical full path"
+                                ),
+                                suggestion=(
+                                    "Use a full path when you know it; otherwise a bare executable "
+                                    "name is acceptable and will be resolved from EvidenceForge config"
+                                ),
+                            )
+                        )
+                    elif process_name:
+                        from evidenceforge.generation.activity.application_catalog import (
+                            resolve_image_path,
+                        )
+
+                        basename = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                        resolved = resolve_image_path(basename, os_cat)
+                        if resolved != basename and resolved.lower() != process_name.lower():
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    field_path=(f"storyline.{idx}.events.{spec_idx}.process_name"),
+                                    message=(
+                                        f"[{event.id}] Process path '{process_name}' differs "
+                                        f"from configured canonical path '{resolved}'"
+                                    ),
+                                    suggestion=(
+                                        "Prefer the configured canonical path, or add an "
+                                        "application_catalog/system_processes overlay if this "
+                                        "environment uses a different install path"
+                                    ),
+                                )
+                            )
 
                     if os_cat == "linux":
                         for indicator in _WINDOWS_COMMAND_INDICATORS:

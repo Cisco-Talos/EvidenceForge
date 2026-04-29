@@ -236,6 +236,36 @@ class TestActivityGenerator:
         assert event.process.image == process_name
         assert event.process.command_line == command_line
 
+    def test_process_follow_on_file_event_after_process_create(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Process follow-on artifacts should not predate the process create event."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0x12345",
+            r"C:\Users\Public\dropper.exe",
+            r"C:\Users\Public\dropper.exe",
+            ensure_file_event=True,
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_event = next(event for event in events if event.event_type == "process_create")
+        file_event = next(
+            event
+            for event in events
+            if event.event_type == "file_create"
+            and event.file is not None
+            and event.file.path == r"C:\Users\Public\dropper.exe"
+        )
+        assert file_event.timestamp > process_event.timestamp
+
     def test_user_session_process_identity_resolved_before_emit(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):

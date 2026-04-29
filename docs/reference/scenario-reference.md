@@ -446,6 +446,8 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `workstation_unlock` | Windows 4801 + 4624 type 7 (unlock + re-auth) | | |
 | `raw` | Any single format | `target_format`, `fields` | |
 
+For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event.
+
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
 ### Red Herrings

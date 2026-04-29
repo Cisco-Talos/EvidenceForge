@@ -1160,6 +1160,8 @@ class TestExplicitProxyVisibility:
         assert any(event.dns.query == "example.com" for event in dns_events)
 
     def test_private_destination_without_hostname_does_not_invent_public_dns(self):
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
         workstation = _system("WKS-01", "10.0.1.10")
         state_manager = StateManager()
         state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
@@ -1169,20 +1171,27 @@ class TestExplicitProxyVisibility:
         generator._dns_server_ips = ["10.0.0.1"]
         generator._ad_domain = "example.org"
 
-        generator.generate_connection(
-            src_ip="10.0.1.10",
-            dst_ip="10.0.0.1",
-            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
-            dst_port=443,
-            proto="tcp",
-            service=None,
-            duration=1.0,
-            orig_bytes=500,
-            resp_bytes=5000,
-            source_system=workstation,
-            emit_dns=True,
-            conn_state="SF",
-        )
+        previous_reverse = REVERSE_DNS.pop("10.0.0.1", None)
+        try:
+            generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.0.1",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                dst_port=443,
+                proto="tcp",
+                service=None,
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                source_system=workstation,
+                emit_dns=True,
+                conn_state="SF",
+            )
+        finally:
+            if previous_reverse is None:
+                REVERSE_DNS.pop("10.0.0.1", None)
+            else:
+                REVERSE_DNS["10.0.0.1"] = previous_reverse
 
         dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
         assert dns_events
