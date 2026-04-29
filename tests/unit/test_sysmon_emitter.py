@@ -364,6 +364,32 @@ class TestSysmonEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == create_time + timedelta(milliseconds=1)
 
+    def test_termination_shifted_after_follow_on(self, format_def, temp_output):
+        """Event 5 should not precede later visible telemetry for the same ProcessGuid."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        network_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        process_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 5,
+                "TimeCreated": terminate_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+            {
+                "EventID": 3,
+                "TimeCreated": network_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+        ]
+
+        emitter._shift_terminations_after_followons()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == network_time + timedelta(milliseconds=1)
+
     def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""
         emitter = SysmonEventEmitter(format_def, temp_output)

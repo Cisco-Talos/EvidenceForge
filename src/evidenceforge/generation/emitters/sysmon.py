@@ -1415,6 +1415,7 @@ class SysmonEventEmitter(LogEmitter):
             return
 
         self._shift_followons_after_process_create()
+        self._shift_terminations_after_followons()
 
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
@@ -1480,6 +1481,29 @@ class SysmonEventEmitter(LogEmitter):
             create_time = process_create_times.get((computer, str(guid)))
             if create_time is not None and ts <= create_time:
                 event["TimeCreated"] = create_time + timedelta(milliseconds=1)
+
+    def _shift_terminations_after_followons(self) -> None:
+        """Prevent Event 5 from preceding visible same-process follow-on telemetry."""
+        latest_followon: dict[tuple[str, str], datetime] = {}
+        terminations: list[tuple[tuple[str, str], dict[str, Any]]] = []
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            key = (str(event.get("Computer", "")), str(guid))
+            if event.get("EventID") == 5:
+                terminations.append((key, event))
+                continue
+            if event.get("EventID") == 1:
+                continue
+            latest_followon[key] = max(ts, latest_followon.get(key, ts))
+
+        for key, event in terminations:
+            ts = event.get("TimeCreated")
+            latest = latest_followon.get(key)
+            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + timedelta(milliseconds=1)
 
     def flush(self) -> None:
         with self._file_lock:

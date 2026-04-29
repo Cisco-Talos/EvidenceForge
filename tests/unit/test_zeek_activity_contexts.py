@@ -165,6 +165,74 @@ class TestSslContextPopulation:
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
 
+    def test_ssh_syslog_sub_events_are_second_ordered(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            sshd_pid=6505,
+        )
+
+        syslog_events = [
+            event for event in events if event.syslog is not None and event.syslog.pid == 6505
+        ]
+        messages = [event.syslog.message for event in syslog_events]
+        times = [event.timestamp for event in syslog_events]
+        assert messages == [
+            'Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22 rdomain ""',
+            "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
+            "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
+        ]
+        assert times == [
+            base_time - timedelta(seconds=1),
+            base_time,
+            base_time + timedelta(seconds=1),
+        ]
+
+    def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        for idx in range(3):
+            gen.generate_ssh_session(
+                user=user,
+                target_system=target,
+                time=datetime(2024, 1, 15, 10, idx, 0, tzinfo=UTC),
+                source_ip="10.0.10.50",
+            )
+
+        session_ids = []
+        for event in events:
+            if event.syslog is None or event.syslog.app_name != "systemd-logind":
+                continue
+            session_ids.append(int(event.syslog.message.split()[2]))
+
+        assert len(session_ids) == 3
+        assert session_ids == sorted(session_ids)
+        assert max(session_ids) < 1000
+
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen
 

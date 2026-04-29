@@ -457,6 +457,40 @@ class TestCanHandleDefault:
         assert "19:00:53" in lines[0]
         assert "20:01:25" in lines[1]
 
+    def test_syslog_sorts_same_second_ssh_lifecycle(self, tmp_path):
+        """Same-second SSH syslog groups should keep lifecycle order."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        timestamp = datetime(2024, 10, 14, 19, 0, 53, tzinfo=UTC)
+        for message in [
+            "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
+            'Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22 rdomain ""',
+            "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "sshd",
+                    "pid": 6505,
+                    "facility": 10,
+                    "severity": 6,
+                    "message": message,
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert "Connection from" in lines[0]
+        assert "Accepted password" in lines[1]
+        assert "pam_unix(sshd:session): session opened" in lines[2]
+
 
 class TestBuildHostContext:
     """Tests for ActivityGenerator._build_host_context()."""

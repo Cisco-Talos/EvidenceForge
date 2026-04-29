@@ -4332,22 +4332,20 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            # Session ID: monotonic + unique per host. Derived from epoch seconds
-            # for call-order independence, with collision handling for same-second sessions.
+            # Session ID: monotonic + unique per host. Keep this in the same
+            # small integer regime real systemd-logind messages use; huge
+            # epoch-derived IDs mixed with small IDs are a synthetic tell.
             hostname = target_system.hostname
             if not hasattr(self, "_session_id_state"):
-                self._session_id_state: dict[str, tuple[int, int]] = {}
+                self._session_id_state: dict[str, int] = {}
             if hostname not in self._session_id_state:
-                self._session_id_state[hostname] = (0, rng.randint(50, 500))
-            _last_epoch, _last_id = self._session_id_state[hostname]
-            _epoch_sec = int(time.timestamp())
-            _candidate = rng.randint(50, 500) + (_epoch_sec - 1700000000)
-            session_id = max(_candidate, _last_id + 1)
-            self._session_id_state[hostname] = (_epoch_sec, session_id)
+                self._session_id_state[hostname] = rng.randint(20, 250)
+            session_id = self._session_id_state[hostname] + rng.randint(1, 4)
+            self._session_id_state[hostname] = session_id
 
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
-                timestamp=time - timedelta(microseconds=rng.randint(1000, 5000)),
+                timestamp=time - timedelta(seconds=1),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -4382,7 +4380,7 @@ class ActivityGenerator:
 
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             pam_event = SecurityEvent(
-                timestamp=time + timedelta(microseconds=rng.randint(1000, 50000)),
+                timestamp=time + timedelta(seconds=1),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -4400,7 +4398,7 @@ class ActivityGenerator:
 
             # systemd-logind new session (syslog-only)
             logind_event = SecurityEvent(
-                timestamp=time + timedelta(microseconds=rng.randint(50000, 80000)),
+                timestamp=time + timedelta(seconds=2),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -5306,6 +5304,7 @@ class ActivityGenerator:
             else:
                 source_ip = None  # Local console on Windows — defaults to system.ip
 
+            emit_transport_syslog = True
             # For Linux hosts with remote logon, emit SSH session (network-side evidence)
             # before the host-side auth event — matches real-world ordering.
             if (
@@ -5321,6 +5320,7 @@ class ActivityGenerator:
                     time=ssh_time,
                     source_ip=source_ip,
                 )
+                emit_transport_syslog = False
             elif (
                 _get_os_category(system.os) == "windows"
                 and logon_type == 10
@@ -5336,7 +5336,14 @@ class ActivityGenerator:
                 )
                 return
 
-            self.generate_logon(user, system, time, logon_type=logon_type, source_ip=source_ip)
+            self.generate_logon(
+                user,
+                system,
+                time,
+                logon_type=logon_type,
+                source_ip=source_ip,
+                emit_transport_syslog=emit_transport_syslog,
+            )
 
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
