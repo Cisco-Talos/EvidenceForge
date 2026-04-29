@@ -98,6 +98,26 @@ class ProcessContext:
 
 
 @dataclass(slots=True)
+class RemoteThreadContext:
+    """Cross-source details for remote thread creation."""
+
+    target_pid: int
+    target_image: str
+    new_thread_id: int
+    start_address: int
+    start_module: str = ""
+    start_function: str = ""
+    source_thread_id: int = 0
+    target_thread_id: int = 0
+    target_process_object_id: str = ""
+    thread_object_id: str = ""
+    stack_base: int = 0
+    stack_limit: int = 0
+    user_stack_base: int = 0
+    user_stack_limit: int = 0
+
+
+@dataclass(slots=True)
 class NetworkContext:
     """Network connection details -- shared across Zeek, eCAR, Snort."""
 

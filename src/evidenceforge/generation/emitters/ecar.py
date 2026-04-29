@@ -276,6 +276,7 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_module_event(self, event: SecurityEvent) -> None:
         """Render eCAR MODULE/LOAD event from canonical FileContext (logged on src_host)."""
         host = event.src_host
+        proc = event.process
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
@@ -286,6 +287,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_path": event.file.path if event.file else "",
             "_host_fqdn": self._host_fqdn(host),
         }
+        if proc:
+            event_data["image_path"] = proc.image
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -349,17 +352,17 @@ class EcarEmitter(HostMultiplexEmitter):
         OpTC field structure: objectID = new thread UUID, actorID = source
         process UUID, tgt_pid_uuid = target process UUID in properties.
         """
-        import random as rng_mod
-
         host = event.src_host
         proc = event.process
         auth = event.auth
-        target_pid = int(auth.source_port) if auth and auth.source_port else -1
-        src_tid = rng_mod.randint(1000, 9999)
-        tgt_tid = rng_mod.randint(1000, 9999)
-        # x86-64 canonical addresses: page-aligned, proper ranges
-        _kstack_base = 0xFFFFF80000000000 + (rng_mod.randint(0, 0xFFFFF) << 12)
-        _ustack_base = 0x000000C0000000 + (rng_mod.randint(0, 0xFFF) << 12)
+        remote_thread = event.remote_thread
+        target_pid = (
+            remote_thread.target_pid
+            if remote_thread is not None
+            else int(auth.source_port)
+            if auth and auth.source_port
+            else -1
+        )
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
@@ -367,19 +370,21 @@ class EcarEmitter(HostMultiplexEmitter):
             "action": "REMOTE_CREATE",
             "pid": proc.pid,
             "ppid": proc.parent_pid,
-            "tid": src_tid,
+            "tid": remote_thread.source_thread_id if remote_thread else 0,
             "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
             "image_path": proc.image,
             "src_pid": str(proc.pid),
-            "src_tid": str(src_tid),
+            "src_tid": str(remote_thread.source_thread_id if remote_thread else 0),
             "tgt_pid": str(target_pid),
-            "tgt_pid_uuid": str(uuid.uuid4()),
-            "tgt_tid": str(tgt_tid),
-            "start_address": f"00007ff{rng_mod.randint(0x0, 0xF):x}{rng_mod.randint(0x0000, 0xFFFF):04x}0000",
-            "stack_base": f"{_kstack_base:016x}",
-            "stack_limit": f"{_kstack_base - 0x6000:016x}",
-            "user_stack_base": f"{_ustack_base:016x}",
-            "user_stack_limit": f"{_ustack_base - 0x100000:016x}",
+            "tgt_pid_uuid": remote_thread.target_process_object_id
+            if remote_thread
+            else str(uuid.uuid4()),
+            "tgt_tid": str(remote_thread.target_thread_id if remote_thread else 0),
+            "start_address": f"{remote_thread.start_address:016x}" if remote_thread else "",
+            "stack_base": f"{remote_thread.stack_base:016x}" if remote_thread else "",
+            "stack_limit": f"{remote_thread.stack_limit:016x}" if remote_thread else "",
+            "user_stack_base": f"{remote_thread.user_stack_base:016x}" if remote_thread else "",
+            "user_stack_limit": f"{remote_thread.user_stack_limit:016x}" if remote_thread else "",
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)

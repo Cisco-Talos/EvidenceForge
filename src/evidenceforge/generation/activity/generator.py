@@ -50,6 +50,7 @@ from evidenceforge.events.contexts import (
     OcspContext,
     ProxyContext,
     RegistryContext,
+    RemoteThreadContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.proxy_user_agents import (
@@ -79,6 +80,20 @@ from .network import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_WINDOWS_USER_SESSION_PROCESSES = {
+    "sihost.exe",
+    "searchhost.exe",
+    "searchprotocolhost.exe",
+    "searchfilterhost.exe",
+    "searchindexer.exe",
+    "runtimebroker.exe",
+    "textinputhost.exe",
+    "startmenuexperiencehost.exe",
+    "shellexperiencehost.exe",
+    "applicationframehost.exe",
+}
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -817,6 +832,38 @@ class ActivityGenerator:
             netbios_domain=ad_domain.split(".")[0].upper() if ad_domain else "CORP",
             roles=list(system.roles),
         )
+
+    def _resolve_process_identity(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+    ) -> tuple[str, str]:
+        """Resolve process owner/logon before emitters render cross-source evidence."""
+        if _get_os_category(system.os) != "windows":
+            return username, logon_id
+
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_USER_SESSION_PROCESSES or username not in _SYSTEM_ACCOUNTS:
+            return username, logon_id
+
+        candidates = [
+            session
+            for session in self.state_manager.list_active_sessions()
+            if (
+                session.system == system.hostname
+                and session.username not in _SYSTEM_ACCOUNTS
+                and session.logon_type in (2, 10, 11)
+            )
+        ]
+        if not candidates:
+            return username, logon_id
+
+        candidates.sort(key=lambda session: session.start_time, reverse=True)
+        session = candidates[0]
+        return session.username, session.logon_id
 
     def _remember_connection_tuple(
         self,
@@ -2292,15 +2339,24 @@ class ActivityGenerator:
                     rng = _get_rng()
                     _integrity = "Low" if rng.random() < 0.65 else "Medium"
 
+        process_username, process_logon_id = self._resolve_process_identity(
+            system=system,
+            username=user.username,
+            logon_id=logon_id,
+            process_name=process_name,
+        )
+        if process_username != user.username:
+            _integrity = "Medium"
+
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
             image=process_name,
             command_line=command_line,
-            username=user.username,
+            username=process_username,
             integrity_level=_integrity,
-            logon_id=logon_id,
+            logon_id=process_logon_id,
         )
 
         # Phase 2: Build SecurityEvent
@@ -2312,18 +2368,18 @@ class ActivityGenerator:
             event_type="process_create",
             src_host=self._build_host_context(system),
             auth=AuthContext(
-                username=user.username,
-                user_sid=self._get_sid(user.username),
-                logon_id=logon_id,
+                username=process_username,
+                user_sid=self._get_sid(process_username),
+                logon_id=process_logon_id,
             ),
             process=ProcessContext(
                 pid=pid,
                 parent_pid=parent_pid,
                 image=process_name,
                 command_line=command_line,
-                username=user.username,
+                username=process_username,
                 integrity_level=_integrity,
-                logon_id=logon_id,
+                logon_id=process_logon_id,
                 parent_image=self._lookup_process_name(
                     system.hostname, parent_pid, _get_os_category(system.os)
                 ),
@@ -2355,13 +2411,13 @@ class ActivityGenerator:
                         timestamp=time,
                         event_type="file_create",
                         src_host=self._build_host_context(system),
-                        auth=AuthContext(username=user.username),
+                        auth=AuthContext(username=process_username),
                         process=ProcessContext(
                             pid=pid,
                             parent_pid=parent_pid,
                             image=process_name,
                             command_line=command_line,
-                            username=user.username,
+                            username=process_username,
                         ),
                         file=FileContext(path=process_name, action="create", pid=pid),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
@@ -2372,7 +2428,7 @@ class ActivityGenerator:
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
-        auth_ctx = AuthContext(username=user.username)
+        auth_ctx = AuthContext(username=process_username)
         if rng.random() < 0.40:
             action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
             from evidenceforge.generation.activity.edr_pools import get_file_paths
@@ -2399,22 +2455,30 @@ class ActivityGenerator:
                         parent_pid=parent_pid,
                         image=process_name,
                         command_line=command_line,
-                        username=user.username,
+                        username=process_username,
                     ),
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
-            from evidenceforge.generation.activity.edr_pools import get_dll_pool
+            from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 
-            dll_path = rng.choice(get_dll_pool())
+            dll_profiles = get_dlls_for_process(_exe_lower)
+            dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
             self.dispatcher.dispatch(
                 SecurityEvent(
                     timestamp=time,
                     event_type="module_load",
                     src_host=host_ctx,
                     auth=auth_ctx,
+                    process=ProcessContext(
+                        pid=pid,
+                        parent_pid=parent_pid,
+                        image=process_name,
+                        command_line=command_line,
+                        username=process_username,
+                    ),
                     file=FileContext(path=dll_path, action="load", pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                 )
@@ -2502,23 +2566,25 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ProcessContext
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        process_username = running_proc.username if running_proc is not None else user.username
+        process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
             src_host=self._build_host_context(system),
             auth=AuthContext(
-                username=user.username,
-                user_sid=self._get_sid(user.username),
-                logon_id=logon_id,
+                username=process_username,
+                user_sid=self._get_sid(process_username),
+                logon_id=process_logon_id,
             ),
             process=ProcessContext(
                 pid=pid,
                 parent_pid=0,
                 image=process_name,
                 command_line="",
-                username=user.username,
-                logon_id=logon_id,
+                username=process_username,
+                logon_id=process_logon_id,
                 start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id),
@@ -5906,22 +5972,64 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import ProcessContext
 
+        rng = random.Random(
+            _stable_seed(
+                "remote_thread:"
+                f"{system.hostname}:{source_pid}:{target_pid}:{time.isoformat()}:{target_image}"
+            )
+        )
+        from evidenceforge.generation.activity.create_remote_thread_patterns import (
+            pick_remote_thread_start,
+        )
+
+        start_module, start_function = pick_remote_thread_start(source_image, target_image, rng)
+        start_address = rng.randint(0x01000000, 0x7FFFFFFF)
+        source_proc = self.state_manager.get_process(system.hostname, source_pid)
+        source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
+        target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
+        thread_obj_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_DNS,
+                f"{system.hostname}:{source_pid}:{target_pid}:{time.isoformat()}:{start_address}",
+            )
+        )
+        stack_base = 0xFFFFF80000000000 + (rng.randint(0, 0xFFFFF) << 12)
+        user_stack_base = 0x000000C0000000 + (rng.randint(0, 0xFFF) << 12)
         event = SecurityEvent(
             timestamp=time,
             event_type="create_remote_thread",
             src_host=self._build_host_context(system),
             process=ProcessContext(
                 pid=source_pid,
-                parent_pid=0,
+                parent_pid=source_proc.parent_pid if source_proc is not None else 0,
                 image=source_image,
-                command_line="",
-                username=user.username,
+                command_line=source_proc.command_line if source_proc is not None else "",
+                username=source_proc.username if source_proc is not None else user.username,
+                logon_id=source_proc.logon_id if source_proc is not None else "",
+                start_time=source_proc.start_time if source_proc is not None else None,
             ),
             auth=AuthContext(
-                username=user.username,
+                username=source_proc.username if source_proc is not None else user.username,
                 target_server=target_image,
                 source_port=target_pid,  # Pack target PID into source_port for emitter
             ),
+            remote_thread=RemoteThreadContext(
+                target_pid=target_pid,
+                target_image=target_image,
+                new_thread_id=rng.randint(100, 9999),
+                start_address=start_address,
+                start_module=start_module,
+                start_function=start_function,
+                source_thread_id=rng.randint(1000, 9999),
+                target_thread_id=rng.randint(1000, 9999),
+                target_process_object_id=target_obj_id,
+                thread_object_id=thread_obj_id,
+                stack_base=stack_base,
+                stack_limit=stack_base - 0x6000,
+                user_stack_base=user_stack_base,
+                user_stack_limit=user_stack_base - 0x100000,
+            ),
+            edr=EdrContext(object_id=thread_obj_id, actor_id=source_obj_id),
         )
         self.dispatcher.dispatch(event)
 

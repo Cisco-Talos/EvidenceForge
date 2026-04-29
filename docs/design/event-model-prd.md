@@ -105,6 +105,16 @@ class ProcessContext:
     start_time: datetime | None = None  # Creation time for stable process GUIDs
 
 @dataclass(slots=True)
+class RemoteThreadContext:
+    """Remote thread creation details shared by Sysmon Event 8 and eCAR."""
+    target_pid: int
+    target_image: str
+    new_thread_id: int
+    start_address: int
+    start_module: str = ""
+    start_function: str = ""
+
+@dataclass(slots=True)
 class NetworkContext:
     """Network connection details -- shared across Zeek, eCAR, Snort."""
     src_ip: str

@@ -151,6 +151,7 @@ def validate_config() -> ValidationResult:
         },
         "activity/create_remote_thread_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
+            "dict_fields": {"start_locations", "target_overrides"},
         },
         "activity/system_processes.yaml": {
             "dict_fields": {
@@ -406,6 +407,7 @@ def validate_config() -> ValidationResult:
     # so that overlay customizations are visible to validation.
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
+        load_create_remote_thread_config,
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
@@ -428,6 +430,7 @@ def validate_config() -> ValidationResult:
     process_net_data = load_process_network_map()
     process_access_data = load_process_access_patterns()
     create_remote_thread_data = load_create_remote_thread_patterns()
+    create_remote_thread_config = load_create_remote_thread_config()
     proxy_data = load_proxy_uri_templates()
     proxy_ua_data = load_proxy_user_agents()
     site_data = load_site_maps()
@@ -1025,6 +1028,7 @@ def validate_config() -> ValidationResult:
         ProcessNetworkEntry,
         ProxyUserAgentOverrideEntry,
         PublicNtpServerEntry,
+        RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
         SmbFileTransferConfig,
         SpawnRuleEntry,
@@ -1088,6 +1092,20 @@ def validate_config() -> ValidationResult:
                 "create_remote_thread_patterns.yaml",
             )
         )
+    remote_thread_locations = []
+    for locations in (create_remote_thread_config.get("start_locations") or {}).values():
+        if isinstance(locations, list):
+            remote_thread_locations.extend(locations)
+    for override in (create_remote_thread_config.get("target_overrides") or {}).values():
+        if isinstance(override, dict) and isinstance(override.get("start_locations"), list):
+            remote_thread_locations.extend(override["start_locations"])
+    _SCHEMA_CHECKS.append(
+        (
+            remote_thread_locations,
+            RemoteThreadStartLocationEntry,
+            "create_remote_thread_patterns.yaml start_locations",
+        )
+    )
 
     # traffic_profiles.yaml: connection entries
     all_traffic_connection_entries = []

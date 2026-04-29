@@ -148,6 +148,7 @@ SecurityEvent
 ├── dst_host: HostContext (target system — hostname, IP, OS, domain, FQDN)
 ├── auth: AuthContext (logon_id, logon_type, SID, failure codes)
 ├── process: ProcessContext (pid, parent_pid, image, command_line, start_time)
+├── remote_thread: RemoteThreadContext (target_pid, new_thread_id, start_address)
 ├── network: NetworkContext (src/dst IP/port, protocol, zeek_uid, bytes)
 ├── dns: DnsContext (query, type, response, TTL)
 ├── file: FileContext (path, hash, operation)
