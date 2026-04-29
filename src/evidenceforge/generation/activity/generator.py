@@ -7408,6 +7408,36 @@ class ActivityGenerator:
                 )
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
+        # Auto-created parent chains should not fabricate a fresh parent with
+        # the same executable as the child when another valid parent exists.
+        # Existing same-exe parents are still honored in _resolve_parent().
+        child_exe_lower = child_exe.lower()
+        nonself_parents = [
+            parent for parent in possible_parents if parent.lower() != child_exe_lower
+        ]
+        if nonself_parents:
+            possible_parents = nonself_parents
+
+        if (
+            os_cat == "windows"
+            and child_exe_lower in {"cmd.exe", "powershell.exe", "pwsh.exe"}
+            and "explorer.exe" in {parent.lower() for parent in possible_parents}
+        ):
+            possible_parents = ["explorer.exe"]
+
+        # Fresh CLI parent chains should start from a shell when the rules
+        # allow it. Existing IDE/editor parents are still honored in
+        # _resolve_parent(), but auto-creating a new Code.exe just to launch a
+        # command-line tool looks less like a normal interactive session.
+        if os_cat == "windows":
+            shell_parents = [
+                parent
+                for parent in possible_parents
+                if parent.lower() in {"cmd.exe", "powershell.exe", "pwsh.exe"}
+            ]
+            if shell_parents:
+                possible_parents = shell_parents
+
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux
         chosen_parent = rng.choice(possible_parents)
 
