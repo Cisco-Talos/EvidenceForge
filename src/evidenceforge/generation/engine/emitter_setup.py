@@ -573,6 +573,7 @@ class EmitterSetupMixin:
             start_time=sm.state.current_time,
             integrity_level="System",
         )
+        pids["system"] = 4
         pids["smss"] = _c(4, r"C:\Windows\System32\smss.exe", "smss.exe", "SYSTEM")
         pids["csrss_s0"] = _c(pids["smss"], r"C:\Windows\System32\csrss.exe", "csrss.exe", "SYSTEM")
         pids["wininit"] = _c(

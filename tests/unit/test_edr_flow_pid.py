@@ -210,6 +210,65 @@ class TestConnectionPidPropagation:
         assert event is not None
         assert event.timestamp > timestamp
 
+    def test_connection_updates_process_last_activity_time(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """FLOW attribution should keep process termination after dependent network evidence."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe"',
+            "jdoe",
+            "Medium",
+        )
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp + timedelta(minutes=5),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=3.0,
+            orig_bytes=500,
+            resp_bytes=1500,
+            conn_state="SF",
+            source_system=win_system,
+            pid=pid,
+        )
+
+        proc = state_manager.get_process("WKS-01", pid)
+        assert proc is not None
+        assert proc.last_activity_time is not None
+        assert proc.last_activity_time >= timestamp + timedelta(minutes=5, seconds=3)
+
+    def test_connection_drops_stale_non_system_pid_attribution(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """A FLOW should not claim a PID that is no longer running in source state."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            source_system=win_system,
+            pid=5156,
+            process_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == -1
+        assert event.process is None
+        assert event.edr is not None
+        assert event.edr.actor_id == ""
+
     def test_connection_with_pid_gets_edr_actor_id(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters
     ):

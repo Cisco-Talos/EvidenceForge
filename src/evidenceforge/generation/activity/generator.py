@@ -3424,6 +3424,7 @@ class ActivityGenerator:
         if pid <= 0:
             pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
 
+        resolved_process = None
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             query_len = len(dns.query) if dns is not None and dns.query else 12
             query_type = (dns.query_type if dns is not None else "").upper()
@@ -3438,9 +3439,22 @@ class ActivityGenerator:
                 duration = max(0.001, dns.rtt)
 
         if pid > 0 and resolved_source_system:
-            process = self.state_manager.get_process(resolved_source_system.hostname, pid)
-            if process and process.start_time and time < process.start_time:
-                time = process.start_time + timedelta(milliseconds=1)
+            resolved_process = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if (
+                resolved_process
+                and resolved_process.start_time
+                and time < resolved_process.start_time
+            ):
+                time = resolved_process.start_time + timedelta(milliseconds=1)
+            elif resolved_process is None and pid != 4:
+                logger.debug(
+                    "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
+                    resolved_source_system.hostname,
+                    pid,
+                    dst_ip,
+                    dst_port,
+                )
+                pid = -1
 
         if (
             service == "dns"
@@ -3640,6 +3654,29 @@ class ActivityGenerator:
         if proto == "tcp" and duration and duration > 10.0 and rng.random() < 0.03:
             missed_bytes = rng.randint(500, 50000)
 
+        time = time + sample_timing_delta(
+            "source.zeek_conn_start",
+            seed_parts=(
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                proto,
+                service or "",
+                time,
+            ),
+        )
+
+        if pid > 0 and resolved_source_system:
+            activity_time = time
+            if duration is not None:
+                activity_time = time + timedelta(seconds=max(0.0, duration))
+            self.state_manager.update_process_activity_time(
+                resolved_source_system.hostname,
+                pid,
+                activity_time,
+            )
+
         # Port-based service correction (Zeek detects service from payload, not scenario labels)
         _PORT_SERVICE = {
             80: "http",
@@ -3684,7 +3721,9 @@ class ActivityGenerator:
             conn_actor_id = self.state_manager.get_process_object_id(
                 resolved_source_system.hostname, pid
             )
-            running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            running = resolved_process or self.state_manager.get_process(
+                resolved_source_system.hostname, pid
+            )
             if running is not None:
                 process_ctx = ProcessContext(
                     pid=pid,

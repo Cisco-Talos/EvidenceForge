@@ -111,6 +111,44 @@ class TestSslContextPopulation:
             assert event.x509_chain[0] is event.x509
             assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
+    def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
+        """Batched logical connections should not render with identical Zeek start times."""
+        gen, events = activity_gen
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.20.10",
+            time=base_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=1000,
+            src_port=50001,
+            conn_state="SF",
+        )
+        gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.20.11",
+            time=base_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=1000,
+            src_port=50002,
+            conn_state="SF",
+        )
+
+        conn_events = [event for event in events if event.event_type == "connection"]
+        assert len(conn_events) == 2
+        assert conn_events[0].timestamp != conn_events[1].timestamp
+        assert conn_events[0].timestamp >= base_time
+        assert conn_events[1].timestamp >= base_time
+
     def test_ssh_session_returns_empty_uid_when_network_not_visible(self, activity_gen):
         gen, events = activity_gen
         visibility = MagicMock()

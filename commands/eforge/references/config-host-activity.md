@@ -297,6 +297,11 @@ relationships:
     position: after
     min_ms: 5
     max_ms: 80
+  source.zeek_conn_start:
+    class: same_observation
+    position: after
+    min_ms: 0
+    max_ms: 850
   network.tls_completed_min_duration:
     class: same_observation
     position: after

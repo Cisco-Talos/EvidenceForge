@@ -881,10 +881,10 @@ class TestActivityGenerator:
         assert event.network.initiating_pid == pid
         assert event.process.image.endswith("powershell.exe")
 
-    def test_generate_connection_carries_process_image_to_wfp_when_process_ended(
+    def test_generate_connection_does_not_carry_stale_process_pid_to_wfp(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
-        """Storyline connections can preserve process image even after process teardown."""
+        """Storyline connections should not preserve a PID after process teardown."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -906,8 +906,8 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "wfp_connection"
-        assert event.network.initiating_pid == 5156
-        assert event.process.image.endswith("powershell.exe")
+        assert event.network.initiating_pid != 5156
+        assert event.process is None or not event.process.image.endswith("powershell.exe")
 
     def test_wfp_connection_skips_unresolved_non_system_pid(
         self, activity_gen, test_system, mock_emitters

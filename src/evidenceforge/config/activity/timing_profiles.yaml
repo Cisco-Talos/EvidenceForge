@@ -56,6 +56,11 @@ relationships:
     position: after
     min_ms: 40
     max_ms: 300
+  source.zeek_conn_start:
+    class: same_observation
+    position: after
+    min_ms: 0
+    max_ms: 850
   source.zeek_ssl_analyzer:
     class: same_observation
     position: after
