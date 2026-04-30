@@ -382,7 +382,7 @@ class TestActivityGenerator:
     def test_generate_rdp_session_reuses_source_port_across_network_and_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """RDP network evidence and destination 4624 should share one source port."""
+        """RDP session should emit one connection and share source port with 4624."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -390,14 +390,16 @@ class TestActivityGenerator:
             user=test_user,
             target_system=test_system,
             time=timestamp,
-            source_ip="10.0.99.50",
+            source_ip="45.83.221.45",
         )
 
-        network_event = next(
+        rdp_connections = [
             call[0][0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
             if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
-        )
+        ]
+        assert len(rdp_connections) == 1
+        network_event = rdp_connections[0]
         logon_event = next(
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
