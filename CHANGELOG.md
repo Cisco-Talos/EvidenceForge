@@ -4,32 +4,169 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## Web Log Realism Improvements (2026-04-22)
+## v0.5.0 (2026-04-29)
 
-Root-cause fixes for three structural realism gaps identified during adversarial evaluation of the `vdf-web-scanning` scenario.
+Version bump only; no code changes. Releases a known-good snapshot after the v0.4.3 correlated-timing review.
 
-**Fix 1 — Referer header centralization (root cause: 5 of 6 `HttpContext` construction sites dropped the field)**
-- Extracted `pick_referrer()` and `pick_scan_referrer()` into `src/evidenceforge/generation/activity/referrer.py`
-- Baseline web-server traffic now generates realistic Referer distributions: ~55% blank, ~20% search engine, ~20% same-origin, ~5% social/news; bot UAs always blank
-- Auto-generated HTTP connections and both storyline HTTP event types now populate Referer
-- Legacy proxy single-connection paths (`generator.py`) also updated — proxy log realism improved as a side effect
-- Per-scanner Referer behavior is declarative in `web_scan_presets.yaml` via `send_referrer` field, grounded in verified upstream source behavior: Nikto sends same-origin Referer on ~30% of requests (partial-crawl mode); gobuster/sqlmap/dirb/nmap_http send none
-- Scenario authors can pin `referrer` on `connection` and `beacon` event specs for phishing-click and drive-by scenarios
+---
 
-**Fix 2 — Scanner UA token substitution**
-- Added `src/evidenceforge/utils/ua_template.py` with `render_ua()` supporting scanner-scoped tokens (`@NIKTO_TESTID@`, etc.)
-- Nikto UA updated from static `(Test:map_codes)` to `(Test:@NIKTO_TESTID@)` — now generates a unique 6-digit test ID per request, matching real Nikto behavior
+## v0.4.3 (2026-04-29)
 
-**Fix 3 — Per-event-type jitter defaults**
-- Each concrete `_PeriodicEventBase` subclass now carries an event-appropriate jitter default instead of the uniform 0.2:
-  - `BeaconEventSpec`: 0.15 (beacons are deliberately tight)
-  - `WebScanEventSpec`: 0.4 (wide variance from target latency)
-  - `CredentialSprayEventSpec`: 0.5 (self-pacing to avoid lockout)
-  - `DgaQueriesEventSpec`: 0.3
-  - `DnsTunnelEventSpec`: 0.25
-- Scenario authors can still override per-event; existing YAML that omits `jitter` now gets a more realistic default
+Cross-source correlated timing hardening and Windows auth timing polish, driven by an adversarial timing-review cycle.
 
-New tests: `test_referrer.py`, `test_ua_template.py`, `test_scan_referrer.py` (185 new assertions). Full suite: 2083 passed.
+**Correlated timing** — introduced data-driven timing profiles (`src/evidenceforge/config/activity/timing_profiles.yaml`) as the source of truth for all inter-event offsets and stabilized cross-source timing correlation.
+
+- Causal prerequisites (`network.dns_before_tcp`, `auth.kerberos_before_logon`, `process.remote_thread_lsass_access`) now consult a YAML profile instead of hard-coded constants; source-native latency, teardown margins, Zeek analyzer offsets, TLS duration floors, and Windows/Sysmon collision-spacing knobs are all configurable (47ec365, 7fb35c8).
+- Stale evidence suppression: teardown events (SSH close, FLOW terminate) only emit for sessions/processes with a matching open event (f764425, 2ff89c4).
+- Timing alignment across edges: EDR DNS↔SSH, SSH↔DNS↔proxy, IDS↔Zeek DNS alerts, process teardown↔Sysmon 5↔Security 4689↔eCAR PROCESS/TERMINATE (05e72a3, f831dc1, c2e7d7b, 7e1f9a1).
+- Correlated lifecycle edge cases: source-offset margin before logoff, lifecycle guards for cross-source timing, cross-source network timestamp offsets (cc89170, 38266e4, e156d9b).
+- Loop timing review follow-up findings resolved (ebe6bbf).
+- Proxy context honors the canonical HTTP status code end-to-end rather than rewriting the origin response on the client-leg (3a887c3).
+
+**Windows auth timing & rendering polish**
+
+- Stabilized process parent chains during auth-adjacent activity (ac69865).
+- Auth rendering/coherence fixes across 4624/4625/4634/4648 and pairing with target-host 4672 for elevated sessions (270eec3, 2467428, b467e6e).
+- Timing realism for auth event sequences including DC machine-account logons (4b8779a).
+- Windows logon token shape derived from auth context (d553709).
+
+---
+
+## v0.4.2 (2026-04-29)
+
+Windows EDR and emitter field provenance hardening from a dedicated blind review.
+
+- Field provenance alignment across emitters: WFP connection process image preserved, WFP/DNS provenance cleaned, emitter field consistency verified via blind review (ee32f4f, 980e500, c4203ee, 8432cc9).
+- Windows process EDR cross-source realism polished across Sysmon 1/5/8/10, Security 4688/4689, and eCAR PROCESS/CREATE/TERMINATE/OPEN (d7bdf56, f794877, e4c5e5e).
+- Consolidated approved open-PR updates (1b180a3).
+- CI tuned: fast unit gate runs on dev; slow integration tests skipped on dev and re-enabled per PR (a976a44, b8409da).
+
+---
+
+## v0.4.1 (2026-04-28)
+
+Windows authentication realism round 1.
+
+- Data-driven Kerberos pre-auth realism: 4771/4776 validation paths, stale-account failure profiles (5fe6ca2).
+- Improved Windows auth event realism across 4624/4625/4634/4648 rendering (df5a921).
+
+---
+
+## v0.4.0 (2026-04-28)
+
+Web proxy path modeling and TLS/Zeek network realism — the biggest single feature release of the hardening campaign.
+
+**Explicit proxy path modeling**
+
+- `environment.proxy.mode` (transparent | explicit) controls whether proxy-routed HTTP/HTTPS keeps direct client→origin network evidence or splits into client→proxy and proxy→origin legs (9908cb6, 685bd81).
+- DENIED proxy requests stop at the proxy leg and do not produce proxy→origin Zeek/IDS/firewall transactions (848de7d).
+- Explicit proxy CONNECT tunnels reused across subsequent requests; explicit proxy DNS routed through the proxy; post-CONNECT TLS emits SSL evidence reliably (3d576db, 1e87a5b, 3e01f32, 1ddb932).
+- External-hostname beacons correctly route through the proxy when explicit mode is in effect (c145b4a).
+- Proxy user agents moved to data-driven YAML (`proxy_user_agents.yaml`) for diversity (c71d43e).
+- Proxy/HTTP content realism: separated CONNECT timestamps, Apache-style response content, correlated web_access ↔ zeek_http ↔ zeek_conn (d6ec7cc, 8da9050, 62bb6cb, 3ac0d9c, edf7f9b).
+- HTTP proxy NAT realism improved (685bd81).
+- Prevent future session reuse on edge cases (bf4026f).
+- Broader HTTP and proxy realism improvements (cd8f9f3).
+
+**TLS & X.509 realism**
+
+- Destination-aware certificate profiles (d0f433c).
+- Issuer-matched validity periods and issuer overrides aligned (359ed67).
+- OCSP evidence linked through zeek_files (a98f7b0, 20713f0).
+- Chain-depth realism from `tls_realism.yaml` (a9fcf77, 575f3c0).
+
+**Zeek network realism**
+
+- Improved Zeek DNS support, SMB file observations, analyzer protocol semantics, and TLS-related conn records (6cb1f88, 00ed3c8, e0bcba3, e50d3c1, d988269, eff613f).
+- Zeek outputs are sorted on close for deterministic ordering (757ddb9).
+- Network blind-eval findings addressed (372c49a).
+
+**Sysmon**
+
+- Sysmon realism signals improved (e73cb85).
+
+**Other**
+
+- Warn on malformed overlay presets rather than silently ignoring (06e7839).
+- Evidence formats reference inaccuracies fixed (3102cc4).
+
+---
+
+## v0.3.0 (2026-04-22)
+
+The MVP-plus release. Introduced the bulk/periodic event framework, workstation lock/unlock, explicit credentials (4648), DC admin-only baseline with RSAT correlation, network segmentation hardening, CLI filtering, and broad web-log realism improvements.
+
+**Bulk event framework**
+
+- Phase A: shared `_PeriodicEventBase` timing engine, `beacon`, `dns_query` (59b856d).
+- Phase B: `web_scan`, `credential_spray` (6696428).
+- Phase C: `dga_queries`, `dns_tunnel` (eb18af4).
+- `ProcessAccessEventSpec` added to the `EventSpec` discriminated union so `process_access` can be declared directly as well as auto-generated by `create_remote_thread` → lsass causal expansion (c9c6017).
+- Per-event-type jitter defaults: `beacon` 0.15, `web_scan` 0.4, `credential_spray` 0.5, `dga_queries` 0.3, `dns_tunnel` 0.25.
+- `credential_spray` success fires at exact attempt count (b287d62).
+- `web_scan_presets` registered in `eforge info` and `validate-config` (eff2e1a).
+- Multiple adversarial-review rounds for the bulk-event framework (bec232d, aa63ad9, 511b5ae, fb7faed).
+- Security hardening: bounded `dns_tunnel` payload size, capped `traffic_rates` overrides, hardened `web_scan` preset overlay against malformed types, explicit credential process PID for 4648 (3323d85, 7559f8c, 65af981, b3c1e9c).
+
+**Workstation lock/unlock & explicit credentials**
+
+- `workstation_lock` / `workstation_unlock` (4800/4801) baseline + storyline with persona-variance lock frequency and cross-hour lock persistence (223959d, 4ca4268, e55b4c6).
+- `explicit_credentials` (4648) storyline handler; broader baseline 4648 patterns for scheduled-task and RunAs activity (2ab8c9e, 1154520).
+- Cluster 4 tests + docs for Windows auth enrichment (229c7fa).
+
+**DC admin-only baseline & RSAT correlation**
+
+- Domain controllers receive admin-only baseline activity: no user desktop artifacts, type 3 logons from RSAT sessions on admin workstations (mmc.exe runs on the workstation, not the DC), type 10 RDP for direct admin access (4382147, 9cdc464).
+- Correlated RSAT sessions produce cross-host events: mmc.exe + DLL loads on the workstation, LDAP/RPC to DC, type 3 logon on DC — all within seconds (e1e08d9).
+- OS-aware domain filtering prevents Linux hosts from visiting Windows-only domains (9e32911).
+
+**Network segmentation & firewall**
+
+- `NetworkSegment.exposure` required; `external_ratio` for segments with `exposure: both` (0e72bd7).
+- Top-level `NetworkConfig.public_cidrs` for the org's own public address blocks (separate from NAT-inferred ranges).
+- `NetworkSensor.drop_mode` (drop|reject) controls denied-connection conn_state (S0 vs REJ).
+- `NetworkSensor.threat_detection_rate` drives ASA 733100 threat-detection alerts when deny bursts exceed the configured threshold.
+- `intensity` scales all background traffic via configurable `traffic_rates.yaml` (46236c0).
+- PAT port overflow, SF missing duration, and syslog None hostname fixes (75de469).
+
+**CLI & config**
+
+- `--formats` CLI filter for targeted log generation; individual format names accepted in `output.logs` (e71163d, c1ba151).
+- EDR overlay pool validation with fallback to defaults (9535939).
+- Transactional `--force` overwrite with rollback on failure; preserved rollback dir on failed restore for manual recovery (1e8647e, d96c721, 0c85126).
+- Moved CallTrace patterns and EDR pools to YAML with overlay support (9396719, e835405).
+- Document `sysmon_filters`, `edr_pools`, `calltrace_patterns` configs (1346563).
+- Normalize naive datetimes in emitter sort and session bootstrap (2f4a856).
+- Remove redundant runtime cap in `_resolve_traffic_rate` (05a8842).
+- DNS multi-answer IPs use correct provider, IPv6 prefixes from YAML (980e24f).
+- `dns_registry` + `proxy_uri_templates` for new curated `site_maps` domains (7f3656b).
+
+**Web log realism improvements** — root-cause fixes for three structural realism gaps identified during adversarial evaluation of the `vdf-web-scanning` scenario (0f1e79b):
+
+- *Referer header centralization* (root cause: 5 of 6 `HttpContext` construction sites dropped the field): extracted `pick_referrer()` and `pick_scan_referrer()` into `src/evidenceforge/generation/activity/referrer.py`. Baseline web-server traffic now generates realistic Referer distributions (~55% blank, ~20% search engine, ~20% same-origin, ~5% social/news; bot UAs always blank). Auto-generated HTTP connections and both storyline HTTP event types now populate Referer. Per-scanner Referer behavior is declarative in `web_scan_presets.yaml` via `send_referrer` field, grounded in verified upstream source behavior: Nikto sends same-origin Referer on ~30% of requests (partial-crawl mode); gobuster/sqlmap/dirb/nmap_http send none. Scenario authors can pin `referrer` on `connection` and `beacon` event specs for phishing-click and drive-by scenarios.
+- *Scanner UA token substitution*: added `src/evidenceforge/utils/ua_template.py` with `render_ua()` supporting scanner-scoped tokens (`@NIKTO_TESTID@`, etc.). Nikto UA updated from static `(Test:map_codes)` to `(Test:@NIKTO_TESTID@)` — now generates a unique 6-digit test ID per request, matching real Nikto behavior.
+- *Per-event-type jitter defaults*: each concrete `_PeriodicEventBase` subclass now carries an event-appropriate jitter default instead of the uniform 0.2 (see bulk event framework above). Scenario authors can still override per-event; existing YAML that omits `jitter` now gets a more realistic default.
+
+**Data realism fixes from expert panel** (P0/P1 batches)
+
+- P0 fixes: user-profile apps on DCs, formulaic HTTP, SF orig_bytes (727dbb8).
+- P1 fixes: task XML, SSH fingerprints, IDS SIDs, journald, SSH ordering (8333dbf).
+- Two additional iteration rounds (8c6bb87, 217490d).
+- 6 more P0/P1 realism fixes (1486928).
+- `test+docs` for realism fixes (33723dd).
+- 4800/4801 and other missing EventIDs added to eval distribution allowlist (5e22243).
+
+**Validation & security**
+
+- JSON Logic truthiness for field constraints enforced (ddeb1ef).
+- Windows eval XML parser hardened against entity expansion DoS (a92ebbe).
+- Linux `process_query` placeholder expansion resolved (791c12c).
+- `attacker` user renamed to a plausible contractor account (ce58db5).
+
+**Test & CI**
+
+- Repaired 4 broken tests (activity_gen fixture, thread safety assertions, Zeek DNS interface, inbound traffic role) (98d7813).
+- Tests: `test_referrer.py`, `test_ua_template.py`, `test_scan_referrer.py` (185 new assertions) added for web log realism. Full suite at v0.3.0 release: 2083 passed.
 
 ---
 

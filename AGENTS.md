@@ -109,10 +109,12 @@ The version is declared in three places that must always match:
 
 **When to bump:** Once per PR from `dev` to `main`, on the `dev` branch, as the last commit before opening that PR. Do not bump on feature branches or per-commit.
 
-**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, run `uv sync` to regenerate `uv.lock`, and commit all three with:
+**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, run `uv sync` to regenerate `uv.lock`, and commit all four (three version artifacts + CHANGELOG.md, see below) with:
 ```
 chore: bump version to X.Y.Z
 ```
+
+**Changelog update (required with every version bump):** as part of the same bump commit, prepend a new `## vX.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md` summarizing every commit since the previous version entry. Drive the summary from `git log main..dev --oneline` (or `git log vPREV..HEAD --oneline` if tagged). Group related commits into themed subsections (e.g., "Explicit proxy path modeling", "TLS & X.509 realism", "CLI & config"), cite the short SHAs inline in parentheses, and skip pure merge commits and unrelated dependabot bumps. Version-bump-only releases (no code changes) still get an entry noting that. The changelog entry and the version bump land in the same commit.
 
 The version on `dev` between releases will be ahead of `main` by one unreleased bump — this is expected and correct. Feature branches never touch the version.
 
