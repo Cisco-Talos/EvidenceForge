@@ -16,6 +16,10 @@ from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "timing_profiles.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_MAX_RELATIONSHIP_MS = 86_400_000
+_MAX_COLLISION_NEAR_ZERO_UNTIL = 10_000
+_MAX_COLLISION_GAP_US = 1_000_000
+_MAX_COLLISION_GAP_MS = 60_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +50,15 @@ def reset_timing_profiles_cache() -> None:
     _CACHED_DATA = None
 
 
+def _safe_int(value: Any, fallback: int, *, minimum: int, maximum: int) -> int:
+    """Convert input to int and clamp to a safe range."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(minimum, min(parsed, maximum))
+
+
 def get_timing_window(
     key: str,
     *,
@@ -58,8 +71,18 @@ def get_timing_window(
     entry = load_timing_profiles().get("relationships", {}).get(key, {})
     if not isinstance(entry, dict):
         entry = {}
-    min_ms = int(entry.get("min_ms", default_min_ms))
-    max_ms = int(entry.get("max_ms", default_max_ms))
+    min_ms = _safe_int(
+        entry.get("min_ms", default_min_ms),
+        default_min_ms,
+        minimum=0,
+        maximum=_MAX_RELATIONSHIP_MS,
+    )
+    max_ms = _safe_int(
+        entry.get("max_ms", default_max_ms),
+        default_max_ms,
+        minimum=0,
+        maximum=_MAX_RELATIONSHIP_MS,
+    )
     if max_ms < min_ms:
         min_ms, max_ms = default_min_ms, default_max_ms
     position = entry.get("position", default_position)
@@ -94,11 +117,36 @@ def windows_collision_spacing_config() -> dict[str, int]:
     if not isinstance(spacing, dict):
         spacing = {}
     config = {
-        "near_zero_until": max(0, int(spacing.get("near_zero_until", 25))),
-        "near_gap_min_us": max(1, int(spacing.get("near_gap_min_us", 50))),
-        "near_gap_max_us": max(1, int(spacing.get("near_gap_max_us", 500))),
-        "large_gap_min_ms": max(1, int(spacing.get("large_gap_min_ms", 1000))),
-        "large_gap_max_ms": max(1, int(spacing.get("large_gap_max_ms", 4000))),
+        "near_zero_until": _safe_int(
+            spacing.get("near_zero_until", 25),
+            25,
+            minimum=0,
+            maximum=_MAX_COLLISION_NEAR_ZERO_UNTIL,
+        ),
+        "near_gap_min_us": _safe_int(
+            spacing.get("near_gap_min_us", 50),
+            50,
+            minimum=1,
+            maximum=_MAX_COLLISION_GAP_US,
+        ),
+        "near_gap_max_us": _safe_int(
+            spacing.get("near_gap_max_us", 500),
+            500,
+            minimum=1,
+            maximum=_MAX_COLLISION_GAP_US,
+        ),
+        "large_gap_min_ms": _safe_int(
+            spacing.get("large_gap_min_ms", 1000),
+            1000,
+            minimum=1,
+            maximum=_MAX_COLLISION_GAP_MS,
+        ),
+        "large_gap_max_ms": _safe_int(
+            spacing.get("large_gap_max_ms", 4000),
+            4000,
+            minimum=1,
+            maximum=_MAX_COLLISION_GAP_MS,
+        ),
     }
     if config["near_gap_max_us"] < config["near_gap_min_us"]:
         config["near_gap_min_us"], config["near_gap_max_us"] = 50, 500
