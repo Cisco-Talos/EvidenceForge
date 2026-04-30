@@ -252,6 +252,24 @@ signatures:
         assert dns_ctx.query.startswith("sync-")
         assert dns_ctx.query.endswith(".to")
 
+    def test_ids_dns_context_ignores_unsafe_query_template(self):
+        import random
+
+        from evidenceforge.generation.engine.baseline import _dns_context_for_ids_signature
+
+        dns_ctx = _dns_context_for_ids_signature(
+            {
+                "sid": 2027757,
+                "dns_query_templates": ["{token}{missing}.to"],
+            },
+            random.Random(42),
+            ad_domain="corp.local",
+            dns_server_ip="9.9.9.9",
+        )
+
+        assert dns_ctx is not None
+        assert dns_ctx.query.endswith(".corp.local")
+
 
 # ── TLS cipher stability ─────────────────────────────────────────────────
 

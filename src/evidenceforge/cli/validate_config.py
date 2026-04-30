@@ -556,12 +556,26 @@ def validate_config() -> ValidationResult:
                 )
             else:
                 for template in templates:
-                    if not isinstance(template, str) or "{token}" not in template:
+                    if not isinstance(template, str):
                         result.issues.append(
                             Issue(
                                 "ERROR",
                                 "ids_signatures.yaml",
-                                f"Signature {sid} DNS template {template!r} must contain {{token}}",
+                                f"Signature {sid} DNS template {template!r} must be a string",
+                            )
+                        )
+                        continue
+                    from evidenceforge.generation.activity.ids_signatures import (
+                        validate_dns_query_template,
+                    )
+
+                    template_error = validate_dns_query_template(template)
+                    if template_error is not None:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "ids_signatures.yaml",
+                                f"Signature {sid} DNS template {template!r} {template_error}",
                             )
                         )
 
