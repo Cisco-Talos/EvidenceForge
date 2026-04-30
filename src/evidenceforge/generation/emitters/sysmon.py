@@ -1490,27 +1490,31 @@ class SysmonEventEmitter(LogEmitter):
 
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Sysmon Event 1 children from preceding their parent Event 1."""
-        process_create_times: dict[tuple[str, str], datetime] = {}
-        for event in self._event_dicts:
-            if event.get("EventID") != 1:
-                continue
-            ts = event.get("TimeCreated")
-            guid = event.get("ProcessGuid")
-            computer = str(event.get("Computer", ""))
-            if isinstance(ts, datetime) and guid:
-                process_create_times[(computer, str(guid))] = ts
+        changed = True
+        while changed:
+            changed = False
+            process_create_times: dict[tuple[str, str], datetime] = {}
+            for event in self._event_dicts:
+                if event.get("EventID") != 1:
+                    continue
+                ts = event.get("TimeCreated")
+                guid = event.get("ProcessGuid")
+                computer = str(event.get("Computer", ""))
+                if isinstance(ts, datetime) and guid:
+                    process_create_times[(computer, str(guid))] = ts
 
-        for event in self._event_dicts:
-            if event.get("EventID") != 1:
-                continue
-            ts = event.get("TimeCreated")
-            parent_guid = event.get("ParentProcessGuid")
-            computer = str(event.get("Computer", ""))
-            if not isinstance(ts, datetime) or not parent_guid:
-                continue
-            parent_time = process_create_times.get((computer, str(parent_guid)))
-            if parent_time is not None and ts <= parent_time:
-                event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
+            for event in self._event_dicts:
+                if event.get("EventID") != 1:
+                    continue
+                ts = event.get("TimeCreated")
+                parent_guid = event.get("ParentProcessGuid")
+                computer = str(event.get("Computer", ""))
+                if not isinstance(ts, datetime) or not parent_guid:
+                    continue
+                parent_time = process_create_times.get((computer, str(parent_guid)))
+                if parent_time is not None and ts <= parent_time:
+                    event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
+                    changed = True
 
     def _shift_followons_after_process_create(self) -> None:
         """Prevent same-ProcessGuid Sysmon follow-ons from preceding Event 1."""
