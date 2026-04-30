@@ -35,8 +35,7 @@ issuers:
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 50}
-      - {type: "rsa", length: 4096, weight: 25}
-      - {type: "ecdsa", length: 256, weight: 25}
+      - {type: "rsa", length: 4096, weight: 50}
 
   - name: "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, L=Salford, ST=Greater Manchester, C=GB"
     weight: 10
@@ -45,8 +44,7 @@ issuers:
     not_before_max_days: 300
     key_types:
       - {type: "rsa", length: 2048, weight: 70}
-      - {type: "rsa", length: 4096, weight: 20}
-      - {type: "ecdsa", length: 256, weight: 10}
+      - {type: "rsa", length: 4096, weight: 30}
 
   - name: "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
     weight: 15
@@ -63,8 +61,7 @@ issuers:
     validity_days_max: 397
     not_before_max_days: 300
     key_types:
-      - {type: "rsa", length: 2048, weight: 85}
-      - {type: "ecdsa", length: 256, weight: 15}
+      - {type: "rsa", length: 2048, weight: 100}
 
   - name: "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
     weight: 10
@@ -91,8 +88,7 @@ issuers:
     validity_days_max: 397
     not_before_max_days: 300
     key_types:
-      - {type: "rsa", length: 2048, weight: 90}
-      - {type: "ecdsa", length: 256, weight: 10}
+      - {type: "rsa", length: 2048, weight: 100}
 
   - name: "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
     weight: 0  # Only used via domain_ca_overrides

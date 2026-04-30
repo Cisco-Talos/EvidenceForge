@@ -186,6 +186,72 @@ class TestIdsSignaturesRevField:
         unique_revs = set(revs)
         assert len(unique_revs) > 1, "All SID revisions are 1 — should have varied values"
 
+    def test_dns_ids_signatures_have_query_templates(self):
+        from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+
+        dns_tld_signatures = [
+            sig
+            for sig in load_ids_signatures()["signatures"]
+            if sig.get("proto") == "udp"
+            and sig.get("dst_port") == 53
+            and "TLD" in sig.get("message", "")
+        ]
+
+        assert dns_tld_signatures
+        assert all(sig.get("dns_query_templates") for sig in dns_tld_signatures)
+
+    def test_dns_ids_query_templates_support_overlay(self, tmp_path, monkeypatch):
+        from evidenceforge.generation.activity.ids_signatures import (
+            load_ids_signatures,
+            reset_ids_signatures_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "ids_signatures.yaml").write_text(
+            """
+signatures:
+  - sid: 999001
+    rev: 1
+    message: "ET DNS Query to .example TLD"
+    classification: "misc-activity"
+    priority: 3
+    proto: udp
+    dst_port: 53
+    direction: out
+    dns_query_templates:
+      - "overlay-{token}.example"
+"""
+        )
+
+        monkeypatch.chdir(tmp_path)
+        reset_ids_signatures_cache()
+        try:
+            signatures = load_ids_signatures()["signatures"]
+        finally:
+            reset_ids_signatures_cache()
+
+        assert any(sig.get("sid") == 999001 for sig in signatures)
+
+    def test_ids_dns_context_uses_signature_query_template(self):
+        import random
+
+        from evidenceforge.generation.engine.baseline import _dns_context_for_ids_signature
+
+        dns_ctx = _dns_context_for_ids_signature(
+            {
+                "sid": 2027757,
+                "dns_query_templates": ["sync-{token}.to"],
+            },
+            random.Random(42),
+            ad_domain="corp.local",
+            dns_server_ip="9.9.9.9",
+        )
+
+        assert dns_ctx is not None
+        assert dns_ctx.query.startswith("sync-")
+        assert dns_ctx.query.endswith(".to")
+
 
 # ── TLS cipher stability ─────────────────────────────────────────────────
 

@@ -86,14 +86,14 @@ signatures:
 
   # ===== UDP =====
   # DNS anomalies (outbound)
-  - {sid: 2027865, rev: 4, message: "ET DNS Query to a .top domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out}
-  - {sid: 2029706, rev: 1, message: "ET DNS Query to .cloud TLD", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: out}
+  - {sid: 2027865, rev: 4, message: "ET DNS Query to a .top domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["cdn-check-{token}.top", "metrics-{token}.top", "update-{token}.top"]}
+  - {sid: 2029706, rev: 1, message: "ET DNS Query to .cloud TLD", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["api-{token}.cloud", "storage-{token}.cloud", "telemetry-{token}.cloud"]}
   - {sid: 2001116, rev: 6, message: "ET DNS Standard query response, Format error", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: in}
   - {sid: 2001117, rev: 6, message: "ET DNS Standard query response, Name Error", classification: "misc-activity", priority: 3, proto: udp, dst_port: 53, direction: in}
   - {sid: 2001119, rev: 6, message: "ET DNS Standard query response, Refused", classification: "misc-activity", priority: 2, proto: udp, dst_port: 53, direction: in}
-  - {sid: 2027757, rev: 2, message: "ET DNS Query for .to TLD", classification: "potentially-bad-traffic", priority: 3, proto: udp, dst_port: 53, direction: out}
-  - {sid: 2027863, rev: 3, message: "ET DNS Query to a .tk domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out}
-  - {sid: 2024291, rev: 4, message: "ET DNS Query to .bit TLD", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out}
+  - {sid: 2027757, rev: 2, message: "ET DNS Query for .to TLD", classification: "potentially-bad-traffic", priority: 3, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["sync-{token}.to", "cdn-{token}.to", "assets-{token}.to"]}
+  - {sid: 2027863, rev: 3, message: "ET DNS Query to a .tk domain", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["lookup-{token}.tk", "status-{token}.tk", "update-{token}.tk"]}
+  - {sid: 2024291, rev: 4, message: "ET DNS Query to .bit TLD", classification: "potentially-bad-traffic", priority: 2, proto: udp, dst_port: 53, direction: out, dns_query_templates: ["node-{token}.bit", "resolver-{token}.bit", "sync-{token}.bit"]}
 
   # STUN/VoIP (outbound, common with Teams/Zoom)
   - {sid: 2016149, rev: 3, message: "ET INFO Session Traversal Utilities for NAT (STUN Binding Request)", classification: "policy-violation", priority: 3, proto: udp, dst_port: 3478, direction: out}

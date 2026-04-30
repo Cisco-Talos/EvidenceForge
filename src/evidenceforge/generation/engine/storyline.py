@@ -2004,6 +2004,7 @@ class StorylineMixin:
             import base64 as _b64
 
             from evidenceforge.events.contexts import DnsContext
+            from evidenceforge.generation.activity.network_params import dns_tunnel_rtt_range
 
             _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
             _RCODE_MAP = {"NOERROR": 0}
@@ -2043,6 +2044,7 @@ class StorylineMixin:
                 chunks.append(payload_bytes[i : i + bytes_per_label])
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
+            min_rtt, max_rtt = dns_tunnel_rtt_range()
             total_bytes = 0
             query_count = 0
             chunk_idx = 0
@@ -2086,7 +2088,7 @@ class StorylineMixin:
                     RD=True,
                     RA=True,
                     rejected=False,
-                    rtt=rng.uniform(5.0, 100.0),
+                    rtt=rng.uniform(min_rtt, max_rtt),
                 )
 
                 dns_server_ip = rng.choice(dns_server_ips)
@@ -2100,6 +2102,7 @@ class StorylineMixin:
                     dns=dns_ctx,
                     emit_dns=False,
                     resp_bytes=resp_bytes,
+                    duration=dns_ctx.rtt,
                 )
                 total_bytes += len(chunk)
                 query_count += 1

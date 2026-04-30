@@ -101,6 +101,16 @@ Sample ~10 records from the output directory across different formats. Read them
 
 Present these as qualitative observations, clearly separated from the numeric scores.
 
+For blind realism reviews, inspect only the generated data unless the user explicitly asks to use
+the scenario or `GROUND_TRUTH.md`. Tell reviewers that the dataset is a bounded collection-window
+extract: sessions, processes, connections, leases, or other state may have started before the
+visible window, so missing pre-window initiators are not automatically impossible. Still flag a
+visible initiating event that appears later than a dependent event for the same identifier, such as a
+same-host `4688` process event before a later `4624` for the same LogonID.
+Do not treat a Type 7 Windows `4624` unlock as the original session creation event; it can
+legitimately appear after earlier in-window process activity for a session that began before the
+collection window.
+
 ### Step 5: Suggest Improvements
 
 For any sub-score below 70, provide specific, actionable suggestions:

@@ -41,9 +41,11 @@ from evidenceforge.events.contexts import (
     EdrContext,
     FileContext,
     HostContext,
+    NetworkContext,
     ProcessContext,
     RemoteThreadContext,
 )
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 
 
@@ -242,6 +244,47 @@ class TestChronologicalOutput:
             for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
         ]
         assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
+
+    def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=1234,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        expected_delta = sample_timing_delta(
+            "source.ecar_flow",
+            seed_parts=(
+                "outbound",
+                "ws01",
+                1234,
+                "10.0.0.10",
+                49152,
+                "93.184.216.34",
+                443,
+                ts,
+            ),
+        )
+        assert emitted[0]["timestamp"] == ts + expected_delta
 
     def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
         """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""

@@ -180,6 +180,83 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_timing_profile_window(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        def load_invalid_timing_profiles():
+            return {
+                "relationships": {
+                    "network.dns_before_tcp": {
+                        "class": "causal_prerequisite",
+                        "position": "before",
+                        "min_ms": 500,
+                        "max_ms": 100,
+                    }
+                },
+                "windows_event_time": {
+                    "collision_spacing": {
+                        "near_zero_until": 25,
+                        "near_gap_min_us": 50,
+                        "near_gap_max_us": 500,
+                        "large_gap_min_ms": 1000,
+                        "large_gap_max_ms": 4000,
+                    }
+                },
+            }
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and 'Relationship "network.dns_before_tcp" max_ms must be greater than or equal to min_ms'
+            in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_windows_collision_spacing(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        def load_invalid_timing_profiles():
+            return {
+                "relationships": {
+                    "network.dns_before_tcp": {
+                        "class": "causal_prerequisite",
+                        "position": "before",
+                        "min_ms": 20,
+                        "max_ms": 1500,
+                    }
+                },
+                "windows_event_time": {
+                    "collision_spacing": {
+                        "near_zero_until": 25,
+                        "near_gap_min_us": 500,
+                        "near_gap_max_us": 50,
+                        "large_gap_min_ms": 4000,
+                        "large_gap_max_ms": 1000,
+                    }
+                },
+            }
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "near_gap_max_us must be >= near_gap_min_us" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "large_gap_max_ms must be >= large_gap_min_ms" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_too_short_workstation_unlock_gap(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 
@@ -322,5 +399,36 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "windows_auth_realism.yaml"
             and "Windows privileges must use Se*Privilege names" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_dns_ids_template_on_non_dns_signature(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 999001,
+                        "rev": 1,
+                        "message": "ET TEST Non-DNS",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "tcp",
+                        "dst_port": 80,
+                        "direction": "out",
+                        "dns_query_templates": ["bad-{token}.example"],
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "defines dns_query_templates but is not a DNS signature" in issue.message
             for issue in result.issues
         )

@@ -49,6 +49,28 @@ class TestStateManagerInit:
         assert len(sm._pid_counters) == 0
         assert len(sm._used_logon_ids) == 0
 
+    def test_linux_logind_session_ids_follow_event_time(self):
+        """Logind session IDs should sort with event time, not generation order."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(7)
+
+        later_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=10),
+        )
+        earlier_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=1),
+        )
+
+        assert earlier_id < later_id
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
@@ -271,6 +293,20 @@ class TestProcessManagement:
         sm = StateManager()
         result = sm.end_process("WS-01", 999)
         assert result is False
+
+    def test_update_process_activity_time_keeps_latest(self):
+        """Process activity marker should track the latest dependent event."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        pid = sm.create_process("WS-01", 0, "explorer.exe", "explorer.exe", "jdoe", "Medium")
+
+        assert sm.update_process_activity_time("WS-01", pid, start + timedelta(minutes=5))
+        assert sm.update_process_activity_time("WS-01", pid, start + timedelta(minutes=2))
+        proc = sm.get_process("WS-01", pid)
+
+        assert proc is not None
+        assert proc.last_activity_time == start + timedelta(minutes=5)
 
     def test_list_running_processes(self):
         """Test listing all running processes."""

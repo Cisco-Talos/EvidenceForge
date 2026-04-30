@@ -639,6 +639,39 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp > process_event.timestamp
 
+    def test_image_load_is_clamped_after_process_start(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Image-load telemetry should not predate the process it references."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = session_start + timedelta(minutes=5)
+        state_manager.set_current_time(session_start)
+        logon_id = activity_gen.generate_logon(test_user, test_system, session_start)
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            process_time,
+            logon_id,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            session_start + timedelta(minutes=1),
+            pid,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Windows\System32\kernel32.dll",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        process_start = state_manager.get_process(test_system.hostname, pid).start_time
+        assert event.event_type == "image_load"
+        assert event.timestamp > process_start
+        assert event.process.start_time == process_start
+
     def test_user_session_process_identity_resolved_before_emit(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -785,6 +818,36 @@ class TestActivityGenerator:
         assert event.image_load.image_loaded in profile_paths
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
+        assert event.edr.actor_id
+
+    def test_image_load_skips_ended_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Dependent image loads should not render after the process has terminated."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+            command_line="ssh.exe web01",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        state_manager.end_process(test_system.hostname, pid)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            pid,
+            r"C:\Windows\System32\OpenSSH\ssh.exe",
+            r"C:\Windows\System32\advapi32.dll",
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
 
     def test_wfp_connection_uses_state_process_image(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -818,10 +881,10 @@ class TestActivityGenerator:
         assert event.network.initiating_pid == pid
         assert event.process.image.endswith("powershell.exe")
 
-    def test_generate_connection_carries_process_image_to_wfp_when_process_ended(
+    def test_generate_connection_does_not_carry_stale_process_pid_to_wfp(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
-        """Storyline connections can preserve process image even after process teardown."""
+        """Storyline connections should not preserve a PID after process teardown."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -843,8 +906,8 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "wfp_connection"
-        assert event.network.initiating_pid == 5156
-        assert event.process.image.endswith("powershell.exe")
+        assert event.network.initiating_pid != 5156
+        assert event.process is None or not event.process.image.endswith("powershell.exe")
 
     def test_wfp_connection_skips_unresolved_non_system_pid(
         self, activity_gen, test_system, mock_emitters

@@ -25,8 +25,8 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekSslEmitter(SensorMultiplexEmitter):
@@ -44,15 +44,24 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
         return (
             event.event_type in self._supported_types
             and event.network is not None
+            and event.network.conn_state == "SF"
             and event.ssl is not None
         )
 
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
         ssl = event.ssl
-        analyzer_delay_ms = 5 + (_stable_seed(f"zeek_ssl_ts:{net.zeek_uid}") % 76)
         event_data: dict[str, Any] = {
-            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
+            "ts": self._offset_timestamp(
+                event.timestamp,
+                int(
+                    sample_timing_delta(
+                        "source.zeek_ssl_analyzer",
+                        seed_parts=(net.zeek_uid, event.timestamp),
+                    ).total_seconds()
+                    * 1000
+                ),
+            ),
             "uid": net.zeek_uid,
             "id.orig_h": net.src_ip,
             "id.orig_p": net.src_port,

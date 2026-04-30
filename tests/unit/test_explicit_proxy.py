@@ -870,6 +870,60 @@ class TestExplicitProxyVisibility:
         assert http_event.http.status_msg == "Connection Established"
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
+    def test_denied_connect_uses_proxy_error_accounting(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=403,
+                tunnel_status_code=403,
+                sc_bytes=2_500_000,
+                cs_bytes=900_000,
+                time_taken=83_948,
+                user_agent="Mozilla/5.0",
+                content_type="text/html",
+                cache_result="DENIED",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=90.0,
+            orig_bytes=900_000,
+            resp_bytes=2_500_000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+        )
+
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.status_code == 403
+        assert proxy_event.proxy.tunnel_status_code == 403
+        assert proxy_event.proxy.cs_bytes < 1000
+        assert proxy_event.proxy.sc_bytes < 2500
+        assert proxy_event.proxy.time_taken < 2000
+        assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
+
     def test_cache_hit_request_stops_before_origin_side_sources(self):
         generator, emitters = _generator(
             [

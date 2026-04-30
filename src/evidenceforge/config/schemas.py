@@ -150,6 +150,15 @@ class TlsIssuerEntry(BaseModel, extra="forbid"):
     not_before_max_days: int
     key_types: list[TlsKeyType]
 
+    @model_validator(mode="after")
+    def rsa_named_ca_uses_rsa_keys(self) -> Self:
+        """Reject RSA-named issuer profiles that can emit ECDSA metadata."""
+        if " rsa " in f" {self.name.lower()} ":
+            ecdsa_types = [key for key in self.key_types if key.type.lower() == "ecdsa"]
+            if ecdsa_types:
+                raise ValueError("RSA-named issuers must not include ecdsa key_types")
+        return self
+
 
 class TlsSanConfig(BaseModel, extra="forbid"):
     """SAN generation settings in tls_realism.yaml."""
@@ -654,6 +663,21 @@ class PublicNtpServerEntry(BaseModel, extra="forbid"):
     stratum: int = Field(ge=1, le=4)
     ref_id: str
     weight: int = Field(gt=0)
+
+
+class DnsTunnelRttConfig(BaseModel, extra="forbid"):
+    """DNS tunnel response timing parameters in network_params.yaml."""
+
+    min_seconds: float = Field(ge=0.001)
+    max_seconds: float = Field(ge=0.001)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> DnsTunnelRttConfig:
+        if self.max_seconds < self.min_seconds:
+            raise ValueError("max_seconds must be greater than or equal to min_seconds")
+        if self.max_seconds > 10.0:
+            raise ValueError("max_seconds should stay within realistic DNS transaction timing")
+        return self
 
 
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):

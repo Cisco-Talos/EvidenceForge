@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
@@ -150,6 +151,7 @@ class TestSslCanHandle:
                 dst_port=443,
                 protocol="tcp",
                 zeek_uid="CTest123456789ab",
+                conn_state="SF",
             )
             if network
             else None
@@ -175,6 +177,13 @@ class TestSslCanHandle:
         fmt = load_format("zeek_ssl")
         emitter = ZeekSslEmitter(fmt, Path("/tmp/test.json"))
         assert emitter.can_handle(self._make_event(ssl=False)) is False
+
+    def test_rejects_partial_handshake_with_ssl_context(self):
+        fmt = load_format("zeek_ssl")
+        emitter = ZeekSslEmitter(fmt, Path("/tmp/test.json"))
+        event = self._make_event()
+        event.network.conn_state = "S1"
+        assert emitter.can_handle(event) is False
 
     def test_rejects_without_network_context(self):
         fmt = load_format("zeek_ssl")
@@ -422,3 +431,64 @@ class TestSslUidCorrelation:
         assert "uid" not in files_row
         assert "id.orig_h" not in files_row
         assert files_row["mime_type"] == "application/ocsp-response"
+
+    def test_tls_conn_duration_contains_ssl_analyzer_offset(self):
+        """Zeek conn duration for completed TLS should contain ssl/x509 analyzer evidence."""
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir / "conn.json")
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CMySpecificUID123",
+                    conn_state="SF",
+                    duration=0.002,
+                ),
+                ssl=SslContext(version="TLSv13", cipher="TLS_AES_128_GCM_SHA256"),
+            )
+
+            conn_emitter.emit(event)
+            conn_emitter.close()
+
+            conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
+
+        assert conn_row["duration"] >= 0.8
+
+    def test_x509_rejects_partial_handshake(self):
+        """x509.log should not emit certificates for incomplete TLS handshakes."""
+        fmt = load_format("zeek_x509")
+        emitter = ZeekX509Emitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CMySpecificUID123",
+                conn_state="S1",
+            ),
+            x509=X509Context(
+                fuid="Fabcdef1234567890",
+                fingerprint="abc123",
+                certificate_serial="01",
+                certificate_subject="CN=example.com",
+                certificate_issuer="CN=Example CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+            ),
+        )
+
+        assert emitter.can_handle(event) is False

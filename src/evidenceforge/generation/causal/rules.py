@@ -26,10 +26,34 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from evidenceforge.generation.causal.engine import ExpandedEvent, ExpansionContext
+
+
+def _timing_spec(
+    key: str,
+    *,
+    default_min_ms: int,
+    default_max_ms: int,
+    default_position: Literal["before", "after"],
+):
+    """Return a TimingSpec from data-driven timing profiles."""
+    from evidenceforge.generation.activity.timing_profiles import get_timing_window
+    from evidenceforge.generation.causal.timing import TimingSpec
+
+    window = get_timing_window(
+        key,
+        default_min_ms=default_min_ms,
+        default_max_ms=default_max_ms,
+        default_position=default_position,
+    )
+    return TimingSpec(
+        min_ms=window.min_ms,
+        max_ms=window.max_ms,
+        position=window.position,
+    )
 
 
 @dataclass
@@ -82,7 +106,6 @@ class KerberosBeforeLogon(ExpansionRule):
 
     def expand(self, event_type: str, ctx: ExpansionContext) -> list[ExpandedEvent]:
         from evidenceforge.generation.causal.engine import ExpandedEvent
-        from evidenceforge.generation.causal.timing import TimingSpec
 
         return [
             ExpandedEvent(
@@ -93,7 +116,12 @@ class KerberosBeforeLogon(ExpansionRule):
                     "auth_package": ctx.auth_package,
                     "source_ip": ctx.src_ip or "",
                 },
-                timing=TimingSpec(min_ms=0, max_ms=0, position="before"),
+                timing=_timing_spec(
+                    "auth.kerberos_before_logon",
+                    default_min_ms=40,
+                    default_max_ms=350,
+                    default_position="before",
+                ),
                 description="Kerberos TGT + TGS on DC before logon",
             )
         ]
@@ -122,7 +150,6 @@ class DnsBeforeConnection(ExpansionRule):
 
     def expand(self, event_type: str, ctx: ExpansionContext) -> list[ExpandedEvent]:
         from evidenceforge.generation.causal.engine import ExpandedEvent
-        from evidenceforge.generation.causal.timing import TimingSpec
 
         kwargs = {
             "src_ip": ctx.src_ip,
@@ -134,7 +161,12 @@ class DnsBeforeConnection(ExpansionRule):
             ExpandedEvent(
                 method="_emit_dns_lookup",
                 kwargs=kwargs,
-                timing=TimingSpec(min_ms=0, max_ms=0, position="before"),
+                timing=_timing_spec(
+                    "network.dns_before_tcp",
+                    default_min_ms=20,
+                    default_max_ms=1500,
+                    default_position="before",
+                ),
                 description="DNS lookup for connection destination",
             )
         ]
@@ -162,7 +194,6 @@ class ProcessAccessAfterRemoteThread(ExpansionRule):
 
     def expand(self, event_type: str, ctx: ExpansionContext) -> list[ExpandedEvent]:
         from evidenceforge.generation.causal.engine import ExpandedEvent
-        from evidenceforge.generation.causal.timing import TimingSpec
 
         return [
             ExpandedEvent(
@@ -176,7 +207,12 @@ class ProcessAccessAfterRemoteThread(ExpansionRule):
                     "target_image": ctx.target_image,
                     "granted_access": "0x1FFFFF",
                 },
-                timing=TimingSpec(min_ms=1, max_ms=50, position="after"),
+                timing=_timing_spec(
+                    "process.remote_thread_lsass_access",
+                    default_min_ms=1,
+                    default_max_ms=75,
+                    default_position="after",
+                ),
                 description="ProcessAccess for lsass credential dumping detection",
             )
         ]
@@ -210,7 +246,6 @@ class SupplementaryAuditEvents(ExpansionRule):
         import re
 
         from evidenceforge.generation.causal.engine import ExpandedEvent
-        from evidenceforge.generation.causal.timing import TimingSpec
 
         cmd = ctx.command_line or ""
         cmd_lower = cmd.lower()
@@ -220,7 +255,12 @@ class SupplementaryAuditEvents(ExpansionRule):
         # Pick DC system: first available, or fall back to target_system
         dc_system = ctx.dc_systems[0] if ctx.dc_systems else ctx.target_system
 
-        timing = TimingSpec(min_ms=100, max_ms=500, position="after")
+        timing = _timing_spec(
+            "windows.audit_from_admin_command",
+            default_min_ms=100,
+            default_max_ms=900,
+            default_position="after",
+        )
 
         def _domain_sid_prefix() -> str:
             for sid in ctx.sid_registry.values():

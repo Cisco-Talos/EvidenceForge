@@ -109,18 +109,19 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         """Get a deterministic connection ID that sorts with event time."""
         if isinstance(ts, datetime):
             ts_bucket = int(ts.timestamp())
-            day_index = max(0, (ts.date() - datetime(2024, 1, 1).date()).days)
             seconds_of_day = ts.hour * 3600 + ts.minute * 60 + ts.second
         else:
             ts_bucket = 0
-            day_index = 0
             seconds_of_day = 0
         sequence_key = (sensor_hostname, ts_bucket)
         sequence = self._conn_id_sequences.get(sequence_key, 0)
         self._conn_id_sequences[sequence_key] = sequence + 1
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
         sensor_offset = seed % 50_000
-        return 1_000_000 + sensor_offset + day_index * 2_000_000 + seconds_of_day * 23 + sequence
+        # Keep adjacent timestamp buckets disjoint during high-volume bursts.
+        # A small multiplier can collide when second N emits enough flows to
+        # overlap second N+1's base ID while both flows are still active.
+        return 1_000_000 + sensor_offset + seconds_of_day * 10_007 + sequence
 
     @staticmethod
     def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:

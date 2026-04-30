@@ -111,6 +111,44 @@ class TestSslContextPopulation:
             assert event.x509_chain[0] is event.x509
             assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
+    def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
+        """Batched logical connections should not render with identical Zeek start times."""
+        gen, events = activity_gen
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.20.10",
+            time=base_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=1000,
+            src_port=50001,
+            conn_state="SF",
+        )
+        gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.20.11",
+            time=base_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=1000,
+            src_port=50002,
+            conn_state="SF",
+        )
+
+        conn_events = [event for event in events if event.event_type == "connection"]
+        assert len(conn_events) == 2
+        assert conn_events[0].timestamp != conn_events[1].timestamp
+        assert conn_events[0].timestamp >= base_time
+        assert conn_events[1].timestamp >= base_time
+
     def test_ssh_session_returns_empty_uid_when_network_not_visible(self, activity_gen):
         gen, events = activity_gen
         visibility = MagicMock()
@@ -164,6 +202,272 @@ class TestSslContextPopulation:
         assert pam_messages
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
+
+    def test_ssh_syslog_sub_events_are_second_ordered(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            sshd_pid=6505,
+        )
+
+        syslog_events = [
+            event for event in events if event.syslog is not None and event.syslog.pid == 6505
+        ]
+        messages = [event.syslog.message for event in syslog_events]
+        times = [event.timestamp for event in syslog_events]
+        assert messages == [
+            'Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22 rdomain ""',
+            "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
+            "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
+        ]
+        assert times == [
+            base_time - timedelta(seconds=1),
+            base_time,
+            base_time + timedelta(seconds=1),
+        ]
+
+    def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        for idx in range(3):
+            gen.generate_ssh_session(
+                user=user,
+                target_system=target,
+                time=datetime(2024, 1, 15, 10, idx, 0, tzinfo=UTC),
+                source_ip="10.0.10.50",
+            )
+
+        session_ids = []
+        for event in events:
+            if event.syslog is None or event.syslog.app_name != "systemd-logind":
+                continue
+            session_ids.append(int(event.syslog.message.split()[2]))
+
+        assert len(session_ids) == 3
+        assert session_ids == sorted(session_ids)
+        assert max(session_ids) < 1000
+
+    def test_ssh_systemd_logind_uses_seeded_host_pid(self, activity_gen):
+        gen, events = activity_gen
+        gen._system_pids = {"linux01": {"logind": 789}}
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        logind_events = [
+            event for event in events if event.syslog and event.syslog.app_name == "systemd-logind"
+        ]
+        assert logind_events
+        assert {event.syslog.pid for event in logind_events} == {789}
+
+    def test_ssh_connection_carries_ip_byte_counters(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        ssh_events = [
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        ]
+        assert ssh_events
+        event = ssh_events[0]
+        assert event.network.orig_ip_bytes is not None
+        assert event.network.resp_ip_bytes is not None
+        assert event.network.orig_ip_bytes > event.network.orig_bytes
+        assert event.network.resp_ip_bytes > event.network.resp_bytes
+
+    def test_ssh_session_records_transport_close_time(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+        )
+
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        session = gen.state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.network_close_time == base_time + timedelta(
+            seconds=ssh_event.network.duration
+        )
+
+    def test_ssh_session_records_transport_close_time_with_existing_object_id(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+        )
+        session_obj_id = gen.state_manager.get_session_object_id(logon_id)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+            session_obj_id=session_obj_id,
+        )
+
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        session = gen.state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.network_close_time == base_time + timedelta(
+            seconds=ssh_event.network.duration
+        )
+
+    def test_ssh_session_honors_min_duration(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            min_duration=7200.0,
+        )
+
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        assert ssh_event.network.duration >= 7200.0
+
+    def test_ssh_source_ports_are_unique_per_endpoint_tuple(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        for idx in range(2):
+            gen.generate_ssh_session(
+                user=user,
+                target_system=target,
+                time=base_time + timedelta(minutes=idx),
+                source_ip="10.0.10.50",
+                source_port=51111,
+            )
+
+        ssh_ports = [
+            event.network.src_port
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        ]
+        assert len(ssh_ports) == 2
+        assert len(set(ssh_ports)) == 2
 
     def test_http_service_no_ssl_context(self, activity_gen):
         gen, events = activity_gen
