@@ -23,7 +23,7 @@
 """Unit tests for Sysmon event emitter."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -306,6 +306,59 @@ class TestSysmonEventEmitter:
         assert f'<Data Name="ProcessGuid">{expected_guid}</Data>' in content
         assert terminate_time_guid not in content
 
+    def test_process_create_parent_guid_uses_context_parent_start_time(self, format_def, tmp_path):
+        """ParentProcessGuid should not be recomputed from a later reused parent PID."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        parent_start = datetime(2024, 1, 15, 9, 59, 0, tzinfo=UTC)
+        child_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        later_reused_parent_start = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=child_start,
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="jsmith",
+                parent_image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                parent_command_line="powershell.exe",
+                parent_start_time=parent_start,
+                start_time=child_start,
+            ),
+            auth=AuthContext(username="jsmith", logon_id="0xabc123"),
+        )
+
+        expected_parent_guid = emitter._generate_process_guid("WKS-01", 4200, parent_start)
+        later_parent_guid = emitter._generate_process_guid(
+            "WKS-01", 4200, later_reused_parent_start
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        output_file = output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml"
+        content = output_file.read_text()
+        assert f'<Data Name="ParentProcessGuid">{expected_parent_guid}</Data>' in content
+        assert later_parent_guid not in content
+
     def test_close_preserves_chronological_order_for_same_second_events(
         self, format_def, temp_output
     ):
@@ -336,6 +389,86 @@ class TestSysmonEventEmitter:
         timestamps = re.findall(r'SystemTime="([^"]+)"', content)
         assert timestamps == sorted(timestamps)
         assert len(set(timestamps)) == len(timestamps)
+        assert all(re.search(r"\.\d{7}Z$", ts) for ts in timestamps)
+
+    def test_follow_on_shifted_after_process_create(self, format_def, temp_output):
+        """Follow-on telemetry with a ProcessGuid should not precede Event 1."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        create_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        follow_on_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 7,
+                "TimeCreated": follow_on_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": create_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+        ]
+
+        emitter._shift_followons_after_process_create()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == create_time + timedelta(milliseconds=1)
+
+    def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
+        """Child Event 1 should not render before a visible parent Event 1."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        parent_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+        child_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        parent_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "TimeCreated": child_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": "{22222222-abcd-ef01-2345-678901234567}",
+                "ParentProcessGuid": parent_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": parent_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": parent_guid,
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
+
+    def test_termination_shifted_after_follow_on(self, format_def, temp_output):
+        """Event 5 should not precede later visible telemetry for the same ProcessGuid."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        network_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        process_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 5,
+                "TimeCreated": terminate_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+            {
+                "EventID": 3,
+                "TimeCreated": network_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+            },
+        ]
+
+        emitter._shift_terminations_after_followons()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == network_time + timedelta(milliseconds=1)
 
     def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""

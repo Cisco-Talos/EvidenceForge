@@ -51,15 +51,29 @@ _SYSLOG_MONTHS = {
 _SYSLOG_TS_RE = re.compile(r"^(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<hms>\d\d:\d\d:\d\d)")
 
 
-def _syslog_sort_key(line: str) -> tuple[int, int, str, str]:
+def _ssh_lifecycle_priority(line: str) -> int:
+    """Order same-second SSH lifecycle messages after timestamp precision is lost."""
+    if " sshd[" not in line:
+        return 50
+    if "Connection from " in line:
+        return 10
+    if "Accepted " in line or "Failed " in line:
+        return 20
+    if "pam_unix(sshd:session): session opened" in line:
+        return 30
+    return 50
+
+
+def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
     """Sort traditional syslog lines by their rendered month/day/time prefix."""
     match = _SYSLOG_TS_RE.match(line)
     if match is None:
-        return (13, 32, "99:99:99", line)
+        return (13, 32, "99:99:99", 99, line)
     return (
         _SYSLOG_MONTHS.get(match.group("mon"), 13),
         int(match.group("day")),
         match.group("hms"),
+        _ssh_lifecycle_priority(line),
         line,
     )
 

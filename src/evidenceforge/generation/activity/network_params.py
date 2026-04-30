@@ -24,6 +24,8 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         result["public_ntp_servers"] = extend_list(
             default.get("public_ntp_servers", []), overlay["public_ntp_servers"]
         )
+    if "dns_tunnel_rtt" in overlay:
+        result["dns_tunnel_rtt"] = dict(overlay["dns_tunnel_rtt"])
     return result
 
 
@@ -59,3 +61,11 @@ def public_ntp_ips() -> list[str]:
         for server in public_ntp_servers()
         if isinstance(server.get("ip"), str) and server["ip"]
     ]
+
+
+def dns_tunnel_rtt_range() -> tuple[float, float]:
+    """Return configured DNS tunnel RTT range in seconds."""
+    rtt = load_network_params().get("dns_tunnel_rtt", {})
+    if not isinstance(rtt, dict):
+        return (0.04, 1.5)
+    return (float(rtt.get("min_seconds", 0.04)), float(rtt.get("max_seconds", 1.5)))

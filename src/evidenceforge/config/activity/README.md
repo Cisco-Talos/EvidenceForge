@@ -17,11 +17,12 @@ caches data after first load. Two files (`network_params.yaml`,
 | `spawn_rules.yaml` | `spawn_rules.py` | Parent-child process relationships for Windows and Linux. Builds reverse child-to-parent index. |
 | `bash_commands.yaml` | `bash_commands.py` | Per-role bash command pools (sysadmin, dba, developer, generic) with `{placeholder}` templates. |
 | `system_processes.yaml` | `system_processes.py` | Baseline Windows scheduled tasks and system services (svchost, MpCmdRun, etc.). |
-| `tls_issuers.yaml` | `tls_issuers.py` | Certificate issuer configs (Let's Encrypt, DigiCert, etc.) with validity periods and key types. |
+| `tls_issuers.yaml` | `tls_issuers.py` | Certificate issuer configs (Let's Encrypt, DigiCert, etc.) with validity periods and key types. RSA-named issuers should not include ECDSA key types under the current simplified x509 model. |
 | `tls_realism.yaml` | `tls_realism.py` | TLS SAN, OCSP, certificate-chain, and destination-profile settings with overlay support. |
 | `kerberos_realism.yaml` | `kerberos_realism.py` | Kerberos 4768 TGT PreAuthType, TicketOptions, encryption, and PKINIT certificate field distributions with overlay support. |
+| `windows_auth_realism.yaml` | `windows_auth_realism.py` | Windows Security authentication realism knobs such as minimum 4800→4801 lock/unlock gap, failed-logon validation paths, companion network evidence, and 4672 privilege profiles. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
-| `network_params.yaml` | `engine/emitter_setup.py` | MAC address OUI prefixes (Dell, HP, VMware, etc.) for realistic MAC generation. |
+| `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, public NTP fallback servers, and DNS tunnel RTT bounds. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
 | `extra_syslog_messages.yaml` | `extra_syslog.py` | Role/distro-tagged syslog program messages for baseline diversity. |
 | `application_catalog.yaml` | `application_catalog.py` | Unified app definitions: image paths, PE metadata, command templates, persona filtering, child processes. |

@@ -433,7 +433,7 @@ class TestProcessAccessAfterRemoteThread:
         assert ev.kwargs["target_pid"] == 636
         assert ev.timing.position == "after"
         assert ev.timing.min_ms == 1
-        assert ev.timing.max_ms == 50
+        assert ev.timing.max_ms == 75
 
 
 # --- SupplementaryAuditEvents rule ---

@@ -139,6 +139,18 @@ class TestTlsIssuers:
         observed = {pick_key_type(random.Random(seed), issuer) for seed in range(20)}
         assert observed == {("rsa", 2048)}
 
+    def test_rsa_named_issuers_only_emit_rsa_certificate_metadata(self):
+        """RSA-branded issuers should not produce ECDSA x509 key/signature pairs."""
+        data = load_tls_issuers()
+        rsa_named_issuers = [
+            issuer for issuer in data["issuers"] if " rsa " in f" {issuer['name'].lower()} "
+        ]
+
+        assert rsa_named_issuers
+        for issuer in rsa_named_issuers:
+            observed = {pick_key_type(random.Random(seed), issuer)[0] for seed in range(20)}
+            assert observed == {"rsa"}, issuer["name"]
+
     def test_san_dns_never_wildcards_public_suffix(self):
         """Generated SAN lists should not contain impossible public-suffix wildcards."""
         assert _tls_san_dns_names("stackoverflow.com") == [
@@ -361,6 +373,28 @@ class TestTlsIssuers:
         reset_network_params_cache()
         try:
             assert _ntp_stratum_and_ref_id("198.51.100.123") == (2, ".GPS.")
+        finally:
+            reset_network_params_cache()
+
+    def test_dns_tunnel_rtt_is_loaded_from_network_params_overlay(self, tmp_path, monkeypatch):
+        """DNS tunnel timing should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rtt_range,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_rtt": {"min_seconds": 0.2, "max_seconds": 0.9}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert dns_tunnel_rtt_range() == (0.2, 0.9)
         finally:
             reset_network_params_cache()
 

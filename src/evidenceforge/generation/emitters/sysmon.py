@@ -38,12 +38,14 @@ from typing import Any
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.windows import (
     _normalize_windows_time_created,
     _subject_domain,
 )
+from evidenceforge.generation.emitters.windows_event import format_windows_system_time
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -534,7 +536,7 @@ class SysmonEventEmitter(LogEmitter):
         sm = getattr(self, "_state_manager", None)
         if sm and pid > 0:
             proc = sm.get_process(hostname, pid)
-            if proc is not None:
+            if proc is not None and proc.start_time <= fallback_timestamp:
                 ts = proc.start_time
         return self._generate_process_guid(hostname, pid, ts)
 
@@ -655,10 +657,13 @@ class SysmonEventEmitter(LogEmitter):
         sm = getattr(self, "_state_manager", None)
         if sm and proc.parent_pid > 0:
             parent_proc = sm.get_process(host.hostname, proc.parent_pid)
+        child_start = proc.start_time or event.timestamp
         _parent_ts = (
-            parent_proc.start_time
-            if parent_proc is not None
-            else self._host_boot_times.get(host.hostname, event.timestamp - timedelta(days=7))
+            proc.parent_start_time
+            if proc.parent_start_time is not None
+            else parent_proc.start_time
+            if parent_proc is not None and parent_proc.start_time <= child_start
+            else self._host_boot_times.get(host.hostname, child_start - timedelta(days=7))
         )
         parent_guid = self._generate_process_guid(
             host.hostname,
@@ -790,7 +795,9 @@ class SysmonEventEmitter(LogEmitter):
         remote_thread = event.remote_thread
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
+        source_guid = self._get_stable_process_guid(
+            host.hostname, proc.pid, proc.start_time or event.timestamp
+        )
 
         target_pid = (
             remote_thread.target_pid
@@ -844,7 +851,9 @@ class SysmonEventEmitter(LogEmitter):
         access = event.process_access
 
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        source_guid = self._get_stable_process_guid(host.hostname, proc.pid, event.timestamp)
+        source_guid = self._get_stable_process_guid(
+            host.hostname, proc.pid, proc.start_time or event.timestamp
+        )
 
         target_pid = access.target_pid if access else rng.randint(500, 800)
         target_image = self._resolve_full_image_path(
@@ -1068,7 +1077,19 @@ class SysmonEventEmitter(LogEmitter):
         net = event.network
         proc = event.process
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        render_time = event.timestamp + sample_timing_delta(
+            "source.sysmon_network_connection",
+            seed_parts=(
+                host.hostname,
+                net.initiating_pid if net else -1,
+                net.src_ip if net else "",
+                net.src_port if net else 0,
+                net.dst_ip if net else "",
+                net.dst_port if net else 0,
+                event.timestamp,
+            ),
+        )
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         # Process info — use ProcessContext if available, else resolve from
         # initiating_pid via StateManager lookup. Real Sysmon always knows the
@@ -1081,7 +1102,9 @@ class SysmonEventEmitter(LogEmitter):
             pid, image = self._resolve_process_from_pid(host.hostname, initiating_pid)
         if pid <= 0 or image == "-":
             return  # Cannot attribute to a process — don't emit phantom Event 3
-        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+        )
 
         # User — resolve from AuthContext, ProcessContext, or StateManager
         user = ""
@@ -1106,7 +1129,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 3,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -1142,7 +1165,9 @@ class SysmonEventEmitter(LogEmitter):
         utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         pid = proc.pid if proc else rng.randint(1000, 5000)
         image = proc.image if proc else r"C:\Windows\System32\svchost.exe"
-        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+        )
 
         # PE metadata for the loaded DLL
         fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
@@ -1187,7 +1212,9 @@ class SysmonEventEmitter(LogEmitter):
         else:
             file_pid = fc.pid if fc else 0
             pid, image = self._resolve_process_from_pid(host.hostname, file_pid)
-        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+        )
 
         event_data = {
             "EventID": 11,
@@ -1223,7 +1250,9 @@ class SysmonEventEmitter(LogEmitter):
         else:
             reg_pid = reg.pid if reg else 0
             pid, image = self._resolve_process_from_pid(host.hostname, reg_pid)
-        process_guid = self._get_stable_process_guid(host.hostname, pid, event.timestamp)
+        process_guid = self._get_stable_process_guid(
+            host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
+        )
 
         # Route to Event 12 or 13 based on action
         action = reg.action
@@ -1347,6 +1376,7 @@ class SysmonEventEmitter(LogEmitter):
         self._record_id_counters: dict[str, int] = {}
         self._erid_rngs: dict[str, random.Random] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
+        self._time_collision_count_by_computer: dict[str, int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1388,7 +1418,7 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
                 event_data[key] = xml_escape(val)
@@ -1413,6 +1443,10 @@ class SysmonEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
+        self._shift_process_creates_after_visible_parent()
+        self._shift_followons_after_process_create()
+        self._shift_terminations_after_followons()
+
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
             if isinstance(ts, datetime):
@@ -1425,6 +1459,7 @@ class SysmonEventEmitter(LogEmitter):
             _normalize_windows_time_created(
                 event,
                 self._last_time_created_by_computer,
+                self._time_collision_count_by_computer,
                 sequence,
                 "sysmon_time_created",
                 jitter_existing_microseconds=True,
@@ -1452,6 +1487,78 @@ class SysmonEventEmitter(LogEmitter):
             self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
+
+    def _shift_process_creates_after_visible_parent(self) -> None:
+        """Prevent visible Sysmon Event 1 children from preceding their parent Event 1."""
+        process_create_times: dict[tuple[str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            computer = str(event.get("Computer", ""))
+            if isinstance(ts, datetime) and guid:
+                process_create_times[(computer, str(guid))] = ts
+
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            parent_guid = event.get("ParentProcessGuid")
+            computer = str(event.get("Computer", ""))
+            if not isinstance(ts, datetime) or not parent_guid:
+                continue
+            parent_time = process_create_times.get((computer, str(parent_guid)))
+            if parent_time is not None and ts <= parent_time:
+                event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
+
+    def _shift_followons_after_process_create(self) -> None:
+        """Prevent same-ProcessGuid Sysmon follow-ons from preceding Event 1."""
+        process_create_times: dict[tuple[str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            computer = str(event.get("Computer", ""))
+            if isinstance(ts, datetime) and guid:
+                process_create_times[(computer, str(guid))] = ts
+
+        for event in self._event_dicts:
+            event_id = event.get("EventID")
+            if event_id == 1:
+                continue
+            ts = event.get("TimeCreated")
+            computer = str(event.get("Computer", ""))
+            guid = event.get("ProcessGuid") or event.get("SourceProcessGuid")
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            create_time = process_create_times.get((computer, str(guid)))
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + timedelta(milliseconds=1)
+
+    def _shift_terminations_after_followons(self) -> None:
+        """Prevent Event 5 from preceding visible same-process follow-on telemetry."""
+        latest_followon: dict[tuple[str, str], datetime] = {}
+        terminations: list[tuple[tuple[str, str], dict[str, Any]]] = []
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            key = (str(event.get("Computer", "")), str(guid))
+            if event.get("EventID") == 5:
+                terminations.append((key, event))
+                continue
+            if event.get("EventID") == 1:
+                continue
+            latest_followon[key] = max(ts, latest_followon.get(key, ts))
+
+        for key, event in terminations:
+            ts = event.get("TimeCreated")
+            latest = latest_followon.get(key)
+            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + timedelta(milliseconds=1)
 
     def flush(self) -> None:
         with self._file_lock:

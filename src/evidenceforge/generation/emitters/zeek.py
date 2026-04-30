@@ -25,6 +25,7 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -46,6 +47,23 @@ class ZeekEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         """Render SecurityEvent to Zeek conn.log format."""
         net = event.network
+        duration = net.duration
+        if (
+            net.protocol == "tcp"
+            and net.dst_port == 443
+            and net.conn_state == "SF"
+            and event.ssl is not None
+        ):
+            tls_min_window = get_timing_window(
+                "network.tls_completed_min_duration",
+                default_min_ms=800,
+                default_max_ms=2500,
+                default_position="after",
+                default_class="same_observation",
+            )
+            min_duration = tls_min_window.min_ms / 1000
+            if duration is None or duration < min_duration:
+                duration = min_duration
         event_data = {
             "ts": event.timestamp,
             "uid": net.zeek_uid,
@@ -55,7 +73,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "id.resp_p": net.dst_port,
             "proto": net.protocol,
             "service": net.service or None,
-            "duration": net.duration,
+            "duration": duration,
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
             "conn_state": net.conn_state,

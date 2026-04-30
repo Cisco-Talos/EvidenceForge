@@ -65,6 +65,8 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
 | Modify ProcessAccess masks | `process_access_patterns.yaml` | (standalone — Event 10 baseline source/target pairs and GrantedAccess masks) |
 | Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
+| Modify Windows auth realism | `windows_auth_realism.yaml` | (standalone — Security log auth timing and failed-logon profile knobs) |
+| Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
 
@@ -85,6 +87,7 @@ Also read the relevant reference doc for field schemas and conventions:
 | Sysmon filters, EDR pools, CallTrace, ProcessAccess masks, CreateRemoteThread pairs | `references/config-apps-processes.md` (Sysmon sections) |
 | Persona file structure | `references/config-personas.md` |
 | Host activity (bash, systemd, syslog) | `references/config-host-activity.md` |
+| Timing profiles | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |
 | Evaluation rules | `references/config-evaluation.md` (read-only reference — not user-customizable) |
 | Cross-file dependencies | `references/config-dependency-graph.md` |

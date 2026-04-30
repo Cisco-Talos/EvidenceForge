@@ -24,15 +24,17 @@
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import AuthContext, HostContext, NetworkContext
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
+from evidenceforge.generation.emitters.windows import _normalize_windows_time_created
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 
@@ -84,7 +86,7 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert "<EventID>4624</EventID>" in content
         assert "<TimeCreated" in content
-        assert "2024-01-15T10:30:45.123456Z" in content
+        assert re.search(r"2024-01-15T10:30:45\.123456\dZ", content)
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
@@ -133,6 +135,93 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert '<Data Name="WorkstationName">WS-01</Data>' in content
         assert "<Computer>FS-01.example.com</Computer>" in content
+        assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+
+    def test_logon_elevated_token_reflects_auth_context(self, format_def, temp_output):
+        """4624 ElevatedToken should vary with canonical auth.elevated."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+
+        for username, elevated, logon_id in [
+            ("jsmith", False, "0x111"),
+            ("admin", True, "0x222"),
+        ]:
+            emitter.emit(
+                SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+                    event_type="logon",
+                    dst_host=host,
+                    auth=AuthContext(
+                        username=username,
+                        user_sid="S-1-5-21-1-2-3-1001",
+                        logon_id=logon_id,
+                        logon_type=2,
+                        elevated=elevated,
+                        subject_sid="S-1-5-18",
+                        subject_username="SYSTEM",
+                        subject_domain="NT AUTHORITY",
+                        subject_logon_id="0x3e7",
+                    ),
+                )
+            )
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+        assert '<Data Name="ElevatedToken">%%1842</Data>' in content
+
+    def test_anonymous_logon_uses_nt_authority_domain_and_source_workstation(
+        self, format_def, temp_output
+    ):
+        """ANONYMOUS LOGON should not inherit the AD domain or local workstation."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="FS-01",
+            ip="10.0.2.20",
+            fqdn="FS-01.example.com",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="ANONYMOUS LOGON",
+                user_sid="S-1-5-7",
+                logon_id="0x12345",
+                logon_type=3,
+                source_ip="10.0.1.10",
+                source_port=52222,
+                workstation_name="WS-01",
+                auth_package="NTLM",
+                logon_process="NtLmSsp",
+                lm_package="NTLM V2",
+                subject_sid="S-1-0-0",
+                subject_username="-",
+                subject_domain="-",
+                subject_logon_id="0x0",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="TargetDomainName">NT AUTHORITY</Data>' in content
+        assert '<Data Name="WorkstationName">WS-01</Data>' in content
+        assert '<Data Name="IpAddress">::ffff:10.0.1.10</Data>' in content
+        assert '<Data Name="ElevatedToken">%%1843</Data>' in content
 
     def test_emit_logoff_event(self, format_def, temp_output):
         """Test emitting a logoff event (4634)."""
@@ -216,6 +305,61 @@ class TestWindowsEventEmitter:
         print(f"{'=' * 80}")
         print(content)
         print(f"{'=' * 80}\n")
+
+    def test_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
+        """A visible 4634 should not precede later rendered evidence for the same session."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logoff_time + timedelta(seconds=10)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+            },
+        ]
+
+        emitter._shift_logoffs_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
+
+    def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
+        """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        last_by_computer: dict[str, datetime] = {}
+        collision_count_by_computer: dict[str, int] = {}
+        rendered_times: list[datetime] = []
+
+        for sequence in range(30):
+            event = {
+                "EventID": 4688,
+                "TimeCreated": base_time,
+                "Computer": "WIN-TEST-01.corp.local",
+            }
+            _normalize_windows_time_created(
+                event,
+                last_by_computer,
+                collision_count_by_computer,
+                sequence,
+                "test_windows_time_created",
+            )
+            rendered_times.append(event["TimeCreated"])
+
+        gaps = [rendered_times[i] - rendered_times[i - 1] for i in range(1, len(rendered_times))]
+        assert max(gaps[:24]) < timedelta(milliseconds=1)
+        assert min(gaps[25:]) >= timedelta(seconds=1)
 
     def test_buffering(self, format_def, temp_output):
         """Test that events are buffered before flushing."""
@@ -532,6 +676,39 @@ class TestWindowsEventEmitter:
             "firefox\\firefox.exe</Data>"
         ) in content
 
+    def test_wfp_connection_uses_source_native_timestamp_offset(self, format_def, temp_output):
+        """WFP 5156 should render with a host-audit offset from the canonical connection."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.50",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="WKS-01.corp.local",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=4,
+            ),
+        )
+
+        emitter.emit(event)
+
+        expected_delta = sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=("WKS-01", 4, "10.0.0.50", 49263, "93.184.216.34", 443, event_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
+
     def test_wfp_connection_pid4_renders_system_application(self, format_def, temp_output):
         """WFP 5156 for PID 4 should render System, not a synthetic svchost path."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -613,8 +790,8 @@ class TestWindowsEventEmitter:
             == r"\device\harddiskvolume1\test.exe"
         )
 
-    def test_timestamp_microsecond_precision(self, format_def, temp_output):
-        """Test that timestamps have 6 decimal places (microsecond precision)."""
+    def test_timestamp_100ns_precision(self, format_def, temp_output):
+        """Test that timestamps have EVTX-like 100ns precision."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
 
         event_data = {
@@ -636,7 +813,37 @@ class TestWindowsEventEmitter:
         emitter.close()
 
         content = temp_output.read_text()
-        assert "2024-01-15T10:30:45.123456Z" in content  # 6 decimal places
+        assert re.search(r"2024-01-15T10:30:45\.123456\dZ", content)
+
+    def test_timestamp_100ns_digit_varies(self, format_def, temp_output):
+        """The synthetic 100ns digit should not always be zero."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=50)
+        for idx in range(20):
+            event_data = {
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, idx, 123456, tzinfo=UTC),
+                "Computer": "WIN-TEST-01.corp.local",
+                "Channel": "Security",
+                "Level": 0,
+                "ExecutionProcessID": 600,
+                "ExecutionThreadID": 100 + idx,
+                "TargetUserSid": "S-1-5-21-123-456-789-1001",
+                "TargetUserName": f"user{idx}",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": f"0x{idx:06x}",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "-",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+            emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        timestamps = re.findall(r'SystemTime="[^"]+\.(\d{7})Z"', content)
+        assert len(timestamps) == 20
+        assert len({fraction[-1] for fraction in timestamps}) > 1
 
     def test_emit_kerberos_preauth_failed(self, format_def, temp_output):
         """Test emitting 4771 (Kerberos pre-auth failed)."""
@@ -693,7 +900,71 @@ class TestWindowsEventEmitter:
         assert "Microsoft-Windows-Eventlog" in content
         assert "LogFileCleared" in content
         assert "UserData" in content
+        assert "<SubjectUserName>admin01</SubjectUserName>" in content
+        assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0
+
+    def test_event_record_id_restarts_after_log_cleared(self, format_def, temp_output):
+        """Security EventRecordID should restart after source-native 1102 log clear."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        base = {
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 600,
+            "ExecutionThreadID": 100,
+        }
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "TargetUserName": "jsmith",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": "0x1",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "-",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+        )
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 1102,
+                "TimeCreated": datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+                "SubjectUserSid": "S-1-5-21-123-456-789-1001",
+                "SubjectUserName": "admin01",
+                "SubjectDomainName": "CORP",
+                "SubjectLogonId": "0x2",
+            }
+        )
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 32, 0, tzinfo=UTC),
+                "TargetUserName": "jsmith",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": "0x3",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "-",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+        )
+        emitter.close()
+
+        content = temp_output.read_text()
+        record_ids = [
+            int(value) for value in re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content)
+        ]
+        assert len(record_ids) == 3
+        assert record_ids[0] < record_ids[1]
+        assert record_ids[2] < record_ids[1]
+        assert record_ids[2] <= 20
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):
         """Test emitting 4800 (workstation locked) with populated EventData fields."""

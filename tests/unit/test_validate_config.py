@@ -120,6 +120,33 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_improbable_kerberos_failure_preauth(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        real_loader = kerberos_realism.load_kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            data = real_loader()
+            failure = dict(data["tgt_failure"])
+            failure["pre_auth_types"] = {
+                "none_or_legacy": {"value": 0, "weight": 50},
+                "encrypted_timestamp": {"value": 2, "weight": 50},
+            }
+            return {**data, "tgt_failure": failure}
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "4771 failure PreAuthType 0/no-preauth weight must not exceed 10%" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_browser_like_proxy_infra_template(self, monkeypatch):
         from evidenceforge.generation.activity import proxy_uri
 
@@ -150,5 +177,258 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "proxy_uri_templates.yaml"
             and "unsuitable content type" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_timing_profile_window(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        def load_invalid_timing_profiles():
+            return {
+                "relationships": {
+                    "network.dns_before_tcp": {
+                        "class": "causal_prerequisite",
+                        "position": "before",
+                        "min_ms": 500,
+                        "max_ms": 100,
+                    }
+                },
+                "windows_event_time": {
+                    "collision_spacing": {
+                        "near_zero_until": 25,
+                        "near_gap_min_us": 50,
+                        "near_gap_max_us": 500,
+                        "large_gap_min_ms": 1000,
+                        "large_gap_max_ms": 4000,
+                    }
+                },
+            }
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and 'Relationship "network.dns_before_tcp" max_ms must be greater than or equal to min_ms'
+            in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_windows_collision_spacing(self, monkeypatch):
+        from evidenceforge.generation.activity import timing_profiles
+
+        def load_invalid_timing_profiles():
+            return {
+                "relationships": {
+                    "network.dns_before_tcp": {
+                        "class": "causal_prerequisite",
+                        "position": "before",
+                        "min_ms": 20,
+                        "max_ms": 1500,
+                    }
+                },
+                "windows_event_time": {
+                    "collision_spacing": {
+                        "near_zero_until": 25,
+                        "near_gap_min_us": 500,
+                        "near_gap_max_us": 50,
+                        "large_gap_min_ms": 4000,
+                        "large_gap_max_ms": 1000,
+                    }
+                },
+            }
+
+        monkeypatch.setattr(timing_profiles, "load_timing_profiles", load_invalid_timing_profiles)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "near_gap_max_us must be >= near_gap_min_us" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "timing_profiles.yaml"
+            and "large_gap_max_ms must be >= large_gap_min_ms" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_too_short_workstation_unlock_gap(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {"workstation_lock": {"min_unlock_gap_seconds": 10}}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "min_unlock_gap_seconds must be at least 60" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_empty_failed_auth_validation_path(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {
+                "workstation_lock": {"min_unlock_gap_seconds": 127},
+                "failed_logon": {
+                    "local_interactive": {
+                        "logon_process_name": "User32",
+                        "authentication_package_name": "Negotiate",
+                        "process_name": r"C:\Windows\System32\winlogon.exe",
+                    },
+                    "network": {
+                        "validation_path_weights": {
+                            "none": {"emit_4776": False, "emit_4771": False, "weight": 1}
+                        },
+                        "logon_process_weights": {
+                            "ntlm": {
+                                "logon_process_name": "NtLmSsp",
+                                "authentication_package_name": "NTLM",
+                                "lm_package_name": "NTLM V2",
+                                "weight": 1,
+                            }
+                        },
+                        "emit_network_connection_probability": 1.0,
+                        "network_ports": {"smb": {"port": 445, "weight": 1}},
+                    },
+                },
+                "special_privileges": {
+                    "profiles": {
+                        "service_account": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                        "domain_admin": {"privileges": ["SeDebugPrivilege"], "weight": 1},
+                        "workstation_admin": {
+                            "privileges": ["SeBackupPrivilege"],
+                            "weight": 1,
+                        },
+                        "uac_elevated_user": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                    }
+                },
+            }
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "validation path must emit at least one DC-side event" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_special_privilege_name(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {
+                "workstation_lock": {"min_unlock_gap_seconds": 127},
+                "failed_logon": {
+                    "local_interactive": {
+                        "logon_process_name": "User32",
+                        "authentication_package_name": "Negotiate",
+                        "process_name": r"C:\Windows\System32\winlogon.exe",
+                    },
+                    "network": {
+                        "validation_path_weights": {
+                            "ntlm": {"emit_4776": True, "emit_4771": False, "weight": 1}
+                        },
+                        "logon_process_weights": {
+                            "ntlm": {
+                                "logon_process_name": "NtLmSsp",
+                                "authentication_package_name": "NTLM",
+                                "lm_package_name": "NTLM V2",
+                                "weight": 1,
+                            }
+                        },
+                        "emit_network_connection_probability": 1.0,
+                        "network_ports": {"smb": {"port": 445, "weight": 1}},
+                    },
+                },
+                "special_privileges": {
+                    "profiles": {
+                        "service_account": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                        "domain_admin": {"privileges": ["Debug"], "weight": 1},
+                        "workstation_admin": {
+                            "privileges": ["SeBackupPrivilege"],
+                            "weight": 1,
+                        },
+                        "uac_elevated_user": {
+                            "privileges": ["SeChangeNotifyPrivilege"],
+                            "weight": 1,
+                        },
+                    }
+                },
+            }
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "Windows privileges must use Se*Privilege names" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_dns_ids_template_on_non_dns_signature(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 999001,
+                        "rev": 1,
+                        "message": "ET TEST Non-DNS",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "tcp",
+                        "dst_port": 80,
+                        "direction": "out",
+                        "dns_query_templates": ["bad-{token}.example"],
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "defines dns_query_templates but is not a DNS signature" in issue.message
             for issue in result.issues
         )

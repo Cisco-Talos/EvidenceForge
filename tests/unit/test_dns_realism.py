@@ -441,6 +441,62 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_pkts > 0
         assert event.network.resp_ip_bytes is not None
 
+    def test_dns_txt_response_has_originator_payload(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS TXT fan-out should not render a response to a zero-byte query."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="abcd1234.exfil.example.com",
+                query_type="TXT",
+                qtype=16,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["v=abcd1234"],
+            ),
+            resp_bytes=800,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_bytes > 0
+        assert event.network.orig_ip_bytes > event.network.orig_bytes
+
+    def test_dns_conn_duration_uses_rtt(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS conn rows should describe the same transaction length as dns.log RTT."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="chunk.tunnel.example.com",
+                query_type="TXT",
+                qtype=16,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["v=chunk"],
+                rtt=0.35,
+            ),
+            resp_bytes=800,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.duration == 0.35
+
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

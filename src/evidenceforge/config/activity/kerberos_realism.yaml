@@ -53,6 +53,25 @@ tgt_success:
       value: "0x17"
       weight: 10
 
+tgt_failure:
+  pre_auth_types:
+    encrypted_timestamp:
+      value: 2
+      weight: 95
+      description: "Normal password/pre-auth failures after encrypted timestamp pre-auth."
+    none_or_legacy:
+      value: 0
+      weight: 5
+      description: "Legacy/no-preauth edge cases; intentionally rare."
+
+  ticket_options:
+    forwardable_renewable_canonicalize:
+      value: "0x40810010"
+      weight: 80
+    forwardable_renewable:
+      value: "0x40810000"
+      weight: 20
+
 certificate_profiles:
   enterprise_user:
     issuer_names:

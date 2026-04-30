@@ -181,6 +181,9 @@ def validate_config() -> ValidationResult:
         "activity/network_params.yaml": {
             "list_fields": {"oui_prefixes": None, "public_ntp_servers": "name"},
         },
+        "activity/windows_auth_realism.yaml": {
+            "dict_fields": {"workstation_lock"},
+        },
         "activity/bash_commands.yaml": {
             # All top-level keys are valid (persona/role names + common/params/keyboard_adjacency)
             # No structural constraints — skip unexpected-key check
@@ -206,11 +209,17 @@ def validate_config() -> ValidationResult:
                 "dll_pool",
             },
         },
+        "activity/ids_signatures.yaml": {
+            "list_fields": {"signatures": None},
+        },
         "activity/web_scan_presets.yaml": {
             "dict_fields": {"presets"},
         },
         "activity/traffic_rates.yaml": {
             "dict_fields": {"low", "medium", "high"},
+        },
+        "activity/timing_profiles.yaml": {
+            "dict_fields": {"relationships", "windows_event_time"},
         },
     }
 
@@ -411,6 +420,7 @@ def validate_config() -> ValidationResult:
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
     )
@@ -420,10 +430,13 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
+    from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
+    from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
+    ids_data = load_ids_signatures()
     catalog_data = load_catalog()
     traffic_data = load_traffic_profiles()
     spawn_data = load_spawn_rules()
@@ -436,6 +449,8 @@ def validate_config() -> ValidationResult:
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
     tls_realism_data = load_tls_realism()
+    windows_auth_data = load_windows_auth_realism()
+    timing_profiles_data = load_timing_profiles()
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
@@ -494,6 +509,61 @@ def validate_config() -> ValidationResult:
                         "WARNING", "dns_registry.yaml", f'Domain "{domain}" has invalid tag "{tag}"'
                     )
                 )
+
+    # --- IDS Signature Integrity ---
+    for i, sig in enumerate(ids_data.get("signatures", [])):
+        sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
+        if not isinstance(sig, dict):
+            result.issues.append(
+                Issue("ERROR", "ids_signatures.yaml", f"Signature {sid} must be a mapping")
+            )
+            continue
+        for required in ("sid", "rev", "message", "classification", "priority", "proto"):
+            if required not in sig:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} missing required field {required}",
+                    )
+                )
+        proto = sig.get("proto")
+        if proto not in {"tcp", "udp", "icmp"}:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} has invalid proto {proto!r}",
+                )
+            )
+        templates = sig.get("dns_query_templates")
+        if templates is not None:
+            if proto not in {"udp", "tcp"} or sig.get("dst_port") != 53:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} defines dns_query_templates but is not a DNS signature",
+                    )
+                )
+            elif not isinstance(templates, list) or not templates:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "ids_signatures.yaml",
+                        f"Signature {sid} dns_query_templates must be a non-empty list",
+                    )
+                )
+            else:
+                for template in templates:
+                    if not isinstance(template, str) or "{token}" not in template:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "ids_signatures.yaml",
+                                f"Signature {sid} DNS template {template!r} must contain {{token}}",
+                            )
+                        )
 
     # --- Checks 7-10: DNS → Downstream Cascade ---
     # proxy_data and site_data loaded above via overlay-aware loaders
@@ -674,6 +744,128 @@ def validate_config() -> ValidationResult:
                 f'OCSP responder host "{domain}" not found in dns_registry',
             )
         )
+
+    # --- Timing profile integrity ---
+    valid_timing_classes = {
+        "same_observation",
+        "source_latency",
+        "causal_prerequisite",
+        "human_workflow",
+        "burst_fanout",
+        "periodic",
+        "teardown",
+    }
+    relationships = timing_profiles_data.get("relationships", {})
+    if not isinstance(relationships, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "relationships must be a mapping")
+        )
+    else:
+        for rel_name, rel_data in relationships.items():
+            if not isinstance(rel_data, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" must be a mapping',
+                    )
+                )
+                continue
+            rel_class = rel_data.get("class")
+            if rel_class not in valid_timing_classes:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" has invalid class "{rel_class}"',
+                    )
+                )
+            position = rel_data.get("position")
+            if position not in {"before", "after"}:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" has invalid position "{position}"',
+                    )
+                )
+            min_ms = rel_data.get("min_ms")
+            max_ms = rel_data.get("max_ms")
+            if not isinstance(min_ms, int) or min_ms < 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" min_ms must be a non-negative integer',
+                    )
+                )
+            if not isinstance(max_ms, int) or max_ms < 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" max_ms must be a non-negative integer',
+                    )
+                )
+            if isinstance(min_ms, int) and isinstance(max_ms, int) and max_ms < min_ms:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f'Relationship "{rel_name}" max_ms must be greater than or equal to min_ms',
+                    )
+                )
+    spacing = timing_profiles_data.get("windows_event_time", {}).get("collision_spacing", {})
+    if not isinstance(spacing, dict):
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "timing_profiles.yaml",
+                "windows_event_time.collision_spacing must be a mapping",
+            )
+        )
+    else:
+        _spacing_minimums = {
+            "near_zero_until": 0,
+            "near_gap_min_us": 1,
+            "near_gap_max_us": 1,
+            "large_gap_min_ms": 1,
+            "large_gap_max_ms": 1,
+        }
+        for field_name, minimum in _spacing_minimums.items():
+            value = spacing.get(field_name)
+            if not isinstance(value, int) or value < minimum:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "timing_profiles.yaml",
+                        f"windows_event_time.collision_spacing.{field_name} must be an integer >= {minimum}",
+                    )
+                )
+        if (
+            isinstance(spacing.get("near_gap_min_us"), int)
+            and isinstance(spacing.get("near_gap_max_us"), int)
+            and spacing["near_gap_max_us"] < spacing["near_gap_min_us"]
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "windows_event_time.collision_spacing.near_gap_max_us must be >= near_gap_min_us",
+                )
+            )
+        if (
+            isinstance(spacing.get("large_gap_min_ms"), int)
+            and isinstance(spacing.get("large_gap_max_ms"), int)
+            and spacing["large_gap_max_ms"] < spacing["large_gap_min_ms"]
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "windows_event_time.collision_spacing.large_gap_max_ms must be >= large_gap_min_ms",
+                )
+            )
 
     # Check 8: Orphaned site maps
     for domain in site_domains - dns_domain_set:
@@ -1178,6 +1370,7 @@ def validate_config() -> ValidationResult:
         ConnectionEntry,
         CreateRemoteThreadPatternEntry,
         DnsEntry,
+        DnsTunnelRttConfig,
         KerberosRealismConfig,
         OuiEntry,
         PersonaEntry,
@@ -1195,6 +1388,7 @@ def validate_config() -> ValidationResult:
         SystemServiceEntry,
         TlsIssuerEntry,
         TlsRealismConfig,
+        WindowsAuthRealismConfig,
         validate_entry,
     )
 
@@ -1347,6 +1541,17 @@ def validate_config() -> ValidationResult:
                 "network_params.yaml (public_ntp_servers)",
             )
         )
+        err = validate_entry(
+            net_params.get("dns_tunnel_rtt", {}),
+            DnsTunnelRttConfig,
+            "network_params.yaml (dns_tunnel_rtt)",
+        )
+        if err:
+            result.issues.append(Issue("ERROR", "network_params.yaml (dns_tunnel_rtt)", err))
+
+    err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
 
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         _SCHEMA_CHECKS.append(

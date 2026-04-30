@@ -54,6 +54,19 @@ def pick_tgt_success_fields(rng: random.Random) -> dict[str, Any]:
     }
 
 
+def pick_tgt_failure_fields(rng: random.Random) -> dict[str, Any]:
+    """Pick coherent 4771 failure fields from Kerberos realism config."""
+    cfg = load_kerberos_realism()
+    failure = cfg.get("tgt_failure", {})
+    return {
+        "ticket_options": _pick_weighted_value(failure.get("ticket_options", {}), rng)
+        or "0x40810010",
+        "pre_auth_type": int(
+            _pick_weighted_profile(failure.get("pre_auth_types", {}), rng).get("value", 2)
+        ),
+    }
+
+
 def _pick_weighted_value(profiles: dict[str, dict[str, Any]], rng: random.Random) -> str:
     """Pick a configured weighted profile and return its value."""
     profile = _pick_weighted_profile(profiles, rng)

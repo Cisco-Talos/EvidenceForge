@@ -50,7 +50,7 @@ environment:
   groups: [...]               # Optional
 ```
 
-Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Each field:
+Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic. Each field:
 - `username`: Account name (must not collide with active users or service_accounts)
 - `last_active`: ISO date when the account was last active (context only, not used by engine)
 - `reason`: Why the account is stale (context only, for ground truth documentation)
@@ -265,6 +265,7 @@ Sessions marked as `storyline_protected` (by storyline events that depend on the
 The engine automatically generates realistic failed logon patterns without scenario configuration:
 
 - **Password typos** (~5% of interactive logons): 1-2 failed attempts (4625) immediately before a successful logon (4624) for the same user. Simulates mistyped complex passwords.
+- **Remote failed auth**: network 4625 events use data-driven Windows auth realism profiles for LogonProcessName/auth package, DC-side 4771/4776 validation-path selection, and matching sensor-visible connection evidence. Auth-bearing connections are established or reset after payload; SYN-only probes are reserved for scans/unreachable services without host auth evidence.
 - **Stale scheduled tasks**: Periodic failed batch logons (type 4) from plausible service accounts on deterministic hosts. Fires every 1-2 hours, representing forgotten tasks with expired credentials.
 - **Management software sweeps**: 1-2 times per business day, a management tool tries a disabled credential across 5-15 servers in quick succession. All fail with "account disabled."
 
@@ -484,16 +485,16 @@ Red herrings are separate from `baseline_activity.suspicious_noise`, which auto-
 
 ### Causal Expansion
 
-The generation engine automatically emits prerequisite events for certain event types. You do **not** need to manually specify these — they are generated with realistic timing offsets:
+The generation engine automatically emits prerequisite events for certain event types. You do **not** need to manually specify these — they are generated with realistic timing offsets from `config/activity/timing_profiles.yaml`:
 
 | Trigger Event | Auto-Generated Prerequisites | Timing |
 |---|---|---|
-| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | 5-80ms before |
-| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | TGT 50-200ms before, TGS 20-100ms after TGT. Elevated-session 4672 is emitted with the target-host 4624. |
+| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | `network.dns_before_tcp` profile before |
+| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | `auth.kerberos_before_logon` profile before. Elevated-session 4672 is emitted with the target-host 4624. |
 | `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
 | `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
-| `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | 100-500ms after |
-| `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | 1-50ms after |
+| `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | `windows.audit_from_admin_command` profile after |
+| `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | `process.remote_thread_lsass_access` profile after |
 
 **When to manually specify these events:** Only when they are part of the attack narrative itself (e.g., DNS tunneling exfiltration, Kerberos golden ticket forging, explicit credential dumping via process access). The validator will warn if it detects potentially redundant manual specifications.
 

@@ -1,0 +1,54 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""IDS signature configuration loader and helpers."""
+
+from __future__ import annotations
+
+import random
+import string
+from typing import Any
+
+from evidenceforge.config import get_activity_directory
+from evidenceforge.config.overlay import extend_list, load_with_overlay
+
+_CONFIG_PATH = get_activity_directory() / "ids_signatures.yaml"
+_CACHED_DATA: dict[str, Any] | None = None
+
+
+def _merge_ids_signatures(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge IDS signature overlay with package defaults."""
+    result = dict(default)
+    if "signatures" in overlay:
+        result["signatures"] = extend_list(default.get("signatures", []), overlay["signatures"])
+    return result
+
+
+def load_ids_signatures() -> dict[str, Any]:
+    """Load IDS signature config, merged with any project-local overlay."""
+    global _CACHED_DATA
+    if _CACHED_DATA is None:
+        _CACHED_DATA = load_with_overlay(
+            _CONFIG_PATH,
+            "activity/ids_signatures.yaml",
+            _merge_ids_signatures,
+        )
+    return _CACHED_DATA
+
+
+def reset_ids_signatures_cache() -> None:
+    """Clear cached IDS signature config. Intended for tests."""
+    global _CACHED_DATA
+    _CACHED_DATA = None
+
+
+def render_dns_query_template(signature: dict[str, Any], rng: random.Random) -> str | None:
+    """Render a DNS query template associated with an IDS DNS signature."""
+    templates = signature.get("dns_query_templates") or []
+    if not isinstance(templates, list) or not templates:
+        return None
+    candidates = [template for template in templates if isinstance(template, str) and template]
+    if not candidates:
+        return None
+    token = "".join(rng.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+    return rng.choice(candidates).format(token=token)

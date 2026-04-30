@@ -513,11 +513,12 @@ events:
     technique: "T1087.001 - Account Discovery: Local Account"
 ```
 
-**Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets. You do NOT need to manually specify these as prerequisites:
+**Causal expansion — auto-generated prerequisite events:** The generation engine automatically emits prerequisite and consequent events with realistic timing offsets from `config/activity/timing_profiles.yaml`. You do NOT need to manually specify these as prerequisites:
 
-- **DNS before connections** — TCP connections auto-generate a DNS lookup (5-80ms before) with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections with `hostname` set always emit DNS; connections without `hostname` skip DNS (correct for raw-IP C2)
+- **DNS before connections** — TCP connections auto-generate a DNS lookup before the connection, with caching, SERVFAIL probability, and NXDOMAIN companions. Baseline web/SaaS connections use domain-first selection for consistent DNS/SNI/proxy hostnames. Storyline connections with `hostname` set always emit DNS; connections without `hostname` skip DNS (correct for raw-IP C2)
 - **Kerberos before logons** — Kerberos-authenticated Windows domain logons auto-generate TGT (4768) and TGS (4769) on the DC; elevated-session 4672 is emitted on the host where the 4624 logon session is created
-- **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 (1-50ms after)
+- **Remote auth network evidence** — Windows remote logon and failed-logon events carry source ports from canonical session/attempt context; when network logs are visible, auth-bearing attempts use established or reset-after-payload connection evidence rather than SYN-only probes
+- **ProcessAccess after lsass injection** — `create_remote_thread` targeting lsass.exe auto-generates Sysmon Event 10 after the remote-thread event
 - **Audit events from commands** — Process events with admin commands (`net user /add`, `sc create`, `schtasks /create`, `wevtutil cl`) auto-generate the corresponding Windows audit events (4720, 4726, 4728, 4697, 4698, 1102)
 - **DNS for RDP/SSH** — `rdp_session` and `ssh_session` auto-generate DNS + connection events
 - **RSAT sessions for DCs** — When the environment contains domain controllers and admin personas (sysadmin/help_desk), the baseline auto-generates correlated RSAT sessions: mmc.exe + DLL loads on the admin workstation, LDAP/RPC connections from workstation to DC, and type 3 logon on the DC. No scenario configuration needed

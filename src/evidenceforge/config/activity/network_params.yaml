@@ -74,3 +74,7 @@ public_ntp_servers:
     stratum: 2
     ref_id: ".PPS."
     weight: 10
+
+dns_tunnel_rtt:
+  min_seconds: 0.04
+  max_seconds: 0.35

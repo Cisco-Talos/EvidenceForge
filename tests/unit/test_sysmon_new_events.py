@@ -20,6 +20,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import SysmonEventEmitter
 
 
@@ -461,6 +462,42 @@ class TestRenderEvent3:
         assert "10.0.2.20" in content
         assert "4444" in content
         assert "tcp" in content
+
+    def test_event3_uses_source_native_timestamp_offset(self, emitter):
+        event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="connection",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd",
+                username="admin",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                dst_ip="10.0.2.20",
+                src_port=49152,
+                dst_port=4444,
+                protocol="tcp",
+                initiating_pid=4567,
+            ),
+        )
+
+        emitter.emit(event)
+
+        expected_delta = sample_timing_delta(
+            "source.sysmon_network_connection",
+            seed_parts=("WKS-01", 4567, "10.0.1.10", 49152, "10.0.2.20", 4444, event_time),
+        )
+        expected_time = event_time + expected_delta
+        assert emitter._event_dicts[0]["TimeCreated"] == expected_time
+        assert (
+            emitter._event_dicts[0]["UtcTime"]
+            == expected_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        )
 
 
 class TestRenderEvent7:

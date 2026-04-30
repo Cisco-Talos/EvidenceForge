@@ -78,6 +78,10 @@ class StateManager:
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._connection_id_counter = 0
+        self._linux_logind_session_counters: dict[str, int] = {}
+        self._linux_logind_session_initials: dict[str, int] = {}
+        self._linux_logind_session_epochs: dict[str, datetime] = {}
+        self._linux_logind_session_used: dict[str, set[int]] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
 
         # Entity lifecycle: per-system boot times for temporal validation
@@ -231,6 +235,7 @@ class StateManager:
         source_port: int | None = None,
         session_kind: str | None = None,
         transport_pid: int | None = None,
+        network_close_time: datetime | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -243,6 +248,8 @@ class StateManager:
                 session.session_kind = session_kind
             if transport_pid is not None:
                 session.transport_pid = transport_pid
+            if network_close_time is not None:
+                session.network_close_time = ensure_utc(network_close_time)
             return True
 
     def end_session(self, logon_id: str) -> bool:
@@ -269,6 +276,44 @@ class StateManager:
         """
         with self._lock:
             return list(self.state.active_sessions.values())
+
+    def next_linux_logind_session_id(
+        self,
+        system: str,
+        rng: random.Random,
+        event_time: datetime | None = None,
+    ) -> int:
+        """Return the next monotonic systemd-logind session ID for a host.
+
+        Linux syslog can be produced by multiple generation paths. Keeping the
+        counter in StateManager prevents split-brain session sequences when
+        baseline noise and explicit SSH/logon events both emit logind messages.
+        """
+        with self._lock:
+            if event_time is not None:
+                normalized_time = ensure_utc(event_time)
+                initial = self._linux_logind_session_initials.setdefault(
+                    system,
+                    rng.randint(20, 250),
+                )
+                epoch = self._system_boot_times.get(system)
+                if epoch is None:
+                    epoch = self._linux_logind_session_epochs.setdefault(
+                        system,
+                        normalized_time,
+                    )
+                elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
+                candidate = initial + elapsed_seconds
+                used = self._linux_logind_session_used.setdefault(system, set())
+                while candidate in used:
+                    candidate += 1
+                used.add(candidate)
+                return candidate
+
+            if system not in self._linux_logind_session_counters:
+                self._linux_logind_session_counters[system] = rng.randint(20, 250)
+            self._linux_logind_session_counters[system] += rng.randint(1, 4)
+            return self._linux_logind_session_counters[system]
 
     # ========================================
     # Process Management
@@ -413,6 +458,17 @@ class StateManager:
         with self._lock:
             proc = self.state.running_processes.get((system, pid))
             return proc.ecar_object_id if proc else ""
+
+    def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
+        """Record the latest dependent activity timestamp for a running process."""
+        with self._lock:
+            proc = self.state.running_processes.get((system, pid))
+            if proc is None:
+                return False
+            activity_time = ensure_utc(activity_time)
+            if proc.last_activity_time is None or activity_time > proc.last_activity_time:
+                proc.last_activity_time = activity_time
+            return True
 
     def get_processes_for_user(self, username: str) -> list[RunningProcess]:
         """Get all running processes for a user.

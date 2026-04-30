@@ -22,12 +22,13 @@
 
 """Unit tests for Phase 5.1.2: Baseline logoff generation."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -114,6 +115,31 @@ class TestLogoffWindows:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.auth.logon_type == 3
 
+    def test_logoff_leaves_margin_after_last_activity(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Logoff should leave room for source-native process-create offsets."""
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.last_activity_time = timestamp + timedelta(seconds=10)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            win_system,
+            timestamp + timedelta(seconds=10, milliseconds=500),
+            logon_id,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(win_system.hostname, logon_id, session.last_activity_time),
+        )
+        assert event.timestamp == session.last_activity_time + expected_delta
+
     def test_logoff_emits_ecar_logout(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):
@@ -185,6 +211,104 @@ class TestLogoffLinux:
         assert mock_emitters["ecar"].emit.called
         event = mock_emitters["ecar"].emit.call_args[0][0]
         assert event.event_type == "logoff"
+
+    def test_ssh_logoff_waits_for_transport_close(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """SSH disconnect syslog should not predate the Zeek connection close."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        close_time = timestamp + timedelta(minutes=8)
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        mock_emitters["syslog"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(seconds=30),
+            logon_id,
+            logon_type=10,
+        )
+
+        event = mock_emitters["syslog"].emit.call_args[0][0]
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(linux_system.hostname, logon_id, close_time),
+        )
+        assert event.timestamp == close_time + expected_delta
+        assert "Received disconnect from 10.0.10.50 port 51111" in event.syslog.message
+
+    def test_ssh_logoff_suppresses_syslog_when_far_from_transport_close(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Stale transport tuples should not produce contradictory sshd session closes."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        close_time = timestamp + timedelta(minutes=8)
+        last_activity_time = timestamp + timedelta(hours=2)
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.last_activity_time = last_activity_time
+        mock_emitters["syslog"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(hours=2, minutes=5),
+            logon_id,
+            logon_type=10,
+        )
+
+        event = mock_emitters["syslog"].emit.call_args[0][0]
+        assert event.syslog is None
+
+    def test_ssh_logoff_suppresses_syslog_for_self_sourced_session(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Self-sourced SSH session cleanup should not claim an external sshd close."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip=linux_system.ip,
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        state_manager.update_session_metadata(
+            logon_id,
+            network_close_time=timestamp + timedelta(minutes=8),
+        )
+        mock_emitters["syslog"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(minutes=8),
+            logon_id,
+            logon_type=10,
+        )
+
+        event = mock_emitters["syslog"].emit.call_args[0][0]
+        assert event.syslog is None
 
 
 class TestLogoffNoEcar:

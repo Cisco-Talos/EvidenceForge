@@ -1,0 +1,89 @@
+# windows_auth_realism.yaml — Windows Security authentication realism knobs.
+#
+# User customizations go in:
+#   .eforge/config/activity/windows_auth_realism.yaml
+#
+# Overlay behavior: nested dictionaries merge with package defaults.
+
+workstation_lock:
+  # Same-session 4801 unlocks closer than this to the preceding 4800 lock are
+  # shifted forward. Real users rarely lock/unlock in only a few seconds.
+  min_unlock_gap_seconds: 127
+
+failed_logon:
+  local_interactive:
+    logon_process_name: User32
+    authentication_package_name: Negotiate
+    process_name: "C:\\Windows\\System32\\winlogon.exe"
+  network:
+    validation_path_weights:
+      ntlm_only:
+        emit_4776: true
+        emit_4771: false
+        weight: 55
+      kerberos_only:
+        emit_4776: false
+        emit_4771: true
+        weight: 25
+      kerberos_then_ntlm:
+        emit_4776: true
+        emit_4771: true
+        weight: 20
+    logon_process_weights:
+      ntlm:
+        logon_process_name: NtLmSsp
+        authentication_package_name: NTLM
+        lm_package_name: NTLM V2
+        weight: 70
+      negotiate:
+        logon_process_name: NtLmSsp
+        authentication_package_name: Negotiate
+        lm_package_name: "-"
+        weight: 30
+    emit_network_connection_probability: 1.0
+    network_ports:
+      smb:
+        port: 445
+        weight: 85
+      rdp:
+        port: 3389
+        weight: 15
+
+special_privileges:
+  profiles:
+    service_account:
+      privileges:
+        - SeAssignPrimaryTokenPrivilege
+        - SeAuditPrivilege
+        - SeImpersonatePrivilege
+        - SeChangeNotifyPrivilege
+      weight: 1
+    domain_admin:
+      privileges:
+        - SeSecurityPrivilege
+        - SeBackupPrivilege
+        - SeRestorePrivilege
+        - SeTakeOwnershipPrivilege
+        - SeDebugPrivilege
+        - SeSystemEnvironmentPrivilege
+        - SeLoadDriverPrivilege
+        - SeImpersonatePrivilege
+        - SeDelegateSessionUserImpersonatePrivilege
+      weight: 1
+    workstation_admin:
+      privileges:
+        - SeBackupPrivilege
+        - SeRestorePrivilege
+        - SeDebugPrivilege
+        - SeChangeNotifyPrivilege
+        - SeIncreaseWorkingSetPrivilege
+        - SeTimeZonePrivilege
+      weight: 1
+    uac_elevated_user:
+      privileges:
+        - SeChangeNotifyPrivilege
+        - SeIncreaseWorkingSetPrivilege
+        - SeShutdownPrivilege
+        - SeUndockPrivilege
+        - SeTimeZonePrivilege
+      weight: 1

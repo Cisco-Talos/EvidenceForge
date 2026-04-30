@@ -51,6 +51,7 @@ class ActiveSession:
         explorer_pid: PID of explorer.exe instance for this interactive session
         process_tree_root: Root PID for this session's process tree
         last_activity_time: Last baseline activity timestamp (for login cooldown)
+        network_close_time: Close time for a transport connection backing the session
     """
 
     logon_id: str
@@ -64,6 +65,7 @@ class ActiveSession:
     session_winlogon_pid: int | None = None  # Windows: per-RDP-session winlogon
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
+    network_close_time: datetime | None = None
     source_port: int = 0
     session_kind: str = "logon"
     transport_pid: int | None = None
@@ -87,6 +89,7 @@ class RunningProcess:
         system: System hostname where process is running
         start_time: When the process started
         integrity_level: Windows integrity level (System, High, Medium, Low)
+        last_activity_time: Last dependent activity timestamp for this process
     """
 
     pid: int
@@ -97,6 +100,7 @@ class RunningProcess:
     system: str
     start_time: datetime
     integrity_level: str
+    last_activity_time: datetime | None = None
     logon_id: str = ""
     ecar_object_id: str = ""
     story_created: bool = False

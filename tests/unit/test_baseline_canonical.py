@@ -178,6 +178,29 @@ class TestIdsAlertCorrelation:
         assert first.root_delay == second.root_delay
         assert first.root_disp == second.root_disp
 
+    def test_completed_tls_duration_contains_zeek_analyzer_evidence(
+        self, activity_gen, mock_emitters, timestamp
+    ):
+        """Completed TLS conn duration should be long enough for ssl/x509 analyzer rows."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=0.002,
+            orig_bytes=1,
+            resp_bytes=1,
+            conn_state="SF",
+            hostname="www.example.com",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.ssl is not None
+        assert event.x509 is not None
+        assert event.network.duration >= 0.8
+
 
 class TestWebAccessCorrelation:
     """Web access logs should produce correlated Zeek conn + HTTP + web records."""
@@ -588,6 +611,35 @@ class TestAnonymousLogon:
         assert event.auth.user_sid == "S-1-5-7"
         assert event.auth.logon_type == 3
         assert event.auth.auth_package == "NTLM"
+        assert event.auth.source_ip == "-"
+        assert event.auth.workstation_name == "-"
+
+    def test_generate_anonymous_logon_uses_available_source_host(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Anonymous network logons should carry realistic remote source metadata."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.10.100",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        ws = System(
+            hostname="WS-01",
+            ip="10.0.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._all_system_ips = [dc.ip, ws.ip]
+        activity_gen._ip_to_system = {ws.ip: ws, dc.ip: dc}
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_anonymous_logon(system=dc, time=timestamp)
+
+        win = mock_emitters["windows_event_security"]
+        event = win.emit.call_args[0][0]
+        assert event.auth.source_ip == ws.ip
+        assert event.auth.source_port > 0
+        assert event.auth.workstation_name == ws.hostname
 
     def test_anonymous_logon_no_session_created(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -626,6 +678,22 @@ class TestNoInternalGenerateRaw:
 
         source = inspect.getsource(EmitterSetupMixin)
         assert "generate_raw" not in source
+
+
+class TestBaselineSshTiming:
+    """Regression tests for baseline SSH connection/syslog correlation."""
+
+    def test_disconnect_uses_same_duration_as_generated_connection(self):
+        """Baseline SSH disconnect timing should share the conn.log duration."""
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
+        assert "duration=ssh_duration" in source
+        assert 'conn_state="SF"' in source
+        assert "max(1.0, ssh_duration)" in source
 
 
 class TestSensorStartup:

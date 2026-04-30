@@ -38,8 +38,13 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_timing_delta,
+    windows_collision_spacing_config,
+)
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.windows_event import format_windows_system_time
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -47,12 +52,13 @@ from evidenceforge.utils.time import ensure_utc
 win_logger = logging.getLogger(__name__)
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
-_NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
 
 
 def _normalize_windows_time_created(
     event: dict[str, Any],
     last_by_computer: dict[str, datetime],
+    collision_count_by_computer: dict[str, int],
     sequence: int,
     seed_prefix: str,
     *,
@@ -64,7 +70,8 @@ def _normalize_windows_time_created(
         return
 
     computer = str(event.get("Computer", ""))
-    normalized = ensure_utc(ts)
+    original = ensure_utc(ts)
+    normalized = original
     seed = (
         f"{seed_prefix}_{computer}_{sequence}_{event.get('EventID', '')}_"
         f"{event.get('ExecutionProcessID', '')}_{event.get('ExecutionThreadID', '')}"
@@ -76,8 +83,23 @@ def _normalize_windows_time_created(
         normalized = normalized + timedelta(microseconds=rng.randint(50, 500))
 
     previous = last_by_computer.get(computer)
-    if previous is not None and normalized <= previous:
-        normalized = previous + timedelta(microseconds=1)
+    if previous is not None and original <= previous:
+        collision_count = collision_count_by_computer.get(computer, 0) + 1
+        collision_count_by_computer[computer] = collision_count
+        spacing = windows_collision_spacing_config()
+        seed = (
+            f"{seed_prefix}:collision:{computer}:{sequence}:{event.get('EventID', '')}:"
+            f"{event.get('EventRecordID', '')}"
+        )
+        rng = random.Random(_stable_seed(seed))
+        if collision_count <= spacing["near_zero_until"]:
+            gap_us = rng.randint(spacing["near_gap_min_us"], spacing["near_gap_max_us"])
+            normalized = previous + timedelta(microseconds=gap_us)
+        else:
+            gap_ms = rng.randint(spacing["large_gap_min_ms"], spacing["large_gap_max_ms"])
+            normalized = previous + timedelta(milliseconds=gap_ms)
+    else:
+        collision_count_by_computer[computer] = 0
     last_by_computer[computer] = normalized
     event["TimeCreated"] = normalized
 
@@ -243,7 +265,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        workstation_name = (
+        workstation_name = auth.workstation_name or (
             event.src_host.hostname
             if auth.logon_type in (3, 10) and event.src_host is not None
             else host.hostname
@@ -270,40 +292,20 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x2e0",
             "ProcessName": r"C:\Windows\System32\lsass.exe",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "IpPort": auth.source_port if auth.logon_type in (3, 10) else 0,
             "LogonProcessName": auth.logon_process,
             "AuthenticationPackageName": auth.auth_package,
             "LmPackageName": auth.lm_package,
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "LogonGuid": auth.logon_guid,
+            "VirtualAccount": "%%1843",
+            "ElevatedToken": "%%1842" if auth.elevated else "%%1843",
         }
         self.emit_event(event_data)
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
-            is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
-            is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
-            is_admin = is_system or auth.logon_type == 5
-            if is_service_account:
-                privs = (
-                    "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
-                    "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
-                )
-            elif is_admin:
-                privs = (
-                    "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
-                    "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
-                    "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
-                    "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
-                    "SeDelegateSessionUserImpersonatePrivilege"
-                )
-            else:
-                # Regular user with occasional elevation (e.g., UAC prompt)
-                privs = (
-                    "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
-                    "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
-                    "SeTimeZonePrivilege"
-                )
+            privs = auth.privilege_list or "SeChangeNotifyPrivilege"
             priv_data = {
                 "EventID": 4672,
                 "TimeCreated": event.timestamp,
@@ -331,28 +333,7 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
 
-        is_system = auth.username == "SYSTEM" or auth.username.endswith("$")
-        is_service_account = auth.username in ("LOCAL SERVICE", "NETWORK SERVICE")
-        is_admin = is_system or auth.logon_type == 5
-        if is_service_account:
-            privs = (
-                "SeAssignPrimaryTokenPrivilege\n\t\t\tSeAuditPrivilege\n\t\t\t"
-                "SeImpersonatePrivilege\n\t\t\tSeChangeNotifyPrivilege"
-            )
-        elif is_admin:
-            privs = (
-                "SeSecurityPrivilege\n\t\t\tSeBackupPrivilege\n\t\t\t"
-                "SeRestorePrivilege\n\t\t\tSeTakeOwnershipPrivilege\n\t\t\t"
-                "SeDebugPrivilege\n\t\t\tSeSystemEnvironmentPrivilege\n\t\t\t"
-                "SeLoadDriverPrivilege\n\t\t\tSeImpersonatePrivilege\n\t\t\t"
-                "SeDelegateSessionUserImpersonatePrivilege"
-            )
-        else:
-            privs = (
-                "SeChangeNotifyPrivilege\n\t\t\tSeIncreaseWorkingSetPrivilege\n\t\t\t"
-                "SeShutdownPrivilege\n\t\t\tSeUndockPrivilege\n\t\t\t"
-                "SeTimeZonePrivilege"
-            )
+        privs = auth.privilege_list or "SeChangeNotifyPrivilege"
 
         priv_data = {
             "EventID": 4672,
@@ -462,8 +443,16 @@ class WindowsEventEmitter(LogEmitter):
             "SubStatus": auth.failure_substatus,
             "FailureReason": auth.failure_reason,
             "LogonType": auth.logon_type,
+            "LogonProcessName": auth.logon_process or "NtLmSsp",
+            "AuthenticationPackageName": auth.auth_package or "NTLM",
+            "WorkstationName": auth.workstation_name or "-",
+            "LmPackageName": auth.lm_package or "-",
+            "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
+            "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
+            "ProcessName": auth.process_name or "-",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": rng.randint(49152, 65535) if auth.logon_type == 3 else 0,
+            "IpPort": auth.source_port
+            or (rng.randint(49152, 65535) if auth.logon_type == 3 else 0),
         }
         self.emit_event(event_data)
 
@@ -789,10 +778,22 @@ class WindowsEventEmitter(LogEmitter):
                 image = "System"
             else:
                 return
+        render_time = event.timestamp + sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=(
+                host.hostname,
+                pid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+        )
 
         event_data = {
             "EventID": 5156,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1083,6 +1084,7 @@ class WindowsEventEmitter(LogEmitter):
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
+        self._time_collision_count_by_computer: dict[str, int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -1128,7 +1130,7 @@ class WindowsEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
-                event_data["TimeCreated"] = ts.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         # Escape XML special characters in string values to prevent parse errors
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -1160,6 +1162,8 @@ class WindowsEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
+        self._shift_logoffs_after_dependents()
+
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
             if isinstance(ts, datetime):
@@ -1173,6 +1177,7 @@ class WindowsEventEmitter(LogEmitter):
             _normalize_windows_time_created(
                 event,
                 self._last_time_created_by_computer,
+                self._time_collision_count_by_computer,
                 sequence,
                 "windows_time_created",
             )
@@ -1199,6 +1204,9 @@ class WindowsEventEmitter(LogEmitter):
             else:
                 self._record_id_counters[counter_key] += 1
             event["EventRecordID"] = self._record_id_counters[counter_key]
+            if event.get("EventID") == 1102:
+                reset_rng = random.Random(f"erid_reset_{counter_key}_{event['EventRecordID']}")
+                self._record_id_counters[counter_key] = reset_rng.randint(0, 5)
 
         # Render and route to per-host writers
         for event in self._event_dicts:
@@ -1207,6 +1215,43 @@ class WindowsEventEmitter(LogEmitter):
             self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
+
+    def _shift_logoffs_after_dependents(self) -> None:
+        """Prevent visible 4634 records from preceding same-session dependents.
+
+        Sysmon and EDR sources render small source-native collection offsets after
+        canonical process creation. A visible Security logoff needs to clear that
+        offset window, not just the Security 4688 timestamp.
+        """
+        latest_dependent: dict[tuple[str, str], datetime] = {}
+        logoffs: list[tuple[tuple[str, str], dict[str, Any]]] = []
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            event_id = event.get("EventID")
+            computer = str(event.get("Computer", ""))
+            if event_id == 4634:
+                logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
+                if logon_id:
+                    logoffs.append(((computer, logon_id), event))
+                continue
+            if event_id not in {4688, 4801}:
+                continue
+            logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
+            if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+                continue
+            key = (computer, logon_id)
+            latest_dependent[key] = max(ts, latest_dependent.get(key, ts))
+
+        for key, event in logoffs:
+            ts = event.get("TimeCreated")
+            latest = latest_dependent.get(key)
+            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + sample_timing_delta(
+                    "windows.logoff_after_rendered_dependents",
+                    seed_parts=(key[0], key[1], latest),
+                )
 
     def flush(self) -> None:
         """Flush dict buffer then all host writers."""
