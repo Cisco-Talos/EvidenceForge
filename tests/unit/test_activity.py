@@ -29,7 +29,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext
+from evidenceforge.events.contexts import HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
@@ -1183,6 +1183,39 @@ class TestActivityGenerator:
         assert net.orig_bytes == orig_bytes or net.orig_bytes >= 0
         assert net.resp_bytes is not None
         assert net.orig_pkts is not None
+
+    def test_https_http_body_size_is_not_reused_as_encrypted_wire_bytes(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """HTTPS conn bytes should include TLS overhead beyond web response body bytes."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        body_len = 10391
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=443,
+            service="ssl",
+            duration=0.01,
+            orig_bytes=200,
+            resp_bytes=body_len,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/robots.txt",
+                response_body_len=body_len,
+                status_code=200,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        net = event.network
+        assert net.resp_bytes > body_len
+        assert net.resp_bytes != event.http.response_body_len
+        assert net.duration is not None and net.duration >= 0.04
 
     def test_generate_connection_with_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection with duration sets a valid conn_state."""

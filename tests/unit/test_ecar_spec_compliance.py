@@ -91,6 +91,30 @@ class TestPidAlwaysPresent:
         record = json.loads(rendered)
         assert record["pid"] == -1
 
+    def test_unlock_reauth_renders_session_open_not_duplicate_login(self, emitter, ts):
+        """Type 7 unlock reauth should not look like a new session login."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="logon",
+            dst_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            auth=AuthContext(username="alice", logon_id="0x123", logon_type=7),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        assert row["object"] == "USER_SESSION"
+        assert row["action"] == "OPEN"
+        assert row["objectID"] == "session-1"
+
     def test_pid_none_becomes_negative_one(self, emitter, ts):
         """Explicit pid=None should become -1."""
         rendered = emitter._render_event(

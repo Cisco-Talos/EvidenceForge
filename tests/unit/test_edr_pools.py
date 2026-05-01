@@ -11,6 +11,7 @@ from evidenceforge.generation.activity.edr_pools import (
     get_registry_keys_hklm,
     load_edr_pools,
     materialize_edr_template,
+    materialize_edr_template_group,
     select_file_side_effect,
 )
 
@@ -162,6 +163,21 @@ class TestTemplateMaterialization:
         assert "}}" not in value
         assert value.startswith(r"Interfaces\{")
         assert value.endswith(r"}\DhcpIPAddress")
+
+    def test_materializes_related_templates_with_shared_placeholders(self):
+        import random
+
+        key, details = materialize_edr_template_group(
+            (
+                r"HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\app-{doc}.exe",
+                r"C:\Program Files\Common Files\Vendor\app-{doc}.exe",
+            ),
+            random.Random(11),
+        )
+
+        key_doc = key.rsplit("app-", 1)[1].split(".exe", 1)[0]
+        details_doc = details.rsplit("app-", 1)[1].split(".exe", 1)[0]
+        assert key_doc == details_doc
 
 
 class TestOverlayValidation:

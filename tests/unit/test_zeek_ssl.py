@@ -338,6 +338,8 @@ class TestSslUidCorrelation:
             rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
             rows_by_id = {row["id"]: row for row in rows}
             assert set(rows_by_id) == {"Fleaf12345678901", "Fintermediate123"}
+            assert [row["id"] for row in rows] == ["Fleaf12345678901", "Fintermediate123"]
+            assert rows[0]["ts"] < rows[1]["ts"]
             assert rows_by_id["Fleaf12345678901"]["basic_constraints.ca"] is False
             assert rows_by_id["Fintermediate123"]["basic_constraints.ca"] is True
 

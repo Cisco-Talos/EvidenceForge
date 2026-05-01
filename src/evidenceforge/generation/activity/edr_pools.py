@@ -131,6 +131,8 @@ def materialize_edr_template(template: str, rng: random.Random, user: str = "SYS
     replacements = {
         "user": user,
         "rand": f"{rng.randint(10000, 99999)}",
+        "small": str(rng.randint(1, 80)),
+        "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "guid": (
             f"{rng.getrandbits(32):08X}-"
@@ -159,6 +161,51 @@ def materialize_edr_template(template: str, rng: random.Random, user: str = "SYS
 
     materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
     return materialized.replace("{{", "{").replace("}}", "}")
+
+
+def materialize_edr_template_group(
+    templates: tuple[str, ...],
+    rng: random.Random,
+    user: str = "SYSTEM",
+) -> tuple[str, ...]:
+    """Materialize related templates with one shared placeholder context."""
+    replacements = {
+        "user": user,
+        "rand": f"{rng.randint(10000, 99999)}",
+        "small": str(rng.randint(1, 80)),
+        "minute": f"{rng.randint(0, 59):02d}",
+        "hex": f"{rng.getrandbits(32):08X}",
+        "guid": (
+            f"{rng.getrandbits(32):08X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(48):012X}"
+        ),
+        "mru": str(rng.randint(0, 24)),
+        "doc": str(rng.randint(1, 80)),
+        "package": rng.choice(
+            [
+                "Package_for_RollupFix",
+                "Package_for_ServicingStack",
+                "Package_for_KB5034122",
+                "Package_for_DotNetRollup",
+                "Microsoft-Windows-Client-Features",
+            ]
+        ),
+        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+    }
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(1)
+        return str(replacements[token]) if token in replacements else match.group(0)
+
+    return tuple(
+        re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
+        .replace("{{", "{")
+        .replace("}}", "}")
+        for template in templates
+    )
 
 
 def select_file_side_effect(

@@ -5069,14 +5069,18 @@ class BaselineMixin:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     from evidenceforge.generation.activity.http_content import (
                         response_size_for_mime,
+                        response_size_for_status,
                     )
 
                     resp_bytes = (
                         response_size_for_mime(rng, mime)
                         if status == 200
-                        else rng.randint(100, 500)
+                        else response_size_for_status(status, http_host, path)
                     )
-                    chosen_ua = rng.choice(ua_pool)
+                    ua_rng = random.Random(
+                        _stable_seed(f"web_client_ua:{client_ip}:{sys_obj.hostname}")
+                    )
+                    chosen_ua = ua_rng.choice(ua_pool)
                     _ua_is_bot = any(
                         bot in chosen_ua for bot in ("Googlebot", "bingbot", "AhrefsBot")
                     )

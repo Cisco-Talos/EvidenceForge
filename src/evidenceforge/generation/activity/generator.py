@@ -2895,7 +2895,7 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.edr_pools import (
                 get_registry_keys_hkcu,
                 get_registry_keys_hklm,
-                materialize_edr_template,
+                materialize_edr_template_group,
             )
 
             _pool_hkcu = get_registry_keys_hkcu()
@@ -2906,9 +2906,11 @@ class ActivityGenerator:
                 else:
                     _key, _vname, _details = rng.choice(_pool_hkcu)
                 _template_user = user.username if user else "SYSTEM"
-                _key = materialize_edr_template(_key, rng, _template_user)
-                _vname = materialize_edr_template(_vname, rng, _template_user)
-                _details = materialize_edr_template(_details, rng, _template_user)
+                _key, _vname, _details = materialize_edr_template_group(
+                    (_key, _vname, _details),
+                    rng,
+                    _template_user,
+                )
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
                 # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
@@ -3686,8 +3688,22 @@ class ActivityGenerator:
             # A completed TLS session with ssl.log/SNI evidence must include
             # at least a ClientHello and server handshake payload at conn.log
             # accounting level, even when the logical request body is empty.
-            orig_bytes = max(orig_bytes or 0, rng.randint(180, 900))
-            resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
+            if http is not None:
+                request_records = max(1, ((http.request_body_len or 0) + 16_383) // 16_384)
+                response_records = max(1, ((http.response_body_len or 0) + 16_383) // 16_384)
+                orig_bytes = (
+                    (http.request_body_len or 0)
+                    + rng.randint(350, 950)
+                    + request_records * rng.randint(22, 38)
+                )
+                resp_bytes = (
+                    (http.response_body_len or 0)
+                    + rng.randint(1200, 5200)
+                    + response_records * rng.randint(22, 38)
+                )
+            else:
+                orig_bytes = max(orig_bytes or 0, rng.randint(180, 900))
+                resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
             tls_min_window = get_timing_window(
                 "network.tls_completed_min_duration",
                 default_min_ms=800,
@@ -3698,6 +3714,18 @@ class ActivityGenerator:
             tls_min_duration = tls_min_window.min_ms / 1000
             if duration is None or duration < tls_min_duration:
                 duration = tls_min_duration + rng.uniform(0.0, 0.4)
+
+        if http is not None and conn_state == "SF":
+            http_timing = get_timing_window(
+                "source.zeek_http_request",
+                default_min_ms=1,
+                default_max_ms=35,
+                default_position="after",
+                default_class="same_observation",
+            )
+            http_min_duration = (http_timing.max_ms + 5) / 1000
+            if duration is None or duration < http_min_duration:
+                duration = http_min_duration + rng.uniform(0.0, 0.025)
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:

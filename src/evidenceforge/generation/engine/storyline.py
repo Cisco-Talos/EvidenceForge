@@ -955,6 +955,7 @@ class StorylineMixin:
                 from evidenceforge.generation.activity.http_content import (
                     normalize_mime_type_for_path,
                     response_size_for_mime,
+                    response_size_for_status,
                 )
 
                 # Context-aware response sizing (or author-specified override)
@@ -1804,6 +1805,11 @@ class StorylineMixin:
                     rng, scan_host, _send_referrer_config, port=spec.dst_port
                 )
 
+                _response_body_len = (
+                    response_size_for_mime(rng, _mime_type)
+                    if _status < 400
+                    else response_size_for_status(_status, scan_host, _uri)
+                )
                 http_ctx = HttpContext(
                     method=_method,
                     host=scan_host,
@@ -1811,7 +1817,7 @@ class StorylineMixin:
                     version="1.1",
                     user_agent=render_ua(scan_ua, rng),
                     request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
-                    response_body_len=response_size_for_mime(rng, _mime_type),
+                    response_body_len=_response_body_len,
                     status_code=_status,
                     status_msg={
                         200: "OK",
