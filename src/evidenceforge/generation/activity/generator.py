@@ -101,6 +101,13 @@ _SYSTEM_ACCOUNT_LOGON_IDS = {
     "LOCAL SERVICE": "0x3e5",
     "NETWORK SERVICE": "0x3e4",
 }
+_WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
+    "smss.exe": "smss",
+    "csrss.exe": "csrss_s0",
+    "wininit.exe": "wininit",
+    "services.exe": "services",
+    "lsass.exe": "lsass",
+}
 _WINDOWS_USER_SESSION_PROCESSES = {
     "sihost.exe",
     "searchhost.exe",
@@ -145,6 +152,58 @@ def _extract_image_from_command(command_line: str) -> str:
     if match:
         return match.group(1)
     return cleaned.split()[0]
+
+
+def _windows_token_profile(username: str, integrity_level: str) -> tuple[str, str, str]:
+    """Return source-native Windows token fields for a process owner."""
+    normalized = username.upper().split("\\")[-1]
+    if normalized in _SYSTEM_ACCOUNTS:
+        return "System", "%%1936", "S-1-16-16384"
+    if integrity_level == "High":
+        return "High", "%%1936", "S-1-16-12288"
+    if integrity_level == "Low":
+        return "Low", "%%1938", "S-1-16-4096"
+    return "Medium", "%%1938", "S-1-16-8192"
+
+
+def _dns_payload_accounting(
+    *,
+    dns: DnsContext,
+    duration: float | None,
+    orig_bytes: int | None,
+    resp_bytes: int | None,
+) -> tuple[float | None, int, int]:
+    """Normalize DNS conn.log payload accounting to the DNS transaction."""
+    query = dns.query or ""
+    query_type = (dns.query_type or "").upper()
+    has_response = dns.rcode_num in (None, 0) and dns.rcode != "SERVFAIL"
+    answers = dns.answers or []
+
+    query_floor = max(40, len(query.encode("utf-8", errors="ignore")) + 18)
+    if query_type in {"TXT", "NULL"}:
+        query_floor += 18
+        query_ceiling = 1232
+    elif query_type == "SRV":
+        query_floor += 10
+        query_ceiling = 512
+    else:
+        query_ceiling = 260
+
+    normalized_orig = min(max(orig_bytes or 0, query_floor), query_ceiling)
+
+    if not has_response:
+        normalized_resp = 0
+    else:
+        answer_bytes = sum(len(str(answer).encode("utf-8", errors="ignore")) for answer in answers)
+        response_floor = max(70, query_floor + answer_bytes + 12)
+        response_ceiling = 1500 if query_type in {"TXT", "NULL"} else 512
+        normalized_resp = min(max(resp_bytes or 0, response_floor), response_ceiling)
+
+    normalized_duration = duration
+    if dns.rtt is not None:
+        normalized_duration = dns.rtt
+
+    return normalized_duration, normalized_orig, normalized_resp
 
 
 # Fixed baseline activity patterns (no LLM expansion)
@@ -2709,8 +2768,28 @@ class ActivityGenerator:
             )
             time = session.start_time + timedelta(milliseconds=offset_ms)
             self.state_manager.set_current_time(time)
-        if process_username != user.username:
+        if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
             _integrity = "Medium"
+        if _get_os_category(system.os) == "windows":
+            _integrity, _token_elevation, _mandatory_label = _windows_token_profile(
+                process_username,
+                _integrity,
+            )
+        else:
+            _token_elevation = "%%1938"
+            _mandatory_label = "S-1-16-8192"
+
+        singleton_pid = self._existing_windows_singleton_pid(system, process_name, time)
+        if singleton_pid is not None:
+            running_proc = self.state_manager.get_process(system.hostname, singleton_pid)
+            if running_proc is not None:
+                if (
+                    running_proc.last_activity_time is None
+                    or time > running_proc.last_activity_time
+                ):
+                    running_proc.last_activity_time = time
+            return singleton_pid
+
         parent_pid = self._sanitize_user_parent_pid(
             system=system,
             user=user,
@@ -2762,8 +2841,8 @@ class ActivityGenerator:
                 ),
                 parent_command_line=self._lookup_parent_command_line(system.hostname, parent_pid),
                 parent_start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
-                token_elevation="%%1938",
-                mandatory_label="S-1-16-8192",
+                token_elevation=_token_elevation,
+                mandatory_label=_mandatory_label,
                 start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
@@ -3374,10 +3453,11 @@ class ActivityGenerator:
             client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
             client_duration = min(duration or 0.2, 2.0)
             if dst_port == 443 and proxy_context.status_code < 400:
-                rng = _get_rng()
-                client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
-                client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
-                client_duration = duration or rng.uniform(0.5, 10.0)
+                client_duration = duration or _get_rng().uniform(0.5, 10.0)
+                if proxy_context.method == "CONNECT":
+                    rng = _get_rng()
+                    client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
+                    client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
 
             client_uid = self.generate_connection(
                 src_ip=src_ip,
@@ -3557,6 +3637,17 @@ class ActivityGenerator:
                     dst_port,
                 )
                 pid = -1
+
+        if service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and dns is not None:
+            ad_domain = getattr(self, "_ad_domain", "corp.local")
+            dns.AA = _dns_is_internal_name(dns.query or "", ad_domain)
+            if not is_fw_deny:
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
+                    dns=dns,
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                )
 
         if (
             service == "dns"
@@ -7411,6 +7502,27 @@ class ActivityGenerator:
         """Get a seeded system process PID by role name."""
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
+
+    def _existing_windows_singleton_pid(
+        self,
+        system: System,
+        process_name: str,
+        time: datetime,
+    ) -> int | None:
+        """Return a seeded Windows singleton PID instead of creating a duplicate."""
+        if _get_os_category(system.os) != "windows":
+            return None
+        normalized_path = process_name.replace("/", "\\").lower()
+        exe_name = normalized_path.rsplit("\\", 1)[-1]
+        role = _WINDOWS_SINGLETON_SYSTEM_PROCESSES.get(exe_name)
+        if role is None:
+            return None
+        if "\\" in normalized_path and not normalized_path.startswith("c:\\windows\\system32\\"):
+            return None
+        pid = getattr(self, "_system_pids", {}).get(system.hostname, {}).get(role)
+        if pid is None or not self._is_pid_active_at(system, pid, time):
+            return None
+        return pid
 
     def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.

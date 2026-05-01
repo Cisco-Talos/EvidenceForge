@@ -558,6 +558,75 @@ class TestExplicitProxyVisibility:
         assert egress_events
         assert egress_events[0].network.resp_bytes >= 107_000
 
+    def test_inspected_https_upload_client_leg_does_not_double_count_request_body(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        request_bytes = 268_435_456
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="POST",
+                url="https://exfil.example/upload",
+                host="exfil.example",
+                status_code=200,
+                sc_bytes=900,
+                cs_bytes=request_bytes + 313,
+                time_taken=1200,
+                user_agent="curl/8.1.2",
+                content_type="application/octet-stream",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=12.0,
+            orig_bytes=request_bytes,
+            resp_bytes=512,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="exfil.example",
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="exfil.example",
+                uri="/upload",
+                version="1.1",
+                user_agent="curl/8.1.2",
+                request_body_len=request_bytes,
+                response_body_len=512,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/octet-stream"],
+            ),
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert client_event.network.orig_bytes == proxy_event.proxy.cs_bytes
+        assert client_event.network.orig_bytes < request_bytes * 2
+
     def test_allowed_proxy_miss_origin_leg_is_established_when_state_is_implicit(self):
         generator, emitters = _generator(
             [

@@ -530,6 +530,69 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.duration == 0.08
 
+    def test_dns_a_query_accounting_is_clamped_to_dns_transaction(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """A single A lookup should not inherit kilobyte-scale generic UDP bytes."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=4.5,
+            dns=DnsContext(
+                query="metrics-b0hov01h.top",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["203.0.113.45"],
+                rtt=0.019,
+            ),
+            orig_bytes=1933,
+            resp_bytes=900,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_bytes <= 260
+        assert event.network.resp_bytes <= 512
+        assert event.network.duration == 0.019
+
+    def test_dns_authoritative_flag_is_consistent_for_internal_names(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Internal names should not flip AA on otherwise equivalent rows."""
+        state_manager.set_current_time(timestamp)
+        activity_gen._ad_domain = "example.org"
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="DC-01.example.org",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["10.0.0.10"],
+                AA=False,
+                rtt=0.004,
+            ),
+            orig_bytes=80,
+            resp_bytes=140,
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args[0][0]
+        assert event.dns.AA is True
+
     def test_sensor_duration_jitter_respects_dns_rtt(self, timestamp, tmp_path):
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(

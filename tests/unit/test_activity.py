@@ -720,6 +720,79 @@ class TestActivityGenerator:
         assert event.process.logon_id == session_logon_id
         assert event.process.integrity_level == "Medium"
 
+    def test_system_process_create_uses_system_integrity_token_fields(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """SYSTEM-owned process events should not render as medium-integrity user tokens."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        activity_gen.generate_process(
+            system_user,
+            test_system,
+            timestamp,
+            "0x3e7",
+            r"C:\Windows\System32\net.exe",
+            r"net.exe use \\FILE-SRV\C$",
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        event = process_events[-1]
+        assert event.process.integrity_level == "System"
+        assert event.process.token_elevation == "%%1936"
+        assert event.process.mandatory_label == "S-1-16-16384"
+
+    def test_windows_singleton_process_uses_seeded_pid_without_create_event(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Core boot-time Windows processes should not be created mid-window."""
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(boot_time)
+        lsass_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"lsass": lsass_pid}}
+        mock_emitters["windows_event_security"].reset_mock()
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        returned_pid = activity_gen.generate_process(
+            system_user,
+            test_system,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\lsass.exe",
+            r"C:\Windows\System32\lsass.exe",
+        )
+
+        assert returned_pid == lsass_pid
+        assert not [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+
     def test_create_remote_thread_carries_shared_thread_context(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

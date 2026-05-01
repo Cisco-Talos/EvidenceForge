@@ -293,6 +293,34 @@ class TestProcessAccess:
         assert props["target_pid"] == "672"
         assert props["target_image_path"] == r"C:\Windows\System32\lsass.exe"
 
+    def test_process_open_parent_image_uses_source_parent(
+        self, emitter, ts, windows_host, tmp_path
+    ):
+        """PROCESS/OPEN parent_image_path should preserve the source process parent."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="process_access",
+            src_host=windows_host,
+            process=ProcessContext(
+                pid=6220,
+                parent_pid=5216,
+                image=r"C:\Windows\System32\ms-index-service.exe",
+                command_line=r"ms-index-service.exe -Embedding",
+                username="SYSTEM",
+                parent_image=r"C:\Windows\explorer.exe",
+            ),
+            auth=AuthContext(username="SYSTEM"),
+            process_access=self._access_context(),
+        )
+        emitter.emit(event)
+        emitter.close()
+
+        output_file = tmp_path / "WKS-01.corp.local" / "ecar.json"
+        record = json.loads(output_file.read_text().strip().split("\n")[0])
+        props = record["properties"]
+        assert props["parent_image_path"] == r"C:\Windows\explorer.exe"
+        assert props["image_path"] == r"C:\Windows\System32\ms-index-service.exe"
+
     def test_source_image_in_properties(self, emitter, ts, windows_host, tmp_path):
         """image_path in properties should be the source process image."""
         event = SecurityEvent(

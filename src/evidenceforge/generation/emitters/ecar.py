@@ -461,7 +461,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
             "image_path": proc.image,
             "command_line": proc.command_line,
-            "parent_image_path": proc.parent_image or proc.image,
+            "parent_image_path": proc.parent_image or "",
             "target_pid": target_pid,
             "target_image_path": target_image,
             "target_process_uuid": access.target_process_object_id if access else "",
